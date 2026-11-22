@@ -5,7 +5,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { appRecord } from "../testing/records";
-import { isShareLabelShown, TitleBar, type TitleBarAttrs } from "./TitleBar";
+import { shareLookOf, TitleBar, type ShareFitting, type TitleBarAttrs } from "./TitleBar";
 
 afterEach(unmountViews);
 
@@ -39,10 +39,33 @@ function slotOrder(bar: HTMLElement): string[] {
     .filter((name) => name !== "spacer");
 }
 
+/** A theme that sets the title in the bar's own run, after the icon, with the window's actions at the far end. */
+const START_CHROME: ThemeChrome = {
+  title_align: "start",
+  leading: ["icon", "title"],
+  trailing: ["refresh", "menu", "minimize", "maximize", "close"],
+};
+
+const SHORT_TITLE = "Chat";
+const LONG_TITLE = "Quarterly planning for the team";
+const VERY_LONG_TITLE = "Quarterly planning notes for the whole team, with the budget and the hiring plan";
+
+/** Share offered on a bar of this width, on a desktop client. */
+function shareOn(barWidth: number): TitleBarAttrs["share"] {
+  return { barWidth, isTouch: false };
+}
+
 function shareOf(bar: HTMLElement): HTMLElement {
   const share = bar.querySelector<HTMLElement>('[data-window-control="share"]');
   if (share === null) throw new Error("no Share control");
   return share;
+}
+
+/** How a rendered bar draws Share, read off the page. */
+function shareLookIn(bar: HTMLElement): "labelled" | "glyph" | "hidden" {
+  const share = bar.querySelector('[data-window-control="share"]');
+  if (share === null) return "hidden";
+  return share.textContent === "Share" ? "labelled" : "glyph";
 }
 
 describe("TitleBar", () => {
@@ -70,7 +93,7 @@ describe("TitleBar", () => {
   });
 
   it("offers Share after the balloon, or after Refresh on a bar with no balloon, as a control a theme can style", () => {
-    const bar = render({ hasAppChat: true, hasShare: true });
+    const bar = render({ hasAppChat: true, share: shareOn(600) });
 
     expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "share", "minimize", "maximize", "close"]);
     const share = shareOf(bar);
@@ -78,7 +101,7 @@ describe("TitleBar", () => {
     expect(share.getAttribute("data-control")).toBe("share");
     expect(share.getAttribute("aria-label")).toBe("Share Docs");
     expect(share.querySelector("svg")).not.toBeNull();
-    expect(slotOrder(render({ hasShare: true }))).toEqual([
+    expect(slotOrder(render({ share: shareOn(600) }))).toEqual([
       "menu",
       "refresh",
       "share",
@@ -89,11 +112,15 @@ describe("TitleBar", () => {
   });
 
   it("offers no Share where the caller offers none, and none on a background window", () => {
-    const withoutShare = ["menu", "refresh", "app-chat", "minimize", "maximize", "close"];
-
-    expect(slotOrder(render({ hasAppChat: true, hasShare: false }))).toEqual(withoutShare);
-    expect(slotOrder(render({ hasAppChat: true }))).toEqual(withoutShare);
-    expect(slotOrder(render({ hasAppChat: true, hasShare: true, isFocused: false }))).toEqual([
+    expect(slotOrder(render({ hasAppChat: true }))).toEqual([
+      "menu",
+      "refresh",
+      "app-chat",
+      "minimize",
+      "maximize",
+      "close",
+    ]);
+    expect(slotOrder(render({ hasAppChat: true, share: shareOn(600), isFocused: false }))).toEqual([
       "minimize",
       "maximize",
       "close",
@@ -101,7 +128,7 @@ describe("TitleBar", () => {
   });
 
   it("keeps Share beside Refresh wherever the theme's chrome puts that slot", () => {
-    const bar = render({ chrome: MAC_CHROME, hasAppChat: true, hasShare: true });
+    const bar = render({ chrome: MAC_CHROME, hasAppChat: true, share: shareOn(600) });
 
     expect(slotOrder(bar)).toEqual([
       "close",
@@ -118,7 +145,7 @@ describe("TitleBar", () => {
   it("reports a click on Share as the share control, and not as a double click on the bar", () => {
     const onControl = vi.fn();
     const onDoubleClick = vi.fn();
-    const share = shareOf(render({ hasShare: true, onControl, onDoubleClick }));
+    const share = shareOf(render({ share: shareOn(600), onControl, onDoubleClick }));
 
     share.click();
     share.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
@@ -128,31 +155,60 @@ describe("TitleBar", () => {
     expect(onDoubleClick).not.toHaveBeenCalled();
   });
 
-  it("writes Share's word beside its glyph on a bar wide enough for both, and draws the glyph alone on a narrower one", () => {
-    const labelled = shareOf(render({ hasShare: true, width: 920 }));
-    const glyphOnly = shareOf(render({ hasShare: true, width: 919 }));
+  it("writes Share's word beside its glyph where a short title leaves room for both", () => {
+    const share = shareOf(render({ title: SHORT_TITLE, hasAppChat: true, share: shareOn(600) }));
 
-    expect(labelled.textContent).toBe("Share");
-    expect(labelled.querySelector("svg")).not.toBeNull();
-    expect(labelled.getAttribute("data-shape")).toBe("text");
+    expect(share.textContent).toBe("Share");
+    expect(share.querySelector("svg")).not.toBeNull();
+    expect(share.getAttribute("data-shape")).toBe("text");
+  });
+
+  it("draws Share's glyph alone where a long title in the same window leaves no room for the word", () => {
+    const bar = render({ title: LONG_TITLE, hasAppChat: true, share: shareOn(600) });
+    const share = shareOf(bar);
+
+    expect(share.textContent).toBe("");
+    expect(share.querySelector("svg")).not.toBeNull();
     // Without the word it is the same square box as the controls beside it, and still says what it does.
-    expect(glyphOnly.textContent).toBe("");
-    expect(glyphOnly.querySelector("svg")).not.toBeNull();
-    expect(glyphOnly.getAttribute("data-shape")).toBe("icon");
-    expect(glyphOnly.className).toBe(
-      (glyphOnly.parentElement?.querySelector('[data-window-control="refresh"]') as HTMLElement).className,
-    );
-    expect(glyphOnly.getAttribute("aria-label")).toBe("Share Docs");
+    expect(share.getAttribute("data-shape")).toBe("icon");
+    expect(share.className).toBe((bar.querySelector('[data-window-control="app-chat"]') as HTMLElement).className);
+    expect(share.getAttribute("aria-label")).toBe("Share Docs");
   });
 
-  it("draws Share's glyph alone on a bar whose width it was not told", () => {
-    expect(shareOf(render({ hasShare: true })).textContent).toBe("");
+  it("draws no Share where a very long title in a narrow window would lie under even its glyph", () => {
+    const bar = render({ title: VERY_LONG_TITLE, hasAppChat: true, share: shareOn(400) });
+
+    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    // The same title leaves the glyph room on a wider bar, and the word on a wider one still.
+    expect(shareLookIn(render({ title: VERY_LONG_TITLE, share: shareOn(700) }))).toBe("glyph");
+    expect(shareLookIn(render({ title: VERY_LONG_TITLE, share: shareOn(1000) }))).toBe("labelled");
   });
 
-  it("asks a wider bar of a touch client, whose controls leave Share's word less room", () => {
-    expect(shareOf(render({ hasShare: true, width: 1159, isTouch: true })).textContent).toBe("");
-    expect(shareOf(render({ hasShare: true, width: 1160, isTouch: true })).textContent).toBe("Share");
-    expect(shareOf(render({ hasShare: true, width: 1159, isTouch: false })).textContent).toBe("Share");
+  it("asks more room of a touch client, whose controls are wider", () => {
+    const looks = (isTouch: boolean): string[] =>
+      [440, 480, 560].map((barWidth) => shareLookIn(render({ title: SHORT_TITLE, share: { barWidth, isTouch } })));
+
+    expect(looks(false)).toEqual(["labelled", "labelled", "labelled"]);
+    expect(looks(true)).toEqual(["hidden", "glyph", "labelled"]);
+  });
+
+  it("always writes Share's word where the theme sets the title in the bar's own run, which nothing can sit on", () => {
+    const bar = render({ chrome: START_CHROME, title: VERY_LONG_TITLE, share: shareOn(320) });
+
+    expect(slotOrder(bar)).toEqual([
+      "window-icon",
+      "window-title",
+      "refresh",
+      "share",
+      "menu",
+      "minimize",
+      "maximize",
+      "close",
+    ]);
+    expect(shareLookIn(bar)).toBe("labelled");
+    expect(
+      shareLookIn(render({ chrome: START_CHROME, title: VERY_LONG_TITLE, share: { barWidth: 320, isTouch: true } })),
+    ).toBe("labelled");
   });
 
   it("arranges the controls as the theme's chrome says and centres the title over the bar", () => {
@@ -212,12 +268,49 @@ describe("TitleBar", () => {
   });
 });
 
-describe("isShareLabelShown", () => {
-  it("shows the word from the width at which a fifth of the bar holds the run that ends in it", () => {
-    expect(isShareLabelShown(320, false)).toBe(false);
-    expect(isShareLabelShown(919, false)).toBe(false);
-    expect(isShareLabelShown(920, false)).toBe(true);
-    expect(isShareLabelShown(1159, true)).toBe(false);
-    expect(isShareLabelShown(1160, true)).toBe(true);
+describe("shareLookOf", () => {
+  const fitting = (overrides: Partial<ShareFitting>): ShareFitting => ({
+    barWidth: 600,
+    title: SHORT_TITLE,
+    isTitleCentered: true,
+    hasCenteredIcon: true,
+    isTouch: false,
+    ...overrides,
+  });
+  const looksAt = (widths: readonly number[], overrides: Partial<ShareFitting>): string[] =>
+    widths.map((barWidth) => shareLookOf(fitting({ ...overrides, barWidth })));
+
+  it("draws the fullest look the room before the centred title holds, at the width each stops fitting", () => {
+    // "Chat" with its icon is taken to be 58 wide: the word needs a bar of 424, the glyph one of 322.
+    expect(looksAt([321, 322, 423, 424], { title: SHORT_TITLE })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
+    expect(looksAt([600], { title: "Getting Started" })).toEqual(["labelled"]);
+    expect(looksAt([600], { title: LONG_TITLE })).toEqual(["glyph"]);
+  });
+
+  it("takes a title no wider than the three fifths of the bar its element is capped at", () => {
+    const endless = "x".repeat(400);
+
+    expect(looksAt([659, 660, 914, 915], { title: endless })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
+  });
+
+  it("counts the app's icon only where the theme centres it with the title", () => {
+    expect(looksAt([400], { title: SHORT_TITLE, hasCenteredIcon: true })).toEqual(["glyph"]);
+    expect(looksAt([400], { title: SHORT_TITLE, hasCenteredIcon: false })).toEqual(["labelled"]);
+  });
+
+  it("asks a touch client's longer run for more room", () => {
+    expect(looksAt([449, 450, 519, 520], { title: SHORT_TITLE, isTouch: true })).toEqual([
+      "hidden",
+      "glyph",
+      "glyph",
+      "labelled",
+    ]);
+  });
+
+  it("writes the word whatever the title and the width where the title is not centred", () => {
+    expect(looksAt([320, 600], { title: "x".repeat(400), isTitleCentered: false, isTouch: true })).toEqual([
+      "labelled",
+      "labelled",
+    ]);
   });
 });

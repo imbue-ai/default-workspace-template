@@ -103,7 +103,8 @@ Left to right: while the window is focused, the window menu (three dots), Refres
 No status indicator.
 Share asks the Imbue Studio chrome to open its share settings for the window's app (`minds:open-share-settings` with the app's name).
 It is offered to the workspace's owner, under a chrome that has said what it can do, on every window of an app that is not internal, the chat and the terminal included.
-It is a glyph and the word "Share" on a bar wide enough to keep the word clear of the centred title, and the glyph alone on a narrower one.
+It never sits over the centred title, whose width the bar estimates from its length: it is a glyph and the word "Share" where the title leaves room for both, the glyph alone where it leaves room for that, and not drawn where it leaves room for neither, which leaves Share to the window menu.
+A theme that sets the title in the bar's own run always gets the word.
 The Classic Mac and Windows 2000 themes, whose title bar controls have no room for a word, hide it and leave Share to the window menu.
 "Chat about this app" opens the chat about the app (the one labelled `app_chat` with the app's name, else the one titled "<App display name> Chat", made with both on the default provider when there is none; the chat app's own windows open "Chat Chat") through the chat app's `app-chat` launch path, and lays the two windows out side by side for this client, the chat on the half it was already nearer and on top (section 9.2 of the spec).
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.

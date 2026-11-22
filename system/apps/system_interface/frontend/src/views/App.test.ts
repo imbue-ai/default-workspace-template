@@ -676,6 +676,11 @@ describe("sharing a window's app", () => {
     return chrome;
   }
 
+  // A backdrop of a real size, so the window is one whose title leaves Share room.
+  beforeEach(() => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+  });
+
   afterEach(() => {
     Object.defineProperty(window, "parent", { value: window, configurable: true });
   });
