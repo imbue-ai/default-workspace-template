@@ -75,7 +75,7 @@ The browser's launch path was relabelled "Open Browser" because it no longer alw
 
 ### 3.2 What a run does
 
-`resolveLaunchRun` is unchanged.
+`resolveLaunchRun` keeps its modes and gains one rule, for a launch path at the app's pin path.
 A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Terminal allocates another session.
 A shortcut whose launch path is a GET at the app's pin path raises the pinned window in either mode, as the launcher's row for that path does, so a double click on Chat shows the pinned chat list and never opens a second one; its menu offers no mode to switch to.
 The `focus` browser shortcut raises this client's most recent browser window on this desktop and opens `/new` only when there is none.
