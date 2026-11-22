@@ -121,13 +121,15 @@ def app_tree(repo_root: Path, record: AppRecord) -> str | None:
 
 def is_app_linked(repo_root: Path, record: AppRecord) -> bool:
     """Whether the history of the checked-out commit holds a join marker for the
-    app's directory, so a split starts from it rather than walking the whole
-    workspace history.
+    app's directory.
 
     `git subtree split --rejoin` leaves one, which is what linking an app this
-    workspace built does, and so does every `git subtree add` and
-    `git subtree merge` with `--squash`, so an installed app is linked from the
-    start.
+    workspace built does: a split then starts from it rather than walking the
+    whole workspace history. Every `git subtree add` and `git subtree merge`
+    with `--squash` leaves a commit the same search finds, so an installed app
+    counts as linked from the start, but that commit shortens no split: git
+    subtree only remembers which upstream commit it stands for, and a split of
+    an installed app reads the whole workspace history each time.
     """
     marker = run_git(
         repo_root,

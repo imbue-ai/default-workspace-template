@@ -418,7 +418,8 @@ def test_an_installed_app_gets_a_dev_repository_only_once_it_is_modified_and_nev
     modified_tip = commit_all(workspace, "Change the greeting")
     outcome = link_app(workspace, "notes", True, False, runtime)
 
-    # The commits the install left are join markers already: none is made, and only the record is committed.
+    # The squash commit the install left is what the search for a marker finds: none is made, and only the
+    # record is committed.
     assert (outcome.result, outcome.marker_commit, outcome.is_dev_repository_created) == (
         LinkResult.ALREADY_LINKED,
         "",

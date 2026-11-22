@@ -83,8 +83,9 @@ def join_marker_pattern(record: AppRecord) -> str:
     """The ``git log --grep`` pattern of the commits that join the app's directory to a history of its own.
 
     ``git subtree`` leaves such a commit when an app is installed or updated (a squash) and when its first split
-    is made with ``--rejoin``, and starts every later split from the newest one. An app whose workspace history
-    holds one is linked; the pattern is the one ``git subtree`` itself searches with.
+    is made with ``--rejoin``. It starts a later split from the newest one made with ``--rejoin``; a squash only
+    tells it which upstream commit the app's history builds on. An app whose workspace history holds either is
+    linked; the pattern is the one ``git subtree`` itself searches with.
     """
     return f"^git-subtree-dir: {app_directory_prefix(record)}/*$"
 

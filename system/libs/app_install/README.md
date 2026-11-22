@@ -166,8 +166,10 @@ A later split starts from the newest marker.
   A merge that brings in older ones, which every update of the workspace does with the template's history, sends `git subtree` back through all of their ancestors, and the shell refuses that long before the root of a workspace's history.
   The sync service then reports the app as `failed` and names `link --refresh`, which tries the split from the marker and, when that fails, makes it again with the markers ignored (`--ignore-joins`): every commit of the workspace is read once, which takes minutes, the same split commits come out, and the marker it leaves is past the merge.
   An app that has not changed since its marker cannot be given a new one, so after such a merge its next change is not pushed until `link --refresh` is run for it.
-- An installed app needs no marker.
-  The commits `install` and `update` leave are join markers already, so `link` only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
+- An installed app gets no marker.
+  The squash commits `install` and `update` leave carry the same trailer, so the app counts as linked and its split builds on the publisher's commits, and `git subtree` refuses to make a `--rejoin` marker for an app that came in as a squash.
+  `link` therefore only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
+  A squash commit shortens no split: each one of an installed app reads the whole workspace history.
 - An app whose directory was removed and made again (an app uninstalled and built or installed again under the same name) is refused.
   `git subtree split` keeps the commit that removed the directory as it is, and everything the workspace held before it comes along, so the split would carry the workspace's own history, with every file of it, into the app's.
   `link` and the sync service both check that a split's history does not hold the workspace's first commit (`github_sync.app_history.require_split_holds_only_the_app`), and neither joins nor pushes one that does.

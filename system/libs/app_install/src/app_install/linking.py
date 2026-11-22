@@ -336,8 +336,9 @@ def link_app(
     ``is_refreshing``, a new one at the current commit when the app has changed since its newest), and create its
     private dev repository when GitHub sync is enabled or ``is_dev_repository_wanted``, and its record names none.
 
-    An installed app needs no marker, since the commits its install and updates left are markers already: linking
-    one only creates its dev repository, and only once it is modified.
+    An installed app gets no marker: the squash commits its install and updates left carry the trailer the search
+    for one finds, and git subtree refuses to rejoin a split of an app that came in as a squash. Linking one only
+    creates its dev repository, and only once it is modified.
 
     Raises MissingCommandError when git has no ``git subtree``, NotPrimaryCheckoutError when run in a linked
     worktree, AppRecordNotFoundError for an app with no record, NotModifiedAppError for an installed app nobody

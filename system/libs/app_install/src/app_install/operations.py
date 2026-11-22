@@ -143,8 +143,8 @@ class ListedApp(FrozenModel):
     record: AppRecord = Field(description="The app's record")
     state: AppState = Field(description="Whether the app was built here, installed, or installed and changed here")
     is_linked: bool = Field(
-        description="Whether the workspace history holds a join marker for the app, so its own history splits "
-        "out quickly"
+        description="Whether the workspace history holds a join marker for the app: the one a link made, from "
+        "which its own history splits out quickly, or the squash commit of an install"
     )
 
 

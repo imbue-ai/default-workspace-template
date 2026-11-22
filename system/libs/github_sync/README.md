@@ -105,8 +105,12 @@ Which apps the pass pushes:
   `app-install link` gives it only when it is **modified**: its committed
   directory differs from the tree it was installed from in a path outside
   the regenerable set (`uv.lock`). The squash commits an install and an
-  update leave are join markers already, and the split builds the adopter's
-  history on top of the publisher's commits.
+  update leave carry the same trailer, so the search above finds them and
+  the split builds the adopter's history on top of the publisher's commits.
+  They do not shorten the split, though: `git subtree` leaves history out
+  only for a `--rejoin` marker, and refuses to make one for an app that came
+  in as a squash, so each change to a modified installed app is split by
+  reading the whole workspace history, which takes minutes on a large one.
 
 Everything else is skipped and named in the status with a reason:
 `no_dev_repository` (the record has no `dev_repo_url`; an app this workspace
