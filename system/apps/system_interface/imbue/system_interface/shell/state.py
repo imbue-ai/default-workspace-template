@@ -163,8 +163,8 @@ from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.shell.web_push import PywebpushTransport
 from imbue.system_interface.shell.web_push import WEB_PUSH_DIRECTORY_NAME
 from imbue.system_interface.shell.web_push import WebPushNotifier
-from imbue.system_interface.shell.web_push_dispatch import SEND_LOG_FILENAME
 from imbue.system_interface.shell.web_push_dispatch import PushDispatcher
+from imbue.system_interface.shell.web_push_dispatch import SEND_LOG_FILENAME
 from imbue.system_interface.shell.web_push_dispatch import SendLog
 from imbue.system_interface.shell.window_paths import WindowPathStore
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY

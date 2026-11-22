@@ -18,11 +18,11 @@ from imbue.system_interface.shell.web_push_dispatch import FULL_TEXT_MAX_LENGTH
 from imbue.system_interface.shell.web_push_dispatch import MAX_SEND_LOG_ENTRIES
 from imbue.system_interface.shell.web_push_dispatch import PER_CHAT_POST_LIMIT
 from imbue.system_interface.shell.web_push_dispatch import PER_CHAT_WINDOW_SECONDS
-from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_POST_LIMIT
 from imbue.system_interface.shell.web_push_dispatch import PushDispatcher
 from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
 from imbue.system_interface.shell.web_push_dispatch import SendLog
 from imbue.system_interface.shell.web_push_dispatch import SendStatus
+from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_POST_LIMIT
 from imbue.system_interface.shell.web_push_dispatch import compose_notification
 from imbue.system_interface.testing import RecordingPushTransport
 

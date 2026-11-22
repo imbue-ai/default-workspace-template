@@ -520,7 +520,9 @@ def test_a_visitor_watching_the_chat_does_not_hold_back_the_owners_push(
     environ: dict[str, str],
 ) -> None:
     http = _RecordingHttp(
-        200, watchers=_watchers_answer("visitor-page", owner_watched_by=()), push=_QUEUED
+        200,
+        watchers=_watchers_answer("visitor-page", owner_watched_by=()),
+        push=_QUEUED,
     )
 
     notify_user.notify("Done.", None, http=http, environ=environ)
@@ -594,7 +596,11 @@ def test_a_device_push_the_shell_queued_counts_when_the_app_did_not(
             (
                 429,
                 json.dumps(
-                    {"send_id": "s", "status": "limited", "detail": "Too many; not sent."}
+                    {
+                        "send_id": "s",
+                        "status": "limited",
+                        "detail": "Too many; not sent.",
+                    }
                 ),
             ),
             "not pushed to your devices: Too many; not sent.",

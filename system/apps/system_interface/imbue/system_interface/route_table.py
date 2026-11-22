@@ -123,8 +123,8 @@ from imbue.system_interface.shell.web_push_routes import NOTIFICATIONS_SCRIPT_RO
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_DEVICES_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_KEY_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_RESET_ROUTE
-from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SEND_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SENDS_ROUTE
+from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SEND_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SETTINGS_ROUTE
 from imbue.system_interface.shell.web_push_routes import WORKER_SCRIPT_ROUTE
 
