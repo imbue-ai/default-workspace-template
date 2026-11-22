@@ -169,6 +169,22 @@ def test_session_a_listed_absent_agent_names_is_kept(roots: SweepRoots) -> None:
     assert not set(shared_copies) & set(_planned(roots))
 
 
+def test_session_two_deleted_agents_name_is_planned_once(roots: SweepRoots) -> None:
+    shared_session = str(uuid4())
+    copies = write_session(roots, shared_session)
+    for _ in range(2):
+        write_archive(
+            roots,
+            _new_agent_id(),
+            [shared_session],
+            preserved_at=_NOW - timedelta(days=1),
+        )
+
+    planned_paths = [removal.path for removal in plan_sweep(roots, now=_NOW)]
+
+    assert sorted(planned_paths) == sorted(copies)
+
+
 def test_session_copies_are_found_in_every_account(roots: SweepRoots) -> None:
     session_id = str(uuid4())
     copies = write_session(roots, session_id, account="a") + write_session(

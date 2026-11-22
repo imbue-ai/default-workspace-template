@@ -97,26 +97,29 @@ def plan_sweep(
         protected_session_ids.update(read_session_ids(history_file))
 
     removals: list[Removal] = []
+    # A clone carries its source's session history, so two deleted agents can name one session.
+    planned_copies: set[Path] = set()
     for archive in unprotected_archives:
         agent_id = archive.agent_id
         session_ids = (
             read_session_ids(archive.path / SESSION_ID_HISTORY_FILENAME)
             - protected_session_ids
         )
-        session_copies = _session_copies(roots.accounts_root, session_ids)
+        session_copies = [
+            path
+            for path in _session_copies(roots.accounts_root, session_ids)
+            if path not in planned_copies
+        ]
         is_expired = now - _preserved_at(archive) >= retention
-        if is_expired:
+        if is_expired or _has_preserved_raw_transcript(archive.path):
+            planned_copies.update(session_copies)
             removals.extend(
                 _removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id)
                 for path in session_copies
             )
+        if is_expired:
             removals.append(
                 _removal(archive.path, RemovalReason.EXPIRED_ARCHIVE, agent_id)
-            )
-        elif _has_preserved_raw_transcript(archive.path):
-            removals.extend(
-                _removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id)
-                for path in session_copies
             )
     return tuple(removals)
 
