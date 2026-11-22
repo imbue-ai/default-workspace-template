@@ -1,0 +1,1 @@
+The shared frontend library (`system/libs/workspace_ui`) gains a coach mark component, `components/CoachMark.ts`: a bubble with an arrow and a "Got it" button that a page points at one of its own controls. Its README lists it with the other shared components.
