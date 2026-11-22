@@ -377,7 +377,7 @@ The page polls the listing every 30 seconds, every 5 while a run is in flight, a
 
 ## 11. Built-in routines and the Caretaker
 
-The template ships one definition, `system/routines/caretaker.toml`:
+The template ships two definitions. `system/routines/history-sweep.toml` ("Clear deleted chats", on by default, daily at 04:00) removes what deleted chats leave on disk; `system/libs/history_sweep/README.md` says what it removes. The other is the Caretaker, `system/routines/caretaker.toml`:
 
 ```toml
 title = "Weekly check-up"
