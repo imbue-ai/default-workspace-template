@@ -84,6 +84,28 @@ describe("the coach mark at the New chat button", () => {
     expect(bubble()).not.toBeNull();
   });
 
+  it("is not held back by the pulse of a mark already up, which never ends", async () => {
+    const button = newChatButton();
+    document.body.appendChild(button);
+    await showNewChatCoachMark(() => undefined);
+    const first = bubble();
+    // As a browser reports the pulse: an animation that repeats forever, and so never finishes.
+    const pulse = {
+      finished: new Promise<void>(() => undefined),
+      effect: { getComputedTiming: () => ({ endTime: Infinity }) },
+    };
+    button.getAnimations = () => [pulse as unknown as Animation];
+
+    void showNewChatCoachMark(() => undefined);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Asked for again, the mark takes the first one's place at once, rather than whenever the pulse stops.
+    expect(first).not.toBeNull();
+    expect(first?.isConnected).toBe(false);
+    expect(document.querySelectorAll(".coach-mark")).toHaveLength(1);
+    expect(button.classList.contains(NEW_CHAT_PULSE_CLASS)).toBe(true);
+  });
+
   it("shows nothing when the list has no New chat button, or the button went while the drawer slid", async () => {
     await showNewChatCoachMark(() => undefined);
     expect(bubble()).toBeNull();

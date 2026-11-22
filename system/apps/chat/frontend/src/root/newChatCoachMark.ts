@@ -13,12 +13,20 @@ export const NEW_CHAT_PULSE_CLASS = "coach-pulse";
 // The New chat button (``ChatRail.ts``): the rail's, or the drawer header's.
 const NEW_CHAT_BUTTON_SELECTOR = ".chat-rail-new";
 
+/** Whether the animation ends by itself. One that repeats forever, as the button's pulse does while a mark is up,
+ *  never finishes: waiting for it would hold a second mark back until the first is taken down. */
+function endsByItself(animation: Animation): boolean {
+  return animation.effect?.getComputedTiming().endTime !== Infinity;
+}
+
 /** Once nothing that moves ``element`` is still animating: its own animations and those of what contains it. */
 async function whenAtRest(element: HTMLElement): Promise<void> {
   const running: Promise<unknown>[] = [];
   for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
     if (typeof node.getAnimations !== "function") continue;
-    for (const animation of node.getAnimations()) running.push(animation.finished);
+    for (const animation of node.getAnimations()) {
+      if (endsByItself(animation)) running.push(animation.finished);
+    }
   }
   // An animation that is cancelled rejects, and leaves the element at rest all the same.
   await Promise.allSettled(running);
