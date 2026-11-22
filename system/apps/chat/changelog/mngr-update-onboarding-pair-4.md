@@ -24,4 +24,4 @@
 
 - The prompt that works out next-step suggestions asks for a question's own answers when the reply's one main question has a small set of them.
 
-- A chat page tells the shell when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`, which the chat root forwards), so the show-around tour starts on every harness.
+- A chat page says when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`), and the chat root tells the shell an agent is working while any chat page it holds says so, so the show-around tour starts on every harness.

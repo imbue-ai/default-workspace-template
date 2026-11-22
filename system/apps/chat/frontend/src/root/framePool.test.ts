@@ -153,6 +153,40 @@ describe("InnerFramePool", () => {
     expect(pool.isInnerWindow(frameA.contentWindow)).toBe(false);
   });
 
+  it("says a page is gone when its frame is destroyed, by deletion or past the bound", () => {
+    const gone: Window[] = [];
+    pool = new InnerFramePool(container, (inner) => gone.push(inner));
+    pool.show("agent-a");
+    const windowA = frameOf("agent-a").contentWindow;
+
+    pool.destroy("agent-a");
+    expect(gone).toEqual([windowA]);
+
+    const chatIds = Array.from({ length: MAX_HELD_FRAMES + 1 }, (_, index) => `agent-${index}`);
+    pool.show(chatIds[0]);
+    const evictedWindow = frameOf(chatIds[0]).contentWindow;
+    for (const chatId of chatIds.slice(1)) pool.show(chatId);
+
+    expect(pool.heldChatIds()).toEqual(chatIds.slice(1));
+    expect(gone).toEqual([windowA, evictedWindow]);
+  });
+
+  it("says a page is gone when its frame loads, before handing the fresh page the handshake", () => {
+    const order: string[] = [];
+    pool = new InnerFramePool(container, (inner) => {
+      if (inner === frameOf("agent-a").contentWindow) order.push("gone");
+    });
+    pool.setHandshake(HANDSHAKE);
+    pool.show("agent-a");
+
+    const page = loadPage("agent-a");
+    page.posted.mockImplementation(() => order.push("handshake"));
+    // A reload, or the page's own navigation: the frame loads again with a page that has said nothing.
+    frameOf("agent-a").dispatchEvent(new Event("load"));
+
+    expect(order).toEqual(["gone", "gone", "handshake"]);
+  });
+
   it("hands a loaded page the handshake, now or when it arrives, and tells it shown and hidden", () => {
     pool.setRootShown(true);
     pool.show("agent-a");

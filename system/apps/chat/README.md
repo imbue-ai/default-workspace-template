@@ -98,9 +98,10 @@ observe`, its own supervised service) writes, and serves:
   (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
   one module the embed ratchet allows, hands them the shell's handshake and
   forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
-  `shell:show-coach-card`, `shell:agent-working`, `shell:message`, and `shell:open-link` messages, and passes the desktop
+  `shell:show-coach-card`, `shell:message`, and `shell:open-link` messages, and passes the desktop
   app's answers to them (`minds:provider-sign-in-ack`,
-  `minds:permission-resolutions`) back down.
+  `minds:permission-resolutions`) back down. Their `shell:agent-working` it keeps, and sends
+  the shell one of its own for all of them (see "Suggestions").
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -855,9 +856,14 @@ has no reply on its way, so no turn is under way in it until a message is sent. 
 shell the same thing, whether or not a strip is drawn: `shell:agent-working {isWorking}` when a
 reply starts or stops being under way in its chat (never for a room, nor for a first agent
 starting with nothing sent to it), again when a shell greets it while one is, and `false` when
-the page stops showing the chat. The chat root forwards it, and the shell's show-around tour
-begins on it, since the avatar's status is prompt only for a harness that reports its activity to
-mngr. The new-chat strip, "Things to try", is open on a chat nobody has said anything
+the page stops showing the chat. The shell hears every page the chat root frames as the root, so
+the root does not pass the message on: it keeps each page's last word
+(`frontend/src/root/agentWorkingReports.ts`) and tells the shell `isWorking: true` while any
+page it holds says so and `false` once none does, when that changes and again when the shell
+greets the root while one does. A page whose frame is evicted, removed, or loads again takes its
+word with it, so a chat that finishes while another still works does not read as stopped, and
+one deleted mid-turn leaves nothing behind. The shell's show-around tour begins on the message,
+since the avatar's status is prompt only for a harness that reports its activity to mngr. The new-chat strip, "Things to try", is open on a chat nobody has said anything
 in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
 the chat's first message it collapses to its toggle, unless the activity strip opens with the
 same suggestions in the same order, in which case it is dropped for good, so the two are never

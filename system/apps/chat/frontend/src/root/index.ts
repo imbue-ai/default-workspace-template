@@ -81,6 +81,7 @@ import { startNewChat } from "./newChat";
 import { showNewChatCoachMark } from "./newChatCoachMark";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import type { InnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
@@ -107,6 +108,7 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+let relay: InnerFrameRelay | null = null;
 // The intake the root's URL named and has not yet applied or given up (waiting for the chats, fetched, offered
 // through the picker); null otherwise. While one is pending the shell holds the window at the token path it put it
 // at, and the root reports no other location, so a reload or another client finds the token too.
@@ -507,13 +509,15 @@ const ChatRoot: m.Component = {
             class: "chat-root-frames absolute inset-0",
             // The frames are the pool's DOM, not mithril's: never reconciled.
             oncreate: ({ dom }: m.VnodeDOM) => {
-              pool = new InnerFramePool(dom as HTMLElement);
+              pool = new InnerFramePool(dom as HTMLElement, (inner) => relay?.forgetAgentWorking(inner));
               pool.setCompact(isCompact);
               if (handshake !== null) pool.setHandshake(handshake);
               pool.setRootShown(isRootShown);
               pool.show(selectedChatId);
             },
             onremove: () => {
+              // The frames go with their container, and what their pages said of an agent working with them.
+              for (const inner of pool?.innerWindows() ?? []) relay?.forgetAgentWorking(inner);
               pool = null;
             },
             onbeforeupdate: () => false,
@@ -602,6 +606,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       reportedLocation = null;
       reportLocation();
       reportedFirstRunProviderStep = null;
+      relay?.repeatAgentWorking();
       m.redraw();
     },
     onShown: () => {
@@ -679,7 +684,7 @@ function bootstrap(): void {
     return;
   }
   const shell = connectRootToShell(accountsLoaded);
-  startInnerFrameRelay(
+  relay = startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
