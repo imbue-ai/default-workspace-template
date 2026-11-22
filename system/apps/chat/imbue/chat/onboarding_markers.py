@@ -1,5 +1,5 @@
 """The chat app's writes to the workspace's onboarding markers (``onboarding_activity``): what its owner has
-already done, which the activity suggestions read to decide what is still worth offering."""
+already done, which the new-chat suggestions and the onboarding checklist read."""
 
 from loguru import logger as _loguru_logger
 from onboarding_activity.markers import Marker

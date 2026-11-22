@@ -1,9 +1,9 @@
 """Suggestions: short entries above the composer that the user can click instead of typing.
 
-A suggestion is offered in one of three places: under an agent's reply (next-step), while an agent
-works on a reply (activity), and on a chat with no message yet (new-chat). Clicking a reply
-suggestion sends its label; clicking an action suggestion does what its action names instead, and
-only the activity and new-chat placements offer those (``activity_suggestions.py``).
+A suggestion is offered in one of two places: under an agent's reply (next-step), and on a chat
+with no message yet (new-chat). Clicking a reply suggestion sends its label; clicking an action
+suggestion does what its action names instead, and only the new-chat placement offers those
+(``new_chat_suggestions.py``).
 
 A chat's next-step suggestions are the replies offered under one assistant message, kept as one
 file in the chat's own folder so every page of the chat reads the same set and it travels with
@@ -38,9 +38,7 @@ class SuggestionPlacement(LowerCaseStrEnum):
 
     # Under an agent's reply: replies to it.
     NEXT_STEP = auto()
-    # While an agent works on a reply: things to try in Studio meanwhile.
-    ACTIVITY = auto()
-    # On a chat with no message yet: the same things to try.
+    # On a chat with no message yet: things to try in Studio.
     NEW_CHAT = auto()
 
 

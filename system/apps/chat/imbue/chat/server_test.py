@@ -4150,7 +4150,6 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
             "autocompact_default": True,
             "is_autocompact_notice_shown": False,
             "is_next_step_suggestions_enabled": True,
-            "is_activity_suggestions_enabled": True,
             "is_new_chat_suggestions_enabled": True,
             "is_picker_send_hint_shown": False,
         }
@@ -4163,7 +4162,6 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "autocompact_default": False,
         "is_autocompact_notice_shown": True,
         "is_next_step_suggestions_enabled": False,
-        "is_activity_suggestions_enabled": True,
         "is_new_chat_suggestions_enabled": False,
         "is_picker_send_hint_shown": True,
     }
@@ -4171,6 +4169,26 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
 
     assert response.status_code == 200
     assert client.get("/api/settings").get_json() == {"settings": replacement}
+
+
+def test_a_settings_write_carrying_a_field_the_settings_do_not_hold_is_taken_without_it(client: FlaskClient) -> None:
+    """A writer that knows a field this app does not must not have its whole write refused for it."""
+    whole = client.put(
+        "/api/settings",
+        json={"fast_mode_turn_limit": 5, "is_some_other_suggestions_enabled": False},
+    )
+    partial = client.put(
+        "/api/settings/suggestions",
+        json={"is_some_other_suggestions_enabled": False, "is_new_chat_suggestions_enabled": False},
+    )
+
+    assert whole.status_code == 200
+    assert partial.status_code == 200
+    settings = client.get("/api/settings").get_json()["settings"]
+    assert "is_some_other_suggestions_enabled" not in settings
+    assert settings["fast_mode_turn_limit"] == 5
+    assert settings["is_new_chat_suggestions_enabled"] is False
+    assert partial.get_json() == {"settings": settings}
 
 
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
@@ -4186,7 +4204,7 @@ def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setti
     resets a setting the other wrote, nor one a writer of the whole settings wrote."""
     client.put("/api/settings", json={"fast_mode_default": "auto", "fast_mode_turn_limit": 5})
 
-    response = client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": False})
+    response = client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": False})
 
     expected = {
         "fast_mode_default": "auto",
@@ -4195,8 +4213,7 @@ def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setti
         "autocompact_default": True,
         "is_autocompact_notice_shown": False,
         "is_next_step_suggestions_enabled": True,
-        "is_activity_suggestions_enabled": False,
-        "is_new_chat_suggestions_enabled": True,
+        "is_new_chat_suggestions_enabled": False,
         "is_picker_send_hint_shown": False,
     }
     assert response.status_code == 200
@@ -4206,17 +4223,17 @@ def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setti
     # A second writer changes another switch; a null and an absent switch both stay as they are.
     second = client.put(
         "/api/settings/suggestions",
-        json={"is_next_step_suggestions_enabled": False, "is_activity_suggestions_enabled": None},
+        json={"is_next_step_suggestions_enabled": False, "is_new_chat_suggestions_enabled": None},
     )
 
     expected = {**expected, "is_next_step_suggestions_enabled": False}
     assert second.get_json() == {"settings": expected}
     assert client.put("/api/settings/suggestions", json={}).get_json() == {"settings": expected}
-    back_on = client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": True})
-    assert back_on.get_json() == {"settings": {**expected, "is_activity_suggestions_enabled": True}}
+    back_on = client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": True})
+    assert back_on.get_json() == {"settings": {**expected, "is_new_chat_suggestions_enabled": True}}
 
 
-def test_the_suggestion_switches_refuse_a_value_that_is_no_switch_and_a_setting_that_is_not_theirs(
+def test_the_suggestion_switches_refuse_a_value_that_is_no_switch_and_leave_a_setting_that_is_not_theirs(
     client: FlaskClient,
 ) -> None:
     before = client.get("/api/settings").get_json()
@@ -4225,8 +4242,11 @@ def test_the_suggestion_switches_refuse_a_value_that_is_no_switch_and_a_setting_
         client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": "sometimes"}).status_code
         == 400
     )
-    assert client.put("/api/settings/suggestions", json={"fast_mode_turn_limit": 9}).status_code == 400
     assert client.put("/api/settings/suggestions", json=[True]).status_code == 400
+    # A setting that is no switch is not this route's to change: it is dropped, and the answer is the settings.
+    not_a_switch = client.put("/api/settings/suggestions", json={"fast_mode_turn_limit": 9})
+    assert not_a_switch.status_code == 200
+    assert not_a_switch.get_json() == before
     assert client.get("/api/settings").get_json() == before
 
 
@@ -4247,7 +4267,7 @@ def test_a_settings_change_through_either_route_is_pushed_to_every_page(app: Fla
     assert drain_pushes(pushes) == []
 
 
-_ALL_ACTIVITY_SUGGESTIONS = [
+_ALL_NEW_CHAT_SUGGESTIONS = [
     {
         "suggestion_id": "new_chat",
         "label": "Work in parallel by starting a new chat",
@@ -4270,63 +4290,50 @@ _ALL_ACTIVITY_SUGGESTIONS = [
 ]
 
 
-def _get_activity_suggestions(
-    client: FlaskClient, placement: str = "activity", chat_id: str | None = None, headers: dict[str, str] | None = None
+def _get_new_chat_suggestions(
+    client: FlaskClient, chat_id: str | None = None, headers: dict[str, str] | None = None
 ) -> Any:
-    query = {"placement": placement} if chat_id is None else {"placement": placement, "chat_id": chat_id}
-    return client.get("/api/suggestions/activity", query_string=query, headers=headers)
+    query = {} if chat_id is None else {"chat_id": chat_id}
+    return client.get("/api/suggestions/new-chat", query_string=query, headers=headers)
 
 
-def _offered_activity_ids(client: FlaskClient, placement: str = "activity", chat_id: str | None = None) -> list[str]:
-    response = _get_activity_suggestions(client, placement, chat_id)
+def _offered_new_chat_ids(client: FlaskClient, chat_id: str | None = None) -> list[str]:
+    response = _get_new_chat_suggestions(client, chat_id)
     assert response.status_code == 200
     return [suggestion["suggestion_id"] for suggestion in response.get_json()["suggestions"]]
 
 
-def test_the_activity_route_offers_nothing_until_the_tour_has_finished_and_then_everything_not_yet_done(
+def test_the_new_chat_route_offers_nothing_until_the_tour_has_finished_and_then_everything_not_yet_done(
     client: FlaskClient,
 ) -> None:
-    """A workspace whose owner has done none of it is offered all four, in their fixed order, at both
-    placements, once the tour is out of the way."""
-    before_the_tour = _get_activity_suggestions(client)
+    """A workspace whose owner has done none of it is offered all four, in their fixed order, once the tour is
+    out of the way."""
+    before_the_tour = _get_new_chat_suggestions(client)
 
     mark(Marker.TOUR_FINISHED)
-    while_waiting = _get_activity_suggestions(client, "activity")
-    on_a_new_chat = _get_activity_suggestions(client, "new_chat")
+    after_the_tour = _get_new_chat_suggestions(client)
 
     assert before_the_tour.status_code == 200
     assert before_the_tour.get_json() == {"suggestions": []}
-    assert while_waiting.status_code == 200
-    assert while_waiting.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
-    assert on_a_new_chat.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
+    assert after_the_tour.status_code == 200
+    assert after_the_tour.get_json() == {"suggestions": _ALL_NEW_CHAT_SUGGESTIONS}
 
 
-def test_the_activity_route_refuses_a_placement_that_offers_no_activity_suggestions(client: FlaskClient) -> None:
-    mark(Marker.TOUR_FINISHED)
-
-    assert client.get("/api/suggestions/activity").status_code == 400
-    for placement in ("", "next_step", "ACTIVITY", "everywhere"):
-        refused = _get_activity_suggestions(client, placement)
-        assert refused.status_code == 400
-        assert refused.get_json() == {"detail": "placement must be 'activity' or 'new_chat'"}
-
-
-def test_the_activity_route_drops_each_suggestion_as_its_marker_is_set(client: FlaskClient) -> None:
+def test_the_new_chat_route_drops_each_suggestion_as_its_marker_is_set(client: FlaskClient) -> None:
     mark(Marker.TOUR_FINISHED)
 
     mark(Marker.PHONE_LAYOUT_USED)
-    assert _offered_activity_ids(client) == ["new_chat", "build_app", "connect_data"]
+    assert _offered_new_chat_ids(client) == ["new_chat", "build_app", "connect_data"]
     mark(Marker.SECOND_CHAT_STARTED)
-    assert _offered_activity_ids(client) == ["build_app", "connect_data"]
+    assert _offered_new_chat_ids(client) == ["build_app", "connect_data"]
     mark(Marker.PERMISSION_REQUEST_FILED)
-    assert _offered_activity_ids(client) == ["build_app"]
-    # A build started just now holds the last one back, at either placement.
+    assert _offered_new_chat_ids(client) == ["build_app"]
+    # A build started just now holds the last one back.
     mark(Marker.APP_BUILD_STARTED)
-    assert _offered_activity_ids(client, "activity") == []
-    assert _offered_activity_ids(client, "new_chat") == []
+    assert _offered_new_chat_ids(client) == []
 
 
-def test_the_activity_route_stops_suggesting_an_app_once_the_user_has_built_one(
+def test_the_new_chat_route_stops_suggesting_an_app_once_the_user_has_built_one(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The registry is read against the workspace the app runs in: a registered package the root project does not
@@ -4338,121 +4345,71 @@ def test_the_activity_route_stops_suggesting_an_app_once_the_user_has_built_one(
     mark(Marker.TOUR_FINISHED)
 
     write_plain_app_registry(registry, "chat")
-    with_the_templates_apps = _offered_activity_ids(client)
+    with_the_templates_apps = _offered_new_chat_ids(client)
     write_plain_app_registry(registry, "chat", "todo-list")
-    with_a_built_app = _offered_activity_ids(client)
+    with_a_built_app = _offered_new_chat_ids(client)
 
     assert with_the_templates_apps == ["new_chat", "phone_access", "build_app", "connect_data"]
     assert with_a_built_app == ["new_chat", "phone_access", "connect_data"]
 
 
-def test_the_activity_route_offers_a_visitor_nothing(client: FlaskClient) -> None:
+def test_the_new_chat_route_offers_a_visitor_nothing(client: FlaskClient) -> None:
     mark(Marker.TOUR_FINISHED)
 
-    visitors = _get_activity_suggestions(client, headers=_identity_header(_VISITOR))
-    owners = _get_activity_suggestions(client, headers=_identity_header(RequestIdentity(owner=True)))
+    visitors = _get_new_chat_suggestions(client, headers=_identity_header(_VISITOR))
+    owners = _get_new_chat_suggestions(client, headers=_identity_header(RequestIdentity(owner=True)))
 
     assert visitors.status_code == 200
     assert visitors.get_json() == {"suggestions": []}
-    assert owners.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
+    assert owners.get_json() == {"suggestions": _ALL_NEW_CHAT_SUGGESTIONS}
 
 
-def test_each_activity_placement_is_switched_off_by_its_own_switch(client: FlaskClient) -> None:
+def test_new_chat_suggestions_are_switched_off_by_their_own_switch_alone(client: FlaskClient) -> None:
     mark(Marker.TOUR_FINISHED)
 
-    client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": False})
-    assert _offered_activity_ids(client, "activity") == []
-    assert len(_offered_activity_ids(client, "new_chat")) == 4
-
-    client.put(
-        "/api/settings/suggestions",
-        json={"is_activity_suggestions_enabled": True, "is_new_chat_suggestions_enabled": False},
-    )
-    assert len(_offered_activity_ids(client, "activity")) == 4
-    assert _offered_activity_ids(client, "new_chat") == []
+    client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": False})
+    assert _offered_new_chat_ids(client) == []
 
     # The next-step switch is another strip's.
     client.put(
         "/api/settings/suggestions",
         json={"is_new_chat_suggestions_enabled": True, "is_next_step_suggestions_enabled": False},
     )
-    assert len(_offered_activity_ids(client, "new_chat")) == 4
+    assert len(_offered_new_chat_ids(client)) == 4
 
 
-def test_the_activity_route_offers_nothing_in_the_first_run_chat_while_its_tree_is_in_progress(
+def test_the_new_chat_route_offers_nothing_in_the_first_run_chat_while_its_tree_is_in_progress(
     app: Flask, client: FlaskClient
 ) -> None:
     """The first conversation's own suggestions are the tree's; every other chat, and a chat the app does not
-    know yet, is offered the activity suggestions meanwhile."""
+    know yet, is offered the new-chat suggestions meanwhile."""
     manager = state_of(app).agent_manager
     mark(Marker.TOUR_FINISHED)
     first_run_chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
     assert manager.get_first_run_tree_step(ChatId(first_run_chat_id)) is FirstRunTreeStep.START
 
-    assert _offered_activity_ids(client, "activity", first_run_chat_id) == []
-    assert _offered_activity_ids(client, "new_chat", first_run_chat_id) == []
-    assert len(_offered_activity_ids(client, "activity", f"agent-{uuid4().hex}")) == 4
-    assert len(_offered_activity_ids(client, "activity", "")) == 4
-    assert len(_offered_activity_ids(client, "activity")) == 4
+    assert _offered_new_chat_ids(client, first_run_chat_id) == []
+    assert len(_offered_new_chat_ids(client, f"agent-{uuid4().hex}")) == 4
+    assert len(_offered_new_chat_ids(client, "")) == 4
+    assert len(_offered_new_chat_ids(client)) == 4
     # An id that is no chat's shape names no chat, so no tree holds anything back.
-    assert len(_offered_activity_ids(client, "activity", "../../etc")) == 4
+    assert len(_offered_new_chat_ids(client, "../../etc")) == 4
 
     write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.IDEAS)
-    assert _offered_activity_ids(client, "activity", first_run_chat_id) == []
+    assert _offered_new_chat_ids(client, first_run_chat_id) == []
 
     write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.DONE)
-    assert len(_offered_activity_ids(client, "activity", first_run_chat_id)) == 4
+    assert len(_offered_new_chat_ids(client, first_run_chat_id)) == 4
 
 
-def test_a_click_on_the_connect_data_suggestion_retires_it_and_a_click_on_any_other_records_nothing(
-    client: FlaskClient,
-) -> None:
-    mark(Marker.TOUR_FINISHED)
-
-    for suggestion_id in ("new_chat", "phone_access", "build_app"):
-        clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": suggestion_id})
-        assert clicked.status_code == 200
-        assert clicked.get_json() == {}
-    assert _offered_activity_ids(client) == ["new_chat", "phone_access", "build_app", "connect_data"]
-    assert not is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
-
-    clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"})
-
-    assert clicked.status_code == 200
-    assert clicked.get_json() == {}
-    assert is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
-    assert _offered_activity_ids(client) == ["new_chat", "phone_access", "build_app"]
-    assert [marker for marker in Marker if is_marked(marker)] == [
-        Marker.TOUR_FINISHED,
-        Marker.CONNECT_DATA_COACH_SHOWN,
-    ]
-
-
-def test_a_click_that_names_no_activity_suggestion_is_refused_and_a_visitors_click_records_nothing(
-    client: FlaskClient,
-) -> None:
-    for body in ({"suggestion_id": "start-describe"}, {"suggestion_id": ""}, {}, ["connect_data"]):
-        assert client.post("/api/suggestions/activity/clicked", json=body).status_code == 400
-
-    visitors = client.post(
-        "/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"}, headers=_identity_header(_VISITOR)
-    )
-
-    assert visitors.status_code == 200
-    assert visitors.get_json() == {}
-    assert not is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
-
-
-def test_a_click_is_answered_even_when_its_marker_cannot_be_written(
+def test_the_new_chat_route_offers_nothing_when_the_markers_cannot_be_read(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mark(Marker.TOUR_FINISHED)
     block_onboarding_markers(tmp_path, monkeypatch)
 
-    clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"})
-    offered = _get_activity_suggestions(client)
+    offered = _get_new_chat_suggestions(client)
 
-    assert clicked.status_code == 200
-    assert clicked.get_json() == {}
     # With the markers unreadable nothing is offered, rather than everything.
     assert offered.status_code == 200
     assert offered.get_json() == {"suggestions": []}

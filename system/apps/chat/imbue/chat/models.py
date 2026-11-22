@@ -12,7 +12,6 @@ from workspace_layout.roster import RosterParticipant
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
-from imbue.chat.activity_suggestions import ActivitySuggestionId
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.chat_autocompact import ChatAutocompactState
@@ -311,23 +310,13 @@ class ChatSuggestionsResponse(FrozenModel):
         )
 
 
-class ActivitySuggestionsResponse(FrozenModel):
-    """Response from GET /api/suggestions/activity: the things to try that are offered to the requester."""
+class NewChatSuggestionsResponse(FrozenModel):
+    """Response from GET /api/suggestions/new-chat: the things to try that are offered to the requester."""
 
     suggestions: tuple[Suggestion, ...] = Field(
-        description="Every activity suggestion whose condition holds, in the order they are offered; empty when "
-        "none holds, and when none is offered to this requester, in this chat, at this placement"
+        description="Every onboarding item the owner has not done, in the items' order; empty when every one is "
+        "done, and when none is offered to this requester or in this chat"
     )
-
-
-class ActivitySuggestionClickRequest(FrozenModel):
-    """Request body for POST /api/suggestions/activity/clicked: the activity suggestion that was clicked."""
-
-    suggestion_id: ActivitySuggestionId = Field(description="The id of the suggestion clicked")
-
-
-class ActivitySuggestionClickResponse(FrozenModel):
-    """Response from POST /api/suggestions/activity/clicked: an empty object."""
 
 
 class FastModeStateResponse(FrozenModel):

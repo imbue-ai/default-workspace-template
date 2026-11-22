@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from loguru import logger as _loguru_logger
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
@@ -44,7 +45,10 @@ class FastModeMode(LowerCaseStrEnum):
 
 
 class ChatSettings(FrozenModel):
-    """What the settings file holds. Every field has a default, so an older file reads whole."""
+    """What the settings file holds. Every field has a default, so an older file reads whole, and a field this
+    version does not know is dropped, so a file that carries one keeps every other value."""
+
+    model_config = ConfigDict(extra="ignore")
 
     fast_mode_default: FastModeMode = Field(
         default=FastModeMode.OFF,
@@ -71,10 +75,6 @@ class ChatSettings(FrozenModel):
         default=True,
         description="Whether suggested replies are offered under an agent's reply",
     )
-    is_activity_suggestions_enabled: bool = Field(
-        default=True,
-        description="Whether things to try in Studio are offered while an agent works on a reply",
-    )
     is_new_chat_suggestions_enabled: bool = Field(
         default=True,
         description="Whether things to try in Studio are offered on a chat with no message yet",
@@ -91,14 +91,14 @@ class SuggestionSettingsUpdate(FrozenModel):
 
     Replacing the settings whole would let a writer that knows fewer fields reset the rest, so the
     writers of these switches (a strip's disable link, the Imbue Studio app's workspace settings) send
-    only the switches they mean to change.
+    only the switches they mean to change. A switch this version does not know is dropped, so a writer that
+    still sends one changes the ones it names that are known.
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     is_next_step_suggestions_enabled: bool | None = Field(
         default=None, description="The new value of the next-step switch; None leaves it"
-    )
-    is_activity_suggestions_enabled: bool | None = Field(
-        default=None, description="The new value of the activity switch; None leaves it"
     )
     is_new_chat_suggestions_enabled: bool | None = Field(
         default=None, description="The new value of the new-chat switch; None leaves it"
@@ -110,10 +110,6 @@ class SuggestionSettingsUpdate(FrozenModel):
         if self.is_next_step_suggestions_enabled is not None:
             updated = updated.model_copy_update(
                 to_update(updated.field_ref().is_next_step_suggestions_enabled, self.is_next_step_suggestions_enabled)
-            )
-        if self.is_activity_suggestions_enabled is not None:
-            updated = updated.model_copy_update(
-                to_update(updated.field_ref().is_activity_suggestions_enabled, self.is_activity_suggestions_enabled)
             )
         if self.is_new_chat_suggestions_enabled is not None:
             updated = updated.model_copy_update(

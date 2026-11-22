@@ -47,7 +47,7 @@ def test_a_suggestion_is_a_reply_unless_it_names_an_action_and_only_a_known_acti
 
 
 def test_the_placements_and_the_actions_are_the_wire_values_the_pages_read() -> None:
-    assert [placement.value for placement in SuggestionPlacement] == ["next_step", "activity", "new_chat"]
+    assert [placement.value for placement in SuggestionPlacement] == ["next_step", "new_chat"]
     assert [action.value for action in SuggestionAction] == [
         "new_chat_coach",
         "phone_access",
