@@ -517,7 +517,9 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
     hint_box, send_box = _box(hint), _box(send_button)
     assert hint_box["left"] <= (send_box["left"] + send_box["right"]) / 2 <= hint_box["right"]
     assert hint_box["bottom"] <= send_box["top"] or hint_box["top"] >= send_box["bottom"]
-    assert state.chat_settings.read().is_picker_send_hint_shown is True
+    wait_until_true(
+        lambda: state.chat_settings.read().is_picker_send_hint_shown, 10, "the hint's recording in the chat settings"
+    )
     page.screenshot(path=str(tmp_path / "category-picker.png"))
 
     hint.get_by_role("button", name="Got it").click()
@@ -536,7 +538,11 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
     expect(categories.get_by_role("button", name="Money", exact=True)).to_be_disabled()
     gmail = connectors.get_by_role("button", name="Gmail", exact=True)
     expect(gmail).to_be_enabled()
-    assert gmail.locator("img").evaluate("image => image.complete && image.naturalWidth > 0") is True
+    wait_until_true(
+        lambda: gmail.locator("img").evaluate("image => image.complete && image.naturalWidth > 0") is True,
+        10,
+        "the Gmail mark's load",
+    )
 
     textarea.fill("")
     gmail.click()
