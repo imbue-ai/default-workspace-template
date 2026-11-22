@@ -179,7 +179,6 @@ from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ChatWatchersResponse
 from imbue.chat.models import ConvergingResponse
-from imbue.chat.models import RenameRefusalResponse
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreateChatResponse
 from imbue.chat.models import CreatedChat
@@ -214,6 +213,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import RenameChatRequest
 from imbue.chat.models import RenameChatResponse
+from imbue.chat.models import RenameRefusalResponse
 from imbue.chat.models import ScreenCaptureResponse
 from imbue.chat.models import SeedChatRequest
 from imbue.chat.models import SendFailureResponse
