@@ -51,6 +51,7 @@ from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import SuggestionSettingsUpdate
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.registry import get_model_state_path
@@ -474,6 +475,10 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
         )
         manager._broadcast_chats_updated()
 
+    # The other placements' strips share the column; they are switched off so only a reply's suggestions are drawn.
+    state.chat_settings.update(
+        SuggestionSettingsUpdate(is_activity_suggestions_enabled=False, is_new_chat_suggestions_enabled=False).apply_to
+    )
     set_agent("WAITING", ActivityState.IDLE)
     generated_labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "No"]
     answer = "\n".join(

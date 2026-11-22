@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import { setParticipantsForTesting } from "../models/Participants";
 import { renderAgentProse, renderAgentTurn } from "./machine-bubbles";
+import { PICKER_CONNECTORS } from "./StudioPickers";
 
 vi.mock("../markdown", () => ({ MarkdownContent: { view: () => null } }));
 
@@ -100,7 +101,7 @@ describe("renderAgentProse", () => {
 
     const live = withPicker(true);
     const pills = live.querySelectorAll<HTMLButtonElement>('[data-studio-picker="connector"] .studio-picker-pill');
-    expect(pills).toHaveLength(15);
+    expect(pills).toHaveLength(PICKER_CONNECTORS.length + 1);
     expect([...pills].every((pill) => !pill.disabled)).toBe(true);
     expect(live.querySelector("[data-machine-bubble] [data-studio-picker]")).not.toBeNull();
 
