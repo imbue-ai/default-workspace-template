@@ -377,6 +377,7 @@ function buildRows(
             ),
           chipCallIds: chipCallIdsOf([permissionEvent], toolResults),
         });
+        addFollowUp([permissionEvent.event_id]);
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {

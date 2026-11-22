@@ -619,6 +619,22 @@ describe("what stands under a reply from outside the transcript", () => {
     expect(ofTheSteps?.[ofTheSteps.length - 1]).toBe("a-t9");
   });
 
+  it("follows a permission request's message in a turn with no steps, as it does any other message", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "read my mail"),
+      {
+        ...toolMsg("t2", "c1", "Ask for the mailbox"),
+        tool_calls: [{ tool_call_id: "c1", tool_name: "Bash", input_chars: 96, display: "permission_request" }],
+      },
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true, null, null, null, (eventIds) =>
+      eventIds.includes("a-c1") ? followUp("a-c1") : null,
+    );
+
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1", "follow-up-a-c1"]]);
+  });
+
   it("draws nothing in a conversation that names none, as a subagent's does not", () => {
     const events: TranscriptEvent[] = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn")];
 
