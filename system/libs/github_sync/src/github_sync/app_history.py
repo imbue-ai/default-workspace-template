@@ -517,6 +517,24 @@ def _what_a_split_reads(record: AppRecord, commit_count: int | None) -> str:
     )
 
 
+def _lend_objects(repo_root: Path, clone: Path) -> None:
+    """Have `clone` read the objects of the repository at `repo_root`, when it
+    does not already.
+
+    `git clone --shared` shares nothing with a shallow repository: it copies
+    what the branches reach, which leaves out the publisher's commits an
+    installed app's history builds on, kept by a ref of their own.
+    """
+    alternates = clone / ".git" / "objects" / "info" / "alternates"
+    if alternates.exists():
+        return
+    objects = run_git(
+        repo_root, ["rev-parse", "--path-format=absolute", "--git-path", "objects"]
+    )
+    alternates.parent.mkdir(parents=True, exist_ok=True)
+    alternates.write_text(f"{objects}\n", encoding="utf-8")
+
+
 def _remove_abandoned_scratch(parent: Path) -> None:
     """Delete the scratch directory of every split whose process has ended
     without removing it, as one stopped by a signal does."""
@@ -569,6 +587,7 @@ def open_app_split(
                 str(clone),
             ],
         )
+        _lend_objects(repo_root, clone)
         commit = run_git(clone, ["rev-parse", "HEAD"])
         commit_count = cut_history_at_bound(clone, record, commit)
         # `git subtree` asks only that the directory exists in the checkout.

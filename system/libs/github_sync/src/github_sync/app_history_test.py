@@ -424,6 +424,28 @@ def test_an_app_installed_again_is_split_from_its_newest_install(
         ]
 
 
+def test_an_installed_app_in_a_shallow_workspace_is_split_onto_its_publishers_commits(
+    tmp_path: Path,
+) -> None:
+    template = init_bare_repo(tmp_path / "template.git")
+    add_history(template, "main", 3)
+    workspace = tmp_path / "workspace"
+    run_git(tmp_path, "clone", "-q", "--depth=1", f"file://{template}", str(workspace))
+    run_git(workspace, "config", "user.email", "test@test.local")
+    run_git(workspace, "config", "user.name", "test")
+    published = init_published_app(tmp_path / "published", "notes")
+    release = git_output(published, "rev-parse", "HEAD")
+    record = install_app(workspace, published, "notes")
+    write_app_file(workspace, record, "local.py", "LIMIT = 25\n")
+    commit_all(workspace, "Add a limit")
+
+    with open_app_split(workspace, record) as split:
+        # git copies a shallow repository's branches into the clone rather than
+        # sharing its objects, and no branch reaches the publisher's commits.
+        assert split_output(split, "rev-parse", f"{split.commit}^@") == release
+        assert split.tree == app_tree(workspace, record)
+
+
 def test_a_directory_removed_and_made_again_is_not_split_into_the_workspaces_own_history(
     tmp_path: Path,
 ) -> None:

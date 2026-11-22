@@ -75,7 +75,10 @@ The pass writes nothing to the workspace repository, so it cannot disturb an
 update that is being applied. The split is made in a scratch clone under
 `/var/tmp` that shares the workspace repository's objects
 (`git clone --shared --no-checkout`), with hooks off, and the commits it
-makes stay in that clone. The push runs in the workspace repository, with
+makes stay in that clone. git copies the branches of a shallow workspace
+into the clone instead of sharing them, so the clone of one is then pointed
+at the workspace's objects for the rest: an installed app's split builds on
+its publisher's commits, which no branch reaches. The push runs in the workspace repository, with
 its configuration, and is lent the clone's objects for that one command
 (`GIT_ALTERNATE_OBJECT_DIRECTORIES`). The clone is removed when the push is
 over, whether or not it went through; one left behind by a service that was
