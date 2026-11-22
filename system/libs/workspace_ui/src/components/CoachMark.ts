@@ -227,7 +227,6 @@ export function showCoachMark(options: CoachMarkOptions): CoachMarkHandle {
     m(Button, { variant: "secondary", sm: true, extra: "coach-mark-dismiss self-end", onclick: dismiss }, "Got it"),
   ]);
   document.body.appendChild(bubble);
-  place();
   observer.observe(document.body, {
     childList: true,
     subtree: true,
@@ -237,5 +236,7 @@ export function showCoachMark(options: CoachMarkOptions): CoachMarkHandle {
   window.addEventListener("resize", schedulePlace);
   window.addEventListener("scroll", schedulePlace, true);
   anchor.addEventListener("click", dismiss);
+  // Last, so that a control already off the page takes down a mark that has everything to take down.
+  place();
   return handle;
 }

@@ -114,6 +114,23 @@ describe("showCoachMark", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("goes at once for a control that is not on the page, and watches the page no longer", async () => {
+    const onDismiss = vi.fn();
+    const anchor = document.createElement("button");
+
+    showCoachMark({ anchor, text: "Here", onDismiss, pulseClass: "coach-pulse" });
+
+    expect(bubble()).toBeNull();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(anchor.classList.contains("coach-pulse")).toBe(false);
+    const frames = vi.spyOn(window, "requestAnimationFrame");
+    document.body.appendChild(document.createElement("p"));
+    window.dispatchEvent(new Event("resize"));
+    await Promise.resolve();
+    expect(frames).not.toHaveBeenCalled();
+    frames.mockRestore();
+  });
+
   it("stays up through redraws of the page that leave the control in it", async () => {
     const anchor = mountAnchor();
     const handle = showCoachMark({ anchor, text: "Here" });
