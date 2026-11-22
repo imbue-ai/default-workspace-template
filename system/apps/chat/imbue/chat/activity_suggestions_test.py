@@ -28,6 +28,7 @@ from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.suggestions import SuggestionAction
 from imbue.chat.suggestions import SuggestionPlacement
+from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_workspace_with_a_user_built_app
 from imbue.imbue_common.model_update import to_update
@@ -246,10 +247,7 @@ def test_a_marker_is_read_as_unset_set_with_its_time_or_unreadable(
 
     assert read_marker(Marker.APP_BUILD_STARTED) == MarkerReading(is_readable=True, marked_at=set_at)
 
-    # A file where the marker directory should be: nothing under it can be looked up.
-    blocked = tmp_path / "blocked"
-    blocked.write_text("")
-    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+    block_onboarding_markers(tmp_path, monkeypatch)
 
     assert read_marker(Marker.APP_BUILD_STARTED) == UNREADABLE_MARKER
 
@@ -293,8 +291,6 @@ def test_a_registry_or_markers_that_cannot_be_read_offer_nothing(
     assert unreadable_registry.has_user_built_app is None
     assert _offered_ids(unreadable_registry) == ["new_chat", "phone_access", "connect_data"]
 
-    blocked = tmp_path / "blocked"
-    blocked.write_text("")
-    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+    block_onboarding_markers(tmp_path, monkeypatch)
 
     assert _offered_ids(read_activity_facts(tmp_path, registry)) == []

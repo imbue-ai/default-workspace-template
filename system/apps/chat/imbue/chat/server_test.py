@@ -30,7 +30,6 @@ from flask import Flask
 from flask.testing import FlaskClient
 from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
-from onboarding_activity.markers import MARKER_DIR_ENV
 from onboarding_activity.markers import Marker
 from onboarding_activity.markers import is_marked
 from onboarding_activity.markers import mark
@@ -157,6 +156,7 @@ from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
+from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
@@ -4445,10 +4445,7 @@ def test_a_click_that_names_no_activity_suggestion_is_refused_and_a_visitors_cli
 def test_a_click_is_answered_even_when_its_marker_cannot_be_written(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A file where the marker directory should be: nothing can be made under it.
-    blocked = tmp_path / "blocked"
-    blocked.write_text("")
-    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+    block_onboarding_markers(tmp_path, monkeypatch)
 
     clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"})
     offered = _get_activity_suggestions(client)

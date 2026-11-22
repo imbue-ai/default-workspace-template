@@ -174,6 +174,7 @@ from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
@@ -6104,10 +6105,7 @@ def test_a_permission_marker_that_cannot_be_written_is_tried_again_at_the_next_f
 ) -> None:
     filed = [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}]
     marker_directory = os.environ[MARKER_DIR_ENV]
-    # A file where the marker directory should be: nothing can be made under it.
-    blocked = tmp_path / "blocked"
-    blocked.write_text("")
-    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+    block_onboarding_markers(tmp_path, monkeypatch)
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")

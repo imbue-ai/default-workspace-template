@@ -56,6 +56,7 @@ from chat_background_tasks import markers
 from chat_background_tasks.markers import TaskSource
 from flask import Flask
 from flask import request
+from onboarding_activity.markers import MARKER_DIR_ENV
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.interfaces import ShellLayoutInterface
@@ -1333,6 +1334,13 @@ def write_workspace_with_a_user_built_app(repo_root: Path) -> None:
         manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
         app_directory = write_app_manifest(repo_root, package, manifest, True).parent
         (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+
+
+def block_onboarding_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the onboarding markers at a file where their directory should be, so no marker can be read or set."""
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
 
 
 def write_plain_app_registry(path: Path, *names: str) -> Path:
