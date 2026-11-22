@@ -85,6 +85,10 @@ export const SHELL_MESSAGE = "shell:message";
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
 
+/** App to shell: whether the first run's provider page is still owed (the chat app's word for it); while it is, the
+ *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
+export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
+
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -213,6 +217,8 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
+  /** Say whether the first run's provider page is still owed to this workspace's owner. */
+  firstRunProviderStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
@@ -499,6 +505,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
+    firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),

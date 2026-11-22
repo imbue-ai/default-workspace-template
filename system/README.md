@@ -18,7 +18,8 @@ day-to-day, but every part is inspectable and the agent maintains it.
   `pyproject.toml` pins). mngr itself is installed as packages from that commit.
 - `config/` - Tracked workspace configuration (`parent.toml`, the upstream
   template pointer). Runtime-written config lives in `data/system/` instead.
-- `changelog/` - Per-change entries for template development.
+- `changelog/` - Per-change entries for template development, kept as files until
+  they are consolidated into the root `CHANGELOG.md` and `UNABRIDGED_CHANGELOG.md`.
 - `Dockerfile` - Builds the workspace image.
 - `supervisord.conf` - The supervisord daemon's own config, plus the
   `[include]` glob that pulls in `supervisord.conf.d/` (also reachable at

@@ -213,6 +213,9 @@ def _pick_port(
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     # Reserve known internal ports that may not have supervisor entries
     in_use.add(8083)  # the Screen's CDP proxy
+    # neko, the Screen's video server: its port is only in a comment in its supervisord
+    # config, and its stack is usually stopped, so neither check above sees it.
+    in_use.add(8091)
     if requested is not None:
         if requested in in_use or is_port_bound(requested):
             sys.exit(
@@ -271,12 +274,22 @@ dev = [
     "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.87",
+    # The harden pass's browser tests: the repo-root venv and conftest do not reach this suite,
+    # so its own venv carries Playwright (which drives Fortress by path) and the plugin behind
+    # each browser test's pytest.mark.timeout marker.
+    "playwright>=1.40",
+    "pytest-timeout>=2.3.0",
 ]
 
 # Makes this directory the tests' own pytest root, so they run against this app's venv
 # rather than the workspace's root configuration.
 [tool.pytest.ini_options]
 testpaths = ["."]
+# The test gate selects by these marks (AGENTS.md, "Manual verification and testing").
+markers = [
+    "browser: drives a browser",
+    "frontend: reads the app's frontend source",
+]
 
 # Supply-chain cooldown, the workspace root's two-week window: a registry release is
 # adopted once it has been public this long, so a compromised release can be noticed

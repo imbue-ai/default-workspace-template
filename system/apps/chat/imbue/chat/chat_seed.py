@@ -28,6 +28,7 @@ from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import FIRST_RUN_KICKOFF_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -46,6 +47,8 @@ SEED_AGENT_NAME: Final[str] = "welcome"
 # pointed at the seed file instead, the way a long handoff summary is, and for the same
 # delivery limits (measured at ``chat_handoffs.INLINE_SUMMARY_MAX_BYTES``).
 INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
+# What the user told Imbue Studio's first run about themselves, beside the seed; read only into the first send.
+FIRST_RUN_CONTEXT_FILENAME: Final[str] = "first_run_context.txt"
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -60,6 +63,76 @@ class SeedTurn(FrozenModel):
 
     role: SeedRole = Field(description="The side of the conversation the turn belongs to")
     text: str = Field(description="The turn's text, as markdown")
+
+
+# The Main chat a first-run workspace opens on (specs/ftue-onboarding-v2 in mngr): the agent introducing itself and
+# Studio, then asking how the user wants to start.
+FIRST_RUN_WELCOME: Final[tuple[SeedTurn, ...]] = (
+    SeedTurn(role=SeedRole.ASSISTANT, text="Hi, I'm your Studio agent. I'll be with you from here on."),
+    SeedTurn(role=SeedRole.ASSISTANT, text="You can chat with me any time by clicking my avatar on the desktop."),
+    SeedTurn(role=SeedRole.ASSISTANT, text="Welcome! Studio is a collaborative space for building your digital life."),
+    SeedTurn(
+        role=SeedRole.ASSISTANT,
+        text="With Studio you can:\n\n- Build apps\n- Run agents\n- Automate workflows\n- Consolidate your data",
+    ),
+    SeedTurn(role=SeedRole.ASSISTANT, text="How would you like to get started?"),
+)
+
+
+def write_first_run_context(chat_dir: Path, context: str) -> None:
+    """Mark the chat as a first-run workspace's, keeping what the user told the first run beside the seed (it
+    may be nothing) for the chat's first agent."""
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / FIRST_RUN_CONTEXT_FILENAME).write_text(context.strip())
+
+
+def is_first_run_seed(chat_dir: Path) -> bool:
+    """Whether the chat is the one a first-run workspace opened on."""
+    return (chat_dir / FIRST_RUN_CONTEXT_FILENAME).is_file()
+
+
+def read_first_run_context(chat_dir: Path) -> str:
+    path = chat_dir / FIRST_RUN_CONTEXT_FILENAME
+    return path.read_text().strip() if path.is_file() else ""
+
+
+def first_run_kickoff_message(chat_dir: Path) -> str:
+    """What a first-run chat's first agent is started with when nobody has typed yet, so it speaks first: the
+    conversation the chat opened on, what the user said they want Studio for (if anything), and what to open
+    with. The page hides the whole message (``harnesses/message_display.py``)."""
+    transcript = seed_transcript(read_seed_events(chat_dir))
+    context = read_first_run_context(chat_dir).replace(f"</{FIRST_RUN_KICKOFF_TAG}>", f"</ {FIRST_RUN_KICKOFF_TAG}>")
+    about_user = (
+        "While the workspace was being set up, the user was asked what type of studio they want to make and "
+        f"answered:\n<about-user>\n{context}\n</about-user>\n"
+        "Open with one short, warm sentence that speaks to what they picked."
+        if context != ""
+        else (
+            "The user was not asked, or did not say, what they want Studio for. Open with one short, warm sentence "
+            "saying you are here and ready to help."
+        )
+    )
+    offer = (
+        "Then offer exactly three things you could build or do for them here, as a numbered list (1., 2., 3.), one "
+        "short line each, each a concrete thing rather than a category"
+        + (
+            ", drawn from what they picked (still three when they named fewer)"
+            if context != ""
+            else ", spread across what Studio is good for"
+        )
+        + ". End with one line saying they can reply with a number, or tell you something else. Nothing after that."
+    )
+    return (
+        f"<{FIRST_RUN_KICKOFF_TAG}>\n"
+        "This chat did not begin with you. The user has just arrived in their new Imbue Studio workspace for the "
+        "first time, and the chat already shows them the welcome this note carries, written before any agent "
+        "joined; you are the first agent to join it, and they have not typed anything yet.\n\n"
+        f"<conversation>\n{transcript}\n</conversation>\n\n"
+        f"{about_user}\n{offer}\n"
+        "Do not repeat the welcome above, do not use any tools, and do not mention this note or that you were "
+        "told anything: just write the message.\n"
+        f"</{FIRST_RUN_KICKOFF_TAG}>"
+    )
 
 
 @pure
@@ -218,6 +291,13 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
         )
     else:
         conversation = f"<conversation>\n{transcript}\n</conversation>"
+    first_run_context = read_first_run_context(chat_dir)
+    if first_run_context != "":
+        safe_context = first_run_context.replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
+        conversation += (
+            "\n\nBefore the workspace existed, the user told Imbue Studio this about what they want it for "
+            f"(they did not say it in this chat):\n<about-user>\n{safe_context}\n</about-user>"
+        )
     return (
         f"<{SEED_CONTEXT_TAG}>\n"
         "This chat did not begin with you. It opened on the conversation this block carries, "

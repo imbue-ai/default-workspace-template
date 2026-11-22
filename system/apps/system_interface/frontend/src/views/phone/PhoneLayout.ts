@@ -221,7 +221,9 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       const state = store.getState();
       const shownWindow = shownWindowOf(state);
       const shownApp = shownWindow === null ? undefined : appByName(state, shownWindow.app);
-      const isHome = state.phone.shown === null || state.phone.shown.kind === "home";
+      // Nothing shown yet is the page before it lands, not home: drawing the home grid then would flash it before
+      // the window the phone lands on.
+      const isHome = state.phone.shown?.kind === "home";
       const thresholdPx = store.getMetrics().dragThreshold;
       const menuRows =
         openMenu === null

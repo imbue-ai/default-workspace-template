@@ -1,6 +1,7 @@
 /**
- * The tray's resource gauge. A raised warning is a pill that says what is wrong in words ("Disk space is low");
- * with the bars always shown, there are three small bars beside it for the workspace's CPU, memory and disk.
+ * The tray's resource gauge. A raised disk or memory warning is a pill that says what is wrong in words ("Disk
+ * space is low"); a raised CPU warning is the CPU bar, drawn in the warning colour. With the bars always shown,
+ * there are three small bars for the workspace's CPU, memory and disk.
  * Resting the pointer on either opens the resource card; a click opens the System Monitor on that resource's view;
  * a right-click opens the gauge's menu.
  *
@@ -13,11 +14,12 @@
 
 import m from "mithril";
 import {
-  GAUGE_RESOURCES,
   RESOURCE_SHORT_LABELS,
   describeBar,
   isGaugeShown,
   levelOf,
+  pillAlertsOf,
+  shownBarsOf,
   shownPercentOf,
   type GaugeLevel,
   type GaugeResource,
@@ -127,9 +129,10 @@ export const ResourceGauge: m.Component<ResourceGaugeAttrs> = {
   view(vnode) {
     const { view, isStale, onOpen, onContextMenu, onHoverStart, onHoverEnd } = vnode.attrs;
     if (view === null || !isGaugeShown(view)) return null;
-    const alert = isStale ? null : (view.alerts[0] ?? null);
-    const hasBars = view.settings.visibility === "always";
-    if (alert === null && !hasBars) return null;
+    const pillAlerts = isStale ? [] : pillAlertsOf(view);
+    const alert = pillAlerts[0] ?? null;
+    const bars = shownBarsOf(view, isStale);
+    if (alert === null && bars.length === 0) return null;
     return m(
       "div",
       {
@@ -145,8 +148,8 @@ export const ResourceGauge: m.Component<ResourceGaugeAttrs> = {
         onmouseleave: onHoverEnd,
       },
       [
-        alert === null ? null : pill(alert, view.alerts.length - 1, onOpen),
-        hasBars ? GAUGE_RESOURCES.map((resource) => bar(view, resource, isStale, onOpen)) : null,
+        alert === null ? null : pill(alert, pillAlerts.length - 1, onOpen),
+        bars.map((resource) => bar(view, resource, isStale, onOpen)),
       ],
     );
   },
