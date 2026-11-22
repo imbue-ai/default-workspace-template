@@ -24,6 +24,7 @@ from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
 from imbue.system_interface.shell.web_push_dispatch import SendLog
 from imbue.system_interface.shell.web_push_dispatch import SendStatus
 from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_POST_LIMIT
+from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_WINDOW_SECONDS
 from imbue.system_interface.shell.web_push_dispatch import compose_notification
 from imbue.system_interface.testing import RecordingPushTransport
 
@@ -174,6 +175,26 @@ def test_the_workspace_as_a_whole_is_limited_too(tmp_path: Path) -> None:
     statuses = [receipt.status for receipt in receipts]
     assert statuses.count(SendStatus.QUEUED) == WORKSPACE_POST_LIMIT
     assert statuses[WORKSPACE_POST_LIMIT:] == [SendStatus.LIMITED] * (30 - WORKSPACE_POST_LIMIT)
+
+
+def test_a_post_waiting_out_its_window_does_not_keep_earlier_ones_counted(tmp_path: Path) -> None:
+    dispatcher, clock, _transport = _dispatcher(tmp_path)
+    dispatcher.submit(_send("one"), "Studio")
+    dispatcher.flush_due()
+    clock.now += 5
+    # Counted at the end of the chat's coalescing window, after the posts other chats make now.
+    dispatcher.submit(_send("two"), "Studio")
+    clock.now += 1
+    for index in range(WORKSPACE_POST_LIMIT - 2):
+        dispatcher.submit(_send("hi", chat_id=f"agent-c{index}"), "Studio")
+
+    clock.now += WORKSPACE_WINDOW_SECONDS
+    receipts = [
+        dispatcher.submit(_send("hi", chat_id=f"agent-d{index}"), "Studio")
+        for index in range(WORKSPACE_POST_LIMIT - 1)
+    ]
+
+    assert [receipt.status for receipt in receipts] == [SendStatus.QUEUED] * (WORKSPACE_POST_LIMIT - 1)
 
 
 def test_a_send_with_no_device_is_logged_and_posts_nothing(tmp_path: Path) -> None:

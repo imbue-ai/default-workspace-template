@@ -14,6 +14,7 @@ locked screen."""
 import secrets
 import threading
 import time
+from bisect import insort
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -407,8 +408,9 @@ class PushDispatcher(MutableModel):
         return None
 
     def _count_post_locked(self, chat_id: str, at: float) -> None:
-        self._post_times_by_chat.setdefault(chat_id, deque()).append(at)
-        self._workspace_post_times.append(at)
+        # In order, as _drop_older_than needs: a chat's post can be due after one another chat posts later.
+        insort(self._post_times_by_chat.setdefault(chat_id, deque()), at)
+        insort(self._workspace_post_times, at)
 
     def _run(self) -> None:
         while not self._stop.is_set():
