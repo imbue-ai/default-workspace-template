@@ -6071,7 +6071,7 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
 
 
 def test_a_filed_permission_request_sets_its_onboarding_marker_once_whichever_chat_filed_it(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager,
 ) -> None:
     """The marker records that a request was ever filed, settled since or not, and by any agent the app reads,
     tracked for activity or not. Once written it is left alone, so a transcript read again does not refresh it."""
