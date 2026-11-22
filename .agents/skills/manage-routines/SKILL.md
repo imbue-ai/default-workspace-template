@@ -164,3 +164,12 @@ Its check (`system/services/caretaker/caretaker_check.sh`) looks at the
 workspace's services, logs, disk, memory guard and the other routines, and
 wakes the Caretaker's chat only with findings (or once, to introduce itself).
 Never enable it without the user asking; it is a beta feature.
+
+## Clear deleted chats
+
+The other built-in routine is `history-sweep` ("Clear deleted chats",
+`system/routines/history-sweep.toml`), on by default, daily at 04:00. It
+removes what deleted chats leave on disk: their claude session files at once,
+and their preserved transcripts 30 days after the delete. It never touches a
+chat that is still listed. Turning it off lets deleted chats' history keep
+filling the disk. What it removes and why: `system/libs/history_sweep/README.md`.
