@@ -4,8 +4,9 @@
  *
  * The time is the transcript's own timestamp of the latest message from either side, so a helper chat messaged
  * only by the agent that started it reads as right as one the user talks to. A compaction, a system chip or
- * another injection the transcript records as a user message does not count, nor does a provider failure's notice. It hides while the agent works on a
- * turn (the status row says so) and while a message is on its way to it, from this page or another.
+ * another injection the transcript records as a user message does not count, nor does a provider failure's notice.
+ * It hides while the agent works on a turn (the status row says so) and while a message is on its way to it, from
+ * this page or another.
  */
 
 import m from "mithril";
