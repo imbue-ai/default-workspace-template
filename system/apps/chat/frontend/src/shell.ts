@@ -81,6 +81,21 @@ export function showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): vo
   connection?.showCoachCard(text, chromeAnchor);
 }
 
+// What this page last told the shell of its chat's agent. No to begin with, which is what a shell that has not heard
+// from a page takes it to say.
+let isAgentWorkingReported = false;
+
+/**
+ * After a look at this page's chat: tell the shell whether a reply is under way in it, when that has changed since
+ * the shell was last told. The shell's show-around tour begins when an agent goes to work, and a chat page knows a
+ * turn's start and end on every harness.
+ */
+export function reportAgentWorking(isWorking: boolean): void {
+  if (isWorking === isAgentWorkingReported) return;
+  isAgentWorkingReported = isWorking;
+  connection?.agentWorking(isWorking);
+}
+
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
 // visit, and false from the moment a framed page connects, until the shell says shown.
 let isShown = true;
@@ -153,6 +168,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any page's unexpired visible or hidden report) is what a hidden report keeps.
     if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
+    // A shell forgets what a page said when the page's frame loads, which can be after the page spoke, and greets
+    // it then.
+    if (isAgentWorkingReported) connection?.agentWorking(true);
     m.redraw();
   };
   const onShown = (): void => {

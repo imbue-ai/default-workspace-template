@@ -121,7 +121,14 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   owner learns the product while waiting for a reply; the page's
   `tour_start_ms` query parameter makes it wait for a task that is taking a
   while instead); the agent answering interrupts it, and the next time the
-  agent works it resumes from the card that would have come next. The
+  agent works it resumes from the card that would have come next. An agent
+  is at work while the avatar's status says so or a page the shell frames
+  does (`frontend/src/model/agentWorking.ts`): the status follows mngr's
+  agent events, which are prompt only for an agent that reports its activity
+  there, and a page says `shell:agent-working {isWorking}` when an agent
+  starts or stops working in what it shows. The shell keeps each page's last
+  word, and drops it when the page's frame loads again or its window goes;
+  a message with no boolean is dropped. The
   launcher's "Show me around" row runs it again from the first card any time.
   A card about a control of the Imbue Studio chrome asks the chrome to ring it
   (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the

@@ -9,7 +9,8 @@
  * shell raises the root's window for it), ``shell:input`` (typing in a nested page is this client's
  * activity, which the shell's heartbeat reports), ``shell:open`` of a sub-agent view, ``shell:draft-text``
  * from a sub-agent view (which has no composer of its own to draft into), ``shell:show-coach-card`` (a
- * card under a control of the minds chrome, which only the shell can draw), ``shell:message`` (for
+ * card under a control of the minds chrome, which only the shell can draw), ``shell:agent-working`` (whether
+ * a reply is under way in a nested page's chat, which the shell hears as the root's own word), ``shell:message`` (for
  * whichever app registered its type), and ``shell:open-link`` (a clicked link or script popup the
  * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
  * ``mailto:`` or ``tel:`` link -- which the shell opens where it belongs).
@@ -37,6 +38,7 @@
  */
 
 import {
+  SHELL_AGENT_WORKING,
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
@@ -58,6 +60,7 @@ const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_OPEN,
   SHELL_DRAFT_TEXT,
   SHELL_SHOW_COACH_CARD,
+  SHELL_AGENT_WORKING,
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
 ]);

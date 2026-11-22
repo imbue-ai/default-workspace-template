@@ -9,7 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
-import { SHELL_SHOW_COACH_CARD } from "@imbue/workspace-ui/src/app_contract";
+import { SHELL_AGENT_WORKING, SHELL_SHOW_COACH_CARD } from "@imbue/workspace-ui/src/app_contract";
 import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { DesktopStore } from "../store/DesktopStore";
@@ -49,6 +49,9 @@ let store: DesktopStore;
 let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
+/** What the App passed on, each time, of whether any page says an agent is working in it. */
+let pagesAgentWorking: boolean[] = [];
+const notePagesAgentWorking = (isWorking: boolean): void => void pagesAgentWorking.push(isWorking);
 
 function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -73,6 +76,7 @@ async function mountApp(
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   openedOutside = [];
+  pagesAgentWorking = [];
   const laterWindowIds = options.laterWindowIds ?? [];
   api.desktops = [
     desktopRecord("home", {
@@ -113,7 +117,7 @@ async function mountApp(
     isViewerOwner: () => true,
     redraw: () => m.redraw(),
   });
-  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+  mountView(() => m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -1299,7 +1303,9 @@ describe("the switch to the phone layout", () => {
       },
     });
     const starting = store.start(NO_LINK);
-    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
     expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
     expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
     // The bar says the page is opening, not that home is on screen, and offers Home.
@@ -1333,7 +1339,9 @@ describe("the switch to the phone layout", () => {
       },
     });
     await store.start(NO_LINK);
-    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
     expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
     expect(document.querySelector("[data-phone-pill]")?.getAttribute("data-phone-pill")).toBe("home");
   });
@@ -1370,6 +1378,27 @@ describe("a fullscreen window", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});
+
+describe("a page's word that an agent is working in it", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("is passed on from the page's shell:agent-working, for the tour to begin on", () => {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isWorking of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_AGENT_WORKING, isWorking },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(pagesAgentWorking.slice(-2)).toEqual([true, false]);
   });
 });
 

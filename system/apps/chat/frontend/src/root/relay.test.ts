@@ -38,6 +38,7 @@ describe("isForwardedToShell", () => {
         chromeAnchor: "permissions",
       }),
     ).toBe(true);
+    expect(isForwardedToShell({ type: "shell:agent-working", isWorking: true })).toBe(true);
     expect(
       isForwardedToShell({ type: "shell:message", message: { type: "open:file", path: "/home/user/a.md" } }),
     ).toBe(true);
@@ -98,10 +99,15 @@ describe("startInnerFrameRelay", () => {
     deliver({ type: "shell:location", path: "/agent-1", title: "" }, inner);
     deliver({ type: "minds:ready" }, stranger);
     deliver({ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" }, inner);
+    deliver({ type: "shell:agent-working", isWorking: true }, inner);
+    deliver({ type: "shell:agent-working", isWorking: true }, stranger);
+    deliver({ type: "shell:agent-working", isWorking: false }, inner);
 
     expect(parent.postMessage.mock.calls).toEqual([
       [{ type: "minds:ready" }, "*"],
       [{ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" }, "*"],
+      [{ type: "shell:agent-working", isWorking: true }, "*"],
+      [{ type: "shell:agent-working", isWorking: false }, "*"],
     ]);
     expect(selected).toEqual([]);
   });

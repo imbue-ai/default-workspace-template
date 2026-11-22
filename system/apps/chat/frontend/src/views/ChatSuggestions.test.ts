@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   showsCoachMarks: true,
   openShareSettingsWithCoachMark: vi.fn(),
   showCoachCard: vi.fn(),
+  reportAgentWorking: vi.fn((_isWorking: boolean) => undefined),
 }));
 
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
@@ -39,6 +40,7 @@ vi.mock("../shell", () => ({
   showsCoachMarks: () => mocks.showsCoachMarks,
   openShareSettingsWithCoachMark: mocks.openShareSettingsWithCoachMark,
   showCoachCard: mocks.showCoachCard,
+  reportAgentWorking: mocks.reportAgentWorking,
 }));
 vi.mock("./MessageInput", () => ({
   submitSuggestion: mocks.submitSuggestion,
@@ -225,6 +227,7 @@ beforeEach(() => {
   mocks.openWorkspaceSettings.mockClear();
   mocks.openShareSettingsWithCoachMark.mockClear();
   mocks.showCoachCard.mockClear();
+  mocks.reportAgentWorking.mockClear();
   // The chat list frames the page, and draws the coach mark at its New chat button.
   showNewChatCoachMark = vi.fn();
   Object.defineProperty(window, "parent", {
@@ -350,6 +353,76 @@ describe("what the page reads of a chat for its activity and new-chat strips", (
     expect(isTurnDoneForActivity(CHAT)).toBe(true);
     mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", held_sends: heldSends });
     expect(isTurnDoneForActivity(CHAT)).toBe(false);
+  });
+});
+
+describe("what the page tells the shell of a reply under way", () => {
+  /** What the shell was told at the last look: the page tells it on every look, and only a change is passed on
+   *  (``reportAgentWorking``). */
+  function lastTold(): boolean | undefined {
+    const calls = mocks.reportAgentWorking.mock.calls;
+    return calls.length === 0 ? undefined : calls[calls.length - 1][0];
+  }
+
+  it("says an agent is working from a turn's start to its end", async () => {
+    await drawAndSettle();
+    expect(lastTold()).toBe(false);
+
+    working();
+    draw();
+    expect(lastTold()).toBe(true);
+
+    answeredAgain();
+    draw();
+    expect(lastTold()).toBe(false);
+  });
+
+  it("says so for a message still on its way, and with the activity strip switched off", async () => {
+    stored.settings = { ...DEFAULT_CHAT_SETTINGS, is_activity_suggestions_enabled: false };
+    await drawAndSettle();
+    expect(lastTold()).toBe(false);
+
+    addOutgoing(CHAT, "And on Thursdays?");
+    draw();
+
+    expect(lastTold()).toBe(true);
+    expect(strip("activity")).toBeNull();
+  });
+
+  it("says nobody is working while a first agent starts with nothing sent to it", () => {
+    mocks.events = [];
+    mocks.chat = undefined;
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating" });
+    draw();
+
+    expect(mocks.reportAgentWorking).toHaveBeenCalled();
+    expect(mocks.reportAgentWorking.mock.calls.every(([isWorking]) => isWorking === false)).toBe(true);
+  });
+
+  it("keeps what it last said while it cannot tell, and says nothing is under way in a room", () => {
+    working();
+    draw();
+    expect(lastTold()).toBe(true);
+
+    // The chat list has not come back yet (a socket reconnecting): the page knows neither way.
+    mocks.chat = undefined;
+    draw();
+    expect(lastTold()).toBe(true);
+
+    working();
+    mocks.isRoom = true;
+    draw();
+    expect(lastTold()).toBe(false);
+  });
+
+  it("takes it back when the page stops showing the chat", () => {
+    working();
+    draw();
+    expect(lastTold()).toBe(true);
+
+    m.render(root, null);
+
+    expect(lastTold()).toBe(false);
   });
 });
 

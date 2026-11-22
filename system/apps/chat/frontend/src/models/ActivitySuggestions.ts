@@ -291,6 +291,12 @@ export function reconcileActivitySuggestions(chatId: string, facts: ActivityFact
   };
 }
 
+/** Whether a reply was being worked on in the chat at the last ``reconcileActivitySuggestions`` that could tell;
+ *  false before one. */
+export function isReplyUnderWay(chatId: string): boolean {
+  return stateByChat.get(chatId)?.wasTurnDone === false;
+}
+
 /** The strip of ``placement`` the chat's page draws, as of the last ``reconcileActivitySuggestions``, or null. */
 export function getActionStrip(chatId: string, placement: ActionPlacement): ActionStrip | null {
   return stateByChat.get(chatId)?.drawn[placement] ?? null;

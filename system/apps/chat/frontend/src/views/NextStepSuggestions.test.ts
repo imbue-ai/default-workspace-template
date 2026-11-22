@@ -41,6 +41,7 @@ vi.mock("../shell", () => ({
   opensWorkspaceSettings: () => mocks.opensWorkspaceSettings,
   openWorkspaceSettings: mocks.openWorkspaceSettings,
   showsCoachMarks: () => false,
+  reportAgentWorking: () => undefined,
 }));
 vi.mock("./MessageInput", () => ({ submitSuggestion: mocks.submitSuggestion }));
 

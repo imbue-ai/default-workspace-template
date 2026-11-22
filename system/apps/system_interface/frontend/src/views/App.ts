@@ -202,6 +202,8 @@ export interface AppAttrs {
   readonly gestures: GestureSource;
   /** The show-around tour: what it shows, and the row that runs it. */
   readonly tour: TourController;
+  /** Told whether any page the shell frames says an agent is working in it (``shell:agent-working``). */
+  readonly notePagesAgentWorking: (isWorking: boolean) => void;
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
@@ -405,6 +407,7 @@ export function App(): m.Component<AppAttrs> {
         if (current.isPhoneLayout() || current.getSoloWindowId() !== null) return;
         attrs.tour.showCoachCard(text, chromeAnchor);
       },
+      notePagesAgentWorking: attrs.notePagesAgentWorking,
     });
     // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
     // window its layout shows, only for the next pass to destroy them.

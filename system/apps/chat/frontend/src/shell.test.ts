@@ -397,6 +397,57 @@ describe("whether the chrome draws coach marks on its own controls", () => {
   });
 });
 
+describe("what the page tells the shell of its chat's agent", () => {
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  function reports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls
+      .map(([data]) => data as { type?: string })
+      .filter((data) => data.type === "shell:agent-working");
+  }
+
+  it("says an agent is working only when that has changed, and nothing while none has worked yet", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.reportAgentWorking(false);
+    expect(reports(parent)).toEqual([]);
+
+    shell.reportAgentWorking(true);
+    shell.reportAgentWorking(true);
+    shell.reportAgentWorking(false);
+    shell.reportAgentWorking(false);
+
+    expect(reports(parent)).toEqual([
+      { type: "shell:agent-working", isWorking: true },
+      { type: "shell:agent-working", isWorking: false },
+    ]);
+  });
+
+  it("says so again to a shell that greets it while an agent works, and not once the agent has stopped", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toEqual([]);
+
+    shell.reportAgentWorking(true);
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toEqual([
+      { type: "shell:agent-working", isWorking: true },
+      { type: "shell:agent-working", isWorking: true },
+    ]);
+
+    shell.reportAgentWorking(false);
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toHaveLength(3);
+  });
+});
+
 describe("the chat's suggestions when its page is shown again", () => {
   it("are read again when the shell shows the page", async () => {
     const parent = framed();

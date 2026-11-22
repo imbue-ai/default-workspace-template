@@ -94,6 +94,11 @@ export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
  *  drops a text that is empty or longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and an anchor it does not know. */
 export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
 
+/** App to shell: whether an agent is working in what the page shows (a reply under way in a chat), sent when that
+ *  changes. The shell keeps each page's last report and drops it when the page goes away or loads again, so a page
+ *  that is greeted while it has said yes says so again. */
+export const SHELL_AGENT_WORKING = "shell:agent-working";
+
 /** The controls of the Imbue Studio chrome a coach card can sit under, as the embed contract names them
  *  (``minds:highlight-chrome``). */
 export const SHELL_CHROME_ANCHORS = ["workspace-switcher", "permissions", "settings", "share", "help"] as const;
@@ -236,6 +241,8 @@ export interface ShellConnection {
   /** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the Imbue Studio
    *  chrome, ringed while the card is up. */
   showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void;
+  /** Say whether an agent is working in what this page shows. */
+  agentWorking(isWorking: boolean): void;
   /** Say whether the first run's provider page is still owed to this workspace's owner. */
   firstRunProviderStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
@@ -538,6 +545,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     showCoachCard: (text: string, chromeAnchor: ShellChromeAnchor) =>
       send(SHELL_SHOW_COACH_CARD, { text, chromeAnchor }),
+    agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
     firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),

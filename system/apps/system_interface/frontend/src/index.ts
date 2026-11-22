@@ -34,6 +34,7 @@ import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
+import { makeAgentWorkingSignal } from "./model/agentWorking";
 import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
 import type { TourAction } from "./model/tourCards";
@@ -200,8 +201,9 @@ function bootstrap(): void {
   });
   // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
   // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
-  // row any time. A card about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's
-  // window aside. The owner's page also records as finished a tour that has nothing left to show.
+  // row any time. An agent is at work while the avatar's status says so or a page the shell frames does. A card
+  // about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's window aside. The
+  // owner's page also records as finished a tour that has nothing left to show.
   const runTourAction = (action: TourAction): void => {
     switch (action) {
       case "snap-avatar-window-right": {
@@ -226,7 +228,8 @@ function bootstrap(): void {
     startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
     redraw: () => m.redraw(),
   });
-  desktopStore.subscribe(() => tour.noteAgentWorking(desktopStore.getState().avatar.status.mood === "working"));
+  const agentWorking = makeAgentWorkingSignal((isWorking) => tour.noteAgentWorking(isWorking));
+  desktopStore.subscribe(() => agentWorking.noteAvatar(desktopStore.getState().avatar.status.mood === "working"));
   onOwnIdentityChanged(() => tour.noteViewerChanged());
   // The chat app says whether the first run's provider page is owed; the cover follows it (views/FirstRunCover.ts).
   setChildFrameMessageHandler(SHELL_FIRST_RUN_PROVIDER_STEP, (frame, payload) => {
@@ -242,6 +245,7 @@ function bootstrap(): void {
           store: desktopStore,
           gestures,
           tour,
+          notePagesAgentWorking: agentWorking.notePages,
           host: window.location.host,
           protocol: window.location.protocol,
         }),

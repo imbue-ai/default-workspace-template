@@ -1,1 +1,3 @@
 The app contract has a new page-to-shell message, `shell:show-coach-card {text, chromeAnchor}` (`connection.showCoachCard`): the shell shows the page's words as a one-button card under a control of the Imbue Studio chrome and rings that control. `shell:handshake` has a `showsCoachMarks` flag, read as false when the shell does not send it: whether the chrome draws coach marks on its own controls. `embed.ts` documents the optional `coachMark` of `minds:open-share-settings` (embed contract v19) and exports its type.
+
+The app contract also has `shell:agent-working {isWorking}` (`connection.agentWorking`): a page says whether an agent is working in what it shows, and the shell keeps each page's last report until the page loads again or goes away.

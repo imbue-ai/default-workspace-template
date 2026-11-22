@@ -26,6 +26,7 @@ import {
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
   SHELL_SHOW_COACH_CARD,
+  SHELL_AGENT_WORKING,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -72,10 +73,13 @@ let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
 /** The coach cards the pages asked the layer for, as a text and the chrome control each names. */
 let coachCards: [string, string][] = [];
+/** What the layers said, each time they said it, of whether any page has an agent working in it. */
+let pagesAgentWorking: boolean[] = [];
 const PAGE_OPTIONS: LivePagesOptions = {
   host: "127.0.0.1:8000",
   protocol: "http:",
   showCoachCard: (text, chromeAnchor) => coachCards.push([text, chromeAnchor]),
+  notePagesAgentWorking: (isWorking) => pagesAgentWorking.push(isWorking),
 };
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
 const FOCUS_GRANT_SCHEDULE_MS = 2000;
@@ -138,6 +142,11 @@ function spyOnFrame(windowId: string): ReturnType<typeof vi.fn> {
 /** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
 function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
   return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
+}
+
+/** What the layers last said of whether any page has an agent working in it. */
+function lastToldOfPages(): boolean | undefined {
+  return pagesAgentWorking[pagesAgentWorking.length - 1];
 }
 
 function load(windowId: string): void {
@@ -254,6 +263,7 @@ beforeEach(async () => {
   initEmbedderRelay();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   coachCards = [];
+  pagesAgentWorking = [];
   layer = new LivePagesLayer(host, store, PAGE_OPTIONS);
   layer.start();
   await store.start(NO_LINK);
@@ -1388,6 +1398,81 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(500), chromeAnchor: "share" });
     expect(coachCards).toEqual([["x".repeat(500), "share"]]);
     warn.mockRestore();
+  });
+
+  it("takes a page's shell:agent-working as that page's last word, and counts an agent as working while any page says so", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    // A layer starts from no page having said anything.
+    expect(pagesAgentWorking).toEqual([false]);
+
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+    const toldAfterFirst = pagesAgentWorking.length;
+    // The same word again changes nothing, and is not passed on.
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(pagesAgentWorking).toHaveLength(toldAfterFirst);
+
+    messageFromPage("win-2", { type: SHELL_AGENT_WORKING, isWorking: true });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: false });
+    expect(lastToldOfPages()).toBe(true);
+
+    messageFromPage("win-2", { type: SHELL_AGENT_WORKING, isWorking: false });
+    expect(lastToldOfPages()).toBe(false);
+  });
+
+  it("drops a shell:agent-working that carries no boolean", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: "true" });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: 1 });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: null });
+
+    expect(pagesAgentWorking).toEqual([false]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("forgets what a page said of an agent working when its window closes", async () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+
+    await store.closeWindow("win-1");
+    layer.reconcile();
+
+    expect(lastToldOfPages()).toBe(false);
+  });
+
+  it("forgets it when the page's frame loads again, before greeting the fresh page", () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    const spy = spyOnFrame("win-1");
+    const toldBeforeGreeting: boolean[] = [];
+    spy.mockImplementation((message: { type?: string }) => {
+      if (message.type === SHELL_HANDSHAKE) toldBeforeGreeting.push(lastToldOfPages() ?? true);
+    });
+
+    load("win-1");
+
+    expect(lastToldOfPages()).toBe(false);
+    // A page that still has an agent working answers the greeting by saying so again, which must come after.
+    expect(toldBeforeGreeting).toEqual([false]);
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+  });
+
+  it("forgets it when the layer stops, and a layer that replaces another starts from nobody working", () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
+    expect(lastToldOfPages()).toBe(false);
+
+    pagesAgentWorking = [];
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: false });
+    // The replaced layer no longer hears its pages.
+    expect(pagesAgentWorking).toEqual([]);
+    layer.stop();
+    expect(pagesAgentWorking).toEqual([false]);
   });
 
   it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {
