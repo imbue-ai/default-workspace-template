@@ -1,1 +1,0 @@
-`manage-routines` says how a routine tells a run started by hand from a scheduled one: a command reads `$ROUTINES_TRIGGER` (`scheduled` or `manual`), and a skill run reads the trigger of its own run, the newest record of `routines runs <id> --limit 1 --format json`.
