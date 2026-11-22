@@ -32,6 +32,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -61,6 +62,7 @@ FULL_TEXT_MAX_LENGTH: Final[int] = 200
 _CHAT_TITLE_MAX_LENGTH: Final[int] = 80
 _CHAT_ID_PATTERN: Final[str] = r"^agent-[A-Za-z0-9_-]{1,120}$"
 _SEND_ID_BYTES: Final[int] = 8
+CHAT_APP_NAME: Final[str] = "chat"
 
 
 class PushCaller(LowerCaseStrEnum):
@@ -153,9 +155,15 @@ class SendLog(MutableModel):
 
 
 @pure
+def deep_link_path(app_name: str, path: str) -> str:
+    """The shell's deep link that opens ``path`` of ``app_name`` (desktop-interface contracts.md section 9)."""
+    return "/?" + urlencode({"open": f"{app_name}:{path}"})
+
+
+@pure
 def chat_path(chat_id: str) -> str:
     """The page a tap opens: the chat, in the workspace's chat app."""
-    return "/?" + urlencode({"open": f"chat:/?chat={chat_id}"})
+    return deep_link_path(CHAT_APP_NAME, "/?" + urlencode({"chat": chat_id}))
 
 
 @pure
@@ -401,8 +409,8 @@ class PushDispatcher(MutableModel):
         while not self._stop.is_set():
             try:
                 self.flush_due()
-            except Exception as e:
-                # The worker outlives one bad post: the next send must still go out.
+            except ShellError as e:
+                # A state file it could not write fails that batch alone: the next send must still go out.
                 logger.opt(exception=e).error("A Web Push batch failed")
             next_due_at = self.next_due_at()
             timeout = None if next_due_at is None else max(0.0, next_due_at - self.clock())

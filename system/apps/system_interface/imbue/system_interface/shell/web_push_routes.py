@@ -183,6 +183,7 @@ def list_sends() -> ResponseReturnValue:
 
 
 def get_settings() -> ResponseReturnValue:
+    """The owner's choice of what a notification shows."""
     refusal = _refuse_unless_owner()
     if refusal is not None:
         return refusal

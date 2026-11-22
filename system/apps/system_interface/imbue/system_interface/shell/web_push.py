@@ -545,6 +545,8 @@ class WebPushNotifier(MutableModel):
                 delivery = delivery_by_id.get(device.device_id)
                 if delivery is None:
                     kept.append(device)
-                elif not delivery.is_forgotten:
+                elif delivery.is_forgotten:
+                    logger.info("Forgot {}: its push service says the subscription is gone", device.label)
+                else:
                     kept.append(with_delivery_recorded(device, delivery, now))
             self._write_devices(tuple(kept))

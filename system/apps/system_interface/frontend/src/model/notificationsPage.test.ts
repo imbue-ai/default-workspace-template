@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { applyRenderModes } from "../theme/metrics";
 import {
   currentNotificationsOffer,
   isHandheldDevice,
@@ -16,8 +17,10 @@ describe("the notifications page", () => {
   });
 
   it("takes a device whose main pointer is a finger for a phone or tablet", () => {
-    expect(isHandheldDevice((query) => ({ matches: query.includes("coarse") }))).toBe(true);
-    expect(isHandheldDevice(() => ({ matches: false }))).toBe(false);
+    const root = document.createElement("html");
+    expect(isHandheldDevice(root)).toBe(false);
+    applyRenderModes(root, { isPhone: false, isTouch: true });
+    expect(isHandheldDevice(root)).toBe(true);
   });
 
   it("is shown to the owner on a phone, found by search on a computer, and never offered to a visitor", () => {

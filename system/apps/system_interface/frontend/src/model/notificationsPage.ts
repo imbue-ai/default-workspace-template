@@ -8,7 +8,7 @@
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
+import { currentRenderModes } from "../theme/metrics";
 import type { OwnIdentity } from "./Presence";
 
 export const NOTIFICATIONS_LAUNCHER_LABEL = "Notifications on this device";
@@ -23,9 +23,10 @@ export function isTopLevelWindow(view: { readonly top: Window | null; readonly s
   return view.top === view.self;
 }
 
-/** Whether this device is a phone or a tablet: its main pointer is a finger. */
-export function isHandheldDevice(matchMedia: (query: string) => { matches: boolean } = window.matchMedia): boolean {
-  return matchMedia(TOUCH_MEDIA_QUERY).matches;
+/** Whether this device is a phone or a tablet: its main pointer is a finger, as the render modes stamped on the
+ *  root element say. */
+export function isHandheldDevice(root: Element = document.documentElement): boolean {
+  return currentRenderModes(root).isTouch;
 }
 
 /** How the launcher offers the page to this viewer, in this window, on this device. */
