@@ -98,7 +98,7 @@ observe`, its own supervised service) writes, and serves:
   (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
   one module the embed ratchet allows, hands them the shell's handshake and
   forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
-  `shell:message`, and `shell:open-link` messages, and passes the desktop
+  `shell:show-coach-card`, `shell:message`, and `shell:open-link` messages, and passes the desktop
   app's answers to them (`minds:provider-sign-in-ack`,
   `minds:permission-resolutions`) back down.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
@@ -834,6 +834,44 @@ owner's click on `connect_data` sets `connect_data_coach_shown`, which retires t
 a click on any of the other three records nothing, since doing the thing is what retires them,
 and so does a visitor's click. An id that is no activity suggestion's answers 400.
 
+The page draws them as two strips (`frontend/src/models/ActivitySuggestions.ts`,
+`views/ActionSuggestions.ts`). The activity strip, "While you wait", opens above the composer
+when a turn starts in the chat the page shows, with what the route answers then, and closes into
+its toggle when the reply ends; the toggle stays until the next turn opens the strip again with
+a fresh read. The new-chat strip, "Things to try", is open on a chat nobody has said anything
+in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
+the chat's first message it collapses to its toggle, unless the activity strip opens with the
+same suggestions in the same order, in which case it is dropped for good, so the two are never
+on screen together. The first-run chat never shows it: the route answers that chat nothing
+while its tree is in progress, and its first strip is the tree's. A strip shows the first three
+suggestions the page can act on and is absent when there are none. The page keeps only a
+suggestion whose action it knows, so a newer backend never produces a dead pill.
+
+The strips of the three placements share the composer's column (`views/ChatSuggestions.ts`). At
+most one is open: a strip that opens, by itself or from its toggle, collapses any other, and
+the collapsed ones are toggles side by side in one row over the open strip.
+
+A click on one sends nothing. It points the user at a control, and the layer that owns the
+control draws the bubble (`views/suggestion-actions.ts`); every bubble has one button, "Got it":
+
+| Action | Who draws | What the page does |
+|---|---|---|
+| `new_chat_coach` | the chat list | calls `showNewChatCoachMark()` on the chat root that frames it (`window.parent.chatRootEmbed`); the root points a coach mark at its New chat button, which pulses, and in the phone layout opens the list's drawer first (`root/newChatCoachMark.ts`) |
+| `build_app_coach` | the chat page | points a coach mark at the composer's text area, and focuses it |
+| `connect_data_coach` | the shell | posts `shell:show-coach-card {text, chromeAnchor: "permissions"}`, which the chat root forwards; the shell shows the words as a card under the Imbue Studio app's permissions button and rings the button |
+| `phone_access` | the Imbue Studio app | posts `minds:open-share-settings {coachMark: "mobile-access"}`, naming no app; the Imbue Studio app opens its share panel on the workspace with a bubble at its phone-access control |
+
+After any click the page posts the suggestion's id to the clicked route and reads the activity
+route again. Before it takes the first three, the page drops the suggestions whose click needs
+a layer it cannot reach: `new_chat` in a chat page no chat list frames, and `phone_access` and
+`connect_data` unless the shell's handshake says `showsCoachMarks`, which is what an Imbue
+Studio app that draws coach marks announces (the chat root keeps the handshake it hands its
+pages up to date when the app speaks after the shell did).
+
+The New chat button's create names the browser it came from (`client_id`, the per-browser id a
+send carries too), which is what lets the chat app count it as a chat a person started; a
+create from anywhere else names none.
+
 A marker or a registry that cannot be read counts against the suggestions that read it, so
 nothing is offered rather than everything: an unreadable `tour_finished` closes the whole gate.
 A marker that cannot be written is logged, and the request or the transcript read that noticed
@@ -847,8 +885,9 @@ The next-step switch governs the strip under a reply, and the other two govern w
 `GET /api/suggestions/activity` answers at their placement. `PUT /api/settings` replaces the settings
 whole, so a writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions`
 takes any of the three switches, changes only those (one left out or null stays as it is), and
-answers the settings as `GET /api/settings` does. Under the pills the workspace's owner is shown
-a "disable next step suggestions" link, which switches the placement off through that route: the
+answers the settings as `GET /api/settings` does. Under the pills of each placement's strip the
+workspace's owner is shown its own link ("disable next step suggestions", "disable activity
+suggestions", "disable new chat suggestions"), which switches that placement off through that route: the
 strip goes, a notice with "Undo" takes its place for a few seconds, and where the Imbue Studio
 app says it opens workspace settings the link opens them on their Suggestions group, whose
 switches write through the same route. Every write through either settings route is pushed to

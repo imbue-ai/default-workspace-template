@@ -1,8 +1,11 @@
 /**
- * A strip: the suggestions of one placement, above the composer and at its width. Open, it is its suggestions as
- * pills in a wrapping row (the recommended one in green) over a quiet link that switches the placement off;
- * collapsed, it is a small labelled toggle that opens it again. A set that may run long shows its first few with
- * a "Show more" that reveals the rest. The pills' look is ``style.css``'s (``suggestion-pill``).
+ * A strip: the suggestions of one placement, above the composer. Open, it is its suggestions as pills in a wrapping
+ * row (the recommended one in green) over a quiet link that switches the placement off; collapsed, it is a small
+ * labelled toggle that opens it again. A set that may run long shows its first few with a "Show more" that reveals
+ * the rest. The pills' look is ``style.css``'s (``suggestion-pill``).
+ *
+ * The strips of a chat share one column at the composer's width (``views/ChatSuggestions.ts``): an open strip and
+ * the line that follows a switch-off take a row of their own, the last, and the toggles sit side by side over it.
  */
 
 import m from "mithril";
@@ -47,9 +50,8 @@ export interface SuggestionStripAttrs {
   onDisable: (() => void) | null;
 }
 
-// The composer's own column, so the pills line up with its edge.
-const COLUMN_CLASS = "mx-auto mb-2 w-full max-w-(--width-message-column)";
-const STRIP_CLASS = `suggestion-strip ${COLUMN_CLASS}`;
+// A row of its own, under the toggles of the strips that are collapsed.
+const OWN_ROW_CLASS = "order-last w-full";
 
 // A key no suggestion's own id takes, for the control drawn among the keyed pills.
 const SHOW_MORE_KEY = "suggestion-strip-show-more";
@@ -67,7 +69,7 @@ export function SuggestionStrip(): m.Component<SuggestionStripAttrs> {
       if (!attrs.isOpen) {
         return m(
           "div",
-          { class: `${STRIP_CLASS} suggestion-strip--collapsed`, "data-placement": attrs.placement },
+          { class: "suggestion-strip suggestion-strip--collapsed", "data-placement": attrs.placement },
           m(
             Button,
             {
@@ -85,7 +87,7 @@ export function SuggestionStrip(): m.Component<SuggestionStripAttrs> {
       return m(
         "div",
         {
-          class: `${STRIP_CLASS} suggestion-strip--open flex flex-col gap-1`,
+          class: `suggestion-strip suggestion-strip--open ${OWN_ROW_CLASS} flex flex-col gap-1`,
           "data-placement": attrs.placement,
           role: "group",
           "aria-label": words.toggleLabel,
@@ -156,7 +158,7 @@ export function suggestionsOffNotice(placement: SuggestionPlacement, onUndo: () 
   return m(
     "div",
     {
-      class: `suggestions-off-notice ${COLUMN_CLASS} flex items-center gap-1 text-(length:--font-size-helper) text-secondary`,
+      class: `suggestions-off-notice ${OWN_ROW_CLASS} flex items-center gap-1 text-(length:--font-size-helper) text-secondary`,
       "data-placement": placement,
       role: "status",
     },

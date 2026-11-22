@@ -17,6 +17,7 @@ import { ensureParticipants } from "./models/Participants";
 import { rereadNextStepSuggestions } from "./models/Suggestions";
 import {
   EMBEDDER_CAPABILITIES,
+  OPEN_SHARE_SETTINGS,
   OPEN_WORKSPACE_SETTINGS,
   reportChatOnScreen,
   reportProviderChooserOnScreen,
@@ -24,7 +25,8 @@ import {
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellChromeAnchor, ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import type { ShareSettingsCoachMark } from "@imbue/workspace-ui/src/embed";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
@@ -58,6 +60,25 @@ export function opensWorkspaceSettings(): boolean {
 /** Ask the Imbue Studio chrome to open its workspace settings at ``group``. */
 export function openWorkspaceSettings(group: string): void {
   sendToEmbedder(OPEN_WORKSPACE_SETTINGS, { group });
+}
+
+// Whether the chrome said it draws coach marks on its own controls, read the same two ways.
+let isCoachMarkDrawnByChrome = false;
+
+/** Whether a chrome stands above this page that draws coach marks on its own controls when asked. */
+export function showsCoachMarks(): boolean {
+  return isCoachMarkDrawnByChrome;
+}
+
+/** Ask the Imbue Studio chrome to open its share settings on the whole workspace, with a coach mark at
+ *  ``coachMark``. */
+export function openShareSettingsWithCoachMark(coachMark: ShareSettingsCoachMark): void {
+  sendToEmbedder(OPEN_SHARE_SETTINGS, { coachMark });
+}
+
+/** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the chrome. */
+export function showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void {
+  connection?.showCoachCard(text, chromeAnchor);
 }
 
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
@@ -127,6 +148,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const onHandshake = (received: ShellHandshake): void => {
     lastHandshake = received;
     isWorkspaceSettingsOpenedByChrome = received.opensWorkspaceSettings;
+    isCoachMarkDrawnByChrome = received.showsCoachMarks;
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any page's unexpired visible or hidden report) is what a hidden report keeps.
@@ -162,6 +184,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   mirrorParentTheme();
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     isWorkspaceSettingsOpenedByChrome = message.opensWorkspaceSettings === true;
+    isCoachMarkDrawnByChrome = message.showsCoachMarks === true;
     m.redraw();
   });
   if (connection.isFramed) {

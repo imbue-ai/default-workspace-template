@@ -342,6 +342,61 @@ describe("whether the chrome opens its workspace settings", () => {
   });
 });
 
+describe("whether the chrome draws coach marks on its own controls", () => {
+  const CAPABILITIES = { type: "minds:embedder-capabilities", canPopOut: false };
+
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  it("is no until a handshake says so, and follows the chrome's own word after it", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver(HANDSHAKE, parent);
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver({ ...HANDSHAKE, showsCoachMarks: true }, parent);
+    expect(shell.showsCoachMarks()).toBe(true);
+
+    deliver(CAPABILITIES, parent);
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver({ ...CAPABILITIES, showsCoachMarks: true }, parent);
+    expect(shell.showsCoachMarks()).toBe(true);
+  });
+
+  it("asks the chrome for its share settings on the whole workspace, with a coach mark at one control", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.openShareSettingsWithCoachMark("mobile-access");
+
+    // No serviceName: the tab opens on the workspace, not on one app.
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "minds:open-share-settings",
+      coachMark: "mobile-access",
+    });
+  });
+
+  it("asks the shell for a coach card under a control of the chrome", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.showCoachCard("Your connections live here.", "permissions");
+
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "shell:show-coach-card",
+      text: "Your connections live here.",
+      chromeAnchor: "permissions",
+    });
+  });
+});
+
 describe("the chat's suggestions when its page is shown again", () => {
   it("are read again when the shell shows the page", async () => {
     const parent = framed();

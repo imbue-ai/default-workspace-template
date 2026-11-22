@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildAgentTerminalUrl, isLaunchInFlight, launchChat } from "./Chats";
+import { buildAgentTerminalUrl, createChat, isLaunchInFlight, launchChat } from "./Chats";
 
 describe("buildAgentTerminalUrl", () => {
   function stubPage(terminalLabel: string | null): void {
@@ -57,6 +57,29 @@ describe("buildAgentTerminalUrl", () => {
     expect(
       buildAgentTerminalUrl("a", false).startsWith("http://terminal.host-0af1b2c3d4e5f60718293a4b5c6d7e8f."),
     ).toBe(true);
+  });
+});
+
+describe("createChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("names the client a person asked from when given one, and leaves the field out otherwise", async () => {
+    vi.stubGlobal("document", { querySelector: () => null });
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ chat_id: "agent-new", name: "x", display_name: "x" }), { status: 201 });
+    });
+
+    await createChat("", "", "", null, "client-1");
+    await createChat("", "acct-1", "Carry on here");
+
+    expect(bodies).toEqual([
+      { project_id: "", account_id: "", message: "", model: null, client_id: "client-1" },
+      { project_id: "", account_id: "acct-1", message: "Carry on here", model: null },
+    ]);
   });
 });
 

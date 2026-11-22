@@ -60,6 +60,29 @@
   }
 }
 
+/* The chat list's New chat button pulses while a coach mark points at it (root/newChatCoachMark.ts): a ring in
+   the accent colour that spreads and fades. Reduced motion holds the ring steady. */
+@keyframes coach-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+.coach-pulse {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+  animation: coach-pulse 1.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-pulse {
+    animation: none;
+  }
+}
+
 /* The phone layout's drawer (root/ChatDrawer.ts) comes in from the left, a short slide rather
    than the panel's whole width, so it reads as arriving rather than travelling. */
 @keyframes chat-drawer-in {

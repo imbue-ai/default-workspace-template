@@ -667,6 +667,8 @@ export interface CreatedChat {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
  * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
+ * ``clientId`` names the browser a person asked for the chat from (the New chat button), which is how the chat app
+ * tells such a chat from one a script made; empty for a create nobody pressed a button for.
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
@@ -674,9 +676,11 @@ export function createChat(
   accountId: string = "",
   message: string = "",
   pick: ModelIdentity | null = null,
+  clientId: string = "",
 ): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
+  const body = { project_id: projectId, account_id: accountId, message, model: pick };
+  return postCreateChat(clientId === "" ? body : { ...body, client_id: clientId });
 }
 
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the

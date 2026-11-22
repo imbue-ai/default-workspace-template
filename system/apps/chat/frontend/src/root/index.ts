@@ -13,7 +13,8 @@
  * (``models/firstSendChooser.ts``), tells the Imbue Studio chrome once when a chooser of its is on
  * screen (``minds:provider-chooser-on-screen``), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
- * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
+ * reports key on the chat it shows. A page calls back the same way for what is the root's to draw: the
+ * provider chooser, and a coach mark at the New chat button. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
  * kinds; a page asking for a sibling chat is answered here, by selecting it.
  */
@@ -77,6 +78,7 @@ import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
+import { showNewChatCoachMark } from "./newChatCoachMark";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
@@ -241,6 +243,13 @@ async function openNewChat(): Promise<void> {
   if (outcome.kind === "created") startedHere.add(outcome.chatId);
   awaitingListing.add(outcome.chatId);
   select(outcome.chatId);
+}
+
+/** Put the chat list on screen where it is not: the phone layout keeps it in a drawer, opened and drawn here. */
+function revealChatList(): void {
+  if (!compactQuery.matches || isDrawerOpen) return;
+  isDrawerOpen = true;
+  m.redraw.sync();
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -627,7 +636,11 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   // only through the handshake the root hands them, so the root keeps that up to date.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     if (handshake === null) return;
-    handshake = { ...handshake, opensWorkspaceSettings: message.opensWorkspaceSettings === true };
+    handshake = {
+      ...handshake,
+      opensWorkspaceSettings: message.opensWorkspaceSettings === true,
+      showsCoachMarks: message.showsCoachMarks === true,
+    };
     pool?.setHandshake(handshake);
   });
   // Hidden until the shell says shown: the root can load into a background tab.
@@ -671,7 +684,10 @@ function bootstrap(): void {
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
-  window.chatRootEmbed = { chooseProviderForFirstSend: () => firstSendChooser.open() };
+  window.chatRootEmbed = {
+    chooseProviderForFirstSend: () => firstSendChooser.open(),
+    showNewChatCoachMark: () => void showNewChatCoachMark(revealChatList),
+  };
   selectedChatId = selectionFromSearch(window.location.search);
   isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);

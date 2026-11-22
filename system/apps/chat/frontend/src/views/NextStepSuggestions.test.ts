@@ -38,9 +38,11 @@ vi.mock("../models/Response", async (importOriginal) => ({
 vi.mock("../shell", () => ({
   opensWorkspaceSettings: () => mocks.opensWorkspaceSettings,
   openWorkspaceSettings: mocks.openWorkspaceSettings,
+  showsCoachMarks: () => false,
 }));
 vi.mock("./MessageInput", () => ({ submitSuggestion: mocks.submitSuggestion }));
 
+import { resetActivitySuggestionsForTests } from "../models/ActivitySuggestions";
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
 import { chatSnapshotFixture, provisionalChatFixture } from "../models/chatSnapshotFixture";
@@ -50,7 +52,8 @@ import { setParticipantsForTesting } from "../models/Participants";
 import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
 import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
-import { NextStepSuggestions, SUGGESTIONS_OFF_NOTICE_MS } from "./NextStepSuggestions";
+import { ChatSuggestions } from "./ChatSuggestions";
+import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
 
 const CHAT = "agent-first-run";
 const SEED_END = `${CHAT}:seed:3`;
@@ -105,8 +108,10 @@ let heldWriteAnswers: (() => void)[] | null;
 let requests: { method: string; url: string; body?: unknown }[];
 let root: HTMLElement;
 
+/** The strips above the composer, of which these tests offer the next-step one alone: the chat app answers the
+ *  other placements with nothing. */
 function draw(): void {
-  m.render(root, m(NextStepSuggestions, { chatId: CHAT }));
+  m.render(root, m(ChatSuggestions, { chatId: CHAT }));
 }
 
 /** Let the page's requests answer, then draw what they brought. */
@@ -150,6 +155,7 @@ function writes(): unknown[] {
 
 beforeEach(() => {
   resetSuggestionsForTests();
+  resetActivitySuggestionsForTests();
   resetChatSettingsForTests();
   setParticipantsForTesting("owner", []);
   stored = { settings: { ...DEFAULT_CHAT_SETTINGS }, suggestions: START_SET, isWriteRefused: false };
@@ -167,6 +173,7 @@ beforeEach(() => {
   vi.spyOn(m, "request").mockImplementation((async (options: { method: string; url: string; body?: unknown }) => {
     requests.push({ method: options.method, url: options.url, body: options.body });
     if (options.url === "/api/settings") return { settings: stored.settings };
+    if (options.url === "/api/suggestions/activity") return { suggestions: [] };
     if (options.url === "/api/settings/suggestions") {
       if (stored.isWriteRefused) throw new Error("400");
       stored.settings = { ...stored.settings, ...(options.body as Partial<ChatSettings>) };
@@ -255,9 +262,11 @@ describe("the next-step strip", () => {
   it("offers the start suggestions in a seeded chat that still awaits its first agent", async () => {
     await load();
 
+    // The last is what a chat nobody has spoken in asks for besides, and here it answers nothing.
     expect(requests.map((request) => `${request.method} ${request.url}`).sort()).toEqual([
       "GET /api/chats/:chatId/suggestions",
       "GET /api/settings",
+      "GET /api/suggestions/activity",
     ]);
     expect(pillLabels()).toEqual(START_LABELS);
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");

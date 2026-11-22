@@ -32,6 +32,13 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:draft-text", text: "Explain this element:" })).toBe(true);
     expect(
+      isForwardedToShell({
+        type: "shell:show-coach-card",
+        text: "Your connections live here.",
+        chromeAnchor: "permissions",
+      }),
+    ).toBe(true);
+    expect(
       isForwardedToShell({ type: "shell:message", message: { type: "open:file", path: "/home/user/a.md" } }),
     ).toBe(true);
     expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(

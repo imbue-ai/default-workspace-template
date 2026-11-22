@@ -24,12 +24,22 @@ export const SUGGESTION_SWITCHES: Record<SuggestionPlacement, SuggestionSwitch> 
   new_chat: "is_new_chat_suggestions_enabled",
 };
 
-/** One clickable entry (the backend's ``Suggestion``). Clicking it sends its label as the user's message. */
+/** One clickable entry (the backend's ``Suggestion``, without its action). Clicking a reply suggestion sends its
+ *  label as the user's message. */
 export interface Suggestion {
   // Unique within its strip.
   suggestion_id: string;
   label: string;
   is_recommended: boolean;
+}
+
+/** What clicking an action suggestion does (the backend's ``SuggestionAction``). */
+export type SuggestionAction = "new_chat_coach" | "phone_access" | "build_app_coach" | "connect_data_coach";
+
+/** A suggestion whose click does something other than send its label (``models/ActivitySuggestions.ts``). A
+ *  next-step suggestion is never one. */
+export interface ActionSuggestion extends Suggestion {
+  action: SuggestionAction;
 }
 
 /** Where a set came from: the chat app itself, with no model asked, or worked out by a model. */
@@ -55,8 +65,9 @@ export interface SuggestionsAnswer {
 
 /**
  * The set an answer carries, or null when it carries none to draw: any status but "ready" (one this page does not
- * know included), or a set with nothing left in it. A suggestion with an action is dropped, since this page knows
- * none, so a newer backend never produces a dead pill; and only the first suggestion may be the recommended one.
+ * know included), or a set with nothing left in it. A suggestion with an action is dropped, since a next-step set
+ * carries none, so a newer backend never produces a dead pill; and only the first suggestion may be the recommended
+ * one.
  */
 export function suggestionSetOf(answer: SuggestionsAnswer): SuggestionSet | null {
   if (answer.status !== "ready" || answer.after_event_id === null) return null;
