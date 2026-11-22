@@ -32,7 +32,7 @@ export interface Suggestion {
   is_recommended: boolean;
 }
 
-/** Where a set came from: written by the chat app word for word, or worked out by a model. */
+/** Where a set came from: the chat app itself, with no model asked, or worked out by a model. */
 export type SuggestionSource = "fixed" | "generated";
 
 /** The suggestions offered under one assistant message. */

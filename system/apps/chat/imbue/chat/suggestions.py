@@ -21,8 +21,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 
 SUGGESTIONS_FILENAME: Final[str] = "suggestions.json"
 SUGGESTIONS_FILE_VERSION: Final[int] = 1
-# What a set worked out from a reply may hold: a label is one line of at most this many characters, and a set at
-# most this many suggestions.
+# What is read from a reply for a set: a label is one line of at most this many characters, and at most this many
+# are taken (a model's suggestions, or the ideas of a list, which the tree's two fixed replies then follow).
 MAX_SUGGESTION_LABEL_LENGTH: Final[int] = 80
 MAX_SUGGESTION_COUNT: Final[int] = 10
 
@@ -30,7 +30,7 @@ MAX_SUGGESTION_COUNT: Final[int] = 10
 class SuggestionSource(LowerCaseStrEnum):
     """Where a set of suggestions came from (a wire value)."""
 
-    # Written by the chat app itself, word for word.
+    # The chat app's own, with no model asked: its own words, or labels read out of the reply the set follows.
     FIXED = auto()
     # Worked out by a model from the conversation.
     GENERATED = auto()
