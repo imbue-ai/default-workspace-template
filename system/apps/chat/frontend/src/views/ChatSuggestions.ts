@@ -13,7 +13,7 @@ import { ensureChatSettings, isSuggestionSwitchOn } from "../models/ChatSettings
 import { isViewerOwner } from "../models/Participants";
 import { SUGGESTION_SWITCHES } from "../models/Suggestions";
 import type { SuggestionPlacement } from "../models/Suggestions";
-import { actionStrips } from "./ActionSuggestions";
+import { actionStrips, followActionSuggestions } from "./ActionSuggestions";
 import { followNextStepSuggestions, nextStepStrip } from "./NextStepSuggestions";
 import { makeSuggestionSwitchLink } from "./suggestion-placement";
 import type { PlacementStrip, SuggestionSwitchLink } from "./suggestion-placement";
@@ -53,6 +53,7 @@ function keepOneOpen(
 export function ChatSuggestions(): m.Component<{ chatId: string }> {
   let shownChatId: string | null = null;
   let stopFollowingNextStep: () => void = () => undefined;
+  let stopFollowingActions: () => void = () => undefined;
   let openAtLastDraw: ReadonlySet<SuggestionPlacement> = new Set();
   const links: Record<SuggestionPlacement, SuggestionSwitchLink> = {
     next_step: makeSuggestionSwitchLink("next_step"),
@@ -63,10 +64,12 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
   return {
     oninit() {
       stopFollowingNextStep = followNextStepSuggestions(() => shownChatId);
+      stopFollowingActions = followActionSuggestions(() => shownChatId);
     },
 
     onremove() {
       stopFollowingNextStep();
+      stopFollowingActions();
       for (const placement of PLACEMENTS) links[placement].dispose();
     },
 

@@ -54,7 +54,7 @@ import { chatSnapshotFixture, provisionalChatFixture } from "../models/chatSnaps
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
-import type { TranscriptEvent } from "../models/Response";
+import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { hasUserMessage, isTurnDoneForActivity } from "./last-reply";
@@ -520,6 +520,28 @@ describe("the new-chat strip", () => {
 
     expect(isOpen("new_chat")).toBe(false);
     expect(pillLabels("activity")).toEqual([BUILD_APP.label]);
+  });
+
+  it("collapses again on a later send when opened from its toggle, with no activity strip to give way to", async () => {
+    stored.settings = { ...stored.settings, is_activity_suggestions_enabled: false };
+    newAndEmpty();
+    await drawAndSettle();
+    firstMessageSent();
+    await drawAndSettle();
+    firstReplyIn();
+    await drawAndSettle();
+    click('.suggestion-strip[data-placement="new_chat"] .suggestion-strip-toggle');
+    expect(isOpen("new_chat")).toBe(true);
+
+    announceMessageSent("agent-elsewhere");
+    draw();
+    expect(isOpen("new_chat")).toBe(true);
+
+    announceMessageSent(CHAT);
+    working();
+    draw();
+    expect(isOpen("new_chat")).toBe(false);
+    expect(strip("activity")).toBeNull();
   });
 });
 

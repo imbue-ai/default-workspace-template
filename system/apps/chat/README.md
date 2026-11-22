@@ -842,7 +842,8 @@ a fresh read. The new-chat strip, "Things to try", is open on a chat nobody has 
 in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
 the chat's first message it collapses to its toggle, unless the activity strip opens with the
 same suggestions in the same order, in which case it is dropped for good, so the two are never
-on screen together. The first-run chat never shows it: the route answers that chat nothing
+on screen together. Opened again from its toggle, it collapses again when the next message is
+sent from the page. The first-run chat never shows it: the route answers that chat nothing
 while its tree is in progress, and its first strip is the tree's. A strip shows the first three
 suggestions the page can act on and is absent when there are none. The page keeps only a
 suggestion whose action it knows, so a newer backend never produces a dead pill.

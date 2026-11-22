@@ -15,9 +15,23 @@ import {
 } from "../models/ActivitySuggestions";
 import type { ActionPlacement, ActionStrip } from "../models/ActivitySuggestions";
 import { isRoomChat } from "../models/Chats";
+import { addMessageSentListener, removeMessageSentListener } from "../models/Response";
 import { hasUserMessage, isTurnDoneForActivity } from "./last-reply";
 import { canRunSuggestionAction, runSuggestionAction } from "./suggestion-actions";
 import type { PlacementStrip } from "./suggestion-placement";
+
+/**
+ * Follow what changes the action strips of the chat on screen between draws: a message sent in it collapses its
+ * open new-chat strip, one opened again from its toggle included. The activity strip is left alone, since the turn
+ * opens and closes it. Answers what stops following.
+ */
+export function followActionSuggestions(shownChatId: () => string | null): () => void {
+  const collapseOnSend = (chatId: string): void => {
+    if (chatId === shownChatId()) collapseActionStrip(chatId, "new_chat");
+  };
+  addMessageSentListener(collapseOnSend);
+  return () => removeMessageSentListener(collapseOnSend);
+}
 
 function placementStrip(chatId: string, placement: ActionPlacement, strip: ActionStrip): PlacementStrip {
   return {
