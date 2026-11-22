@@ -82,6 +82,13 @@ describe("the last-message line under the latest message", () => {
     expect(lastMessageAtMs(CHAT_ID, events)).toBe(Date.parse("2026-10-24T10:00:00Z"));
   });
 
+  it("counts a command the person ran in bash mode as their message", () => {
+    const command = userMessage("2026-10-26T09:00:00Z", { display: "person_chip", display_label: "!ls" });
+    expect(lastMessageAtMs(CHAT_ID, [reply("2026-10-24T10:00:00Z"), command])).toBe(
+      Date.parse("2026-10-26T09:00:00Z"),
+    );
+  });
+
   it("does not count a provider failure's notice as a message", () => {
     const events = [
       reply("2026-10-24T10:00:00Z"),

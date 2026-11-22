@@ -3,23 +3,23 @@
  * nobody has touched in days from one in use before stopping or deleting it. The exact time is its tooltip.
  *
  * The time is the transcript's own timestamp of the latest message from either side, so a helper chat messaged
- * only by the agent that started it reads as right as one the user talks to. A compaction, a system chip or
- * another injection the transcript records as a user message does not count, nor does a provider failure's notice.
- * It hides while the agent works on a turn (the status row says so) and while a message is on its way to it, from
- * this page or another.
+ * only by the agent that started it reads as right as one the user talks to. A command the person runs in bash
+ * mode counts as theirs. A compaction, a system chip or another injection the transcript records as a user message
+ * does not count, nor does a provider failure's notice. It hides while the agent works on a turn (the status row
+ * says so) and while a message is on its way to it, from this page or another.
  */
 
 import m from "mithril";
 import { getChatById } from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { TranscriptEvent } from "../models/Response";
-import { isTurnUserMessage } from "./message-classification";
+import { isPersonsChipMessage, isTurnUserMessage } from "./message-classification";
 import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { Age, longAge } from "./relativeTime";
 
 function isMessage(event: TranscriptEvent): boolean {
   if (event.type === "assistant_message") return !event.is_api_error && !event.is_auth_error;
-  return event.type === "user_message" && isTurnUserMessage(event);
+  return event.type === "user_message" && (isTurnUserMessage(event) || isPersonsChipMessage(event));
 }
 
 /** When the transcript's latest message was, in epoch milliseconds, or null when the mark shows nothing. */
