@@ -75,7 +75,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), what a client's phone shows
-  (`/api/clients/<client>/shown`), the backdrop size a client's desktop layout
+  (`/api/clients/<client>/shown`, which only the phone layout posts, so the
+  owner's report also sets the `phone_layout_used` marker), the backdrop size a client's desktop layout
   draws in (`/api/clients/<client>/viewport`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg|icon.png`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), the embedder-message
@@ -110,9 +111,12 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/api/roster`): who is connected right now, with their identity and
   profile, and everyone who may be here (see "Who is here").
 - The show-around tour's record (`GET` and `POST /api/tour`, `{"is_seen",
-  "resume_index"}`): whether the tour of the desktop
-  (`frontend/src/model/tourCards.ts`) has run in this workspace, and the card it
-  resumes at. A new workspace (one the bootstrap marked with `offer_tour` on its
+  "resume_index", "is_finished"}`): whether the tour of the desktop
+  (`frontend/src/model/tourCards.ts`) has run in this workspace, the card it
+  resumes at, and whether it has nothing left to show. A tour that waits to
+  resume is not finished. A record written with `is_finished` true also sets
+  the `tour_finished` marker (see the state paragraph below), which outlives
+  a later record that asks for the tour again. A new workspace (one the bootstrap marked with `offer_tour` on its
   first boot) runs it by itself the first time its agent goes to work (so the
   owner learns the product while waiting for a reply; the page's
   `tour_start_ms` query parameter makes it wait for a task that is taking a
@@ -128,7 +132,7 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `themes_changed`, `keybindings_changed`, and `layout_op` (contracts section
   6); it accepts each client's `client_state` report.
 
-Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
+Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, where it resumes, and whether it is finished), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the default shortcuts the shell has
 offered), `placements/<desktop>/<client>.json`,
@@ -143,6 +147,14 @@ an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
 beside the seven bundled ones (`docs/system/avatar-designs.md`). Presence lives
 beside it under `data/.state/presence/` (`--presence-dir`): the per-user files
 and the profile cache.
+
+The shell also sets two of the workspace's onboarding markers, the one-way
+records under `data/.state/onboarding_activity/` of what the owner has already
+done (`system/libs/onboarding_activity`): `tour_finished`, whenever the tour
+record is written finished, and `phone_layout_used`, whenever the owner's
+client reports what its phone layout shows. A visitor's report sets nothing.
+A marker that cannot be written is logged and does not fail the request. The
+shell only writes them; what reads them is each reader's own business.
 
 ### The desktop model
 
