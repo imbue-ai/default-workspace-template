@@ -47,11 +47,12 @@ export function resolveLaunchRun(
   if (launchPath === null) return { kind: "unavailable", reason: `${app.display_name} has no launch path ${launch}` };
   const desktop = activeDesktop(state);
   if (desktop === null) return { kind: "unavailable", reason: "there is no desktop to open on" };
-  if (launchRowKindOf(app, launchPath) === "focus") {
+  const rowKind = launchRowKindOf(app, launchPath);
+  if (rowKind === "focus") {
     const pinned = pinnedWindowOf(state, app.name);
     if (pinned !== null) return { kind: "raise", windowId: pinned.id };
   }
-  const isOneWindowAction = launchPath.method === "POST" && launchRowKindOf(app, launchPath) === "one";
+  const isOneWindowAction = launchPath.method === "POST" && rowKind === "one";
   if (mode === "focus" && !isOneWindowAction) {
     const recent = mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     if (recent !== null) return { kind: "raise", windowId: recent.id };
