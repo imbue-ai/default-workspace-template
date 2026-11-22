@@ -294,13 +294,14 @@ class _FailingOnceTransport(RecordingPushTransport):
 
 def test_a_failed_batch_does_not_hold_back_another_chats(tmp_path: Path) -> None:
     dispatcher, _, transport = _dispatcher(tmp_path, transport=_FailingOnceTransport())
-    dispatcher.submit(_send("one"), "Studio")
+    first = dispatcher.submit(_send("one"), "Studio")
     second = dispatcher.submit(_send("two", chat_id="agent-other"), "Studio")
 
     dispatcher.flush_due()
 
     assert len(transport.posted) == 1
     by_id = {entry.send_id: entry for entry in dispatcher.log.entries()}
+    assert by_id[first.send_id].status is SendStatus.FAILED
     assert by_id[second.send_id].status is SendStatus.SENT
 
 

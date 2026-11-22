@@ -278,6 +278,7 @@ const SEND_STATUS_TEXT = {
   limited: "Not sent: too many notifications in a short time",
   no_devices: "Not sent: no device had notifications on",
   cancelled: "Not sent: notifications were reset before it went out",
+  failed: "Not sent: the workspace could not post it",
 };
 
 function deliveryText(delivery) {

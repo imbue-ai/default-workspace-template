@@ -94,6 +94,8 @@ class SendStatus(LowerCaseStrEnum):
     NO_DEVICES = auto()
     # Dropped: the owner reset notifications while it was queued.
     CANCELLED = auto()
+    # Dropped: posting it failed (the shell's log says why).
+    FAILED = auto()
 
 
 class PushSendRequest(FrozenModel):
@@ -358,6 +360,7 @@ class PushDispatcher(MutableModel):
             except (ShellError, OSError) as e:
                 # A state file it could not read or write fails that batch alone: the other chats' still go out.
                 logger.opt(exception=e).error("A Web Push batch from {} failed", batch.chat_id)
+                self._log_failed(batch)
 
     def next_due_at(self) -> float | None:
         with self._lock:
@@ -376,6 +379,18 @@ class PushDispatcher(MutableModel):
         )
         if cancelled:
             self.log.put(cancelled)
+
+    def _log_failed(self, batch: _PendingBatch) -> None:
+        """Log a batch whose post failed as failed, so the log never shows it as still waiting."""
+        try:
+            failed = tuple(
+                entry.model_copy_update(to_update(entry.field_ref().status, SendStatus.FAILED))
+                for entry in self.log.entries()
+                if entry.send_id in batch.send_ids
+            )
+            self.log.put(failed)
+        except (ShellError, OSError) as e:
+            logger.opt(exception=e).error("Could not log the failed Web Push batch from {}", batch.chat_id)
 
     def _post(self, batch: _PendingBatch) -> None:
         notification = compose_notification(
