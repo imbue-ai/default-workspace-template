@@ -20,14 +20,14 @@ A published app is listed from a checkout of its published repository, read from
 ``app.toml`` at its root, with its icon copied beside the catalog:
 
     python3 catalog/build_catalog_from_export.py \\
-        --app https://github.com/someone/weather-desk=path/to/weather-desk \\
-        --popular inbox-digest-review,app:weather-desk,...
+        --app https://github.com/someone/weather-desk=path/to/weather-desk
 
 Without ``--export`` the templates and shelves already in the catalog are kept, so an app
 is added, refreshed, or dropped (``--drop-app``) without the export in hand. The apps
 already listed are kept either way; ``--app`` adds one or replaces the one of its name. A
-shelf names an app as ``app:<name>`` among its template slugs: ``--popular`` takes such
-entries, and a shelf rebuilt from an export keeps the app entries it held.
+shelf names an app as ``app:<name>`` among its template slugs: ``--popular``, which
+replaces the whole leading shelf, takes such entries, and a shelf rebuilt from an export
+keeps the app entries it held.
 
 Stdlib only, so it runs from any checkout without a sync.
 """

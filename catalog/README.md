@@ -125,8 +125,7 @@ the builder keeps the templates and shelves the catalog already has.
 ```bash
 git clone https://github.com/someone/weather-desk /var/tmp/weather-desk
 python3 catalog/build_catalog_from_export.py \
-    --app https://github.com/someone/weather-desk=/var/tmp/weather-desk \
-    --popular inbox-digest-review,app:weather-desk,plain-text-gtd
+    --app https://github.com/someone/weather-desk=/var/tmp/weather-desk
 ```
 
 `--app` is repeatable; it adds the app, or replaces the entry of the same name,
@@ -134,9 +133,11 @@ and copies the icon to `app-icons/<owner>--<name>.svg`. The icon has to be an
 `.svg` file of the checkout itself: one that is a link or a path leading out of
 the checkout is refused, since the checkout is someone else's repository. The
 apps already listed are kept. `--drop-app <name>` removes one, with its icon and every shelf entry
-naming it. `--popular` rewrites the leading shelf and takes `app:<name>` beside
-template slugs; leave it out to keep the shelves as they are. Any other shelf
-takes an app by adding `app:<name>` to its `slugs` by hand, which a later run
+naming it. That lists the app, on the "All apps" row; it goes on a shelf by
+adding `app:<name>` to that shelf's `slugs` by hand. `--popular` does the same
+for the leading shelf but replaces the whole of it, so pass every entry it is
+to hold, `app:<name>` among the template slugs, or leave the option out to
+keep the shelves as they are. An `app:<name>` added by hand is one a later run
 keeps (a run from an export rebuilds a shelf's templates and keeps the app
 entries it held). `--catalog <path>` writes another file than the shipped one,
 with its drawings and icons beside it.
