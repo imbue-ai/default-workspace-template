@@ -555,6 +555,30 @@ def test_a_repository_that_was_not_closed_or_not_given_its_topic_is_a_problem_of
     assert run_git(published, ["rev-parse", "main"]) == pushed.commit
 
 
+def test_a_first_publish_whose_push_fails_still_says_what_creating_the_repository_could_not_do(
+    tmp_path: Path,
+) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    runtime.lockdown_problem = "PATCH answered 403"
+    runtime.topic_problem = "the topic was not set"
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    # The repository is created, but the push cannot reach it.
+    run_git(workspace, ["config", "--unset", f"url.{published}.insteadOf"])
+    point_url_at(workspace, _PUBLISHED_URL, tmp_path / "github" / "missing.git")
+
+    with pytest.raises(PublishError) as failure:
+        push_app(workspace, "notes", None, runtime)
+
+    # The run after this one finds the repository made, so this is the only time either is said.
+    assert f"the push to {_PUBLISHED_URL} failed" in str(failure.value)
+    assert "did not take: PATCH answered 403" in str(failure.value)
+    assert "the topic published apps are found by: the topic was not set" in str(failure.value)
+    run_git(workspace, ["config", "--unset", f"url.{tmp_path / 'github' / 'missing.git'}.insteadOf"])
+    point_url_at(workspace, _PUBLISHED_URL, published)
+    assert push_app(workspace, "notes", None, runtime).problems == ()
+
+
 def test_only_the_first_publish_of_an_app_installed_and_changed_here_says_what_it_was_derived_from(
     tmp_path: Path,
 ) -> None:

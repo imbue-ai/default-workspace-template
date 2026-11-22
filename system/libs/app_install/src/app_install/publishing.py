@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import tomllib
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from enum import auto
 from pathlib import Path
@@ -555,19 +556,22 @@ def _derived_from(record: AppRecord) -> str:
     return f"{record.upstream_url}@{record.upstream_commit}"
 
 
-def _push(repo_root: Path, repo_url: str, refspec: str) -> None:
+def _push(repo_root: Path, repo_url: str, refspec: str, earlier_problems: Sequence[str] = ()) -> None:
     """Push one refspec to the published repository through the latchkey gateway, never forced. Raises
-    PushRefusedError when the repository holds commits the push does not continue, and PublishError otherwise."""
+    PushRefusedError when the repository holds commits the push does not continue, and PublishError otherwise.
+    Either one also says ``earlier_problems``: what the run could not do before the push, which a run that
+    stops here would otherwise never report."""
+    earlier = f"; and before that: {'; '.join(earlier_problems)}" if earlier_problems else ""
     try:
         run_git(repo_root, ["push", "--quiet", repo_url, refspec], is_gateway_used=True)
     except GitCommandError as e:
         if any(marker in str(e) for marker in _NON_FAST_FORWARD_MARKERS):
             raise PushRefusedError(
                 f"{repo_url} holds commits this workspace's publish does not continue, so nothing was pushed "
-                f"and nothing is ever forced: {e}"
+                f"and nothing is ever forced: {e}{earlier}"
             ) from e
         hint = hint_for_push_failure(str(e))
-        raise PublishError(f"the push to {repo_url} failed: {e}" + (f" -- {hint}" if hint else "")) from e
+        raise PublishError(f"the push to {repo_url} failed: {e}" + (f" -- {hint}" if hint else "") + earlier) from e
 
 
 def _commit_assembled_tree(repo_root: Path, record: AppRecord, pending: PendingPublish, derived_from: str) -> str:
@@ -609,7 +613,9 @@ def push_app(
     AppRecordNotFoundError for an app with no record, NotAssembledError when no tree is waiting,
     PublishedNameTakenError when the account already has a repository of that name, PushRefusedError when the
     repository holds commits this publish does not continue, and PublishError otherwise. A tag that does not
-    reach the repository is a problem in the outcome: the version is published all the same.
+    reach the repository is a problem in the outcome: the version is published all the same. What creating the
+    repository could not do is a problem in the outcome too, and is said by the error when the push that
+    follows it fails, since no later run creates the repository again.
     """
     record = load_record(repo_root, name)
     pending = _load_pending(repo_root, name)
@@ -649,7 +655,8 @@ def push_app(
             _write_pending(repo_root, name, pending)
             # Keeps the published commit's objects in the workspace repository for the next publish to follow.
             run_git(repo_root, ["update-ref", f"{PUBLISHED_REF_PREFIX}{name}", pending.commit])
-        _push(repo_root, repo_url, f"{pending.commit}:refs/heads/{DEFAULT_BRANCH}")
+        # The next run finds the repository made and has nothing to say of how that went.
+        _push(repo_root, repo_url, f"{pending.commit}:refs/heads/{DEFAULT_BRANCH}", problems)
         pending = pending.model_copy_update(to_update(pending.field_ref().is_commit_pushed, True))
         _write_pending(repo_root, name, pending)
 
