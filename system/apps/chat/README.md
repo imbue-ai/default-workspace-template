@@ -31,7 +31,11 @@ observe`, its own supervised service) writes, and serves:
   "Choose a provider" button, so a new workspace's welcome chat lands alone.
   A chat leaves the list the moment its delete is confirmed and comes back if
   the delete is refused, and with no chats left the one awaiting its first send
-  is only asked for once no delete is on its way.
+  is only asked for once no delete is on its way. A name another chat has keeps
+  the rename field open with a line under it. Any other refused delete or rename
+  says why in a notice over the list (the chat app's reason, or that the
+  workspace didn't answer, so whether it happened isn't known), with Try again
+  or Rename again; the list's notices wait while a chat's name is being typed.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled. The root opens
@@ -687,6 +691,18 @@ over such a snapshot (`_RecentRename`) until the stream reports the rename, so
 the list never flips back to the old name. The rail shows a typed name at once
 (`root/pendingRenames.ts`) and keeps it until the chat app answers: an automatic
 name shown meanwhile does not replace it, and a refusal brings the old name back.
+A name another chat already has never gets a dialog: the list checks the names
+it shows before sending (case aside), and keeps the field open with a red line
+under it ("A chat named "X" already exists. Pick another name."); Escape, or
+leaving the field, puts the old name back. The chat app's own rule is wider (it
+also counts names that differ only in punctuation), so its 409 for a taken name
+carries `kind: "name_taken"` and the list reopens the field with the same line.
+Any other refused rename or delete says why in the chat root's notice
+(`root/rootNotice.ts`, a dialog over the list): a fixed line saying what did not
+happen with the chat app's reason under it, or that whether it happened is not
+known when nothing answered, plus Rename again or Try again. A notice that comes
+while a chat's name is being typed waits until that field closes, since the
+dialog would take its focus and save the half-typed name.
 
 ## Compaction
 

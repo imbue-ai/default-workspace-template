@@ -129,6 +129,7 @@ from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
+from imbue.chat.server import NAME_TAKEN_RENAME_REFUSAL_KIND
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _attributed_send
@@ -476,6 +477,26 @@ def test_a_chat_being_created_can_be_renamed_and_deleted_through_the_routes() ->
     deleted = client.post(f"/api/chats/{chat_id}/destroy", json={})
     assert deleted.status_code == 200
     assert manager.get_provisional_chat(chat_id) is None
+
+
+def test_a_rename_to_another_chats_name_is_refused_with_the_name_taken_kind() -> None:
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    other_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+    with manager._lock:
+        manager._provisional_chats[other_id] = ProvisionalChat(
+            chat_id=other_id, name="Trip plans", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+
+    refused = client.post(f"/api/chats/{chat_id}/rename", json={"title": "trip-plans"})
+
+    assert refused.status_code == 409
+    assert refused.get_json() == {
+        "detail": "A chat named 'trip-plans' already exists; pick another name",
+        "kind": NAME_TAKEN_RENAME_REFUSAL_KIND,
+    }
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None and proto.name == "Chat 1"
 
 
 def test_the_launch_choice_route_sets_the_account_and_model_of_a_chat_being_created(signed_in_account: str) -> None:

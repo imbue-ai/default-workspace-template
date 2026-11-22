@@ -32,7 +32,8 @@ import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
-import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
+import { failureBody, holdRootNotices, raiseRootNotice } from "./rootNotice";
+import { NameTakenError, destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
 import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
 import { participantPicture } from "../views/participant-picture";
 import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
@@ -88,10 +89,20 @@ function displayStatus(row: ChatRow): string {
 interface RenameState {
   chatId: string;
   draft: string;
+  /** Why the name typed cannot be used, shown under the field until the name is edited; null otherwise. */
   error: string | null;
 }
 
 let rename: RenameState | null = null;
+// The root's state as the list or header last drew it: the names a typed name is checked against, and what a field
+// reopened or a delete tried again after the chat app answers works from, since by then the rows and the chat on
+// screen may differ from when the rename or delete was chosen.
+let latestMenuContext: RowMenuContext | null = null;
+
+/** Note the root's state as it is drawn now; the list and the phone header call it on every draw. */
+export function noteRowMenuContext(context: RowMenuContext): void {
+  latestMenuContext = context;
+}
 
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
@@ -112,8 +123,21 @@ const railMenu = createMenu({
   },
 });
 
-function beginRename(row: ChatRow): void {
-  rename = { chatId: row.chatId, draft: row.title, error: null };
+// Notices wait while a name field is open: a notice would take the focus from the field, and its blur would save
+// whatever is half typed there.
+function beginRename(row: ChatRow, draft: string = row.title, error: string | null = null): void {
+  rename = { chatId: row.chatId, draft, error };
+  holdRootNotices(true);
+}
+
+function endRename(): void {
+  rename = null;
+  holdRootNotices(false);
+}
+
+/** A chat list arrived: a chat that left it takes its name field with it, which would otherwise hold notices for good. */
+export function endRenameOfUnlisted(listed: ReadonlySet<string>): void {
+  if (rename !== null && !listed.has(rename.chatId)) endRename();
 }
 
 /** Whether ``chatId`` is being renamed. */
@@ -121,30 +145,69 @@ export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
 
-/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name and
- *  the field with the reason. */
-function commitRename(row: ChatRow): void {
+/** The sentence for a name another chat in the list already has, or null. Compared without case, a subset of the
+ *  chat app's own rule, which also catches names that differ only in punctuation and answers ``NameTakenError``. */
+function takenNameError(row: ChatRow, title: string): string | null {
+  const key = title.toLowerCase();
+  const rows = latestMenuContext?.rows ?? [];
+  const isTaken = rows.some((other) => other.chatId !== row.chatId && other.title.trim().toLowerCase() === key);
+  return isTaken ? takenNameSentence(title) : null;
+}
+
+function takenNameSentence(title: string): string {
+  return `A chat named "${title}" already exists. Pick another name.`;
+}
+
+/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name. A name
+ *  another chat has keeps the field open with a line saying so (Enter) or puts the old name back (leaving the field);
+ *  any other refusal says why in a notice. */
+function commitRename(row: ChatRow, isLeaving: boolean): void {
   if (rename === null || rename.chatId !== row.chatId) return;
   const title = rename.draft.trim();
-  rename = null;
-  if (title !== "" && title !== row.title) showPendingRename(row.chatId, title);
+  const takenError = title === "" || title === row.title ? null : takenNameError(row, title);
+  if (takenError !== null && !isLeaving) {
+    rename = { ...rename, error: takenError };
+    return;
+  }
+  endRename();
   m.redraw();
-  if (title === "" || title === row.title) return;
+  if (title === "" || title === row.title || takenError !== null) return;
+  showPendingRename(row.chatId, title);
   renameChat(row.chatId, title).then(
     () => acceptPendingRename(row.chatId, title),
     (error: unknown) => refuseRename(row, title, error),
   );
 }
 
+/** Reopen the field on ``title`` with ``error`` under it, for a chat still listed while no other name is being typed;
+ *  false when that cannot be done. On a phone only the header draws a field once the drawer is closed, and only for
+ *  the chat on screen, so the chat is shown first, but only when ``mayShowChat``: the user asked for the field. */
+function reopenRename(row: ChatRow, title: string, error: string | null, mayShowChat: boolean): boolean {
+  const context = latestMenuContext;
+  if (rename !== null || context === null || !context.rows.some((listed) => listed.chatId === row.chatId))
+    return false;
+  const mustShowChat = context.isInDrawer && context.selectedChatId !== row.chatId;
+  if (mustShowChat && !mayShowChat) return false;
+  if (mustShowChat) context.onPick(row.chatId);
+  beginRename(row, title, error);
+  return true;
+}
+
 function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
-  if (rename !== null) {
-    // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
-    console.warn(`Could not rename chat ${row.chatId}`, error);
-  } else {
-    rename = { chatId: row.chatId, draft: title, error: error instanceof Error ? error.message : String(error) };
+  console.warn(`[chat-root] could not rename chat ${row.chatId}`, error);
+  if (error instanceof NameTakenError && reopenRename(row, title, takenNameSentence(title), false)) {
+    m.redraw();
+    return;
   }
-  m.redraw();
+  raiseRootNotice({
+    title: isRoom(row) ? "Couldn't rename the room" : "Couldn't rename the chat",
+    body: failureBody(error, {
+      refused: `"${row.title}" was not renamed to "${title}".`,
+      unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
+    }),
+    retry: { label: "Rename again", run: () => void reopenRename(row, title, null, true) },
+  });
 }
 
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
@@ -162,8 +225,12 @@ function makeMainFromMenu(row: ChatRow): void {
   });
 }
 
-/** What a row's menu needs of the root: the rows, the one shown, how to show another, and word of a refused delete. */
-export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick" | "onDeleteRefused">;
+/** What a row's menu needs of the root: the rows, the one shown, how to show another, word of a refused delete, and
+ *  whether the root draws its phone layout. */
+export type RowMenuContext = Pick<
+  ChatRailAttrs,
+  "rows" | "selectedChatId" | "onPick" | "onDeleteRefused" | "isInDrawer"
+>;
 
 /** What a reference to an element of the list needs of the root, as its right-click menu does. */
 export type RowReferenceContext = Pick<
@@ -178,14 +245,18 @@ export function referenceRowsFor(attrs: RowReferenceContext, element: Element, c
 }
 
 /** Delete from the menu, after asking: the chat leaves the list at once, and when it is the chat the root shows, the
- *  root moves to the next one in the list (to none, for the last chat). A refusal brings the chat back and says why. */
+ *  root moves to the next one in the list (to none, for the last chat). A refusal brings the chat back and says why in
+ *  a notice, which can try again. */
 function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const isConfirmed = window.confirm(
     isRoom(row)
       ? `Delete "${row.title}"?\n\nThis removes the room and its messages. It cannot be undone.`
       : `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
   );
-  if (!isConfirmed) return;
+  if (isConfirmed) deleteChat(attrs, row);
+}
+
+function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
   const next = attrs.rows.find((candidate) => candidate.chatId !== row.chatId);
   showPendingDelete(row.chatId);
   if (row.chatId === attrs.selectedChatId) attrs.onPick(next?.chatId ?? null);
@@ -193,9 +264,23 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   destroyChat(row.chatId).catch((error: unknown) => {
     dropPendingDelete(row.chatId);
     attrs.onDeleteRefused();
-    // Synchronous, so the chat is back behind the alert rather than after it.
-    m.redraw.sync();
-    alert(`Could not delete "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`[chat-root] could not delete chat ${row.chatId}`, error);
+    raiseRootNotice({
+      title: isRoom(row) ? "Couldn't delete the room" : "Couldn't delete the chat",
+      body: failureBody(error, {
+        refused: `"${row.title}" was not deleted.`,
+        unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was deleted.`,
+      }),
+      retry: {
+        label: "Try again",
+        // A chat gone from the list was deleted after all or is being deleted again, so there is nothing to retry.
+        run: () => {
+          const context = latestMenuContext ?? attrs;
+          const listed = context.rows.find((candidate) => candidate.chatId === row.chatId);
+          if (listed !== undefined) deleteChat(context, listed);
+        },
+      },
+    });
   });
 }
 
@@ -288,6 +373,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
     }
   },
   view({ attrs }) {
+    noteRowMenuContext(attrs);
     const menuRow = menuChatId === null ? undefined : attrs.rows.find((row) => row.chatId === menuChatId);
     return m(
       "nav",
@@ -609,39 +695,47 @@ function rowKebab(row: ChatRow): m.Vnode {
 export function renameField(row: ChatRow): m.Vnode {
   const state = rename;
   if (state === null) throw new Error("renameField rendered with no rename in progress");
-  return m("input", {
-    class: [
-      "chat-rail-rename-input min-w-0 flex-1 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
-      state.error === null ? "ring-accent" : "ring-danger",
-    ].join(" "),
-    type: "text",
-    value: state.draft,
-    "aria-label": "Chat name",
-    "aria-invalid": state.error === null ? undefined : "true",
-    title: state.error ?? undefined,
-    maxlength: 256,
-    oncreate: ({ dom }: m.VnodeDOM) => {
-      const input = dom as HTMLInputElement;
-      input.focus();
-      input.select();
-    },
-    oninput: (event: InputEvent) => {
-      if (rename === null) return;
-      rename = { ...rename, draft: (event.target as HTMLInputElement).value, error: null };
-    },
-    onkeydown: (event: KeyboardEvent) => {
-      event.stopPropagation();
-      if (isHandledByInputMethod(event)) return;
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitRename(row);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        rename = null;
-      }
-    },
-    onblur: () => commitRename(row),
-  });
+  return m("span", { class: "chat-rail-rename-field flex min-w-0 flex-1 flex-col gap-0.5" }, [
+    m("input", {
+      class: [
+        "chat-rail-rename-input min-w-0 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
+        state.error === null ? "ring-accent" : "ring-danger",
+      ].join(" "),
+      type: "text",
+      value: state.draft,
+      "aria-label": "Chat name",
+      "aria-invalid": state.error === null ? undefined : "true",
+      maxlength: 256,
+      oncreate: ({ dom }: m.VnodeDOM) => {
+        const input = dom as HTMLInputElement;
+        input.focus();
+        input.select();
+      },
+      oninput: (event: InputEvent) => {
+        if (rename === null) return;
+        rename = { ...rename, draft: (event.target as HTMLInputElement).value, error: null };
+      },
+      onkeydown: (event: KeyboardEvent) => {
+        event.stopPropagation();
+        if (isHandledByInputMethod(event)) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commitRename(row, false);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          endRename();
+        }
+      },
+      onblur: () => commitRename(row, true),
+    }),
+    state.error === null
+      ? null
+      : m(
+          "span",
+          { class: "chat-rail-rename-error px-1 text-(length:--font-size-helper) text-danger", role: "alert" },
+          state.error,
+        ),
+  ]);
 }
 
 function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode {

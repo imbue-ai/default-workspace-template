@@ -15,7 +15,7 @@ const verbs = vi.hoisted(() => ({
   makeMainChat: vi.fn(async (_chatId: string) => undefined),
   destroyChat: vi.fn(async (_chatId: string) => undefined),
 }));
-vi.mock("./verbs", () => verbs);
+vi.mock("./verbs", async (importActual) => ({ ...(await importActual<typeof import("./verbs")>()), ...verbs }));
 
 import m from "mithril";
 import { ChatDrawer } from "./ChatDrawer";

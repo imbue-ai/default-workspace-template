@@ -213,6 +213,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import RenameChatRequest
 from imbue.chat.models import RenameChatResponse
+from imbue.chat.models import RenameRefusalResponse
 from imbue.chat.models import ScreenCaptureResponse
 from imbue.chat.models import SeedChatRequest
 from imbue.chat.models import SendFailureResponse
@@ -872,6 +873,8 @@ ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 # page asks for a provider, rather than showing the refusal. A create naming a signed-out account answers
 # ``ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND``, like a send to a chat on one.
 NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND: Final[str] = "no_provider_account"
+# A rename refused because another chat has the name (or one that differs only in case or punctuation).
+NAME_TAKEN_RENAME_REFUSAL_KIND: Final[str] = "name_taken"
 
 
 def _is_account_signed_out(agent_info: AgentInfo) -> bool:
@@ -2786,7 +2789,9 @@ def _rename_chat(chat_id: str) -> Response:
     rename_request = parse_request_body(RenameChatRequest)
     try:
         agent_manager.rename_chat(chat_id, rename_request.title)
-    except (ChatConvergingError, AgentNameConflictError) as e:
+    except AgentNameConflictError as e:
+        return model_response(RenameRefusalResponse(detail=str(e), kind=NAME_TAKEN_RENAME_REFUSAL_KIND), 409)
+    except ChatConvergingError as e:
         return error_response(str(e), 409)
     except AgentRenameError as e:
         return error_response(str(e), 400)
@@ -3194,7 +3199,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
-        request_model=RenameChatRequest, response_model=RenameChatResponse
+        request_model=RenameChatRequest,
+        response_model=RenameChatResponse,
+        alternate_responses=(AlternateResponse(status=409, model=RenameRefusalResponse),),
     ),
     ("POST", "/api/chats/{chat_id}/launch-choice"): RouteModels(
         request_model=SetLaunchChoiceRequest, response_model=OkResponse
