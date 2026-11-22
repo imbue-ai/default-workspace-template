@@ -958,6 +958,13 @@ def _filed_permission_request_id(event: Mapping[str, Any]) -> str | None:
 
 
 @pure
+def _is_person_agent_chat(agent: AgentStateItem) -> bool:
+    """Whether a listed chat on ``agent`` is one a person talks to an agent in: no agent started it, and it is
+    not a room."""
+    return agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
+
+
+@pure
 def _has_user_turn_since(events: list[dict[str, Any]], since: float) -> bool:
     """Whether one of the events is a user turn timestamped at or after ``since`` (epoch seconds).
 
@@ -2143,9 +2150,7 @@ class AgentManager:
         or an agent chat that is not on an agent yet (awaiting its first send, being created, or failed)."""
         with self._lock:
             if any(
-                chat.chat_id != chat_id
-                for agent, chat in self._listed_chats_locked()
-                if agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
+                chat.chat_id != chat_id for agent, chat in self._listed_chats_locked() if _is_person_agent_chat(agent)
             ):
                 return True
             return any(
@@ -2158,11 +2163,7 @@ class AgentManager:
         never picks a room, though the main chat may be switched into one), and every chat still provisional.
         Lock held."""
         last_messaged = self._message_stamps.read()
-        candidate_ids = [
-            chat.chat_id
-            for agent, chat in self._listed_chats_locked()
-            if agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
-        ]
+        candidate_ids = [chat.chat_id for agent, chat in self._listed_chats_locked() if _is_person_agent_chat(agent)]
         candidate_ids.extend(chat_id for chat_id in self._provisional_chats if chat_id not in candidate_ids)
         return [
             MainChatCandidate(
