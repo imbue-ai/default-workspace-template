@@ -263,9 +263,21 @@ version the app was on. **Put the data back first**: the reinstall is itself
 an update, so it takes a new copy of whatever is in `data/.apps/<name>/` and
 keeps only that one.
 
+Two values are needed: the commit the app was on, and the copy of the data.
+When the update ran in an earlier chat and neither was noted, both are still
+in the workspace. The copy is the one directory under
+`data/.state/app_install/snapshots/<name>/` (none there means the update made
+none: see "The copy of the data" above). The commit is in the record's own
+history: `git log -p -- system/config/apps/<name>.toml` shows each change to
+the record, and the newest one that changes `upstream_commit` removed the
+commit the app was on, in full.
+
 1. Stop the app's programs: `supervisorctl stop <name>`, and each
    `<name>-<role>`.
-2. Set the current data aside and put the copy in its place:
+2. Set the current data aside and put the copy in its place (skip this for an
+   app that had no stored data; when the copy was not made because the data
+   did not fit, bring the data back from the backup instead, as
+   `system/services/host_backup/README.md` describes):
 
    ```bash
    uv run --no-sync disk-headroom /var/tmp          # the move must leave room to spare
