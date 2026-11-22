@@ -243,6 +243,9 @@ class CodexMessageLedger(MutableModel):
     # duplicate frame) emits its live user-turn exactly once. The frontend also dedups by
     # ``event_id``, so this is belt-and-suspenders, but it keeps the broadcast clean.
     emitted_user_turn_keys: set[str] = Field(default_factory=set)
+    # Turns a user message has already committed into, so a later one committed into the same turn
+    # is known to have been taken mid-turn (a steer, ours or another client's).
+    turn_ids_with_user_turn: set[str] = Field(default_factory=set)
     # ``client_id``s already handed back to the composer by a previous :meth:`interrupt`, so a
     # later stop never re-prepends already-returned text (each Returned message is handed off once).
     returned_handed_off: set[str] = Field(default_factory=set)
@@ -410,6 +413,8 @@ class CodexMessageLedger(MutableModel):
         content = _user_message_item_text(item.get("content"))
         commit_ms = _as_int(params.get("completedAtMs"))
         item_id_str = item_id if isinstance(item_id, str) else None
+        turn_id = params.get("turnId")
+        commit_turn_id = turn_id if isinstance(turn_id, str) else self.client.active_turn_id
         entry = self.entries.get(client_id) if isinstance(client_id, str) else None
         if entry is not None and entry.state != MessageState.DELIVERED:
             # A single send's own committed userMessage: deliver it, using the entry's own text (the
@@ -419,19 +424,27 @@ class CodexMessageLedger(MutableModel):
             # accepted-then-committed micro-race): prefer the committed truth over the optimistic
             # Returned. A genuinely-failed/aborted entry never receives an ``item/completed`` for its
             # ``client_id``, so only that micro-race can reach a non-live entry here.
-            self._deliver([entry], entry.client_id, commit_ms, entry.text, item_id_str)
+            self._deliver([entry], entry.client_id, commit_ms, entry.text, item_id_str, commit_turn_id)
             return
         # A combined shoulder-tap resend commits ONE userMessage carrying a fresh ``combined_client_id``
         # (Fix 3): deliver EVERY member of that group at once, emitting a SINGLE user-turn (the
         # concatenated content the daemon committed), keyed on the combined id so the rollout copy dedups.
         group = self._resend_group(client_id) if isinstance(client_id, str) else []
         if group:
-            self._deliver(group, client_id, commit_ms, content or self._combined_text(group), item_id_str)
+            self._deliver(
+                group, client_id, commit_ms, content or self._combined_text(group), item_id_str, commit_turn_id
+            )
             return
         if entry is None:
             # Foreign commit -- emit its live user-turn (keyed on its own clientId when tagged, else
             # anon), but create no entry: it is not one of our five-state messages.
-            self._queue_user_turn(client_id if isinstance(client_id, str) else None, commit_ms, content)
+            self._queue_user_turn(
+                client_id if isinstance(client_id, str) else None,
+                commit_ms,
+                content,
+                commit_turn_id,
+                is_steer=False,
+            )
 
     def _on_turn_completed(self, params: dict[str, Any]) -> None:
         turn = params.get("turn")
@@ -528,9 +541,9 @@ class CodexMessageLedger(MutableModel):
                 groups.setdefault(key, []).append(entry)
         for key, group in groups.items():
             if len(group) == 1 and group[0].combined_client_id is None:
-                self._deliver(group, group[0].client_id, None, group[0].text, None)
+                self._deliver(group, group[0].client_id, None, group[0].text, None, group[0].bound_turn_id)
             else:
-                self._deliver(group, key, None, self._combined_text(group), None)
+                self._deliver(group, key, None, self._combined_text(group), None, group[0].bound_turn_id)
         return uncommitted
 
     @staticmethod
@@ -549,18 +562,21 @@ class CodexMessageLedger(MutableModel):
         epoch_ms: int | None,
         content: str,
         item_id: str | None,
+        turn_id: str | None,
     ) -> None:
         """Mark ``entries`` Delivered and emit ONE committed user-turn for them (deduped by event_id).
 
         A single send delivers one entry with its own text; a combined shoulder-tap resend delivers
         the whole group with the concatenated content, both keyed on the committed userMessage's
         ``client_id`` so the rollout file reader's copy dedups against this live one (A3b)."""
+        # A Queued entry is a parked steer, which codex commits inside the turn it was parked into.
+        is_steer = all(entry.state == MessageState.QUEUED for entry in entries)
         for entry in entries:
             if item_id is not None:
                 entry.item_id = item_id
             entry.state = MessageState.DELIVERED
             entry.resend_visible = False
-        self._queue_user_turn(event_client_id, epoch_ms, content)
+        self._queue_user_turn(event_client_id, epoch_ms, content, turn_id, is_steer=is_steer)
 
     def _resend_group(self, client_id: str) -> list[LedgerEntry]:
         """The live entries a shoulder-tap re-sent under the combined ``client_id`` (Fix 3)."""
@@ -896,22 +912,35 @@ class CodexMessageLedger(MutableModel):
 
     # Change-gated callbacks
 
-    def _queue_user_turn(self, client_id: str | None, epoch_ms: int | None, content: str) -> None:
+    def _queue_user_turn(
+        self,
+        client_id: str | None,
+        epoch_ms: int | None,
+        content: str,
+        turn_id: str | None,
+        *,
+        is_steer: bool,
+    ) -> None:
         """Record a committed user-turn to broadcast after the queue snapshot (A3b), deduped.
 
         The ``event_id`` is the cross-channel join key (:func:`codex_user_turn_event_id`) so the
         rollout file reader's hydration copy of the same message dedups against this live copy. An
-        empty body (nothing to show) or an already-emitted id is a no-op."""
+        empty body (nothing to show) or an already-emitted id is a no-op. It is stamped
+        ``delivered_mid_turn`` when it is a steer or another message already committed into its
+        turn, matching the rollout reader's stamp for the same message."""
         if not content:
             return
         event_id = codex_user_turn_event_id(client_id, epoch_ms, content)
         if event_id in self.emitted_user_turn_keys:
             return
         self.emitted_user_turn_keys.add(event_id)
+        is_delivered_mid_turn = is_steer or (turn_id is not None and turn_id in self.turn_ids_with_user_turn)
+        if turn_id is not None:
+            self.turn_ids_with_user_turn.add(turn_id)
         # The commit's own epoch-ms is the authoritative display time; when the frame carried none
         # (the reconcile-only path), fall back to the ledger's injectable clock.
         timestamp = _epoch_ms_to_iso(epoch_ms) if epoch_ms is not None else self.now()
-        self._pending_user_turns.append(build_user_turn_event(timestamp, content, event_id))
+        self._pending_user_turns.append(build_user_turn_event(timestamp, content, event_id, is_delivered_mid_turn))
 
     def _flush_user_turns(self) -> None:
         """Broadcast the user-turns queued during this notification, in commit order.

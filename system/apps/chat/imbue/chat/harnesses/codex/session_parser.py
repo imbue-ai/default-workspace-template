@@ -91,6 +91,11 @@ _UNKNOWN_MODEL = "unknown"
 # ``turn_state`` key, present only while a ``thread_settings_applied`` is newer than the latest ``turn_context``.
 SETTINGS_CHANGED_SINCE_TURN_KEY: Final[str] = "settings_changed_since_turn"
 
+# ``turn_state`` key: the event ids of the user messages committed in the open turn, present only
+# between a ``task_started`` and that turn's end. Codex commits a message sent while it works (a
+# steer) inside the running turn, after the message that opened it.
+_TURN_USER_MESSAGE_IDS_KEY: Final[str] = "turn_user_message_ids"
+
 # codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
 # reading the prose: the tag is the part that survives codex rewording its messages. Quota
 # exhaustion is deliberately absent -- `usage_limit_exceeded` belongs to the auth family, whose
@@ -332,7 +337,7 @@ def codex_user_turn_event_id(client_id: str | None, epoch_ms: int | None, conten
     return f"codex-user-anon-{digest}"
 
 
-def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[str, Any]:
+def build_user_turn_event(timestamp: str, content: str, event_id: str, is_delivered_mid_turn: bool) -> dict[str, Any]:
     """The web-UI ``user_message`` event dict -- the single shape both channels emit.
 
     The rollout file reader builds it on hydration; the live ledger builds an identical one at
@@ -347,6 +352,8 @@ def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[s
         "content": content,
         "message_uuid": event_id,
     }
+    if is_delivered_mid_turn:
+        event["delivered_mid_turn"] = True
     # The shared render decision (fleet nudges, task notifications, latchkey verdicts,
     # model-bar traffic) -- codex gets the same detector table as claude and pi.
     stamp_user_message_display(event, content)
@@ -419,7 +426,12 @@ def _marker_turn_id(payload: dict[str, Any]) -> str | None:
     return turn_id if isinstance(turn_id, str) and turn_id else None
 
 
-def _user_message_events(timestamp: str, text: str | None, client_id: str | None = None) -> list[dict[str, Any]]:
+def _user_message_events(
+    timestamp: str,
+    text: str | None,
+    client_id: str | None,
+    turn_state: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
     """The single user-bubble event for a human prompt, or ``[]`` when there is no text.
 
     Both the old ``event_msg`` ``user_message`` and the new ``item_completed``
@@ -432,7 +444,23 @@ def _user_message_events(timestamp: str, text: str | None, client_id: str | None
     if not text:
         return []
     event_id = codex_user_turn_event_id(client_id, iso_timestamp_to_epoch_ms(timestamp), text)
-    return [build_user_turn_event(timestamp, text, event_id)]
+    return [build_user_turn_event(timestamp, text, event_id, _is_steered_into_open_turn(turn_state, event_id))]
+
+
+def _is_steered_into_open_turn(turn_state: dict[str, Any] | None, event_id: str) -> bool:
+    """Record a committed user message against the open turn; True when another one opened it.
+
+    Keyed on the event id so a re-serialised copy of the opening message is not taken for a steer.
+    """
+    if turn_state is None:
+        return False
+    turn_ids = turn_state.get(_TURN_USER_MESSAGE_IDS_KEY)
+    if not isinstance(turn_ids, list):
+        return False
+    if event_id in turn_ids:
+        return turn_ids.index(event_id) > 0
+    turn_ids.append(event_id)
+    return len(turn_ids) > 1
 
 
 # Queue ledger (the codex analogue of Claude's queue-operation records)
@@ -505,6 +533,7 @@ def parse_lines(
                 timestamp,
                 text if isinstance(text, str) else None,
                 client_id if isinstance(client_id, str) else None,
+                turn_state,
             )
         if payload_type == "item_completed":
             item = payload.get("item")
@@ -516,6 +545,7 @@ def parse_lines(
                         timestamp,
                         _item_content_text(item.get("content")),
                         client_id if isinstance(client_id, str) else None,
+                        turn_state,
                     )
                 if item.get("type") == "ContextCompaction":
                     turn_id = payload.get("turn_id")
@@ -551,6 +581,8 @@ def parse_lines(
         # turn_aborted marker; the activity layer treats it as resolving every
         # still-open tool call (see ``activity_state.pending_tool_call``).
         if payload_type == "turn_aborted":
+            if turn_state is not None:
+                turn_state.pop(_TURN_USER_MESSAGE_IDS_KEY, None)
             event_id = _marker_event_id(payload, "turn_aborted", timestamp)
             return [
                 {
@@ -571,6 +603,11 @@ def parse_lines(
         # on screen.
         if payload_type in ("task_started", "task_complete"):
             kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
+            if turn_state is not None:
+                if payload_type == "task_started":
+                    turn_state[_TURN_USER_MESSAGE_IDS_KEY] = []
+                else:
+                    turn_state.pop(_TURN_USER_MESSAGE_IDS_KEY, None)
             event_id = _marker_event_id(payload, payload_type, timestamp)
             marker: dict[str, Any] = {
                 "timestamp": timestamp,

@@ -1216,3 +1216,44 @@ def test_conservation_holds_across_send_queue_deliver_return() -> None:
     assert states[MessageState.QUEUED] == 0
     assert states[MessageState.SENDING] == 0
     assert ledger.reconcile_returned() == "m3"
+
+
+# Mid-turn stamp (matches the rollout reader's for the same message)
+
+
+def test_a_committed_steer_is_stamped_delivered_mid_turn_and_the_opener_is_not() -> None:
+    transport = ScriptedTransport()
+    ledger, client, sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first, content="first")
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    second = ledger.send("second")
+    _push_user_message_committed(transport, client, second, content="second")
+
+    assert [turn["content"] for turn in sink.user_turns] == ["first", "second"]
+    assert "delivered_mid_turn" not in sink.user_turns[0]
+    assert sink.user_turns[1]["delivered_mid_turn"] is True
+
+
+def test_a_foreign_message_committed_into_an_opened_turn_is_stamped() -> None:
+    transport = ScriptedTransport()
+    ledger, client, sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first, content="first")
+    _push_user_message_committed(transport, client, None, item_id="tui-1", content="typed in the TUI")
+
+    assert sink.user_turns[1]["content"] == "typed in the TUI"
+    assert sink.user_turns[1]["delivered_mid_turn"] is True
+
+
+def test_a_foreign_message_that_opens_a_turn_is_not_stamped() -> None:
+    transport = ScriptedTransport()
+    _ledger, client, sink = _build_ledger(transport)
+    transport.push({"jsonrpc": "2.0", "method": "turn/started", "params": {"turn": {"id": "turn-9"}}})
+    client.poll_notifications()
+    _push_user_message_committed(transport, client, None, item_id="tui-1", content="typed in the TUI")
+
+    assert len(sink.user_turns) == 1
+    assert "delivered_mid_turn" not in sink.user_turns[0]

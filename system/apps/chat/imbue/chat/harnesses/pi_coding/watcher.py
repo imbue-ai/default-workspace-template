@@ -36,8 +36,8 @@ from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.chat.harnesses.pi_coding.queue_tracker import PiQueueTracker
-from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
+from imbue.chat.harnesses.pi_coding.session_parser import parse_record_in_chain
 from imbue.chat.harnesses.reply_draft_matching import is_landed_reply
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
@@ -118,6 +118,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
     _byte_offset: int
     _consumed_static_paths: set[Path]
     _is_static_scan_done: bool
+    _record_links: dict[str, tuple[str | None, str | None]]
 
     @classmethod
     def build_loader(cls, agent_info: AgentInfo) -> "PiTranscriptLoader":
@@ -138,6 +139,9 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
         # Static files only ever appear through a rotation (the marker changing) or before
         # the first scan, so the rglob sweep is gated on those rather than run per refresh.
         self._is_static_scan_done = False
+        # Record id -> (message role, parent id) for every record read, across rotations, so a
+        # user record can be placed in pi's chain (see ``parse_record_in_chain``).
+        self._record_links = {}
 
     # -- the queue's hooks (the watcher's; a loader mirrors no live queue) -----------------
 
@@ -279,7 +283,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
             return []
         if not isinstance(record, dict):
             return []
-        return parse_record(record)
+        return parse_record_in_chain(record, self._record_links)
 
     def _read_process_started_at(self) -> float | None:
         """The ``pi_process_started`` marker's mtime, or None when it is absent."""

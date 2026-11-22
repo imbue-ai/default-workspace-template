@@ -13,6 +13,7 @@ from typing import Any
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
+from imbue.chat.harnesses.pi_coding.session_parser import parse_record_in_chain
 
 _TESTDATA = Path(__file__).parent / "testdata"
 
@@ -30,7 +31,7 @@ def test_user_record_becomes_user_message() -> None:
     assert event["content"] == "hey"
 
 
-def test_assistant_record_drops_thinking_and_keeps_text_and_tool_calls() -> None:
+def test_assistant_record_drops_thinking_and_splits_text_from_tool_calls() -> None:
     message = {
         "role": "assistant",
         "model": "claude-opus-4-8",
@@ -39,21 +40,42 @@ def test_assistant_record_drops_thinking_and_keeps_text_and_tool_calls() -> None
             {"type": "text", "text": "Doing it."},
             {"type": "toolCall", "id": "toolu_1", "name": "bash", "arguments": {"command": "ls"}},
         ],
+        "stopReason": "toolUse",
+        "usage": {"input": 5, "output": 7},
     }
-    events = parse_record(_message_record("asst1", message))
-    assert len(events) == 1
-    event = events[0]
-    assert event["type"] == "assistant_message"
-    assert event["event_id"] == "pi-asst1"
+    prose, work = parse_record(_message_record("asst1", message))
+    assert (prose["type"], work["type"]) == ("assistant_message", "assistant_message")
+    assert (prose["event_id"], work["event_id"]) == ("pi-asst1", "pi-asst1-tools")
     # Thinking is never rendered: its text must not leak into the assistant text.
-    assert event["text"] == "Doing it."
-    assert "secret reasoning" not in event["text"]
-    assert len(event["tool_calls"]) == 1
-    call = event["tool_calls"][0]
+    assert prose["text"] == "Doing it."
+    assert prose["tool_calls"] == []
+    assert prose["has_thinking"] is True
+    assert (prose["stop_reason"], prose["usage"]) == (None, None)
+    assert work["text"] == ""
+    assert "has_thinking" not in work
+    assert work["stop_reason"] == "toolUse"
+    assert work["usage"]["output_tokens"] == 7
+    assert len(work["tool_calls"]) == 1
+    call = work["tool_calls"][0]
     assert call["tool_call_id"] == "toolu_1"
     assert call["tool_name"] == "bash"
     assert call["header_label"] == "Tool: Bash"
     assert call["caption_label"] == "Running ls"
+
+
+def test_detail_of_a_split_message_follows_its_events() -> None:
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "why"},
+            {"type": "text", "text": "Checking."},
+            {"type": "toolCall", "id": "toolu_1", "name": "bash", "arguments": {"command": "ls"}},
+        ],
+    }
+    detail = parse_record_detail(_message_record("asst1", message))
+    assert detail["pi-asst1"] == {"inputs_by_tool_call_id": {}, "output": None, "thinking": "why"}
+    assert set(detail["pi-asst1-tools"]["inputs_by_tool_call_id"]) == {"toolu_1"}
+    assert detail["pi-asst1-tools"]["thinking"] is None
 
 
 def test_parallel_tool_calls_all_captured() -> None:
@@ -254,3 +276,50 @@ def test_compaction_record_without_valid_id_is_skipped() -> None:
     assert parse_record({"type": "compaction", "timestamp": "t", "summary": "hi"}) == []
     assert parse_record({"type": "compaction", "id": "", "timestamp": "t", "summary": "hi"}) == []
 
+
+def _user_bubbles_in_chain(fixture: str) -> list[dict[str, Any]]:
+    record_links: dict[str, tuple[str | None, str | None]] = {}
+    events: list[dict[str, Any]] = []
+    for line in (_TESTDATA / fixture).read_text().splitlines():
+        events.extend(parse_record_in_chain(json.loads(line), record_links))
+    return [event for event in events if event["type"] == "user_message"]
+
+
+def test_a_real_steer_is_stamped_delivered_mid_turn() -> None:
+    """pi 0.87.1 (scripted model): a steer sent while a tool ran lands right after its result."""
+    opener, steer = _user_bubbles_in_chain("session_steer_M.jsonl")
+    assert "delivered_mid_turn" not in opener
+    assert steer["content"] == "which app folder in this workspace is the biggest on disk?"
+    assert steer["delivered_mid_turn"] is True
+
+
+def test_after_an_abort_the_parked_steer_is_stamped_and_the_resubmit_is_not() -> None:
+    """A steer, then abort, then the same text sent again (a shoulder tap's flush): pi wrote the
+    parked steer after the aborted tool's result, then the resubmit after the aborted reply."""
+    opener, parked, resubmit = _user_bubbles_in_chain("session_steer_S.jsonl")
+    assert "delivered_mid_turn" not in opener
+    assert parked["delivered_mid_turn"] is True
+    assert "delivered_mid_turn" not in resubmit
+
+
+def test_a_message_sent_after_stop_is_not_stamped() -> None:
+    bubbles = _user_bubbles_in_chain("session_steer_X.jsonl")
+    assert [bubble["content"] for bubble in bubbles][1] == "keep going"
+    assert not any("delivered_mid_turn" in bubble for bubble in bubbles)
+
+
+def test_records_outside_the_conversation_are_skipped_when_placing_a_user_record() -> None:
+    record_links: dict[str, tuple[str | None, str | None]] = {}
+    records = [
+        {**_message_record("r1", {"role": "toolResult", "toolCallId": "c", "content": []}), "parentId": None},
+        {"type": "model_change", "id": "m1", "parentId": "r1", "provider": "p", "modelId": "x"},
+        {**_message_record("s1", {"role": "system", "content": ""}), "parentId": "m1"},
+        {**_message_record("u1", {"role": "user", "content": "hi"}), "parentId": "s1"},
+        {**_message_record("u2", {"role": "user", "content": "orphan"}), "parentId": "missing"},
+    ]
+    events = [event for record in records for event in parse_record_in_chain(record, record_links)]
+    bubbles = [event for event in events if event["type"] == "user_message"]
+    assert [(event["content"], event.get("delivered_mid_turn")) for event in bubbles] == [
+        ("hi", True),
+        ("orphan", None),
+    ]
