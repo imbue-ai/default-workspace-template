@@ -39,7 +39,8 @@ format. In brief:
   arrangement is scoped.
 - A **shortcut** is an icon on a desktop's backdrop that runs one app's launch
   path, in `focus` mode (raise the app's most recent window, opening one only
-  when it has none) or `new` mode (always open one).
+  when it has none) or `new` mode (always open one). A shortcut to the app's
+  pinned page (the chat's) raises the pinned window in either mode.
 - Titles come from the pages, icons and launch paths from the manifests, and
   liveness from supervisord. The shell stores no status and no recency of its
   own.
