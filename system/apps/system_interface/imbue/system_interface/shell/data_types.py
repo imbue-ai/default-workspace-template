@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from collections.abc import Sequence
+from typing import Any
 from typing import Final
 from typing import Literal
 
@@ -220,6 +221,16 @@ class DesktopsDocument(FrozenModel):
         description="Every desktop, in display order (creation order, as the order route rearranged it); the first is "
         "the fallback"
     )
+
+
+class StoredDesktops(FrozenModel):
+    """``desktops.json`` as this shell reads it: the document, and the JSON it was read from, which still holds the
+    fields this shell does not know (a newer shell's), so a write can put them back."""
+
+    document: DesktopsDocument = Field(
+        description="The document, read with the fields this shell does not know ignored"
+    )
+    raw: dict[str, Any] = Field(description="The JSON object the document was read from")
 
 
 class DesktopThemesDocument(FrozenModel):

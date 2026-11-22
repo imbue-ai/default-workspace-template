@@ -1,0 +1,1 @@
+The desktop contract (`docs/system/blueprint/desktop-interface/contracts.md` section 4.1) describes how the shell keeps the fields of `desktops.json` it does not know, and that it renames an unreadable file aside before writing a new one.
