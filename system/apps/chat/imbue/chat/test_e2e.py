@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import mark
 from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
@@ -472,6 +474,77 @@ def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_r
 
     expect(pills).to_have_text(labels)
     expect(_chat(page).locator(".suggestion-strip-more")).to_have_count(0)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_things_to_try_are_offered_while_the_agent_works_and_fold_into_a_toggle_when_the_reply_ends(
+    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+) -> None:
+    """Once the tour has finished, a turn that starts opens the While you wait strip above the composer, holding
+    the things this page can point at. Its first pill has the chat list point at its New chat button; the reply's
+    end folds the strip into its toggle, which opens it again."""
+    manager = e2e_server.chat_state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+
+    def set_agent(agent_state: str, activity_state: ActivityState) -> None:
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=agent.name,
+            state=agent_state,
+            labels=agent.labels,
+            activity_state=activity_state,
+        )
+        manager._broadcast_chats_updated()
+
+    mark(Marker.TOUR_FINISHED)
+    set_agent("WAITING", ActivityState.IDLE)
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+    expect(chat.locator(".suggestion-strip")).to_have_count(0)
+
+    _append_user_turn(e2e_server.session_file, "wait-u-1", "Plan my week")
+    set_agent("RUNNING", ActivityState.THINKING)
+
+    # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
+    strip = chat.locator('.suggestion-strip[data-placement="activity"]')
+    pills = strip.locator(".suggestion-pill")
+    offered = ["Work in parallel by starting a new chat", "Build an app"]
+    expect(pills).to_have_text(offered, timeout=15000)
+    expect(strip).to_have_class(re.compile(r"suggestion-strip--open"))
+    expect(strip.locator(".suggestion-strip-disable")).to_have_text("disable activity suggestions")
+    composer = chat.locator(".message-input-textbox")
+    assert _box(strip)["bottom"] <= _box(composer)["top"]
+    page.screenshot(path=str(tmp_path / "while-you-wait.png"))
+
+    pills.first.click()
+
+    new_chat_button = _chat_root(page).locator(".chat-rail-new")
+    coach_mark = _chat_root(page).locator(".coach-mark")
+    expect(coach_mark).to_contain_text("Start a new chat here any time.")
+    expect(new_chat_button).to_have_class(re.compile(r"coach-pulse"))
+    mark_box, button_box = _box(coach_mark), _box(new_chat_button)
+    assert mark_box["top"] >= button_box["bottom"] or mark_box["left"] >= button_box["right"]
+    page.screenshot(path=str(tmp_path / "new-chat-coach-mark.png"))
+    coach_mark.get_by_role("button", name="Got it").click()
+    expect(coach_mark).to_have_count(0)
+    expect(new_chat_button).not_to_have_class(re.compile(r"coach-pulse"))
+
+    answer = [{"type": "text", "text": "Here is a plan for your week."}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("wait-a-1", "2026-01-01T00:02:00Z", answer, "end_turn")) + "\n")
+    set_agent("WAITING", ActivityState.IDLE)
+
+    toggle = strip.locator(".suggestion-strip-toggle")
+    expect(toggle).to_have_text("While you wait", timeout=15000)
+    expect(pills).to_have_count(0)
+    page.screenshot(path=str(tmp_path / "while-you-wait-toggle.png"))
+
+    toggle.click()
+
+    expect(pills).to_have_text(offered)
 
 
 @pytest.mark.timeout(90, func_only=False)
