@@ -4,7 +4,7 @@
  *
  * The time is the transcript's own timestamp of the latest message from either side, so a helper chat messaged
  * only by the agent that started it reads as right as one the user talks to. A compaction, a system chip or
- * another injection the transcript records as a user message does not count. It hides while the agent works on a
+ * another injection the transcript records as a user message does not count, nor does a provider failure's notice. It hides while the agent works on a
  * turn (the status row says so) and while a message is on its way to it, from this page or another.
  */
 
@@ -17,7 +17,7 @@ import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { Age, longAge } from "./relativeTime";
 
 function isMessage(event: TranscriptEvent): boolean {
-  if (event.type === "assistant_message") return true;
+  if (event.type === "assistant_message") return !event.is_api_error && !event.is_auth_error;
   return event.type === "user_message" && isTurnUserMessage(event);
 }
 

@@ -29,7 +29,7 @@ function userMessage(timestamp: string, display: Partial<UserMessageEvent> = {})
   };
 }
 
-function reply(timestamp: string): AssistantMessageEvent {
+function reply(timestamp: string, overrides: Partial<AssistantMessageEvent> = {}): AssistantMessageEvent {
   return {
     type: "assistant_message",
     event_id: `a-${timestamp}`,
@@ -44,6 +44,7 @@ function reply(timestamp: string): AssistantMessageEvent {
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    ...overrides,
   };
 }
 
@@ -78,6 +79,15 @@ describe("the last-message line under the latest message", () => {
     const chip = userMessage("2026-10-27T11:58:00Z", { display: "chip", display_label: "Background task" });
     const compaction = userMessage("2026-10-27T11:59:00Z", { display: "status", compaction_cause: "idle" });
     const events = [reply("2026-10-24T10:00:00Z"), chip, compaction];
+    expect(lastMessageAtMs(CHAT_ID, events)).toBe(Date.parse("2026-10-24T10:00:00Z"));
+  });
+
+  it("does not count a provider failure's notice as a message", () => {
+    const events = [
+      reply("2026-10-24T10:00:00Z"),
+      reply("2026-10-27T11:58:00Z", { is_api_error: true }),
+      reply("2026-10-27T11:59:00Z", { is_auth_error: true }),
+    ];
     expect(lastMessageAtMs(CHAT_ID, events)).toBe(Date.parse("2026-10-24T10:00:00Z"));
   });
 
