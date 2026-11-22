@@ -6,4 +6,4 @@
 
 - `POST /api/chats/create` takes an optional `client_id`, naming the page a person asked for the chat from.
 
-- The chat app sets three onboarding markers: `second_chat_started` when a person starts a chat while another chat a person talks to exists, `permission_request_filed` when it reads a filed permission request, and `connect_data_coach_shown` on the click above.
+- The chat app sets three onboarding markers: `second_chat_started` when a person starts a chat (through the create route, or through an intake that makes a new chat, as the shell launcher's "New Chat" does) while another chat a person talks to exists, `permission_request_filed` when it reads a filed permission request, and `connect_data_coach_shown` on the click above.

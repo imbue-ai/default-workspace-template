@@ -4566,6 +4566,119 @@ def test_a_chat_started_while_the_seeded_chat_awaits_its_first_message_is_a_seco
     assert is_marked(Marker.SECOND_CHAT_STARTED)
 
 
+def _intake_from_a_client(client: FlaskClient, **fields: object) -> Any:
+    """An intake as the shell posts one a person typed into its launcher: naming the client and its desktop."""
+    return client.post("/api/chats/intake", json={"client_id": "client-1", "desktop_id": "home", **fields})
+
+
+def test_a_new_chat_a_person_starts_from_the_launcher_beside_another_is_a_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The launcher's "New Chat" goes through the intake route, which makes the chat under the create route's rule."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+
+    first = _intake_from_a_client(client, target="new_chat", message="Teach me")
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    second = _intake_from_a_client(client, target="new_chat", message="And this, meanwhile")
+    _wait_for_creates_to_finish(manager)
+
+    assert (first.status_code, second.status_code) == (200, 200)
+    assert _chat_id_of(first.get_json()["path"]) != _chat_id_of(second.get_json()["path"])
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_an_intake_that_names_no_client_starts_no_second_chat(tmp_path: Path, signed_in_account: str) -> None:
+    """A script's intake makes its chat like any other, beside whatever exists, and is no person starting one."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    existing = f"agent-{uuid4().hex}"
+    _register_agent(app, existing, "Chat-1", "RUNNING")
+
+    scripted = client.post("/api/chats/intake", json={"target": "new_chat", "message": "Teach me"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert scripted.status_code == 200
+    made = ChatId(_chat_id_of(scripted.get_json()["path"]))
+    assert made != existing
+    assert state_of(app).agent_manager.has_person_chat_other_than(made)
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_an_intake_into_a_chat_that_exists_starts_no_second_chat(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send and a draft into a chat the app already lists make no chat, however many chats there are."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    receiving = "agent-00000000000000000000000000000123"
+    _track_claude_agent(app, receiving, "test-agent", tmp_path / "claude_config")
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-2", "RUNNING")
+
+    sent = _intake_from_a_client(
+        client, target="chat", chat_id=receiving, message="Carry on", is_delivery_awaited=True
+    )
+    drafted = _intake_from_a_client(
+        client, target="current_chat", is_draft="true", message="Draw me a seal", window_path=f"/?chat={receiving}"
+    )
+
+    assert (sent.status_code, drafted.status_code) == (200, 200)
+    assert sent.get_json() == {"path": f"/?chat={receiving}"}
+    assert _chat_id_of(drafted.get_json()["path"]) == receiving
+    assert messenger.sent == [(receiving, "Carry on")]
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_new_chat_the_launcher_can_only_mint_is_a_second_chat_beside_another_and_not_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With nothing signed in, or for a draft, the new chat waits for its first send; it is a chat all the same."""
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+
+    alone = _intake_from_a_client(client, target="new_chat", message="Teach me")
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    beside_it = _intake_from_a_client(client, target="new_chat", is_draft="true", message="A second thought")
+
+    assert (alone.status_code, beside_it.status_code) == (200, 200)
+    assert [provisional.phase for provisional in manager.get_provisional_chats()] == [
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+    ]
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_the_chat_about_an_app_is_a_second_chat_when_it_is_made_beside_another_and_never_when_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+    about_docs = {"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
+
+    made_alone = _intake_from_a_client(client, **about_docs)
+    found = _intake_from_a_client(client, **about_docs)
+
+    assert (made_alone.status_code, found.status_code) == (200, 200)
+    assert _chat_id_of(found.get_json()["path"]) == _chat_id_of(made_alone.get_json()["path"])
+    assert len(manager.get_provisional_chats()) == 1
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+    made_beside_it = _intake_from_a_client(client, target="app_chat", app="files", app_display_name="Files")
+
+    assert made_beside_it.status_code == 200
+    assert len(manager.get_provisional_chats()) == 2
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_the_lounge_an_intake_makes_is_a_room_and_no_second_chat(app: Flask, client: FlaskClient) -> None:
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-1", "RUNNING")
+
+    response = _intake_from_a_client(client, target="lounge", is_draft="true", message="@Bob ")
+
+    assert response.status_code == 200
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
 def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions(tmp_path: Path) -> None:
     """The first-run chat offers its replies before any agent exists: the route answers for a seeded chat that
     is still provisional, naming the welcome's last turn as the message the set follows."""

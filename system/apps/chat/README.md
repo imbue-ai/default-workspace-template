@@ -795,12 +795,16 @@ files under `data/.state/onboarding_activity/` that are only ever set, so a fact
 after what proved it is gone (a deleted chat, a phone put away). The chat app sets three of them
 (`onboarding_markers.py`):
 
-- `second_chat_started`, when `POST /api/chats/create` creates an agent chat a person asked for
-  while another chat a person talks to exists. A create a person asked for names the client it
-  came from in `client_id`, as the page's own create does and a script's
-  (`message_chat.py --create`) does not. A chat a person talks to is a listed agent chat that no
+- `second_chat_started`, when a person starts an agent chat while another chat a person talks
+  to exists. A person starts one through `POST /api/chats/create`, or through an intake
+  (`POST /api/chats/intake`, the shell launcher's "New Chat" and a window's "Chat about this
+  app") that makes a chat rather than finds one, whether the chat is created at once or minted
+  to await its first send. Either request counts as a person's when it names the client it came
+  from in `client_id`, as the page's own create and the shell's intake do and a script's
+  (`message_chat.py --create`) does not. An intake that sends or drafts into a chat that exists
+  makes none, and a room is never one. A chat a person talks to is a listed agent chat that no
   agent started, or one not on an agent yet, a seeded chat awaiting its first message included.
-  The chat being launched never counts as the other one, so the first message that launches the
+  The chat being made never counts as the other one, so the first message that launches the
   chat a workspace opened on starts no second chat.
 - `permission_request_filed`, when the agent manager reads a tool result that files a permission
   request, in any chat it follows, whether or not the request has been settled since. It is

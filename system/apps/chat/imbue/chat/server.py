@@ -2302,8 +2302,8 @@ def _run_create_chat() -> CreatedChat | Response:
         return created
     if attributed is not None and attributed.annotation is not None:
         state.authors.record(created.chat_id, attributed.annotation)
+    _note_chat_started_by_a_person(state, created.chat_id, create_request.kind, create_request.client_id)
     if create_request.kind is not ChatKind.ROOM:
-        _note_chat_started_by_a_person(state, created.chat_id, create_request.client_id)
         _consider_naming_chat(state, created.chat_id, create_request.message)
         if create_request.message:
             _advance_first_run_tree(state, created.chat_id, create_request.message)
@@ -2320,12 +2320,12 @@ def _run_create_chat() -> CreatedChat | Response:
     return created
 
 
-def _note_chat_started_by_a_person(state: ChatAppState, chat_id: ChatId, client_id: str) -> None:
-    """Set the ``second_chat_started`` onboarding marker when the agent chat just created was asked for by a person
-    (its create names the client it came from; a script's names none) while another chat a person talks to exists.
-    Launching the one chat a workspace opened on, seeded and awaiting its first send, is no second chat: the
-    chat launched is never counted as the other one."""
-    if not client_id:
+def _note_chat_started_by_a_person(state: ChatAppState, chat_id: ChatId, kind: ChatKind, client_id: str) -> None:
+    """Set the ``second_chat_started`` onboarding marker when the chat just made, by the create route or by an
+    intake, is an agent chat a person asked for (the request names the client it came from; a script's names
+    none) while another chat a person talks to exists. Launching the one chat a workspace opened on, seeded and
+    awaiting its first send, is no second chat: the chat made is never counted as the other one."""
+    if kind is ChatKind.ROOM or not client_id:
         return
     if state.agent_manager.has_person_chat_other_than(chat_id):
         set_onboarding_marker(Marker.SECOND_CHAT_STARTED)
@@ -2448,6 +2448,10 @@ class _ResolvedIntakeChat(FrozenModel):
 
     chat_id: ChatId | None = Field(description="The receiving chat; None for a pick or a create")
     needs_pick: bool = Field(default=False, description="Whether several chats qualify and the user chooses")
+    is_agent_chat_made_for_it: bool = Field(
+        default=False,
+        description="Whether reading the target made the receiving chat, as an agent's, rather than found it",
+    )
 
 
 def _agent_chat_snapshot(agent_manager: AgentManager, chat_id: ChatId) -> ChatSnapshot | None:
@@ -2503,9 +2507,13 @@ def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Resolve
         return account
     if account is None:
         minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title, labels=labels))
-        return minted if isinstance(minted, Response) else _ResolvedIntakeChat(chat_id=minted.chat_id)
+        if isinstance(minted, Response):
+            return minted
+        return _ResolvedIntakeChat(chat_id=minted.chat_id, is_agent_chat_made_for_it=True)
     created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account, labels=labels))
-    return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
+    if isinstance(created, Response):
+        return created
+    return _ResolvedIntakeChat(chat_id=created.chat_id, is_agent_chat_made_for_it=True)
 
 
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
@@ -2644,6 +2652,8 @@ def _intake_chat() -> Response:
         return model_response(IntakeResponse(path=intake_path(None, token)))
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
+    if resolved.is_agent_chat_made_for_it:
+        _note_chat_started_by_a_person(state, resolved.chat_id, ChatKind.AGENT, intake.client_id)
     if intake.target is IntakeTarget.APP_CHAT:
         # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
         # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
@@ -2676,10 +2686,12 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
             return created
         if attributed.annotation is not None:
             state.authors.record(created.chat_id, attributed.annotation)
+        _note_chat_started_by_a_person(state, created.chat_id, ChatKind.AGENT, intake.client_id)
         _consider_naming_chat(state, created.chat_id, intake.message)
         _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
+    _note_chat_started_by_a_person(state, minted.chat_id, ChatKind.AGENT, intake.client_id)
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
     return model_response(IntakeResponse(path=intake_path(minted.chat_id, token)))
 
