@@ -94,6 +94,8 @@ If there is a hard-coded set of replies to be given (for onboarding), simply fol
 
 If the suggestions are obvious (for example, the assistant's last response ended with a yes or no question), just give the easy, obvious suggested next steps.
 
+If there is a single primary question in the response that has a small, enumerable (or enumerated) set of possible responses, those should be given directly as the suggestions.
+
 If the assistant's last response requires very complex information from the user (for example, it asked them for their preferences) and suggestions don't make sense, it's ok to emit no suggestions.
 
 If the assistant asked a bunch of complicated questions and it's hard for a suggestion to really make sense, you can suggest "Go with your recommendations" as a blanket "keep going and figure it out".
