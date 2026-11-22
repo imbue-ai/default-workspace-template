@@ -28,9 +28,9 @@ successor of its handoff in progress):
 | At once, if the archive holds a non-empty raw transcript and its manifest records no failed final flush or copy of it | the agent's session files in every account folder |
 | 30 days after the archive was written (`preserved_at` in its manifest; the folder's modification time for an older archive with no manifest) | the archive, and any session files still left |
 
-It never removes a session that a present or listed agent's history also names, never reads
-an archive whose manifest it cannot parse, and removes nothing at all when a chat
-record cannot be read (it cannot tell what is listed). Archived hand-off segments
+It never removes a session that a present or listed agent's history also names, and
+removes nothing at all when a chat record or an archive's manifest cannot be read (it
+cannot tell what is listed, or what the archive holds). Archived hand-off segments
 of a listed chat are present agents, so they are never touched.
 
 Chats that are still listed keep their history: the template also sets claude's
