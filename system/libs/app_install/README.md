@@ -171,9 +171,11 @@ A later split reads only the commits made since the newest marker: the sync serv
   The squash commits `install` and `update` leave carry the same trailer, so the app counts as linked and its split builds on the publisher's commits, and `git subtree` refuses to make a `--rejoin` marker for an app that came in as a squash.
   `link` therefore only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
   Its splits start at the merge that installed it.
-- An app this workspace built whose directory was removed and made again (uninstalled, then built again under the same name) is refused.
+- An app this workspace built whose directory was removed and made again (uninstalled, then built again under the same name) gets no marker, and nothing of it is pushed.
   `git subtree split` keeps the commit that removed the directory as it is, and everything the workspace held before it comes along, so the split would carry the workspace's own history, with every file of it, into the app's.
   `link` and the sync service both check that a split's history does not hold the workspace's first commit (`github_sync.app_history.require_split_holds_only_the_app`), and neither joins nor pushes one that does.
+  `link` makes that check when it makes a marker, so it refuses such an app, with no dev repository created, when the history holds no join for the directory, and with `--refresh`.
+  When the directory's earlier life left a join (the app was linked, or an installed app of that name was there), a `link` without `--refresh` finds the app linked, makes no split, and creates its dev repository like any other; the sync service pushes nothing to it and reports the app as `failed` with the reason.
   An app that was uninstalled and installed again is not refused: its history starts at its newest install.
 
 **The dev repository.**
