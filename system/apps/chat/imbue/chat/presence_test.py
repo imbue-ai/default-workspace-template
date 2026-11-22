@@ -47,7 +47,7 @@ def _report(
 
 def test_a_visible_report_makes_the_chat_open_and_visible() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True)
     assert tracker.is_open(_CHAT)
     assert tracker.is_visible(_CHAT)
     assert tracker.open_chat_ids() == {_CHAT}
@@ -56,7 +56,7 @@ def test_a_visible_report_makes_the_chat_open_and_visible() -> None:
 
 def test_a_hidden_report_is_open_but_not_visible() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))
+    tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN), is_owner=True)
     assert tracker.is_open(_CHAT)
     assert not tracker.is_visible(_CHAT)
     assert tracker.visible_chat_ids() == set()
@@ -64,8 +64,8 @@ def test_a_hidden_report_is_open_but_not_visible() -> None:
 
 def test_a_closed_report_leaves_the_chat_neither_open_nor_watched() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
-    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
+    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED), is_owner=True)
     assert not tracker.is_open(_CHAT)
     assert not tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == []
@@ -76,9 +76,11 @@ def test_a_report_that_arrives_after_a_later_one_from_its_page_is_dropped() -> N
     # The page's handshake sends hidden and shown sends visible a moment later, as two requests the
     # server can record in either order. Recorded last, the hidden one would leave the page hidden.
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2), is_owner=True)
 
-    assert tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, is_focused=True, sequence=1)) == (
+    assert tracker.record(
+        _CHAT, _report("page-1", PresenceState.HIDDEN, is_focused=True, sequence=1), is_owner=True
+    ) == (
         PresenceTransition(
             is_newly_visible=False, is_newly_watched=False, is_open_changed=False, is_visible_changed=False
         )
@@ -89,10 +91,10 @@ def test_a_report_that_arrives_after_a_later_one_from_its_page_is_dropped() -> N
 
 def test_a_report_that_arrives_after_its_page_closed_does_not_reopen_it() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, sequence=1))
-    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED, sequence=3))
+    tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, sequence=1), is_owner=True)
+    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED, sequence=3), is_owner=True)
 
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2), is_owner=True)
 
     assert not tracker.is_open(_CHAT)
     assert not tracker.is_visible(_CHAT)
@@ -102,7 +104,7 @@ def test_a_report_that_arrives_after_its_page_closed_does_not_reopen_it() -> Non
 
 def test_closing_an_unknown_chat_is_a_no_op() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))
+    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED), is_owner=True)
     assert tracker.open_chat_ids() == set()
 
 
@@ -110,52 +112,52 @@ def test_two_pages_of_one_client_keep_separate_reports() -> None:
     # A pulled-out chat: its copy in the main window is hidden while the popout shows it. Keyed by
     # client, whichever reported last would win; keyed by page, both stand.
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("popout-page", PresenceState.VISIBLE, is_focused=True))
-    tracker.record(_CHAT, _report("main-window-page", PresenceState.HIDDEN))
+    tracker.record(_CHAT, _report("popout-page", PresenceState.VISIBLE, is_focused=True), is_owner=True)
+    tracker.record(_CHAT, _report("main-window-page", PresenceState.HIDDEN), is_owner=True)
 
     assert tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == ["popout-page"]
 
-    tracker.record(_CHAT, _report("main-window-page", PresenceState.CLOSED))
+    tracker.record(_CHAT, _report("main-window-page", PresenceState.CLOSED), is_owner=True)
     assert tracker.watchers(_CHAT) == ["popout-page"]
 
 
 def test_instances_aggregate_per_chat() -> None:
     # Visible in any page makes the chat visible; open until every page closes it.
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("desktop", PresenceState.HIDDEN))
-    tracker.record(_CHAT, _report("phone", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("desktop", PresenceState.HIDDEN), is_owner=True)
+    tracker.record(_CHAT, _report("phone", PresenceState.VISIBLE), is_owner=True)
     assert tracker.is_visible(_CHAT)
-    tracker.record(_CHAT, _report("phone", PresenceState.HIDDEN))
+    tracker.record(_CHAT, _report("phone", PresenceState.HIDDEN), is_owner=True)
     assert tracker.is_open(_CHAT)
     assert not tracker.is_visible(_CHAT)
-    tracker.record(_CHAT, _report("phone", PresenceState.CLOSED))
+    tracker.record(_CHAT, _report("phone", PresenceState.CLOSED), is_owner=True)
     assert tracker.is_open(_CHAT)
-    tracker.record(_CHAT, _report("desktop", PresenceState.CLOSED))
+    tracker.record(_CHAT, _report("desktop", PresenceState.CLOSED), is_owner=True)
     assert not tracker.is_open(_CHAT)
 
 
 def test_only_a_visible_and_focused_page_watches() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("shown-unfocused", PresenceState.VISIBLE, is_focused=False))
-    tracker.record(_CHAT, _report("hidden-focused", PresenceState.HIDDEN, is_focused=True))
+    tracker.record(_CHAT, _report("shown-unfocused", PresenceState.VISIBLE, is_focused=False), is_owner=True)
+    tracker.record(_CHAT, _report("hidden-focused", PresenceState.HIDDEN, is_focused=True), is_owner=True)
     assert tracker.watchers(_CHAT) == []
 
-    tracker.record(_CHAT, _report("shown-focused", PresenceState.VISIBLE, is_focused=True))
+    tracker.record(_CHAT, _report("shown-focused", PresenceState.VISIBLE, is_focused=True), is_owner=True)
     assert tracker.watchers(_CHAT) == ["shown-focused"]
 
 
 def test_every_watching_page_is_listed() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("page-b", PresenceState.VISIBLE, is_focused=True, client_id="laptop"))
-    tracker.record(_CHAT, _report("page-a", PresenceState.VISIBLE, is_focused=True, client_id="phone"))
+    tracker.record(_CHAT, _report("page-b", PresenceState.VISIBLE, is_focused=True, client_id="laptop"), is_owner=True)
+    tracker.record(_CHAT, _report("page-a", PresenceState.VISIBLE, is_focused=True, client_id="phone"), is_owner=True)
     assert tracker.watchers(_CHAT) == ["page-a", "page-b"]
     assert tracker.watchers(ChatId("agent-2")) == []
 
 
 def test_a_watcher_goes_stale_long_before_its_report_expires() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
 
     clock.now += WATCHING_STALE_SECONDS - 1.0
     assert tracker.watchers(_CHAT) == ["page-1"]
@@ -169,16 +171,16 @@ def test_a_watcher_goes_stale_long_before_its_report_expires() -> None:
 
 def test_a_heartbeat_keeps_a_watcher_watching() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
     clock.now += WATCHING_STALE_SECONDS - 1.0
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
     clock.now += WATCHING_STALE_SECONDS - 1.0
     assert tracker.watchers(_CHAT) == ["page-1"]
 
 
 def test_an_unrefreshed_report_expires() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True)
     clock.now += PRESENCE_EXPIRY_SECONDS + 1.0
     assert not tracker.is_open(_CHAT)
     assert not tracker.is_visible(_CHAT)
@@ -187,18 +189,18 @@ def test_an_unrefreshed_report_expires() -> None:
 
 def test_a_heartbeat_refreshes_the_report() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True)
     clock.now += PRESENCE_EXPIRY_SECONDS - 1.0
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True)
     clock.now += PRESENCE_EXPIRY_SECONDS - 1.0
     assert tracker.is_visible(_CHAT)
 
 
 def test_expiry_is_per_instance() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("stale", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("stale", PresenceState.VISIBLE), is_owner=True)
     clock.now += PRESENCE_EXPIRY_SECONDS - 1.0
-    tracker.record(_CHAT, _report("fresh", PresenceState.HIDDEN))
+    tracker.record(_CHAT, _report("fresh", PresenceState.HIDDEN), is_owner=True)
     clock.now += 2.0
     # The stale page's visible report has expired; the fresh page's hidden one stands.
     assert tracker.is_open(_CHAT)
@@ -207,9 +209,9 @@ def test_expiry_is_per_instance() -> None:
 
 def test_forgetting_a_chat_drops_every_report() -> None:
     tracker, _ = _tracker()
-    tracker.record(_CHAT, _report("desktop", PresenceState.VISIBLE, is_focused=True))
-    tracker.record(_CHAT, _report("phone", PresenceState.HIDDEN))
-    tracker.record(ChatId("agent-2"), _report("desktop-2", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("desktop", PresenceState.VISIBLE, is_focused=True), is_owner=True)
+    tracker.record(_CHAT, _report("phone", PresenceState.HIDDEN), is_owner=True)
+    tracker.record(ChatId("agent-2"), _report("desktop-2", PresenceState.VISIBLE), is_owner=True)
     tracker.forget_chat(_CHAT)
     assert tracker.open_chat_ids() == {ChatId("agent-2")}
     assert tracker.watchers(_CHAT) == []
@@ -218,27 +220,39 @@ def test_forgetting_a_chat_drops_every_report() -> None:
 def test_a_report_says_when_it_makes_the_chat_watched_and_only_then() -> None:
     tracker, _ = _tracker()
 
-    assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE)) == PresenceTransition(
+    assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True) == PresenceTransition(
         is_newly_visible=True, is_newly_watched=False, is_open_changed=True, is_visible_changed=True
     )
-    assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)) == PresenceTransition(
+    assert tracker.record(
+        _CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True
+    ) == PresenceTransition(
         is_newly_visible=False, is_newly_watched=True, is_open_changed=False, is_visible_changed=False
     )
     # The heartbeat of a page already watching, and a second page joining it, change nothing.
-    assert not tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
-    assert not tracker.record(_CHAT, _report("page-2", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
+    assert not tracker.record(
+        _CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True
+    ).is_newly_watched
+    assert not tracker.record(
+        _CHAT, _report("page-2", PresenceState.VISIBLE, is_focused=True), is_owner=True
+    ).is_newly_watched
 
 
 def test_watching_again_after_every_watcher_left_is_a_new_transition() -> None:
     tracker, clock = _tracker()
-    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
 
-    assert not tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=False)).is_newly_watched
-    assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
+    assert not tracker.record(
+        _CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=False), is_owner=True
+    ).is_newly_watched
+    assert tracker.record(
+        _CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True
+    ).is_newly_watched
 
     # A watcher whose heartbeats stopped long enough to go stale is gone too: its next report is a return.
     clock.now += WATCHING_STALE_SECONDS + 1.0
-    assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
+    assert tracker.record(
+        _CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True
+    ).is_newly_watched
 
 
 def _changes(transition: PresenceTransition) -> tuple[bool, bool]:
@@ -248,20 +262,37 @@ def _changes(transition: PresenceTransition) -> tuple[bool, bool]:
 def test_a_report_says_when_it_changes_whether_the_chat_is_open_or_visible() -> None:
     tracker, clock = _tracker()
 
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (True, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN), is_owner=True)) == (True, False)
     # The heartbeat of a page in the same state changes neither answer.
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (False, False)
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))) == (False, True)
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN), is_owner=True)) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE), is_owner=True)) == (False, True)
+    assert _changes(
+        tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True), is_owner=True)
+    ) == (False, False)
     # A second page showing the chat adds nothing; the first putting it away changes nothing either.
-    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.VISIBLE))) == (False, False)
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (False, False)
-    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.CLOSED))) == (False, True)
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))) == (True, False)
+    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.VISIBLE), is_owner=True)) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN), is_owner=True)) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.CLOSED), is_owner=True)) == (False, True)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED), is_owner=True)) == (True, False)
     # A report dropped as stale changes nothing, whatever it says.
-    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, sequence=1))) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, sequence=1), is_owner=True)) == (
+        False,
+        False,
+    )
 
     # A heartbeat that revives an expired report reopens the chat, so it counts as a change.
-    tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE))
+    tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE), is_owner=True)
     clock.now += PRESENCE_EXPIRY_SECONDS + 1.0
-    assert _changes(tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE))) == (True, True)
+    assert _changes(tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE), is_owner=True)) == (True, True)
+
+
+def test_only_the_owners_pages_count_as_the_owner_watching() -> None:
+    tracker = PresenceTracker()
+    tracker.record(_CHAT, _report("visitor", PresenceState.VISIBLE, is_focused=True), is_owner=False)
+    tracker.record(_CHAT, _report("owner", PresenceState.VISIBLE, is_focused=True, sequence=1), is_owner=True)
+
+    assert tracker.watchers(_CHAT) == ["owner", "visitor"]
+    assert tracker.owner_watchers(_CHAT) == ["owner"]
+
+    tracker.record(_CHAT, _report("owner", PresenceState.HIDDEN, sequence=2), is_owner=True)
+    assert tracker.owner_watchers(_CHAT) == []

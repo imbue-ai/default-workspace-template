@@ -22,7 +22,9 @@ crashed tab, a lost laptop) stops counting on its own. Each report also says whe
 changed either answer, so the prioritizer can leave a heartbeat that changed nothing alone.
 The notify path reads the *watchers*: the instances whose last report is visible and focused
 and younger than ninety seconds, three heartbeats, so a watcher that went away unannounced
-stops suppressing notifications quickly.
+stops suppressing notifications quickly. Each report also records whether the page is the
+owner's, so the phone push (which reaches the owner alone) is held back only by the owner's
+own watching, never by a visitor reading the chat.
 """
 
 import threading
@@ -85,6 +87,7 @@ class _InstancePresence(FrozenModel):
     is_focused: bool = Field(description="Whether the page's document had focus")
     reported_at: float = Field(description="Wall-clock epoch seconds of the report, for expiry and staleness")
     sequence: int = Field(description="The report's sequence number, which a later report must exceed")
+    is_owner: bool = Field(description="Whether the reporting page is the workspace owner's")
 
 
 class PresenceTracker(MutableModel):
@@ -107,8 +110,9 @@ class PresenceTracker(MutableModel):
     _presence_by_instance_by_chat: dict[ChatId, dict[str, _InstancePresence]] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def record(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
-        """Replace the instance's standing report about ``chat_id`` unless it is stale, and say what changed."""
+    def record(self, chat_id: ChatId, report: PresenceReport, is_owner: bool) -> PresenceTransition:
+        """Replace the instance's standing report about ``chat_id`` unless it is stale, and say what changed;
+        ``is_owner`` is whether the page that sent it is the owner's."""
         now = self.clock()
         with self._lock:
             by_instance = self._live_reports_locked(chat_id, now)
@@ -121,7 +125,11 @@ class PresenceTracker(MutableModel):
             was_visible = _is_any_visible(by_instance)
             was_watched = len(self._watchers_among(by_instance, now)) > 0
             by_instance[report.instance_id] = _InstancePresence(
-                state=report.state, is_focused=report.is_focused, reported_at=now, sequence=report.sequence
+                state=report.state,
+                is_focused=report.is_focused,
+                reported_at=now,
+                sequence=report.sequence,
+                is_owner=is_owner,
             )
             self._presence_by_instance_by_chat[chat_id] = by_instance
             is_visible = _is_any_visible(by_instance)
@@ -151,6 +159,17 @@ class PresenceTracker(MutableModel):
         now = self.clock()
         with self._lock:
             return self._watchers_among(self._live_reports_locked(chat_id, now), now)
+
+    def owner_watchers(self, chat_id: ChatId) -> list[str]:
+        """The watchers whose pages are the owner's."""
+        now = self.clock()
+        with self._lock:
+            by_instance = self._live_reports_locked(chat_id, now)
+            return [
+                instance_id
+                for instance_id in self._watchers_among(by_instance, now)
+                if by_instance[instance_id].is_owner
+            ]
 
     def open_chat_ids(self) -> set[ChatId]:
         with self._lock:

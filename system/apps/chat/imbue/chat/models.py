@@ -296,6 +296,14 @@ class ChatWatchersResponse(FrozenModel):
     """Response from GET /api/chats/{id}/watchers."""
 
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+    owner_watched_by: tuple[str, ...] = Field(
+        description="Of those, the pages that are the owner's: what holds back a push to the owner's phone"
+    )
+    is_owners_chat: bool = Field(
+        description="Whether everyone who has written in the chat is the owner (true for a chat no person wrote in): "
+        "a phone push goes only from such a chat, so a visitor's words never reach the owner's lock screen"
+    )
+    chat_title: str | None = Field(description="The chat's title as the chat list shows it; None for an unknown chat")
 
 
 class ChatNotificationRequest(FrozenModel):

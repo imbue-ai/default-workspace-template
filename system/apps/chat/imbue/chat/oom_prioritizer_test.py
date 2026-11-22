@@ -72,6 +72,7 @@ class _Harness:
                 is_focused=False,
                 sequence=self.reports_sent,
             ),
+            is_owner=True,
         )
 
     def _resolve_pids_by_chat_id(self, chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
@@ -425,6 +426,7 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
         PresenceReport(
             instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False, sequence=1
         ),
+        is_owner=True,
     )
     prioritizer.record_message(chat_id)
     prioritizer.record_running_chats([chat_id])

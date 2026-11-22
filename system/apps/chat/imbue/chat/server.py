@@ -56,6 +56,7 @@ from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import BubbleKind
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
@@ -2858,7 +2859,7 @@ def _presence_endpoint(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
     report = parse_request_body(PresenceReport)
     state = get_state()
-    state.agent_manager.record_presence(ChatId(chat_id), report)
+    state.agent_manager.record_presence(ChatId(chat_id), report, is_owner_participant(request_identity()))
     # A page of theirs looking at the chat is the person having seen what mentioned them (section 7.4).
     if report.state is PresenceState.VISIBLE and report.is_focused:
         if state.mentions.clear_for(requester_mention_keys(), ChatId(chat_id)):
@@ -2873,8 +2874,22 @@ def _watchers_endpoint(chat_id: str) -> Response:
         return refusal
     if not AGENT_ID_PATTERN.fullmatch(chat_id):
         return _chat_not_found_response(chat_id)
-    agent_manager: AgentManager = get_state().agent_manager
-    return model_response(ChatWatchersResponse(watched_by=tuple(agent_manager.chat_watchers(ChatId(chat_id)))))
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
+    known_chat_id = ChatId(chat_id)
+    owner_keys = {
+        OWNER_PARTICIPANT_KEY,
+        *(entry.key for entry in state.roster.document().participants if entry.is_owner),
+    }
+    snapshot = agent_manager.get_chat_snapshot(chat_id)
+    return model_response(
+        ChatWatchersResponse(
+            watched_by=tuple(agent_manager.chat_watchers(known_chat_id)),
+            owner_watched_by=tuple(agent_manager.chat_owner_watchers(known_chat_id)),
+            is_owners_chat=all(key in owner_keys for key in agent_manager.chat_participants(known_chat_id)),
+            chat_title=None if snapshot is None else snapshot.title,
+        )
+    )
 
 
 def _notification_endpoint(chat_id: str) -> Response:
