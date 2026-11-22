@@ -27,6 +27,12 @@
        border-bottom: 1px solid #e4e3dd; }
   li small { display: block; color: #6b6b66; }
   details { margin-top: 1.5rem; }
+  label.switch { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0 0 0.5rem; }
+  label.switch input { width: 1.25rem; height: 1.25rem; margin-top: 0.2rem; flex: none; }
+  .note { font-size: 0.9rem; color: #6b6b66; }
+  li.send { display: block; }
+  li.send .outcome { display: block; font-size: 0.9rem; color: #4a4a46; }
+  li .stale { color: #a3392b; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #efeee9; padding: 0.75rem; border-radius: 8px;
         font-size: 0.8rem; }
 </style>
@@ -38,6 +44,9 @@
   <p>Get a notification here when an agent in this workspace finishes something for you or needs your answer.
      Tapping it brings you back to the workspace.</p>
   <div class="status" id="status" role="status">Checking this device...</div>
+  <p class="note" id="desktop-note" hidden>This is a computer. The Imbue Studio app already shows your notifications
+     here, so turning them on in this browser too means each one arrives twice. Turn them on here only if you use this
+     workspace in this browser without the app.</p>
   <div class="actions">
     <button type="button" class="primary" id="turn-on" hidden>Turn on notifications</button>
     <button type="button" id="send-test" hidden>Send a test notification</button>
@@ -46,6 +55,23 @@
   <h2>Devices with notifications on</h2>
   <ul id="devices"></ul>
   <p id="no-devices" hidden>None yet.</p>
+  <section id="owner-controls" hidden>
+    <h2>What a notification shows</h2>
+    <label class="switch"><input type="checkbox" id="full-text">
+      <span>Show what the agent wrote<br><span class="note">Off: a notification names the chat only, so nothing it
+      said shows on a locked screen.</span></span></label>
+    <h2>Recent notifications</h2>
+    <ul id="sends"></ul>
+    <p id="no-sends" class="note" hidden>None sent yet.</p>
+    <h2>Reset</h2>
+    <p class="note">Turns notifications off on every device and replaces this workspace's notification key, so nothing
+       sent with the old one arrives anywhere. Each device then turns notifications on again.</p>
+    <div class="actions">
+      <button type="button" id="reset">Reset notifications</button>
+      <button type="button" class="primary" id="reset-confirm" hidden>Turn off on every device</button>
+      <button type="button" id="reset-cancel" hidden>Cancel</button>
+    </div>
+  </section>
   <details id="last-answer" hidden>
     <summary>What the last request answered</summary>
     <pre id="last-answer-body"></pre>
