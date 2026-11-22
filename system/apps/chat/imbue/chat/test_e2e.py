@@ -1012,6 +1012,149 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_a_chat_seen_this_session_shows_its_conversation_without_waiting_on_its_transcript(
+    tmp_path: Path, page: Page
+) -> None:
+    """A chat page opened again in the same session draws the conversation it last held, not the loading shape: so
+    even when its transcript request fails, the conversation is on screen rather than an error in its place."""
+    with _running_e2e_server(tmp_path) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        expect(_shown_chat_of_root(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(
+            timeout=15000
+        )
+        chat_frame = _chat_frame(page)
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('transcript-cache:{FIXTURE_AGENT_ID}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+
+        page.route(
+            "**/api/chats/*/events",
+            lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),
+        )
+        page.reload()
+
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-list-error")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reopened_long_chat_shows_its_bottom_at_once_and_says_so_while_earlier_messages_load(
+    tmp_path: Path, page: Page
+) -> None:
+    """A long chat's cached snapshot holds about a screen of its bottom, not its history. Opened again while its
+    transcript request is still out, the page draws that bottom at once, says earlier messages are loading above it,
+    and fills them in when the transcript lands."""
+    events = _make_long_conversation_events(150)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        chat_frame = _chat_frame(page)
+        entry_key = f"transcript-cache:{FIXTURE_AGENT_ID}"
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('{entry_key}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+        entry = json.loads(chat_frame.evaluate(f"sessionStorage.getItem('{entry_key}')"))
+        cached_messages = [event["content"] for event in entry["events"] if event["type"] == "user_message"]
+        assert "msg-149" in cached_messages
+        assert len(entry["events"]) < 100, f"the snapshot holds {len(entry['events'])} of 300 events, not a screen"
+        first_cached = _min_message_index(cached_messages)
+
+        held: list[Route] = []
+        is_released = False
+
+        def hold_until_released(route: Route) -> None:
+            if is_released:
+                route.continue_()
+            else:
+                held.append(route)
+
+        page.route(lambda url: "/events" in url, hold_until_released)
+        page.reload()
+
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        wait_for(lambda: len(held) > 0, timeout=10.0, poll_interval=0.1)
+        chat_frame = _chat_frame(page)
+        chat_frame.evaluate("() => { document.querySelector('.app-content').scrollTop = 0; }")
+        earlier = chat.locator(".message-list-earlier-loading")
+        expect(earlier).to_be_visible(timeout=5000)
+        expect(earlier).to_have_text("Loading earlier messages...")
+        # The line sits right above the snapshot's first message, not above empty space for the rest of the chat.
+        expect(chat.locator(".message-user", has_text=f"msg-{first_cached}")).to_be_in_viewport()
+        expect(chat.locator(".message-list-window-loading")).to_have_count(0)
+
+        is_released = True
+        for route in held:
+            route.continue_()
+        expect(earlier).to_have_count(0, timeout=15000)
+
+        def shows_earlier_messages() -> bool:
+            chat_frame.evaluate("() => { document.querySelector('.app-content').scrollTop = 0; }")
+            return 0 <= _min_message_index(_visible_user_messages(page)) < first_cached
+
+        wait_for(shows_earlier_messages, timeout=20.0, poll_interval=0.3)
+
+
+# Records, on every frame of the chat page from its first, where its last user message sits and whether the page still
+# shows a window from the transcript cache (its "loading earlier messages" line).
+_LAST_MESSAGE_POSITION_TRACE = """
+(() => {
+  if (!location.pathname.startsWith('/agent-')) return;
+  window.__lastMessageTops = [];
+  const started = performance.now();
+  const tick = () => {
+    const bubbles = document.querySelectorAll('.message-user .message-user-bubble');
+    const last = bubbles[bubbles.length - 1];
+    if (last) {
+      window.__lastMessageTops.push({
+        text: last.textContent.trim(),
+        top: Math.round(last.getBoundingClientRect().top),
+        isCached: document.querySelector('.message-list-earlier-loading') !== null,
+      });
+    }
+    if (performance.now() - started < 3000) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reopened_chat_keeps_its_bottom_still_as_its_transcript_replaces_the_cached_one(
+    tmp_path: Path, page: Page
+) -> None:
+    """The cached bottom of a chat is drawn where the real transcript puts it: from the first frame the page paints to
+    after the transcript lands, the last message does not move."""
+    events = _make_long_conversation_events(150)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        expect(_shown_chat_of_root(page).locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        chat_frame = _chat_frame(page)
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('transcript-cache:{FIXTURE_AGENT_ID}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+
+        page.add_init_script(_LAST_MESSAGE_POSITION_TRACE)
+        page.reload()
+        expect(_shown_chat_of_root(page).locator(".turn-done-mark")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(3500)
+
+        frames = _chat_frame(page).evaluate("window.__lastMessageTops")
+        assert frames and frames[0]["text"] == "msg-149" and frames[0]["isCached"], frames[:3]
+        assert any(not frame["isCached"] for frame in frames), "the transcript never replaced the cached window"
+        tops = {frame["top"] for frame in frames}
+        assert max(tops) - min(tops) <= 2, f"the last message moved: {sorted(tops)}"
+
+
 # layout ops
 
 

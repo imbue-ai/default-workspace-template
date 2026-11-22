@@ -230,3 +230,67 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     expect(element.scrollTop).toBe(BOTTOM_PX - 100);
   });
 });
+
+describe("transcript scroll engine restores a saved position", () => {
+  let engine: TranscriptScrollEngine | undefined;
+
+  afterEach(() => {
+    engine?.detach();
+    engine = undefined;
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it("waits for the transcript to land before matching the saved anchor against a window from the cache", async () => {
+    vi.useFakeTimers();
+    const saved = JSON.stringify({
+      version: 1,
+      state: { kind: "USER_CONTROLLED", anchor: { rowKey: "event-2", offsetPx: 0 } },
+      anchorEventIndex: 2,
+    });
+    localStorage.setItem("transcript-scroll:agent-1", saved);
+    // A cached tail of events 20..29, held as a window of its own numbered from 0, with no total yet.
+    let eventIds = Array.from({ length: 10 }, (_, index) => `event-${20 + index}`);
+    let totalEvents: number | null = null;
+    let renderVersion = 1;
+    const rowsFor = (ids: string[]): RowDescriptor[] =>
+      ids.map((eventId) => ({
+        key: eventId,
+        estimate: 100,
+        anchorEventId: eventId,
+        render: () => null,
+        takesLiveTail: false,
+        chipCallIds: new Set(),
+        speakerTurn: null,
+      }));
+    let rows = rowsFor(eventIds);
+    const dataSource: TranscriptScrollDataSource = {
+      getRows: () => rows,
+      getWindowEventIds: () => eventIds,
+      getFirstOffset: () => 0,
+      getTotalEvents: () => totalEvents,
+      getRenderVersion: () => renderVersion,
+      executeFill: async () => undefined,
+    };
+    engine = createTranscriptScrollEngine({ dataSource });
+    engine.setChat("agent-1");
+    engine.computeRenderPlan();
+    vi.advanceTimersByTime(1000);
+
+    expect(localStorage.getItem("transcript-scroll:agent-1")).toBe(saved);
+
+    // The transcript lands, holding the saved anchor at its real place.
+    eventIds = Array.from({ length: 30 }, (_, index) => `event-${index}`);
+    rows = rowsFor(eventIds);
+    totalEvents = 30;
+    renderVersion = 2;
+    engine.computeRenderPlan();
+    vi.advanceTimersByTime(1000);
+
+    const persisted = JSON.parse(localStorage.getItem("transcript-scroll:agent-1") ?? "null") as {
+      state: { kind: string; anchor?: { rowKey: string } };
+    };
+    expect(persisted.state.kind).toBe("USER_CONTROLLED");
+    expect(persisted.state.anchor?.rowKey).toBe("event-2");
+  });
+});

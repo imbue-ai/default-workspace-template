@@ -1172,6 +1172,29 @@ The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
 workspace every frontend belongs to.
 
+## Opening a chat
+
+The root keeps the pages of the four chats shown most recently alive
+(`frontend/src/root/framePool.ts`); opening any other chat starts its page from
+nothing. So that page still shows the conversation at once, each page keeps a
+snapshot of the bottom of its chat in the window's session storage
+(`frontend/src/models/transcriptCache.ts`) and draws it the moment the chat opens,
+until the transcript request answers and replaces it, drawn where the transcript will put it so nothing moves when it lands (it is held at the bottom of the screen, and keeps the height of what the page drew under its last row until the chat's live state arrives). A snapshot holds only what
+fills the chat's screen with a quarter screen of margin, sized by the text the
+screen shows (measured from the rows on it), and a message longer than that is
+kept only from the part that shows, so no one message makes a snapshot large; one
+snapshot is at most 32,000 characters. All of a window's snapshots share one
+budget of 250,000 characters (about 1 MB, since Chromium holds session storage in
+both the browser process and the page's renderer); past it the chat viewed
+longest ago is dropped first. Showing a chat counts as viewing it; a chat that
+changes behind another does not. Scrolled up past a snapshot before its
+transcript has arrived, the page shows "Loading earlier messages..." at the top,
+and the earlier messages fill in when it lands; if the request fails, the
+snapshot stays with the usual "Couldn't refresh this conversation" strip. A
+deleted chat's snapshot is dropped, as is any chat's that the chat list no
+longer names. Each window keeps its own snapshots, and they end with the window:
+a transcript can hold anything pasted into it, so it is not written to disk.
+
 ## Presence and watching
 
 Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`

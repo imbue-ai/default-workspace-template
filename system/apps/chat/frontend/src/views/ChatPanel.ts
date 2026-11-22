@@ -41,7 +41,11 @@ import {
   removeMessageSentListener,
   type ToolResultEvent,
   isTranscriptLoaded,
+  hasEarlierThanCachedWindow,
+  cachedWindowTrailingPx,
+  placeCachedTranscript,
 } from "../models/Response";
+import { renderedChars, setScreenMeasurer, type ScreenMeasure } from "../models/transcriptCache";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
@@ -211,6 +215,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
+  // The transcript's scroll container, once mounted.
+  let transcriptElement: HTMLElement | null = null;
   // Memoized turn-grouping output. buildSections walks the whole held
   // transcript, so it is recomputed only when the data actually changes (keyed
   // on the render version + idle flag), not on every scroll-driven redraw.
@@ -230,12 +236,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       getRows: () => cachedRows,
       getWindowEventIds: () => getEventsForChat(currentChatId ?? "").map((event) => event.event_id),
       getFirstOffset: () => getFirstOffset(currentChatId ?? ""),
-      // Null until the first window has been placed (renderVersion bumps on
-      // placement, including for an empty transcript), so the engine's fill
-      // planner never races the initial snapshot+stream load.
+      // Null until the first snapshot has landed, so the engine's fill planner
+      // never races the initial snapshot+stream load, nor pages from a window
+      // placed from the transcript cache that the snapshot is about to replace.
       getTotalEvents: () => {
         const chatId = currentChatId ?? "";
-        return getRenderVersion(chatId) > 0 ? getTotalEventCount(chatId) : null;
+        return isTranscriptLoaded(chatId) ? getTotalEventCount(chatId) : null;
       },
       getRenderVersion: () => getRenderVersion(currentChatId ?? ""),
       executeFill: (action: FillAction): Promise<void> => {
@@ -637,6 +643,51 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
+  /**
+   * How much rendered text the transcript's screen holds, from the rows on screen now; null while hidden. The text is
+   * counted as the cache counts it (``renderedChars`` over the events those rows show), so the two agree on what a
+   * screenful is.
+   */
+  function measureScreen(): ScreenMeasure | null {
+    if (!panelVisible || transcriptElement === null || transcriptElement.clientHeight === 0) return null;
+    const heightPx = transcriptElement.clientHeight;
+    // Each mounted row carries its key as its id; the spacers carry none.
+    const mounted = [...transcriptElement.querySelectorAll<HTMLElement>(".message-list > [id]")];
+    const rowsPx = mounted.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0);
+    const lastMounted = mounted[mounted.length - 1] as HTMLElement | undefined;
+    const isAtLastRow = lastMounted !== undefined && lastMounted.id === cachedRows[cachedRows.length - 1]?.key;
+    const trailingPx = isAtLastRow ? measureTrailingPx(lastMounted) : 0;
+    // Under half a screen of rows says too little about the chat's text to go by.
+    if (mounted.length === 0 || rowsPx < heightPx / 2) return { heightPx, charsPerPx: null, trailingPx };
+    const events = getEventsForChat(currentChatId ?? "");
+    const rowIndexByKey = new Map(cachedRows.map((row, index) => [row.key, index]));
+    const eventIndexOfRowAtOrAfter = (rowIndex: number | undefined): number | null => {
+      if (rowIndex === undefined) return null;
+      for (let index = rowIndex; index < cachedRows.length; index++) {
+        const anchor = cachedRows[index].anchorEventId;
+        const eventIndex = anchor === null ? -1 : events.findIndex((event) => event.event_id === anchor);
+        if (eventIndex !== -1) return eventIndex;
+      }
+      return null;
+    };
+    const lastRowIndex = rowIndexByKey.get(mounted[mounted.length - 1].id);
+    const start = eventIndexOfRowAtOrAfter(rowIndexByKey.get(mounted[0].id));
+    const end = lastRowIndex === undefined ? null : (eventIndexOfRowAtOrAfter(lastRowIndex + 1) ?? events.length);
+    if (start === null || end === null || end <= start) return { heightPx, charsPerPx: null, trailingPx };
+    const chars = events.slice(start, end).reduce((sum, event) => sum + renderedChars(event), 0);
+    return { heightPx, charsPerPx: chars / rowsPx, trailingPx };
+  }
+
+  /** The height drawn under the transcript's last row inside the message list, beyond the row's own bottom margin. */
+  function measureTrailingPx(lastRow: HTMLElement): number {
+    const list = lastRow.parentElement;
+    if (list === null) return 0;
+    const listStyle = getComputedStyle(list);
+    const contentBottom = list.getBoundingClientRect().bottom - parseFloat(listStyle.paddingBottom);
+    const rowBottom = lastRow.getBoundingClientRect().bottom + parseFloat(getComputedStyle(lastRow).marginBottom);
+    return Math.max(0, Math.round(contentBottom - rowBottom));
+  }
+
   /** Load the chat once. */
   function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
@@ -647,6 +698,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
+    // What this session last saw of the chat shows at once, until the snapshot replaces it.
+    placeCachedTranscript(chatId);
     loadChat(chatId, isStreamed);
   }
 
@@ -871,12 +924,29 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const plan = engine.computeRenderPlan();
     const isTurnStatusAfterSends = turnStatusPlacement(chatId) === "after-sends";
     const liveEnd = renderLiveEndAfterRows(chatId, events, rows);
-    return m("div", { class: "message-list-wrapper" }, [
+    // A window from the transcript cache holds only the chat's bottom; the rest arrives with the snapshot.
+    const isAwaitingEarlier = hasEarlierThanCachedWindow(chatId) && load.phase === "loading";
+    // Held at the bottom of the screen meanwhile, so a window shorter than the screen does not sit at the top and
+    // jump down when the snapshot lands.
+    const wrapperClass = isAwaitingEarlier
+      ? "message-list-wrapper flex min-h-full flex-col justify-end"
+      : "message-list-wrapper";
+    return m("div", { class: wrapperClass }, [
       failedReloadNotice,
       // The queued-message group renders after the virtualized rows so it sits at
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
+        isAwaitingEarlier
+          ? m(
+              "p",
+              {
+                key: "earlier-loading",
+                class: "message-list-earlier-loading py-3 text-center text-sm text-secondary",
+              },
+              "Loading earlier messages...",
+            )
+          : m.fragment({ key: "earlier-loading" }, []),
         ...renderTranscriptSegments(rows, [
           { kind: "spacer", height: plan.topPadPx },
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
@@ -892,8 +962,22 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
         // The status row under the user's own send while it waits on the agent or opens the turn the row reports.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
+        // What the page drew under the rows comes from the chat's live state, which a page just opened may not have
+        // yet: until it does, a cached window keeps that space, so the rows do not move when it arrives.
+        isChatStateUnknown(chatId) && cachedWindowTrailingPx(chatId) > 0
+          ? m("div", {
+              key: "cached-trailing",
+              class: "message-list-cached-trailing",
+              style: `height: ${cachedWindowTrailingPx(chatId)}px`,
+            })
+          : m.fragment({ key: "cached-trailing" }, []),
       ]),
     ]);
+  }
+
+  /** Whether the page has neither the chat's listing nor its provisional record yet. */
+  function isChatStateUnknown(chatId: string): boolean {
+    return getChatById(chatId) === undefined && provisionalRecord(chatId) === null;
   }
 
   const handleChatsUpdated = (): void => {
@@ -909,6 +993,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
 
   return {
     oninit() {
+      setScreenMeasurer(measureScreen);
       addChatsUpdatedListener(handleChatsUpdated);
       addMessageSentListener(handleMessageSent);
     },
@@ -1004,6 +1089,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
                     oncreate: (mainVnode: m.VnodeDOM) => {
+                      transcriptElement = mainVnode.dom as HTMLElement;
                       engine.afterRender(mainVnode.dom as HTMLElement);
                       reportChatOnScreenOnce(chatId, isTranscriptLoaded(chatId));
                     },
