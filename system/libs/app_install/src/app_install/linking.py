@@ -50,6 +50,10 @@ _SCRATCH_PARENT: Final[Path] = Path("/var/tmp")
 _SCRATCH_PREFIX: Final[str] = "app-install-link-"
 # How many times the marker is made again because the primary branch moved while it was being made.
 _MAXIMUM_ATTEMPTS: Final[int] = 5
+# A split that has to read the whole workspace history takes minutes (about 12 ms a commit where it was
+# measured, and a workspace starts with the template's history), which the time given to an ordinary git
+# command does not cover.
+_SPLIT_TIMEOUT_SECONDS: Final[float] = 1800.0
 _DEV_REPOSITORY_SUFFIX: Final[str] = "-dev"
 
 
@@ -161,7 +165,11 @@ def _clone_bounded_by_app_age(
 
 def _rejoin_in_clone(clone: Path, start_head: str, name: str, prefix: str) -> tuple[str, str]:
     """Split the app's history in the clone and join it back; the marker commit and the split commit."""
-    output = run_git(clone, ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"])
+    output = run_git(
+        clone,
+        ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"],
+        timeout_seconds=_SPLIT_TIMEOUT_SECONDS,
+    )
     split_commit = output.splitlines()[-1].strip()
     marker = run_git(clone, ["rev-parse", "HEAD"])
     if marker == start_head:

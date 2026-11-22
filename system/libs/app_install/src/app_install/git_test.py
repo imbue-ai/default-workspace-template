@@ -157,3 +157,11 @@ def test_the_environment_the_installer_runs_in_has_git_subtree(tmp_path: Path) -
     workspace = make_workspace_repository(tmp_path / "workspace")
 
     require_git_subtree(workspace)
+
+
+def test_a_command_that_outlasts_the_time_it_is_given_is_a_failure_that_names_it(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    run_git(workspace, ["config", "alias.wait", "!sleep 2"])
+
+    with pytest.raises(GitCommandError, match="could not run `git wait`.*timed out"):
+        run_git(workspace, ["wait"], timeout_seconds=0.2)

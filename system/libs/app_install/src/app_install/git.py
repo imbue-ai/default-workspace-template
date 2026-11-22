@@ -61,6 +61,7 @@ def run_git(
     is_global_config_read: bool = True,
     is_gateway_used: bool = False,
     extra_environment: Mapping[str, str] | None = None,
+    timeout_seconds: float = GIT_TIMEOUT_SECONDS,
 ) -> str:
     """Run one git command in ``cwd`` with hooks off and the installer's identity; its stdout, stripped.
 
@@ -69,7 +70,7 @@ def run_git(
     command names goes through the latchkey gateway, when the workspace has one, and the command then reads the
     gateway's wiring from here alone, not from the global configuration. ``extra_environment`` is added to the
     command's environment (an index file of the command's own, say). Raises GitCommandError when the command
-    fails.
+    fails or runs longer than ``timeout_seconds``.
     """
     argv = ["git", "-c", f"core.hooksPath={os.devnull}", *arguments]
     try:
@@ -80,7 +81,7 @@ def run_git(
             capture_output=True,
             text=True,
             check=False,
-            timeout=GIT_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GitCommandError(f"could not run `git {' '.join(arguments)}`: {e}") from e
