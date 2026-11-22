@@ -55,7 +55,7 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
-  // Exporting a workspace app as a Mac app (contract v12). Probed like the ones above.
+  // Exporting a workspace app as a Mac app (contract v18). Probed like the ones above.
   export const APP_DRAG_STARTED: "minds:app-drag-started";
   export const EXPORT_APP_ACTION: "minds:export-app-action";
   export const EXPORTABLE_APPS: "minds:exportable-apps";

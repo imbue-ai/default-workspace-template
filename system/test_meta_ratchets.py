@@ -499,6 +499,10 @@ _SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset(
         "needs_system_services_restart",
         "needsSystemServicesRestart",
         "SYSTEM_SERVICES_RESTART_DETAILS",
+        # The embed contract's payload keys, which mngr defines and the shell
+        # can only spell as the contract does.
+        "serviceName",
+        "serviceNames",
     }
 )
 
@@ -576,7 +580,7 @@ def _find_service_identifiers_in_the_shell() -> list[str]:
 def test_prevent_service_identifiers_in_the_shell() -> None:
     """The shell, its frontend, and the shared frontend library call an app an app: no new identifier may say 'service'."""
     violations = _find_service_identifiers_in_the_shell()
-    assert len(violations) <= snapshot(1), (
+    assert len(violations) <= snapshot(0), (
         "Identifiers naming an app a 'service' in the shell's code:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )

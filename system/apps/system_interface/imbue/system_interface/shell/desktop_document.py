@@ -733,7 +733,7 @@ def default_shortcut_start_path(row: RegistryRow) -> str | None:
     launch_path = next((path for path in effective_launch_paths(row) if path.id == choices[0].launch), None)
     if launch_path is None or launch_path.method != LaunchPathMethod.GET:
         return None
-    query = urlencode(launch_path.presets)
+    query = urlencode({str(name): value for name, value in launch_path.presets.items()})
     return f"{launch_path.path}?{query}" if query else str(launch_path.path)
 
 
