@@ -30,7 +30,7 @@ const GROUP_CLASS = "suggestion-layer-strip mx-auto flex min-h-0 w-full max-w-(-
 
 // The pills alone rise in. The padding keeps a focused pill's outline, and the last one's shadow, inside what
 // scrolls, and sets the pills off from the line under the layer.
-const SCROLL_CLASS = "suggestion-layer-scroll suggestion-rise min-h-0 overflow-y-auto pt-1 pb-1.5";
+const SCROLL_CLASS = "suggestion-layer-scroll suggestion-rise min-h-0 overflow-y-auto pt-1 pb-1.5 pl-1";
 
 export function SuggestionLayer(): m.Component<SuggestionLayerAttrs> {
   return {
