@@ -1173,8 +1173,8 @@ def test_a_shortcut_to_the_pin_path_raises_the_pinned_window_rather_than_opening
     tmp_path: Path, page: Page, mode: str
 ) -> None:
     """A shortcut to an app's pin path is the launcher's focus row on the desktop: a double click restores and raises
-    the pinned window and opens no second one, whatever mode the shortcut was stored with (the chat's shipped as
-    ``new``), and its menu offers no mode to switch to."""
+    the pinned window and opens no second one, whatever mode the shortcut was stored with, and its menu
+    offers no mode to switch to."""
     with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), pinned_shortcut_mode=mode) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
