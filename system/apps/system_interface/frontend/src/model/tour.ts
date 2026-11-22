@@ -233,8 +233,9 @@ export class TourController {
     this.persist({ ...record, isFinished: true });
   }
 
-  /** What the avatar says: the agent went to work (the tour may begin or resume) or stopped (a card on screen is
-   *  interrupted, and a start not yet begun is dropped). */
+  /** Whether an agent is at work, as the shell hears it from the avatar's status or a page it frames
+   *  (``model/agentWorking.ts``): one went to work (the tour may begin or resume) or none is working any more (a
+   *  card on screen is interrupted, and a start not yet begun is dropped). */
   noteAgentWorking(isWorking: boolean): void {
     if (isWorking === this.isAgentWorking) return;
     this.isAgentWorking = isWorking;
