@@ -47,6 +47,7 @@ vi.mock("./MessageInput", () => ({
 
 import { resetActivitySuggestionsForTests } from "../models/ActivitySuggestions";
 import type { ActionPlacement, ActivityAnswer } from "../models/ActivitySuggestions";
+import { ALL_FOUR, BUILD_APP, CONNECT_DATA, NEW_CHAT, PHONE } from "../models/activitySuggestionFixture";
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
 import { chatSnapshotFixture, provisionalChatFixture } from "../models/chatSnapshotFixture";
@@ -61,14 +62,6 @@ import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
 
 const CHAT = "agent-chat";
 
-const NEW_CHAT = {
-  suggestion_id: "new_chat",
-  label: "Work in parallel by starting a new chat",
-  action: "new_chat_coach",
-};
-const PHONE = { suggestion_id: "phone_access", label: "Access Studio from your phone", action: "phone_access" };
-const BUILD_APP = { suggestion_id: "build_app", label: "Build an app", action: "build_app_coach" };
-const CONNECT_DATA = { suggestion_id: "connect_data", label: "Connect some data", action: "connect_data_coach" };
 const FIRST_THREE_LABELS = [NEW_CHAT.label, PHONE.label, BUILD_APP.label];
 
 function reply(eventId: string): TranscriptEvent {
@@ -227,11 +220,10 @@ beforeEach(() => {
   resetActivitySuggestionsForTests();
   resetChatSettingsForTests();
   setParticipantsForTesting("owner", []);
-  const allFour = { suggestions: [NEW_CHAT, PHONE, BUILD_APP, CONNECT_DATA] };
   stored = {
     settings: { ...DEFAULT_CHAT_SETTINGS },
     nextSteps: NO_NEXT_STEPS,
-    offered: { activity: allFour, new_chat: allFour },
+    offered: { activity: ALL_FOUR, new_chat: ALL_FOUR },
   };
   requests = [];
   root = document.createElement("div");

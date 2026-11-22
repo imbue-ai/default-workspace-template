@@ -22,19 +22,10 @@ import {
   RETRY_DELAY_MS,
   toggleActionStrip,
 } from "./ActivitySuggestions";
+import { ALL_FOUR, BUILD_APP, CONNECT_DATA, NEW_CHAT, PHONE } from "./activitySuggestionFixture";
 import type { SuggestionAction } from "./Suggestions";
 
 const CHAT = "agent-1";
-
-const NEW_CHAT = {
-  suggestion_id: "new_chat",
-  label: "Work in parallel by starting a new chat",
-  action: "new_chat_coach",
-};
-const PHONE = { suggestion_id: "phone_access", label: "Access Studio from your phone", action: "phone_access" };
-const BUILD_APP = { suggestion_id: "build_app", label: "Build an app", action: "build_app_coach" };
-const CONNECT_DATA = { suggestion_id: "connect_data", label: "Connect some data", action: "connect_data_coach" };
-const ALL_FOUR: ActivityAnswer = { suggestions: [NEW_CHAT, PHONE, BUILD_APP, CONNECT_DATA] };
 
 /** What the chat app answers each placement, which the page's reads read. */
 let offered: Record<ActionPlacement, ActivityAnswer>;
