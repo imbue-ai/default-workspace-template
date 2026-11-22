@@ -49,12 +49,8 @@ import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
-import {
-  isTurnDoneForSuggestions,
-  lastReplyEventId,
-  NextStepSuggestions,
-  SUGGESTIONS_OFF_NOTICE_MS,
-} from "./NextStepSuggestions";
+import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
+import { NextStepSuggestions, SUGGESTIONS_OFF_NOTICE_MS } from "./NextStepSuggestions";
 
 const CHAT = "agent-first-run";
 const SEED_END = `${CHAT}:seed:3`;
@@ -95,9 +91,12 @@ const START_SET: SuggestionsAnswer = {
   source: "fixed",
   suggestions: [
     { suggestion_id: "start-describe", label: "Describe what you want to make", is_recommended: false },
+    { suggestion_id: "start-ideas", label: "Get ideas for what to make", is_recommended: false },
     { suggestion_id: "start-features", label: "See what Studio can do", is_recommended: false },
   ],
 };
+
+const START_LABELS = START_SET.suggestions.map((suggestion) => suggestion.label);
 
 /** What the backend holds, which the page's requests read and write. */
 let stored: { settings: ChatSettings; suggestions: SuggestionsAnswer; isWriteRefused: boolean };
@@ -260,7 +259,7 @@ describe("the next-step strip", () => {
       "GET /api/chats/:chatId/suggestions",
       "GET /api/settings",
     ]);
-    expect(pillLabels()).toEqual(["Describe what you want to make", "See what Studio can do"]);
+    expect(pillLabels()).toEqual(START_LABELS);
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
   });
 
@@ -299,7 +298,7 @@ describe("the next-step strip", () => {
     announceSuggestionsUpdated(CHAT);
     await settle();
 
-    expect(pillLabels()).toEqual(["Describe what you want to make", "See what Studio can do"]);
+    expect(pillLabels()).toEqual(START_LABELS);
 
     m.render(root, null);
     expect(mocks.suggestionsUpdatedListeners).toEqual([]);
@@ -311,7 +310,7 @@ describe("the next-step strip", () => {
     click(".suggestion-pill:nth-child(2)");
 
     expect(mocks.submitSuggestion).toHaveBeenCalledTimes(1);
-    expect(mocks.submitSuggestion).toHaveBeenCalledWith(CHAT, "See what Studio can do");
+    expect(mocks.submitSuggestion).toHaveBeenCalledWith(CHAT, "Get ideas for what to make");
   });
 
   it("collapses to the Next steps toggle when a message is sent, and opens again with its pills still clickable", async () => {
@@ -323,7 +322,7 @@ describe("the next-step strip", () => {
     expect(root.querySelector(".suggestion-strip-toggle")?.textContent).toBe("Next steps");
 
     click(".suggestion-strip-toggle");
-    expect(pillLabels()).toEqual(["Describe what you want to make", "See what Studio can do"]);
+    expect(pillLabels()).toEqual(START_LABELS);
     click(".suggestion-pill");
     expect(mocks.submitSuggestion).toHaveBeenCalledWith(CHAT, "Describe what you want to make");
   });
@@ -334,7 +333,7 @@ describe("the next-step strip", () => {
     announceMessageSent("agent-elsewhere");
     draw();
 
-    expect(pillLabels()).toHaveLength(2);
+    expect(pillLabels()).toHaveLength(3);
   });
 
   it("goes when the turn the send opened ends, and shows nothing under a reply the stored set is not for", async () => {
@@ -389,7 +388,7 @@ describe("the next-step strip", () => {
 
     await load();
 
-    expect(pillLabels()).toHaveLength(2);
+    expect(pillLabels()).toHaveLength(3);
   });
 });
 
@@ -405,7 +404,7 @@ describe("the link that switches next-step suggestions off", () => {
     setParticipantsForTesting("user:glenn-2", ownerAndVisitorRosterFixture());
     draw();
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
-    expect(pillLabels()).toHaveLength(2);
+    expect(pillLabels()).toHaveLength(3);
 
     // Before the page knows who its viewer is, it offers the link to no one.
     setParticipantsForTesting(null, []);
@@ -443,7 +442,7 @@ describe("the link that switches next-step suggestions off", () => {
     ]);
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
     await settle();
-    expect(pillLabels()).toEqual(["Describe what you want to make", "See what Studio can do"]);
+    expect(pillLabels()).toEqual(START_LABELS);
   });
 
   it("takes the line away after about eight seconds, leaving nothing", async () => {
@@ -496,7 +495,7 @@ describe("the link that switches next-step suggestions off", () => {
       ["/api/settings/suggestions", { is_next_step_suggestions_enabled: false }],
       ["/api/settings/suggestions", { is_next_step_suggestions_enabled: true }],
     ]);
-    expect(pillLabels()).toHaveLength(2);
+    expect(pillLabels()).toHaveLength(3);
   });
 
   it("puts the strip back, with no line and no settings opened, when the backend refuses the write", async () => {
@@ -510,7 +509,7 @@ describe("the link that switches next-step suggestions off", () => {
     await settle();
 
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
-    expect(pillLabels()).toHaveLength(2);
+    expect(pillLabels()).toHaveLength(3);
     expect(mocks.openWorkspaceSettings).not.toHaveBeenCalled();
   });
 });

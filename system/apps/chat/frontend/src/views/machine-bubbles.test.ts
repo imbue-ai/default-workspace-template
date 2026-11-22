@@ -61,7 +61,15 @@ describe("renderAgentTurn", () => {
 
 describe("renderAgentProse", () => {
   const prose = (text: string, layout: "bubble" | "plain" = "bubble", isStretchHead = false): m.Vnode | null =>
-    renderAgentProse({ text, timestamp: "t", expansionKeyPrefix: "e1", layout, isStretchHead });
+    renderAgentProse({
+      text,
+      timestamp: "t",
+      expansionKeyPrefix: "e1",
+      layout,
+      isStretchHead,
+      chatId: "agent-1",
+      isPickerLive: true,
+    });
 
   it("draws nothing for whitespace-only text", () => {
     expect(prose("\n")).toBeNull();
@@ -74,6 +82,34 @@ describe("renderAgentProse", () => {
     expect(head?.getAttribute("data-rail-node")).toBe("box");
     expect(head?.className).toContain("rounded-tl-[4px]");
     expect(render(prose("words")).querySelector("[data-machine-bubble]")?.className).not.toContain("rounded-tl-[4px]");
+  });
+
+  it("draws a picker where the text carries its tag on a line of its own, live or not as it is told", () => {
+    const withPicker = (isPickerLive: boolean): HTMLElement =>
+      render(
+        renderAgentProse({
+          text: "**Which apps do you use most?**\n\n<studio_connector_picker/>",
+          timestamp: "t",
+          expansionKeyPrefix: "e1",
+          layout: "bubble",
+          isStretchHead: false,
+          chatId: "agent-1",
+          isPickerLive,
+        }),
+      );
+
+    const live = withPicker(true);
+    const pills = live.querySelectorAll<HTMLButtonElement>('[data-studio-picker="connector"] .studio-picker-pill');
+    expect(pills).toHaveLength(15);
+    expect([...pills].every((pill) => !pill.disabled)).toBe(true);
+    expect(live.querySelector("[data-machine-bubble] [data-studio-picker]")).not.toBeNull();
+
+    const earlier = withPicker(false).querySelectorAll<HTMLButtonElement>(".studio-picker-pill");
+    expect([...earlier].every((pill) => pill.disabled)).toBe(true);
+  });
+
+  it("draws no picker for text without a tag", () => {
+    expect(render(prose("words")).querySelector("[data-studio-picker]")).toBeNull();
   });
 
   it("draws plain text, off the line, inside a piece that holds it", () => {

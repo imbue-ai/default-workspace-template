@@ -15,6 +15,7 @@ import {
 } from "../models/ComposerAttachments";
 import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
+import { messageTextKey, readComposerDraft, takeComposerDraftChange } from "../models/ComposerDraft";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import {
@@ -167,7 +168,6 @@ const TOOLBAR_CLASS =
 
 const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px] leading-[1.3]";
 
-const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
 // The kind of the server's refusal of a send to a chat whose account was signed out.
@@ -194,10 +194,6 @@ function sendFailureKind(sendError: unknown): unknown {
  *  before its answer was lost, so it is handled as one mngr could not confirm. */
 function noticeKindOf(sendError: unknown): SendFailureKind {
   return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
-}
-
-function messageTextKey(chatId: string): string {
-  return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
 function composerHintKey(chatId: string): string {
@@ -1349,6 +1345,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
+      }
+      // A picker in a message added or removed one of its labels in the saved draft.
+      if (takeComposerDraftChange(chatId)) {
+        messageText = readComposerDraft(chatId);
       }
       if (pendingComposerFocuses.delete(chatId)) {
         // After this pass has drawn the textarea the hint is for.

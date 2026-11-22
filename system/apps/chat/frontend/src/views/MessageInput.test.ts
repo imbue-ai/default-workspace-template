@@ -333,6 +333,7 @@ import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { EngineLoadError } from "@imbue/workspace-voice/src/workerClient";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { toggleComposerFragment } from "../models/ComposerDraft";
 import { DICTATION_NOTE, hasDictatedSpeech, withDictationNote } from "../models/dictationNote";
 import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
@@ -2435,6 +2436,29 @@ describe("setComposerHint", () => {
     localStorage.setItem("composer-hint:agent-4", "How do you want to change Notes?");
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-4" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("How do you want to change Notes?");
+  });
+});
+
+describe("a draft changed from outside the composer", () => {
+  const CHAT = "agent-picking";
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("is taken up on the composer's next pass, over what the composer held", () => {
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: CHAT } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({
+      target: { value: "dog training", style: {}, scrollHeight: 10 },
+    });
+
+    toggleComposerFragment(CHAT, "Money");
+
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("dog training, Money, ");
+    toggleComposerFragment(CHAT, "Money");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("dog training, ");
   });
 });
 

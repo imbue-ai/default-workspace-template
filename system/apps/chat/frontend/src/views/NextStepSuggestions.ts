@@ -10,17 +10,9 @@
 
 import m from "mithril";
 import { ensureChatSettings, isSuggestionSwitchOn, updateSuggestionSwitches } from "../models/ChatSettings";
-import {
-  addSuggestionsUpdatedListener,
-  getChatById,
-  getProvisionalChat,
-  isLaunchInFlight,
-  isRoomChat,
-  removeSuggestionsUpdatedListener,
-} from "../models/Chats";
-import { getOutgoingMessages } from "../models/OutgoingMessages";
+import { addSuggestionsUpdatedListener, isRoomChat, removeSuggestionsUpdatedListener } from "../models/Chats";
 import { isViewerOwner } from "../models/Participants";
-import { addMessageSentListener, getEventsForChat, hasMoreAfter, removeMessageSentListener } from "../models/Response";
+import { addMessageSentListener, removeMessageSentListener } from "../models/Response";
 import {
   collapseNextStepSuggestions,
   getNextStepSuggestions,
@@ -30,10 +22,9 @@ import {
   toggleNextStepSuggestions,
 } from "../models/Suggestions";
 import { openWorkspaceSettings, opensWorkspaceSettings } from "../shell";
-import { isNonBoundaryUserMessage } from "./message-classification";
+import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
 import { submitSuggestion } from "./MessageInput";
 import { SuggestionStrip, suggestionsOffNotice } from "./SuggestionStrip";
-import { isChatTurnOver } from "./TurnDoneMark";
 
 const NEXT_STEP_SWITCH = SUGGESTION_SWITCHES.next_step;
 // How many of a generated set's suggestions are drawn before "Show more". A fixed set is drawn whole.
@@ -41,33 +32,6 @@ const GENERATED_SET_FOLD = 3;
 // The group of the chrome's workspace settings that holds the suggestion switches.
 const SUGGESTIONS_SETTINGS_GROUP = "suggestions";
 export const SUGGESTIONS_OFF_NOTICE_MS = 8_000;
-
-/** Whether the chat's turn is done, as the done mark reads it. A chat still awaiting its first send (a seeded one,
- *  before its first agent) has no turn to be in, and counts as done until something is sent. */
-export function isTurnDoneForSuggestions(chatId: string): boolean {
-  if (isChatTurnOver(chatId)) return true;
-  const provisional = getProvisionalChat(chatId);
-  return (
-    provisional !== undefined &&
-    provisional.phase === "awaiting_first_send" &&
-    getChatById(chatId) === undefined &&
-    !isLaunchInFlight(chatId) &&
-    getOutgoingMessages(chatId).length === 0
-  );
-}
-
-/** The event id of the reply a set of suggestions may follow: the last assistant message the page holds, when the
- *  page holds the transcript's end and nobody has said anything since. */
-export function lastReplyEventId(chatId: string): string | null {
-  if (hasMoreAfter(chatId)) return null;
-  const events = getEventsForChat(chatId);
-  for (let index = events.length - 1; index >= 0; index--) {
-    const event = events[index];
-    if (event.type === "assistant_message") return event.event_id;
-    if (event.type === "user_message" && !isNonBoundaryUserMessage(event)) return null;
-  }
-  return null;
-}
 
 export function NextStepSuggestions(): m.Component<{ chatId: string }> {
   let currentChatId: string | null = null;

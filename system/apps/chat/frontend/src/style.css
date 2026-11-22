@@ -879,6 +879,62 @@
 }
 
 /*
+ * The pickers an agent's message draws in a new workspace's first conversation (views/StudioPickers.ts): pills
+ * that toggle their label in the composer's draft, filled while the draft holds it.
+ */
+.studio-picker-heading {
+  color: var(--c-text-faint);
+  font-size: var(--font-size-helper);
+  line-height: 1.4;
+}
+
+.studio-picker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.studio-picker-pill:hover:not(:disabled) {
+  background: var(--c-fill-hover);
+}
+
+.studio-picker-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.studio-picker-pill--pressed,
+.studio-picker-pill--pressed:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  background: var(--c-accent-light);
+  color: var(--c-accent);
+}
+
+.studio-picker-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.studio-picker-mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/*
  * The first run's provider page (views/FirstRunProvidersPage.ts): the warm cream ground and brown ink of
  * Imbue Studio's first-run pages, whatever theme the workspace wears, since it continues them.
  */

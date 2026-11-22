@@ -27,6 +27,9 @@ export interface ChatSettings extends Partial<SuggestionSwitches> {
   // Whether a new chat starts with auto-compact on.
   autocompact_default: boolean;
   is_autocompact_notice_shown: boolean;
+  // Whether the one-time hint at the send button, shown on the first pick from a first-run picker, has been shown.
+  // Absent from an older backend's answer, where it reads as not shown.
+  is_picker_send_hint_shown?: boolean;
 }
 
 /** The backend's defaults, so a page that has not loaded yet behaves as a fresh workspace would. */
