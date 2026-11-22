@@ -170,13 +170,13 @@ def test_an_announcement_carries_the_page_the_apps_shortcut_opens(
     announcement_writer.announce(
         _rows(
             tmp_path,
-            registry_row_toml("todo", "http://localhost:8400", default_shortcut=("open", "focus")),
+            registry_row_toml("todo", "http://localhost:8400", default_shortcuts=[("open", "focus")]),
             registry_row_toml(
                 "chat",
                 "http://localhost:8010",
                 launch_paths=[("new", "New Chat", "/new")],
                 launch_methods={"new": "POST"},
-                default_shortcut=("new", "new"),
+                default_shortcuts=[("new", "new")],
             ),
         )
     )
