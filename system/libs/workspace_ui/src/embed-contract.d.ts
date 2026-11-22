@@ -46,7 +46,6 @@ declare module "@minds/embed-contract" {
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
   // Exporting a workspace app as a Mac app (contract v12). Probed like the ones above.
   export const APP_DRAG_STARTED: "minds:app-drag-started";
-  export const APP_DRAG_ENDED: "minds:app-drag-ended";
   export const EXPORT_APP_ACTION: "minds:export-app-action";
   export const EXPORTABLE_APPS: "minds:exportable-apps";
   export const APP_DRAG_HANDED_OFF: "minds:app-drag-handed-off";

@@ -137,6 +137,9 @@ function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuR
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
 /** Set on the layout root while a shortcut is in the hand, so the closed hand holds for the whole gesture. */
 const SHORTCUT_DRAGGING_ATTRIBUTE = "data-shortcut-dragging";
+/** How long an OS drag over the desktop may go without a dragover before the shortcut it carries goes back to its
+ *  cell: past the gap browsers leave between dragovers of a still drag (350 ms, give or take 200). */
+const HANDED_OFF_DRAG_LEAVE_MS = 600;
 
 /** Set on the desktop's root for the length of a press, which is longer than the drag it may
  *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
@@ -268,26 +271,32 @@ export function App(): m.Component<AppAttrs> {
       const gesture = current.getGesture();
       if (gesture !== null && gesture.kind === "shortcut") paintShortcut(current, gesture.app, gesture.launch);
     };
+    // An OS drag over the page fires dragover every few dozen milliseconds even when still. When they stop it has left
+    // the desktop or been cancelled (Escape), which the page is not reliably told: dragleave also fires between the
+    // page's own elements, and a cancel may send nothing at all.
+    let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearLeaveTimer = (): void => {
+      if (leaveTimer !== null) clearTimeout(leaveTimer);
+      leaveTimer = null;
+    };
     const onDragOver = (event: DragEvent): void => {
       if (!current.returnHandedOffShortcutDrag(backdropPoint(event))) return;
       event.preventDefault();
       if (event.dataTransfer !== null) event.dataTransfer.dropEffect = "move";
       root.setAttribute(SHORTCUT_DRAGGING_ATTRIBUTE, "");
       paintHeld();
-    };
-    const onDragLeave = (event: DragEvent): void => {
-      // Leaving one element for another inside the root also fires dragleave; only leaving the root counts.
-      const box = root.getBoundingClientRect();
-      const isInside =
-        event.clientX > box.left && event.clientX < box.right && event.clientY > box.top && event.clientY < box.bottom;
-      if (isInside) return;
-      root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
-      current.leaveHandedOffShortcutDrag();
+      clearLeaveTimer();
+      leaveTimer = setTimeout(() => {
+        leaveTimer = null;
+        root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+        current.leaveHandedOffShortcutDrag();
+      }, HANDED_OFF_DRAG_LEAVE_MS);
     };
     const onDrop = (event: DragEvent): void => {
       const dropped = current.dropHandedOffShortcutDrag(backdropPoint(event));
       if (dropped === null) return;
       event.preventDefault();
+      clearLeaveTimer();
       root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
       paintShortcut(current, dropped.app, dropped.launch);
     };
@@ -298,14 +307,13 @@ export function App(): m.Component<AppAttrs> {
     };
     root.addEventListener("dragenter", onDragOver);
     root.addEventListener("dragover", onDragOver);
-    root.addEventListener("dragleave", onDragLeave);
     root.addEventListener("drop", onDrop);
     root.addEventListener("pointerdown", onPointer, true);
     root.addEventListener("pointermove", onPointer, true);
     return () => {
+      clearLeaveTimer();
       root.removeEventListener("dragenter", onDragOver);
       root.removeEventListener("dragover", onDragOver);
-      root.removeEventListener("dragleave", onDragLeave);
       root.removeEventListener("drop", onDrop);
       root.removeEventListener("pointerdown", onPointer, true);
       root.removeEventListener("pointermove", onPointer, true);
@@ -472,7 +480,7 @@ export function App(): m.Component<AppAttrs> {
     if (element === undefined || element === null) return;
     const gesture = current.getGesture();
     if (gesture !== null && gesture.kind === "shortcut") {
-      applyLiftStyle(element, gesture.lift);
+      applyLiftStyle(element, gesture.lift, gesture.isCarriedByOs);
       return;
     }
     const rect = current.shortcutRect(app, launch);
@@ -588,7 +596,7 @@ export function App(): m.Component<AppAttrs> {
       onCancel: (binding) => {
         root.removeAttribute(WINDOW_DRAGGING_ATTRIBUTE);
         root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
-        current.cancelGesture();
+        current.cancelPointerGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
         if (binding.kind === "shortcut") paintShortcut(current, binding.app, binding.launch);

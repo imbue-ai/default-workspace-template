@@ -2,7 +2,6 @@ import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
-  APP_DRAG_ENDED,
   APP_DRAG_HANDED_OFF,
   APP_DRAG_STARTED,
   DETACHED_WINDOWS,
@@ -94,7 +93,6 @@ const popOutBridge: PopOutBridge = {
 /** The shell's side of exporting an app as a Mac app: every ask goes to the embedding chrome. */
 const appExportBridge: AppExportBridge = {
   beginAppDrag: (app) => sendToEmbedder(APP_DRAG_STARTED, { serviceName: app }),
-  endAppDrag: (app, isCancelled) => sendToEmbedder(APP_DRAG_ENDED, { serviceName: app, isCancelled }),
   runAction: (app, action) => sendToEmbedder(EXPORT_APP_ACTION, { serviceName: app, action }),
 };
 

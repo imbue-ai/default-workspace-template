@@ -50,6 +50,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     isStopped: false,
     isSelected: false,
     lift: null,
+    isCarriedByOs: false,
     isSliding: false,
     isRunOnClick: false,
     onSelect: vi.fn(),
@@ -124,6 +125,12 @@ describe("ShortcutIcon", () => {
     expect(render().hasAttribute("data-lifted")).toBe(false);
   });
 
+  it("does not draw the one the OS carries, whose drag image stands in for it", () => {
+    expect(render({ lift: { x: 40, y: -12 }, isCarriedByOs: true }).style.opacity).toBe("0");
+    unmountViews();
+    expect(render({ lift: { x: 40, y: -12 } }).style.opacity).toBe("");
+  });
+
   it("hands the icon the whole box: the drawing brings its own tile, so nothing paints or pads behind it", () => {
     // An app icon is a 48x48 tile with its own flat background and its own 32 per cent corner
     // (docs/system/app-icons.md), so a surface and a padding here would frame the tile in a
@@ -159,8 +166,9 @@ describe("ShortcutIcon", () => {
 
 describe("applyDropStyle", () => {
   it("settles an icon into the cell it landed in with the lift cleared and the slide off for the frame", () => {
-    const icon = render({ lift: { x: 40, y: -12 }, isSliding: true });
+    const icon = render({ lift: { x: 40, y: -12 }, isCarriedByOs: true, isSliding: true });
     applyDropStyle(icon, { x: 208, y: 128, width: 96, height: 112 });
+    expect(icon.style.opacity).toBe("");
     expect(icon.style.left).toBe("208px");
     expect(icon.style.top).toBe("128px");
     expect(icon.style.transform).toBe("");

@@ -39,6 +39,9 @@ export interface ShortcutIconAttrs {
   /** How far a drag has carried this icon out of its cell, or null when it is resting: the icon in the hand
    *  is drawn in the cell it was lifted from and translated by this, at full strength and above everything. */
   readonly lift: PixelPoint | null;
+  /** Whether the icon in the hand is the OS's drag image of the app's Mac app, which stands in for it: it is not
+   *  drawn, while the room for it is still made. */
+  readonly isCarriedByOs: boolean;
   /** Whether a drag is making room right now: only then does an icon slide between cells, and only where
    *  the platform welcomes motion. Outside a drag a cell changes because the grid was re-fitted -- a desktop
    *  switch, or a resize, which re-fits it on every frame of the drag. */
@@ -58,11 +61,12 @@ export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefi
 
 export const CONNECTING_TOOLTIP = "Connecting to the workspace...";
 
-/** The three properties a lift writes, spelled once for the render and the paint. */
+/** The properties a lift writes, spelled once for the render and the paint. */
 export interface LiftStyle {
   readonly transform: string;
   readonly transition: string;
   readonly zIndex: string;
+  readonly opacity: string;
 }
 
 /** The icon tile over the label: what a shortcut draws inside its cell. The whole thing is what a drag
@@ -116,26 +120,27 @@ export function shortcutTooltip(label: string, isStopped: boolean, isConnecting:
 
 /** What being in the hand comes to, spelled once for the render and for the per-frame paint of the drag:
  *  the icon translated out of its cell and grown, over everything, with nothing eased so it tracks the
- *  pointer exactly. Resting (``null``) clears all three. */
-export function liftStyle(lift: PixelPoint | null): LiftStyle {
-  if (lift === null) return { transform: "", transition: "", zIndex: "" };
+ *  pointer exactly, and not drawn at all while the OS carries it. Resting (``null``) clears them all. */
+export function liftStyle(lift: PixelPoint | null, isCarriedByOs: boolean): LiftStyle {
+  if (lift === null) return { transform: "", transition: "", zIndex: "", opacity: "" };
   return {
     transform: `translate(${lift.x}px, ${lift.y}px) scale(var(--desk-shortcut-lift-scale))`,
     transition: "none",
     zIndex: "var(--z-sticky)",
+    opacity: isCarriedByOs ? "0" : "",
   };
 }
 
 /** Write the lift onto an icon outside any redraw. */
-export function applyLiftStyle(element: HTMLElement, lift: PixelPoint | null): void {
-  Object.assign(element.style, liftStyle(lift));
+export function applyLiftStyle(element: HTMLElement, lift: PixelPoint | null, isCarriedByOs: boolean): void {
+  Object.assign(element.style, liftStyle(lift, isCarriedByOs));
 }
 
 /** Write a dropped icon's landing straight onto it: the cell it landed in, the lift cleared, and the slide
  *  off for this one frame -- the hand left it at that cell, so sliding it over from the cell it was picked up
  *  in would take it backwards. The next render writes the same box and lets the slide back on. */
 export function applyDropStyle(element: HTMLElement, rect: PixelRect): void {
-  Object.assign(element.style, rectStyle(rect), { transform: "", transition: "none", zIndex: "" });
+  Object.assign(element.style, rectStyle(rect), { transform: "", transition: "none", zIndex: "", opacity: "" });
 }
 
 export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
@@ -149,6 +154,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         isAppsLoaded,
         isSelected,
         lift,
+        isCarriedByOs,
         isSliding,
         isRunOnClick,
         isStopped,
@@ -178,7 +184,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
               ? "motion-safe:transition-[left,top] duration-(--desk-shortcut-slide) ease-out "
               : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
-          style: { ...rectStyle(rect), ...liftStyle(lift) },
+          style: { ...rectStyle(rect), ...liftStyle(lift, isCarriedByOs) },
           ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.

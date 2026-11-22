@@ -1195,7 +1195,6 @@ describe("gestures", () => {
     const store = makeStore(() => undefined, {
       appExport: {
         beginAppDrag: (app) => exportCalls.push(["begin", app]),
-        endAppDrag: (app, isCancelled) => exportCalls.push(["end", app, isCancelled]),
         runAction: (app, action) => exportCalls.push(["action", app, action]),
       },
     });
@@ -1204,62 +1203,50 @@ describe("gestures", () => {
     return { store, exportCalls };
   }
 
-  it("a ready app's shortcut drag is announced for export and ended on its release", async () => {
+  it("a ready app's shortcut drag is announced for export, another app's is not", async () => {
     const { store, exportCalls } = await exportingShortcutStore(["docs"]);
     store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
     store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     store.beginShortcutDrag("notes", "new", { x: 130, y: 40 });
     store.endShortcutDrag({ x: 130, y: 40 }, { x: 0, y: 0 });
-    expect(exportCalls).toEqual([
-      ["begin", "docs"],
-      ["end", "docs", false],
-    ]);
+    expect(exportCalls).toEqual([["begin", "docs"]]);
   });
 
-  it("a cancelled export-watched drag tells the chrome so", async () => {
+  it("a drag the chrome handed to the OS stays held, undrawn, and the pointer's own moves and release leave it", async () => {
     const { store, exportCalls } = await exportingShortcutStore(["docs"]);
     store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
-    store.cancelGesture();
-    expect(exportCalls).toEqual([
-      ["begin", "docs"],
-      ["end", "docs", true],
-    ]);
-  });
-
-  it("a drag the chrome handed to the OS puts the shortcut back and saves nothing, whatever the release says", async () => {
-    const { store, exportCalls } = await exportingShortcutStore(["docs"]);
-    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
-    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     store.handOffShortcutDrag("docs");
-    expect(store.getGesture()).toBeNull();
-    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
-    // The release the shell sees later (or the hover after it) finds no gesture.
+    expect(store.getGesture()).toMatchObject({ kind: "shortcut", app: "docs", isCarriedByOs: true });
+    // What reaches the page from the pointer after the OS took it is not the drag's.
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    store.cancelPointerGesture();
+    expect(store.getGesture()).toMatchObject({ kind: "shortcut", app: "docs", targetCell: { column: 0, row: 0 } });
     await settle();
     expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
     expect(exportCalls).toEqual([["begin", "docs"]]);
   });
 
-  it("a handed-off drag brought back over the desktop carries the shortcut and lands where it drops", async () => {
+  it("the OS drag of a handed-off shortcut makes room over the desktop and lands it where it drops", async () => {
     const { store, exportCalls } = await exportingShortcutStore(["docs"]);
     store.beginShortcutDrag("docs", "new", { x: 34, y: 44 });
-    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    store.updateShortcutDrag({ x: 36, y: 46 }, { x: 6, y: 6 });
     store.handOffShortcutDrag("docs");
     expect(store.returnHandedOffShortcutDrag({ x: 230, y: 260 })).toBe(true);
-    // Lifted again from where it was pressed, not from where the drag first crossed the threshold.
+    // Lifted from where it was pressed, not from where the drag first crossed the threshold.
     expect(store.getGesture()).toMatchObject({
       kind: "shortcut",
       app: "docs",
       targetCell: { column: 2, row: 2 },
       lift: { x: 200, y: 220 },
-      isExportWatched: false,
+      isCarriedByOs: true,
     });
+    expect(cellsByApp(store)).toEqual({ docs: "2,2", notes: "1,0" });
     expect(store.dropHandedOffShortcutDrag({ x: 230, y: 260 })).toEqual({ app: "docs", launch: "new" });
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
     expect(store.getGesture()).toBeNull();
     expect(store.returnHandedOffShortcutDrag({ x: 230, y: 260 })).toBe(false);
-    // The chrome already handed this drag off; the return is not announced to it again.
     expect(exportCalls).toEqual([["begin", "docs"]]);
   });
 
