@@ -7,6 +7,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -15,8 +16,7 @@ from app_install.derived import is_python_app
 from app_install.errors import DevRepositoryError
 from app_install.errors import PublishedNameTakenError
 from app_install.errors import PublishError
-from app_install.git import COMMITTER_EMAIL
-from app_install.git import COMMITTER_NAME
+from app_install.git import installer_identity_environment
 from app_install.interfaces import CreatedRepository
 from app_install.interfaces import SecretScan
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -64,10 +64,14 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
 
     def _run(self, argv: Sequence[str]) -> str | None:
         """The failure's text, or None when the command succeeded."""
+        return self._run_with_environment(argv, dict(os.environ))
+
+    def _run_with_environment(self, argv: Sequence[str], environment: Mapping[str, str]) -> str | None:
         try:
             completed = subprocess.run(
                 list(argv),
                 cwd=self.repo_root,
+                env=dict(environment),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -172,21 +176,11 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
         staged = self._run(["git", "add", "--all", "--", *relative_paths])
         if staged is not None:
             return staged
-        committed = self._run(
-            [
-                "git",
-                "-c",
-                f"user.name={COMMITTER_NAME}",
-                "-c",
-                f"user.email={COMMITTER_EMAIL}",
-                "commit",
-                "--quiet",
-                "--only",
-                "-m",
-                message,
-                "--",
-                *relative_paths,
-            ]
+        # With hooks on, unlike the installer's other git commands: this commit is on the primary checkout, where
+        # GitHub sync's post-commit hook is what pushes it.
+        committed = self._run_with_environment(
+            ["git", "commit", "--quiet", "--only", "-m", message, "--", *relative_paths],
+            installer_identity_environment(),
         )
         if committed is not None and any(marker in committed for marker in _NOTHING_TO_COMMIT_MARKERS):
             return None

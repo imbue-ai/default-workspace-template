@@ -37,14 +37,21 @@ _ACCESS_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 )
 
 
-def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str, str]:
+def installer_identity_environment() -> dict[str, str]:
+    """The process environment with the installer named as git's author and committer. git reads these
+    variables ahead of any configuration, and an agent's shell exports its own identity in them."""
     environment = dict(os.environ)
-    # Never wait on a prompt: the installer asks nothing.
-    environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["GIT_AUTHOR_NAME"] = COMMITTER_NAME
     environment["GIT_AUTHOR_EMAIL"] = COMMITTER_EMAIL
     environment["GIT_COMMITTER_NAME"] = COMMITTER_NAME
     environment["GIT_COMMITTER_EMAIL"] = COMMITTER_EMAIL
+    return environment
+
+
+def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str, str]:
+    environment = installer_identity_environment()
+    # Never wait on a prompt: the installer asks nothing.
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     if is_gateway_used:
         # A workspace with no gateway has only its global configuration to read the repository with.
         environment = git_environment_through_gateway(environment) or environment

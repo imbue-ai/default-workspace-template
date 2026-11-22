@@ -582,11 +582,18 @@ def test_an_app_that_is_not_registered_cannot_be_uninstalled(tmp_path: Path) -> 
         uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
 
 
-def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(tmp_path: Path) -> None:
+def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = make_workspace_repository(tmp_path / "workspace")
     package = write_user_app(workspace, "notes")
     add_app(workspace, package, None, never_bound)
     commit_all(workspace, "a workspace with notes")
+    # An agent's shell exports its own identity, which git reads ahead of any configuration.
+    for variable in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(variable, "an agent")
+    for variable in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(variable, "agent@workspace.invalid")
     # Someone else's uncommitted work, which the removal must not sweep into its commit.
     write_workspace_file(workspace, "README.md", "the workspace, edited\n")
 
