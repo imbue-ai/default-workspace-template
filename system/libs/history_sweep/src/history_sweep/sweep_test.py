@@ -285,6 +285,31 @@ def test_unreadable_archive_manifest_refuses_the_whole_sweep(roots: SweepRoots) 
         plan_sweep(roots, now=_NOW)
 
 
+def test_archive_whose_manifest_does_not_parse_is_left_with_its_sessions(
+    roots: SweepRoots,
+) -> None:
+    shared_session = str(uuid4())
+    shared_copies = write_session(roots, shared_session)
+    unparseable = write_archive(
+        roots, _new_agent_id(), [shared_session], preserved_at=_NOW - timedelta(days=90)
+    )
+    (unparseable / PRESERVATION_MANIFEST_FILENAME).write_text("{truncated")
+    own_session = str(uuid4())
+    own_copies = write_session(roots, own_session)
+    write_archive(
+        roots,
+        _new_agent_id(),
+        [shared_session, own_session],
+        preserved_at=_NOW - timedelta(days=1),
+    )
+
+    planned = [removal.path for removal in plan_sweep(roots, now=_NOW)]
+
+    assert sorted(planned) == sorted(own_copies)
+    assert unparseable not in planned
+    assert not set(shared_copies) & set(planned)
+
+
 def test_nothing_to_sweep_on_an_empty_host(roots: SweepRoots) -> None:
     assert plan_sweep(roots, now=_NOW) == ()
 

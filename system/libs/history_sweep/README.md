@@ -30,8 +30,10 @@ successor of its handoff in progress):
 
 It never removes a session that a present or listed agent's history also names, and
 removes nothing at all when a chat record or an archive's manifest cannot be read (it
-cannot tell what is listed, or what the archive holds). Archived hand-off segments
-of a listed chat are present agents, so they are never touched.
+cannot tell what is listed, or what the archive holds). An archive whose manifest reads
+but does not parse is left alone, and the sessions its history names are kept, while
+the rest of the sweep goes ahead. Archived hand-off segments of a listed chat are
+present agents, so they are never touched.
 
 Chats that are still listed keep their history: the template also sets claude's
 `cleanupPeriodDays` to 3650 (`.mngr/settings.toml`), since claude otherwise deletes

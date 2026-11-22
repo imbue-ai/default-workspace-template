@@ -12,7 +12,8 @@ record:
   non-empty raw transcript (the same lines) whose final flush and copy mngr did not report failing;
 - after the retention window, the archive itself and any session files still left.
 
-A session id that a present or listed agent's history also names is never touched.
+A session id that a present or listed agent's history also names is never touched, nor one
+named by an archive mngr cannot read the manifest of (whose agent the sweep cannot tell).
 """
 
 import json
@@ -32,6 +33,7 @@ from imbue.mngr.api.preservation import (
     PreservedAgentArchive,
     TranscriptFlushOutcome,
     discover_preserved_agent_archives,
+    get_preserved_agents_root_dir,
 )
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
@@ -93,13 +95,18 @@ def plan_sweep(
         for archive in archives
         if str(archive.agent_id) not in protected_agent_ids
     ]
-    protected_history_files = [
-        agent_dir / SESSION_ID_HISTORY_FILENAME for agent_dir in present_agent_dirs
-    ] + [
-        archive.path / SESSION_ID_HISTORY_FILENAME
-        for archive in archives
-        if str(archive.agent_id) in protected_agent_ids
-    ]
+    protected_history_files = (
+        [agent_dir / SESSION_ID_HISTORY_FILENAME for agent_dir in present_agent_dirs]
+        + [
+            archive.path / SESSION_ID_HISTORY_FILENAME
+            for archive in archives
+            if str(archive.agent_id) in protected_agent_ids
+        ]
+        + [
+            archive_dir / SESSION_ID_HISTORY_FILENAME
+            for archive_dir in _undiscovered_archive_dirs(roots.host_dir, archives)
+        ]
+    )
     protected_session_ids: set[str] = set()
     for history_file in protected_history_files:
         protected_session_ids.update(read_session_ids(history_file))
@@ -183,6 +190,27 @@ def _present_agent_dirs(host_dir: Path) -> tuple[Path, ...]:
     if not agents_root.is_dir():
         return ()
     return tuple(path for path in agents_root.iterdir() if path.is_dir())
+
+
+def _undiscovered_archive_dirs(
+    host_dir: Path, archives: list[PreservedAgentArchive]
+) -> tuple[Path, ...]:
+    """Archive folders mngr's discovery skipped: a manifest that does not parse, or a name it cannot read.
+
+    The sweep cannot tell whose they are, so it leaves them alone and keeps the sessions they name.
+    """
+    root = get_preserved_agents_root_dir(host_dir)
+    discovered = {archive.path for archive in archives}
+    try:
+        return tuple(
+            path
+            for path in sorted(root.iterdir())
+            if path.is_dir() and path not in discovered
+        )
+    except FileNotFoundError:
+        return ()
+    except OSError as e:
+        raise SweepRefusedError(f"cannot read the preserved archives: {e}") from e
 
 
 def _listed_agent_ids(chats_root: Path) -> set[str]:
