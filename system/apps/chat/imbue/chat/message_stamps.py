@@ -26,7 +26,7 @@ STAMPS_FILENAME: Final[str] = "last_messaged.json"
 REPLY_STAMPS_FILENAME: Final[str] = "last_replied.json"
 # The on-disk key predates the chat-versus-agent split: its entries are keyed by chat id, which
 # is the first agent's id, so the historical name still reads every existing file.
-STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
+_STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
 REPLY_STAMPS_KEY: Final[str] = "last_replied_at_by_chat_id"
 
 
@@ -34,7 +34,7 @@ class MessageStampStore(MutableModel):
     """Epoch seconds of one moment per chat, in one small JSON file; ``None`` keeps them in memory only."""
 
     path: Path | None = Field(frozen=True, description="The stamps file, or None for memory only (tests)")
-    key: str = Field(default=STAMPS_KEY, frozen=True, description="The file's top-level key the stamps live under")
+    key: str = Field(default=_STAMPS_KEY, frozen=True, description="The file's top-level key the stamps live under")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _stamps: dict[ChatId, float] = PrivateAttr(default_factory=dict)
 
