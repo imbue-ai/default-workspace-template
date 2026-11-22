@@ -94,8 +94,9 @@ interface RenameState {
 }
 
 let rename: RenameState | null = null;
-// The root's state as the list or header last drew it, for a delete tried again from a notice: by then the chat on
-// screen may be another than the one shown when the delete was chosen.
+// The root's state as the list or header last drew it: the names a typed name is checked against, and what a field
+// reopened or a delete tried again after the chat app answers works from, since by then the rows and the chat on
+// screen may differ from when the rename or delete was chosen.
 let latestMenuContext: RowMenuContext | null = null;
 
 /** Note the root's state as it is drawn now; the list and the phone header call it on every draw. */
