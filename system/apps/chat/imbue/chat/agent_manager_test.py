@@ -85,12 +85,14 @@ from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import ALLOW_SETTINGS_NARROWING_ENV
 from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import UNDELIVERED_HELD_SEND_DETAIL
 from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -114,6 +116,7 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.message_display import FIRST_RUN_KICKOFF_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.model import ModelIdentity
@@ -311,6 +314,13 @@ def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
 def test_get_provisional_chats_initially_empty(agent_manager: AgentManager) -> None:
     protos = agent_manager.get_provisional_chats()
     assert protos == []
+
+
+def test_the_shown_chat_ids_are_the_listed_chats_then_the_provisional_ones(agent_manager: AgentManager) -> None:
+    seed_agent_state(agent_manager, "agent-listed-1", name="Chat-1")
+    seed_failed_chat(agent_manager, ChatId("agent-provisional-2"), "Chat-2")
+
+    assert agent_manager.get_shown_chat_ids() == [ChatId("agent-listed-1"), ChatId("agent-provisional-2")]
 
 
 @pytest.mark.parametrize("chat_ref", ["", "   "])
@@ -950,6 +960,35 @@ def test_a_send_to_an_unseeded_or_unknown_chat_is_delivered_as_given(
         assert delivered == ["hello"]
     finally:
         manager.stop()
+
+
+def test_a_first_run_chat_launched_with_no_words_is_started_with_the_kickoff_note_and_owes_no_seed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-run workspace's owner connects a provider and has typed nothing: the agent is started with a note
+    of the chat app's own (the welcome, what they picked, what to open with), so it speaks first, and since the
+    note carries the seed no later send owes it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat(
+            "Main", FIRST_RUN_WELCOME, first_run_context="I want to use Studio for: Music.", is_first_run=True
+        )
+        manager.create_chat("", chat_id=seeded.chat_id)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
+        record = store.read(ChatId(seeded.chat_id))
+    finally:
+        manager.stop()
+
+    (recorded,) = argv_log.read_text().splitlines()
+    assert f"<{FIRST_RUN_KICKOFF_TAG}>" in recorded and recorded.rstrip().endswith(f"</{FIRST_RUN_KICKOFF_TAG}>")
+    assert "I want to use Studio for: Music." in recorded
+    assert FIRST_RUN_WELCOME[0].text in recorded
+    assert record is not None and record.is_seed_pending is False
 
 
 def test_a_waited_launch_of_a_seeded_chat_reports_the_member_agent_it_created(
@@ -2600,10 +2639,12 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
 
 
 def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_one_is_not(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The message a create leaves out is handed over under the id the sender's annotation carries, and what a
-    landed message does next (a room's mentions) runs only for one that landed."""
+    landed message does next (a room's mentions) runs only for one that landed. A refused one is told to the pages
+    instead, so the one that sent it can hand it back to its composer."""
+    q = broadcaster.register()
     sent: list[tuple[str, str, str]] = []
     told: list[tuple[ChatId, str]] = []
 
@@ -2637,6 +2678,20 @@ def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_o
 
     assert sent == [("test-id", "@agent hello", "m-test-id"), ("test-id-2", "refused", "m-test-id-2")]
     assert told == [(ChatId("test-id"), "m-test-id")]
+    broadcasts: list[dict[str, Any]] = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        broadcasts.append(json.loads(raw))
+    assert [message for message in broadcasts if message["type"] == "held_send_failed"] == [
+        {
+            "type": "held_send_failed",
+            "chat_id": "test-id-2",
+            "message_id": "m-test-id-2",
+            "detail": UNDELIVERED_HELD_SEND_DETAIL,
+            "kind": "not_ready",
+        }
+    ]
 
 
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(

@@ -49,6 +49,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
+  dropOutgoingByMessageId,
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
@@ -56,15 +57,18 @@ import {
   describeRequestError,
   describeRequestErrorKind,
   isUnansweredRequest,
+  sendFailureKindOf,
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
-  areAccountsLoaded,
   isAccountSignedOut,
+  isFirstRunProviderStepPending,
   loadAccounts,
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { isAwaitingProvider, openFirstSendChooser } from "../models/firstSendChooser";
+import { framingChatRoot } from "../embedApi";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -74,6 +78,7 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  addHeldSendFailedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -100,7 +105,7 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
-import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { isHandledByInputMethod, keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { QueryObserver, skipToken } from "@tanstack/query-core";
 import {
@@ -315,6 +320,28 @@ export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft):
   restoreToComposer(chatId, taken.text, taken.attachments);
   if (taken.mayContainDictatedSpeech) markDictatedSpeech(chatId);
 }
+
+// The sends this page posted that the chat app held for an agent still coming up, by send-time id: the draft each
+// was sent from, for handing back if the chat app reports it never reached the agent. Page memory, like the
+// "Sending…" bubble it stands behind.
+const heldSendDrafts = new Map<string, { chatId: string; draft: TakenComposerDraft }>();
+
+/** Note a send the chat app answered "held", so a later report that it never landed can hand it back. */
+function rememberHeldSend(chatId: string, messageId: string, draft: TakenComposerDraft): void {
+  heldSendDrafts.set(messageId, { chatId, draft });
+}
+
+// Only the page that sent a held send holds its draft, so only that page answers.
+addHeldSendFailedListener((chatId, messageId, detail, kind) => {
+  const held = heldSendDrafts.get(messageId);
+  if (held === undefined || held.chatId !== chatId) {
+    return;
+  }
+  heldSendDrafts.delete(messageId);
+  dropOutgoingByMessageId(chatId, [messageId]);
+  restoreComposerDraft(chatId, held.draft);
+  raiseFailureNotice(chatId, { title: "Couldn't send your message", detail, kind: sendFailureKindOf(kind) });
+});
 
 /**
  * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
@@ -1499,7 +1526,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              if (firstStatus === "held") rememberHeldSend(chatId, messageId, prepared);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1527,6 +1556,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
+          if (status === "held") rememberHeldSend(chatId, messageId, prepared);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
@@ -1752,6 +1782,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (isHandledByInputMethod(event)) return;
         // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
         if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
           event.preventDefault();
@@ -2255,36 +2286,32 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /**
-       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
-       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
-       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
-       * refuses lands on the page as a failed create, with its "Try again".
-       */
+      /** The chooser for a chat with no provider to start on (``models/firstSendChooser.ts``): the chat root's, when
+       *  one frames this page, else this page's own. */
       function openProviderChooserForFirstSend(awaitingChatId: string): void {
-        openProviderChooser({
-          onSignedIn: (accountId) => {
-            const awaiting = getProvisionalChat(awaitingChatId);
-            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
-            if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
-              console.error(
-                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
-              );
-            });
-          },
-          onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId),
-        });
+        const root = framingChatRoot();
+        if (root !== null) {
+          root.chooseProviderForFirstSend();
+          return;
+        }
+        openFirstSendChooser(
+          () => awaitingChatId,
+          (chatId) => void launchAwaitingChatAsRoom(chatId),
+        );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
-       *  notice appears, and its button opens it again once dismissed. */
+      /** In place of the composer while nothing is signed in that a new chat could start on; its button opens the
+       *  chooser again once dismissed. A page no chat root frames opens it as the notice appears; under a root, the
+       *  root has opened it already, over the whole list. On a first-run workspace the shell's cover is asking the
+       *  same thing over the whole desktop, so nothing opens by itself. */
       function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
           () => openProviderChooserForFirstSend(awaitingChatId),
-          () => openProviderChooserForFirstSend(awaitingChatId),
+          framingChatRoot() === null && !isFirstRunProviderStepPending()
+            ? () => openProviderChooserForFirstSend(awaitingChatId)
+            : undefined,
         );
       }
 
@@ -2307,11 +2334,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
       // Until the account list has loaded the composer shows as usual: most pages have an account.
-      const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
-      const isBlockedByNoProvider =
-        awaitingFirstSend?.phase === "awaiting_first_send" &&
-        areAccountsLoaded() &&
-        accountForFirstSend(awaitingFirstSend.account_id) === null;
+      const isBlockedByNoProvider = chatId !== null && isAwaitingProvider(chatId);
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
       isComposerDisabledNow = isComposerDisabled;
       const canSendNow = canSend && !isComposerDisabled;

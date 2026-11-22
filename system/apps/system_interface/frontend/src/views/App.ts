@@ -46,7 +46,9 @@ import { shortcutKey } from "../model/records";
 import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
 import { needsYou, workingOn } from "../model/ChatsActivity";
 import { leftBehindDesktops, ownerEntryOf } from "../model/Ownership";
+import { firstRunProvidersUrl } from "../model/firstRunCover";
 import { getOwnIdentity, getOwnParticipant } from "../model/Presence";
+import { isPreviewShell } from "../model/PreviewShell";
 import { getRoster, rosterEntry } from "../model/Roster";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -77,6 +79,7 @@ import { findShortcut } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
+import { firstRunCoverView } from "./FirstRunCover";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
@@ -315,10 +318,10 @@ export function App(): m.Component<AppAttrs> {
     if (event.key !== "Escape") return;
     // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
     // tear-out drops the desktop window the chrome was dragging.
-    const gesture = store?.getGesture() ?? null;
-    if (store !== null && gesture !== null && gesture.kind === "move") {
+    const movingWindowId = store?.movingWindowId() ?? null;
+    if (store !== null && movingWindowId !== null) {
       store.cancelGesture();
-      paintWindow(store, gesture.windowId);
+      paintWindow(store, movingWindowId);
       m.redraw();
       return;
     }
@@ -1148,6 +1151,12 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** Whether the viewer is the workspace's owner, whose alone the gauge's settings are (the warnings notify them). */
+  /** The cover over a first-run workspace's desktop, for its owner, while the chat app says the page is owed. */
+  function firstRunCover(): m.Children {
+    const url = firstRunProvidersUrl();
+    return url === null || !isViewerOwner() || isPreviewShell() ? null : firstRunCoverView(url);
+  }
+
   function isViewerOwner(): boolean {
     const identity = getOwnIdentity();
     return identity === null || identity.owner;
@@ -1367,8 +1376,7 @@ export function App(): m.Component<AppAttrs> {
       // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
       // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
       // painted once more when the gesture is gone: shown again, its page's torn-out mark lifted.
-      const gesture = store?.getGesture() ?? null;
-      const movingWindowId = gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+      const movingWindowId = store?.movingWindowId() ?? null;
       const windowToPaint = movingWindowId ?? draggedWindowId;
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
@@ -1392,6 +1400,7 @@ export function App(): m.Component<AppAttrs> {
       uninstallContextMenu?.();
       detachGestures?.();
       resizeObserver?.disconnect();
+      pages?.stop();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
       trayCard.dispose();
       stopCardRefresh();
@@ -1646,6 +1655,7 @@ export function App(): m.Component<AppAttrs> {
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),
+          firstRunCover(),
           // Viewing somebody else's desktop: their colour all the way round, the taskbar included (the
           // multiplayer spec, section 8.3); it runs into the chip at the bar's corner.
           viewing === null || viewed === null

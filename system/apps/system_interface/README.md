@@ -242,13 +242,21 @@ through `relay.ts`). A solo page hands on its apps' messages but never the
 chrome's, which the main window's page already relays. A `path` handler has the
 message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
-route's `show` below, in-process. A message some app did not take becomes a
-notice carrying that app's reason, and a page shown while the client has only
+route's `show` below, in-process; when the handler sets `reload_when_raised`
+and the show raised a window already at that page, the shell then refreshes
+that window. A message some app did not take becomes a notice carrying that
+app's reason, and a page shown while the client has only
 pop-outs open becomes a notice to reopen the main window. The shell's page
 announces `reportsChatOnScreen` to the chrome, promising the
 `minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
-a window on screen, which the relay forwards up with the other `minds:`
-messages. The shell's page
+a window on screen, and `reportsProviderChooserOnScreen`, promising the
+`minds:provider-chooser-on-screen` the chat root sends once its provider
+chooser is drawn there (and that a `minds:focus-chat` with no `chatId` brings
+the chat root up, so the chooser can open on a workspace with nothing signed
+in before any chat exists), both of which the relay forwards up with the
+other `minds:` messages. The second is `true` only when the vendored embed
+contract is v16 or later, since an older one drops a `minds:focus-chat` with
+no `chatId` before the shell sees it. The shell's page
 also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
 to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
 into the workspace) or a

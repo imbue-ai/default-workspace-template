@@ -25,6 +25,11 @@ declare module "@minds/embed-contract" {
   export const WORKSPACE_READY: "minds:workspace-ready";
   // The chat-on-screen report (contract v15). Probed like the ones above.
   export const CHAT_ON_SCREEN: "minds:chat-on-screen";
+  // The provider-chooser-on-screen report (contract v16). Probed like the ones above.
+  export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen";
+  // The first-run provider step report and the chrome's cover time for its end (contract v17). Probed like the ones above.
+  export const FIRST_RUN_PROVIDER_STEP: "minds:first-run-provider-step";
+  export const FIRST_RUN_EXIT_COVER_MS: number;
   // The pull-out window set (contract v6). Probed like the ones above.
   export const POP_OUT_WINDOW: "minds:pop-out-window";
   export const WINDOW_DRAG_STARTED: "minds:window-drag-started";

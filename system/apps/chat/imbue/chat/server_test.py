@@ -81,8 +81,11 @@ from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -4028,6 +4031,73 @@ def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_thr
     assert client.post(f"/api/chats/{chat_id}/destroy").status_code == 404
 
 
+def test_a_first_run_seed_opens_main_on_the_welcome_and_carries_the_users_words_to_the_first_send(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post(
+        "/api/chats/seed",
+        json={"title": "Welcome", "turns": [], "is_first_run": True, "context": "I want to use Studio for: Writing."},
+    )
+
+    assert response.status_code == 201
+    chat_id = response.get_json()["chat_id"]
+    events = client.get(f"/api/chats/{chat_id}/events").get_json()["events"]
+    assert [event["text"] for event in events] == [turn.text for turn in FIRST_RUN_WELCOME]
+    launch = seed_context_message(tmp_path / chat_id, "Build an app with your data")
+    assert "I want to use Studio for: Writing." in launch
+    assert launch.endswith("\nBuild an app with your data")
+    assert "I want to use Studio for: Writing." not in json.dumps(events)
+
+
+def test_a_first_run_seed_owes_the_provider_page_until_the_owner_leaves_it(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is True
+
+    assert client.post("/api/first-run/provider-step/done").status_code == 200
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+    # Finished for good: a manager built over the same files, as after a restart, still reads it finished.
+    assert (
+        AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path).is_first_run_provider_step_pending()
+        is False
+    )
+
+
+def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_same_chat(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    first = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True, "context": ""})
+
+    again = client.post(
+        "/api/chats/seed", json={"turns": [], "is_first_run": True, "context": "I want to use Studio for: Film."}
+    )
+
+    assert first.status_code == 201 and again.status_code == 201
+    chat_id = first.get_json()["chat_id"]
+    assert again.get_json()["chat_id"] == chat_id
+    assert "I want to use Studio for: Film." in first_run_kickoff_message(tmp_path / chat_id)
+    assert len(agent_manager.get_provisional_chats()) == 1
+
+
+def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    client.post("/api/chats/seed", json=_seed_body())
+
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400
@@ -4589,6 +4659,24 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     assert served.data == b"console.log('chat');"
     assert client.get("/assets/missing.js").status_code == 404
     assert client.get("/assets/../chat.html").status_code == 404
+
+
+def test_caches_an_asset_named_from_its_content_for_good_and_revalidates_the_rest(tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "assets" / "chat-D4x_9-Qa.js").write_text("console.log('chat');")
+    (static / "assets" / "chat.js").write_text("console.log('chat');")
+    state = build_test_state()
+    state.static_directory = static
+    client = create_application(state).test_client()
+
+    hashed = client.get("/assets/chat-D4x_9-Qa.js")
+    unhashed = client.get("/assets/chat.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
 
 
 def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:

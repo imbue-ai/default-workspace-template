@@ -34,8 +34,10 @@ from imbue.chat.accounts import NoAccountsError
 from imbue.chat.accounts import UnknownAccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
+from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import index_path
+from imbue.chat.accounts import read_index
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -79,6 +81,7 @@ from imbue.chat.chat_handoffs import DEFAULT_PROMPT_TEMPLATE_PATH
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
@@ -104,10 +107,13 @@ from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
@@ -120,6 +126,9 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
 from imbue.chat.compaction_status import shown_compaction_cause
 from imbue.chat.compaction_status import write_compaction_request
+from imbue.chat.first_run import finish_provider_step
+from imbue.chat.first_run import is_provider_step_pending
+from imbue.chat.first_run import mark_provider_step_pending
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
@@ -3374,7 +3383,7 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str, kind: ChatKind = ChatKind.AGENT) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id``, or as a room (spec 5.10, and spec 6 for a rebind).
@@ -3628,6 +3637,7 @@ class AgentManager:
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             apply_launch_fast_mode=self.apply_launch_fast_mode,
             drain_to_composer=capabilities.drain_to_composer,
@@ -3659,6 +3669,7 @@ class AgentManager:
             resolve_account=resolve_account,
             account_dir=account_dir,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             stop_agent=self.stop_agent_process,
@@ -3681,6 +3692,18 @@ class AgentManager:
         if capabilities is None:
             raise HandoffError("This chat app cannot move a chat between agents or accounts: switches are not wired")
         return capabilities
+
+    def _held_send_delivery(self, capabilities: HandoffCapabilities) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=capabilities.deliver,
+            sleep=self._pause,
+            is_stopping=self._shutdown_event.is_set,
+            report_undelivered=self._report_undelivered_held_send,
+        )
+
+    def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
+        self._broadcaster.broadcast_held_send_failed(chat_id, message_id, detail, kind)
 
     def _pause(self, seconds: float) -> None:
         """A wait paced by the shutdown event, so a stop interrupts a handoff's summary wait at once."""
@@ -4617,6 +4640,12 @@ class AgentManager:
         with self._lock:
             return list(self._provisional_chats.values())
 
+    def get_shown_chat_ids(self) -> list[ChatId]:
+        """The id of every chat the pages are shown: the listed chats, then the provisional ones not listed yet."""
+        with self._lock:
+            listed = [chat.chat_id for _agent, chat in self._listed_chats_locked()]
+            return [*listed, *(chat_id for chat_id in self._provisional_chats if chat_id not in listed)]
+
     def get_provisional_chats_as_shown(self) -> list[ProvisionalChatAsShown]:
         """``get_provisional_chats`` as the pages are sent them, for a client catching up."""
         return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
@@ -4667,7 +4696,62 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
+    def is_first_run_provider_step_pending(self) -> bool:
+        """Whether the workspace still owes its owner the first run's "pick your AI" page (``first_run.py``)."""
+        return is_provider_step_pending(self._chat_files_root)
+
+    def finish_first_run_provider_step(self) -> None:
+        """The owner left the first run's provider page: it is never shown again, and every page reads that."""
+        finish_provider_step(self._chat_files_root)
+        self._broadcaster.broadcast_accounts_updated()
+        self._start_first_run_main_chat()
+
+    def _start_first_run_main_chat(self) -> None:
+        """Start the main chat's first agent as the owner leaves the provider page with an account connected, so
+        the agent is up and has spoken by the time they read the chat. Nothing to start (they skipped, or the chat
+        is already running or gone) is not an error, and a launch that is refused leaves the chat awaiting its
+        first send as before."""
+        main_chat_id = self._main_chat.read()
+        if main_chat_id is None:
+            return
+        provisional = self.get_provisional_chat(str(main_chat_id))
+        if provisional is None or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND:
+            return
+        if not is_first_run_seed(self._chat_files_root / main_chat_id):
+            return
+        account = choose_default_account(read_index())
+        if account is None:
+            return
+        try:
+            self.create_chat("", chat_id=str(main_chat_id), account_id=account.id)
+        except (AgentCreationError, AccountError, OSError, ValueError) as e:
+            _loguru_logger.warning("Did not start the first-run main chat {}: {}", main_chat_id, e)
+
+    def update_first_run_context(self, first_run_context: str) -> CreatedChat | None:
+        """Take what the user told Imbue Studio's first run again, for a first-run main chat nobody has sent to
+        yet: the app seeds the chat as the workspace finishes building and hands the answer over once more as the
+        user enters, since they may have answered in between. Answers the chat, or None when there is no such
+        chat to update (no first-run seed, or its first agent already has the note)."""
+        main_chat_id = self._main_chat.read()
+        if main_chat_id is None:
+            return None
+        chat_dir = self._chat_files_root / main_chat_id
+        with self._lock:
+            provisional = self._provisional_chats.get(main_chat_id)
+            if (
+                provisional is None
+                or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND
+                or not is_first_run_seed(chat_dir)
+            ):
+                return None
+            write_first_run_context(chat_dir, first_run_context)
+        return CreatedChat(
+            chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
+        )
+
+    def seed_chat(
+        self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "", is_first_run: bool = False
+    ) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
@@ -4684,13 +4768,24 @@ class AgentManager:
         no usable characters raises ``AgentCreationError`` and one already taken raises
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
         empty title mints the first free "Chat N".
+
+        ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
+        seed and is never shown. ``is_first_run`` owes the owner the first run's provider page, marked before the
+        chat is published so the first page to load already knows.
         """
         explicit_title = explicit_chat_name(title)
+        if is_first_run:
+            mark_provider_step_pending(self._chat_files_root)
         with self._lock:
             provisional = self._seed_chat_locked(
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
             )
+            if is_first_run:
+                write_first_run_context(self._chat_files_root / provisional.chat_id, first_run_context)
         self._publish_seeded_chat(provisional)
+        if is_first_run:
+            # A page that read the accounts before this seed does not know the provider page is owed.
+            self._broadcaster.broadcast_accounts_updated()
         return CreatedChat(
             chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
         )
@@ -5055,6 +5150,14 @@ class AgentManager:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
 
+            # A first-run chat launched with no words (its owner connected a provider and has typed nothing
+            # yet) is started with a note of its own, so its agent speaks first; the note carries the seed.
+            is_first_run_kickoff = (
+                seed_record is not None
+                and not message
+                and harness is not HarnessType.ROOM
+                and is_first_run_seed(self._chat_files_root / launched_chat_id)
+            )
             # A seeded chat's id is its seed's; its first agent is a member of its own, like a
             # handoff's successor, with a fresh id and the membership labels. It goes on the
             # record before the provisional record changes phase, so a record that cannot be
@@ -5063,7 +5166,10 @@ class AgentManager:
                 None
                 if seed_record is None
                 else self._name_seeded_member_locked(
-                    seed_record, account, harness, is_seed_carried_by_first_send=not message
+                    seed_record,
+                    account,
+                    harness,
+                    is_seed_carried_by_first_send=not message and not is_first_run_kickoff,
                 )
             )
             provisional = ProvisionalChat(
@@ -5111,11 +5217,12 @@ class AgentManager:
         # sign-in's) leaves the conversation for the first send to carry. A room's words ride bare:
         # a room has no agent to need the context, and its page shows the seeded conversation as the
         # chat's earlier segment already (the multiplayer spec, section 7.3).
-        launch_message = (
-            message
-            if seed_record is None or not message or harness is HarnessType.ROOM
-            else seed_context_message(self._chat_files_root / launched_chat_id, message)
-        )
+        if is_first_run_kickoff:
+            launch_message = first_run_kickoff_message(self._chat_files_root / launched_chat_id)
+        elif seed_record is None or not message or harness is HarnessType.ROOM:
+            launch_message = message
+        else:
+            launch_message = seed_context_message(self._chat_files_root / launched_chat_id, message)
 
         first_message = (
             FirstMessage(text=launch_message, message_id=message_id or uuid4().hex, on_delivered=on_message_delivered)
@@ -5586,7 +5693,7 @@ class AgentManager:
             self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
-                capabilities.deliver,
+                self._held_send_delivery(capabilities),
                 agent_info,
                 HeldSend(
                     message_id=first_message.message_id,
@@ -5599,7 +5706,7 @@ class AgentManager:
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can

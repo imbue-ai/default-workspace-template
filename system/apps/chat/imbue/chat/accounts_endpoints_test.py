@@ -94,7 +94,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         response = client.get("/api/accounts")
     assert response.status_code == 200
     payload = response.get_json()
-    assert set(payload) == {"accounts", "mru", "default"}
+    assert set(payload) == {"accounts", "mru", "default", "is_first_run_provider_step_pending"}
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.

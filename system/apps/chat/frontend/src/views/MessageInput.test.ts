@@ -66,6 +66,8 @@ const mocks = vi.hoisted(() => {
     launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
+    // What the composer registered to hear of a held send that never reached its agent.
+    heldSendFailedListener: null as ((chatId: string, messageId: string, detail: string, kind: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
     loadAccounts: vi.fn(async () => {}),
@@ -85,6 +87,8 @@ const mocks = vi.hoisted(() => {
     // Whether the agent's turn for a message has reached the transcript; none has, at rest.
     hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
+    // The chat root framing the page, null for a page no root frames (the shell's own frame, a direct visit).
+    framingRoot: null as { chooseProviderForFirstSend: ReturnType<typeof vi.fn> } | null,
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
@@ -100,6 +104,7 @@ const mocks = vi.hoisted(() => {
     selectedAccount: null as { id: string } | null,
     // Whether this page has read the account list; until it has, no account reads as missing.
     accountsLoaded: true,
+    isFirstRunProviderStepPending: false,
     listeners,
     agent,
     // Whether the page offers dictation, and the dictation the composer made: a stand-in whose state the test
@@ -205,6 +210,7 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
   isUnansweredRequest: (e: unknown) => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 0,
+  sendFailureKindOf: (kind: unknown) => (typeof kind === "string" ? kind : "unknown"),
 }));
 vi.mock("../models/ModelSettings", () => ({
   addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
@@ -267,6 +273,9 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  addHeldSendFailedListener: (listener: (chatId: string, messageId: string, detail: string, kind: string) => void) => {
+    mocks.heldSendFailedListener = listener;
+  },
   isLaunchInFlight: () => mocks.isLaunchInFlight,
   isRoomChat: () => mocks.isRoom,
   launchChat: (chatId: string, accountId: string, message?: string, kind?: string) =>
@@ -279,11 +288,13 @@ vi.mock("../models/Providers", () => ({
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
   areAccountsLoaded: () => mocks.accountsLoaded,
+  isFirstRunProviderStepPending: () => mocks.isFirstRunProviderStepPending,
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
   loadAccounts: () => mocks.loadAccounts(),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
+vi.mock("../embedApi", () => ({ framingChatRoot: () => mocks.framingRoot }));
 vi.mock("@imbue/workspace-voice/src/dictation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@imbue/workspace-voice/src/dictation")>();
   return {
@@ -605,6 +616,59 @@ describe("MessageInput send guard", () => {
 
     const switched = component.view!({ attrs: { chatId: "agent-2" } } as never);
     expect(renderedText(switched)).not.toContain("can't be sent from chat");
+  });
+});
+
+describe("MessageInput Enter during an input-method composition", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  function typeDraft(component: m.Component<{ chatId: string | null }>, text: string): void {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({ target: { value: text, style: {}, scrollHeight: 10 } });
+  }
+
+  function pressEnter(component: m.Component<{ chatId: string | null }>, init: Record<string, unknown>) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    (textarea?.attrs?.onkeydown as (event: unknown) => void)({
+      key: "Enter",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault,
+      ...init,
+    });
+    return preventDefault;
+  }
+
+  it("neither sends nor takes the keystroke from the input method", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+
+    const preventDefault = pressEnter(component, { isComposing: true });
+    await flushAsync();
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("sends the finished draft once, on the Enter that follows the composition", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+    pressEnter(component, { isComposing: true });
+    typeDraft(component, "share the workspace");
+
+    pressEnter(component, {});
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "share the workspace", expect.stringMatching(/^m-/));
   });
 });
 
@@ -1273,6 +1337,34 @@ describe("MessageInput send to a chat still being created", () => {
     expect(text).toContain("mngr create exited with code 3");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
+
+  it("hands a held send back to the composer with the reason when the chat app reports it never landed", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "held hello");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "failed");
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("The agent didn't take the message.");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("held hello");
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain(
+      expect.stringContaining("held hello"),
+    );
+  });
+
+  it("ignores a report of a held send this page did not send", async () => {
+    const component = MessageInput();
+
+    mocks.heldSendFailedListener!("agent-1", "someone-elses-message", "refused", "input_blocked");
+
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).not.toContain("Couldn't send your message");
+    expect(localStorage.getItem("message-text:agent-1")).toBeNull();
+  });
 });
 
 describe("MessageInput first send of a seeded chat", () => {
@@ -1426,6 +1518,20 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+
+  it("hands the first send back to the composer when the chat app reports it never reached the new agent", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "Plan my month");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "not_ready");
+
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).toContain(
+      "Couldn't send your message",
+    );
+    expect(localStorage.getItem("message-text:agent-1")).toContain("Plan my month");
   });
 
   it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
@@ -2430,6 +2536,20 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves the chooser shut as the notice appears while the first run's provider page is owed, its button still opening it", () => {
+    mocks.isFirstRunProviderStepPending = true;
+    try {
+      mocks.openProviderChooser.mockClear();
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      expect(findByClass(tree, "message-input-no-provider")!.attrs!.oncreate).toBeUndefined();
+      (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+      expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.isFirstRunProviderStepPending = false;
+    }
+  });
+
   it("launches the awaiting chat with no message as the chooser's sign-in completes, from the button or on appearing", async () => {
     mocks.launchChat.mockClear();
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
@@ -2512,6 +2632,35 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+
+  describe("in a chat root's frame", () => {
+    beforeEach(() => {
+      mocks.framingRoot = { chooseProviderForFirstSend: vi.fn() };
+    });
+
+    afterEach(() => {
+      mocks.framingRoot = null;
+    });
+
+    it("leaves opening the chooser to the root as the notice appears", () => {
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      const notice = findByClass(tree, "message-input-no-provider");
+      expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
+      expect(notice!.attrs!.oncreate).toBeUndefined();
+      expect(mocks.framingRoot!.chooseProviderForFirstSend).not.toHaveBeenCalled();
+      expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+    });
+
+    it("asks the root for its chooser from the notice's button, opening none of its own", () => {
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+
+      expect(mocks.framingRoot!.chooseProviderForFirstSend).toHaveBeenCalledTimes(1);
+      expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+    });
   });
 });
 

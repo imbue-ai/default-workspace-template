@@ -24,19 +24,37 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected
   (opened bare, or after the chat on screen is deleted) it shows the main chat
-  (below), else the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  (below), else the most recent chat, and with no chats and an account signed in
+  one awaiting its first send (`POST /api/chats/awaiting`, held in memory until
+  that send launches it). With nothing signed in it starts no chat for an empty
+  list: the empty list says "Connect an AI provider to start chatting." with a
+  "Choose a provider" button, so a new workspace's welcome chat lands alone.
   A chat leaves the list the moment its delete is confirmed and comes back if
   the delete is refused, and with no chats left the one awaiting its first send
   is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
-  composer, which stays in view (holding any draft) but disabled, and opens the
-  provider chooser as that notice appears; this is the one place the chooser
-  opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). The sign-in
-  that chooser produces launches the awaiting chat at once, with no message, so
-  its agent is up before the user has typed. Whether
+  composer, which stays in view (holding any draft) but disabled. The root opens
+  the provider chooser over everything it frames as soon as the chat it shows is
+  in that state, once per chat, and also once with no chat to show while nothing
+  is signed in (a new workspace before its welcome chat is seeded or its agents
+  are first listed); the first chat it shows after that counts as opened for, so
+  a chooser the user closed stays closed when the welcome chat arrives. The
+  notice's button, and the empty list's, open the root's chooser again
+  (`frontend/src/models/firstSendChooser.ts`; a chat page no root frames
+  opens its own as the notice appears). This is the one place the chooser opens
+  for a missing provider (the New chat button opens the awaiting chat, and an
+  intake's first message goes into its composer, with no dialog). Being the
+  root's, the chooser stays up, with any sign-in under way, when the selection
+  moves (the seeded welcome chat arriving). The sign-in it produces launches the
+  chat awaiting its first send on screen when it finishes, with no message, so
+  its agent is up before the user has typed; one that finishes with no such chat
+  on screen launches the first the root shows after it, and the root starts no
+  chat for an empty list meanwhile. Once per page load, when a chooser of the
+  root's is drawn with its providers listed while the shell shows the root and
+  its frame is laid out, the root posts `minds:provider-chooser-on-screen {}` to
+  the Imbue Studio chrome (forwarded up by the shell), which lifts its cover over
+  a new workspace on it. Whether
   anything is signed in is decided from a fresh read of the account list; the
   New chat button then names no account, so the chat app picks it as the create
   runs and an account signed out since the page read the list is never the one
@@ -112,7 +130,10 @@ observe`, its own supervised service) writes, and serves:
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
-  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  and a chat root window (`/`) on screen allowed to be moved to it. With no `chatId` (the Imbue Studio app
+  entering a new workspace) it shows the chat root as it stands: a chat root window at `/` or on any chat
+  the app lists or holds provisionally counts as already showing it, no window is moved, and with none the
+  pinned window comes up at `/`. The shell picks the window. It
   answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
@@ -378,7 +399,10 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
@@ -931,6 +955,14 @@ into the page the browser ends on. The CLI's own answer is not passed back,
 since claude sends the browser to its success page before its token exchange
 has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
 so the desktop app frees the port.
+
+Claude's CLI draws its callback port at random, so the desktop app may find
+something on the user's machine already answering there (a Docker container's
+published SSH port, say). It then answers `reason: "port_taken"`, and the
+chooser starts the same sign-in again for a fresh port, trying up to three
+ports in all before it falls back as below. A fresh sign-in that lands on a
+port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
+fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
