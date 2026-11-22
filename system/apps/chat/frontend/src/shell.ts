@@ -8,7 +8,7 @@
  */
 
 import m from "mithril";
-import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { adoptClientIdentity, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
@@ -256,7 +256,8 @@ function reportChatLocation(chatId: string, path: string): void {
  * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
  * given and ``pick`` as the model it runs on (null for the harness's default). The switch
  * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
- * notice with neither. The chat is filed in no project: the desktop has none.
+ * notice with neither. The chat is filed in no project: the desktop has none. A person pressed a button for it,
+ * so the create names the client it came from, as the New chat button's does.
  */
 export async function startChatOnAccount(
   accountId: string,
@@ -265,7 +266,7 @@ export async function startChatOnAccount(
 ): Promise<boolean> {
   let created: CreatedChat;
   try {
-    created = await createChat("", accountId, message, pick);
+    created = await createChat("", accountId, message, pick, getClientId());
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return false;

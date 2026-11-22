@@ -668,8 +668,9 @@ export interface CreatedChat {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
  * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
- * ``clientId`` names the browser a person asked for the chat from (the New chat button), which is how the chat app
- * tells such a chat from one a script made; empty for a create nobody pressed a button for.
+ * ``clientId`` names the browser a person asked for the chat from (the New chat button, or "Start a new chat" in
+ * the switch dialog), which is how the chat app tells such a chat from one a script made; empty for a create
+ * nobody pressed a button for.
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
