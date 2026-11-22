@@ -132,6 +132,14 @@ class HarnessActivityTracker(ABC):
         """The cached tail event's timestamp as epoch seconds, or None."""
         return parse_iso_timestamp_to_epoch(self._last_event_timestamp)
 
+    def is_tail_mid_turn(self, process_started_at: float | None) -> bool:
+        """Whether the transcript ends inside a turn the process started at ``process_started_at`` ran: a tool call
+        with no result, or a prompt or tool result the agent has not answered yet. A tail older than the process is
+        a turn an earlier process abandoned. Says nothing about whether the process is still working on it."""
+        if is_transcript_tail_stale(tail_event_at=self._tail_event_at, process_started_at=process_started_at):
+            return False
+        return self._has_pending_tool_use or self._last_event_type in ("user_message", "tool_result")
+
     def observe(self, events: Sequence[dict[str, Any]]) -> bool:
         """Fold a batch of events into the cached signals.
 

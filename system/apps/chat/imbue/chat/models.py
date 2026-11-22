@@ -747,6 +747,12 @@ class ActiveAgentSnapshot(FrozenModel):
     background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
         description="The chat's pending background tasks, oldest first"
     )
+    is_interrupted: bool = Field(
+        description=(
+            "Whether the agent's process died mid-turn and nothing has reached it since: the chat offers to resume "
+            "it, and the page never sends that on its own"
+        )
+    )
 
 
 class ResentSendSnapshot(FrozenModel):

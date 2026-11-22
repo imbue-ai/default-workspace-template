@@ -1430,6 +1430,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             is_resending_after_sign_in=False,
             is_busy=False,
             background_tasks=(),
+            is_interrupted=False,
         ),
         last_messaged_at=last_messaged_at,
     )

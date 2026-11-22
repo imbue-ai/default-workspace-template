@@ -52,6 +52,8 @@ export interface ActiveAgent {
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
   background_tasks: BackgroundTask[];
+  // The agent's process died mid-turn and nothing has reached it since: the page offers to resume it.
+  is_interrupted: boolean;
 }
 
 /** Who recorded a background task: the workspace's runner (``run_in_background.py``), which outlives the agent and

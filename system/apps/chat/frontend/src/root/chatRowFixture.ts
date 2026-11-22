@@ -14,6 +14,7 @@ export function chatRowFixture(chatId: string, overrides: Partial<ChatRow> = {})
     isMain: false,
     hasMention: false,
     participants: [],
+    isAgentProcessDead: false,
     ...overrides,
   };
 }

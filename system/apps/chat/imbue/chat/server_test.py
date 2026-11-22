@@ -3325,18 +3325,20 @@ class _TestClientHttp(update_runtime.HttpClient):
 
 def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(tmp_path: Path) -> None:
     """update-self's restart pass, run against this app: it restarts the idle chat, leaves the busy ones and
-    the switching one running and says why, and skips its own chat, a stopped chat and a room.
+    the switching one running and says why, and skips its own chat, a stopped chat, an interrupted chat and a room.
 
     The pass is standard-library only and reads this app's chat list and interrupt answers from its
     own copies of their wire names, so this is what fails when the two drift apart."""
     app, _log_path = _recording_app(tmp_path)
     manager: AgentManager = state_of(app).agent_manager
-    own, idle, working, backgrounded, stopped, room = (f"agent-{uuid4().hex}" for _ in range(6))
+    own, idle, working, backgrounded, stopped, interrupted, room = (f"agent-{uuid4().hex}" for _ in range(7))
     _register_agent(app, own, "Chat-own", "WAITING")
     _register_agent(app, idle, "Chat-idle", "WAITING")
     _register_agent(app, working, "Chat-working", "RUNNING")
     _register_agent(app, backgrounded, "Chat-backgrounded", BACKGROUND_LIFECYCLE_STATE)
     _register_agent(app, stopped, "Chat-stopped", "STOPPED")
+    _register_agent(app, interrupted, "Chat-interrupted", "DONE")
+    manager._interrupted_agent_ids.add(interrupted)
     seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
     switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
     workspace = tmp_path / "workspace"

@@ -34,7 +34,8 @@ class ChatStatus(LowerCaseStrEnum):
     """What a chat is doing, as its snapshot reports it and the chat root's rail draws it (a wire value).
 
     A chat switching agents is ``working``, or ``error`` once the switch failed, whatever its agent
-    does. Otherwise the first that holds: ``stopped`` (the agent is dead), ``attention`` (a
+    does. Otherwise the first that holds: ``interrupted`` (the agent's process died mid-turn, and nothing has
+    been sent to it since), ``stopped`` (the agent is dead), ``attention`` (a
     permission request waits on the user), ``working`` (a turn is in flight), ``background`` (no
     turn, but a pending background task will start one), ``idle``.
     """
@@ -44,6 +45,7 @@ class ChatStatus(LowerCaseStrEnum):
     IDLE = auto()
     ATTENTION = auto()
     STOPPED = auto()
+    INTERRUPTED = auto()
     ERROR = auto()
 
 

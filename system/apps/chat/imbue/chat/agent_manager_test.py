@@ -35,6 +35,7 @@ from imbue.chat.accounts import read_index
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
+from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
@@ -8265,7 +8266,14 @@ def test_status_mapping_follows_the_chat_row(
     is_turn_closing: bool,
     expected: ChatStatus,
 ) -> None:
-    assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing) is expected
+    assert (
+        chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing, False) is expected
+    )
+
+
+@pytest.mark.parametrize("lifecycle", ["DONE", "WAITING", "STOPPED"])
+def test_an_interrupted_turn_outranks_every_other_status(lifecycle: str) -> None:
+    assert chat_status_for_agent(lifecycle, ActivityState.IDLE, True, True, False, True) is ChatStatus.INTERRUPTED
 
 
 @pytest.mark.parametrize(
@@ -8346,6 +8354,129 @@ def test_only_a_harness_task_keeps_a_waiting_chat_from_its_restart_and_is_read_w
         assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "waiting on background work"
     finally:
         manager.stop()
+
+
+def _turn_in_flight(manager: AgentManager, tmp_path: Path, agent_id: str = "agent-1") -> Path:
+    """A tracked claude agent mid-turn: a prompt it has not answered and its ``active`` marker down."""
+    state_dir = tmp_path / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    _seed_agent(manager, agent_id, state="RUNNING")
+    manager._ensure_activity_tracking(agent_id)
+    manager.update_session_events(
+        agent_id, [{"type": "user_message", "timestamp": "2026-11-19T00:00:00Z", "content": "go"}]
+    )
+    (state_dir / "active").touch()
+    return state_dir
+
+
+def _set_lifecycle(manager: AgentManager, state: str, agent_id: str = "agent-1") -> None:
+    _seed_agent(manager, agent_id, state=state)
+    manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+
+def _shown_status(manager: AgentManager, agent_id: str = "agent-1") -> ChatStatus:
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert snapshot.active_agent.is_interrupted is (snapshot.status is ChatStatus.INTERRUPTED)
+    return snapshot.status
+
+
+def test_a_process_that_dies_mid_turn_reads_interrupted_until_a_message_reaches_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    _set_lifecycle(agent_manager, "DONE")
+    assert _shown_status(agent_manager) is ChatStatus.INTERRUPTED
+
+    # The main chat's automatic wake brings the process back without the turn, clearing the marker at launch.
+    (state_dir / "active").unlink()
+    _set_lifecycle(agent_manager, "WAITING")
+    assert _shown_status(agent_manager) is ChatStatus.INTERRUPTED
+
+    agent_manager.clear_interrupted("agent-1")
+    assert _shown_status(agent_manager) is ChatStatus.IDLE
+
+
+def test_a_transcript_ending_mid_turn_marks_a_dead_process_interrupted_without_a_marker(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    (state_dir / "active").unlink()
+    _set_lifecycle(agent_manager, "DONE")
+    assert _shown_status(agent_manager) is ChatStatus.INTERRUPTED
+
+
+def test_a_turn_an_earlier_process_abandoned_is_not_read_as_cut_off(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    (state_dir / "active").unlink()
+    marker = state_dir / "claude_process_started"
+    marker.touch()
+    tail_at = parse_iso_timestamp_to_epoch("2026-11-19T00:00:00Z")
+    assert tail_at is not None
+    os.utime(marker, (tail_at + 60, tail_at + 60))
+    _set_lifecycle(agent_manager, "DONE")
+    assert _shown_status(agent_manager) is ChatStatus.STOPPED
+
+
+def test_a_process_that_exits_between_turns_is_only_stopped(agent_manager: AgentManager, tmp_path: Path) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    agent_manager.update_session_events(
+        "agent-1", [{"type": "assistant_message", "timestamp": "2026-11-19T00:00:05Z", "text": "done"}]
+    )
+    (state_dir / "active").unlink()
+    _set_lifecycle(agent_manager, "DONE")
+    assert _shown_status(agent_manager) is ChatStatus.STOPPED
+
+
+def test_a_deliberate_stop_mid_turn_is_only_stopped(agent_manager: AgentManager, tmp_path: Path) -> None:
+    _turn_in_flight(agent_manager, tmp_path)
+    _set_lifecycle(agent_manager, "STOPPED")
+    assert _shown_status(agent_manager) is ChatStatus.STOPPED
+
+
+def test_a_restart_the_chat_app_asked_for_is_not_an_interrupted_turn(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    _turn_in_flight(agent_manager, tmp_path)
+    with agent_manager.letting_go_of_unrecorded_sends("agent-1"):
+        _set_lifecycle(agent_manager, "DONE")
+    assert _shown_status(agent_manager) is ChatStatus.STOPPED
+
+
+def test_a_restart_that_settles_the_activity_forgets_the_interrupted_turn(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    _set_lifecycle(agent_manager, "DONE")
+    (state_dir / "active").unlink()
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager.reset_activity_state("agent-1")
+    assert _shown_status(agent_manager) is ChatStatus.IDLE
+
+
+def test_a_send_waking_an_interrupted_agent_reads_as_connecting(agent_manager: AgentManager, tmp_path: Path) -> None:
+    _turn_in_flight(agent_manager, tmp_path)
+    _set_lifecycle(agent_manager, "DONE")
+    with agent_manager.track_connecting_send("agent-1", "message-1", "Continue") as mark_connecting:
+        mark_connecting()
+        snapshot = agent_manager.get_chat_snapshot("agent-1")
+        assert snapshot is not None
+        assert snapshot.active_agent.is_connecting
+        assert snapshot.status is ChatStatus.STOPPED
+
+
+def test_a_new_turn_forgets_the_interrupted_one(agent_manager: AgentManager, tmp_path: Path) -> None:
+    state_dir = _turn_in_flight(agent_manager, tmp_path)
+    _set_lifecycle(agent_manager, "DONE")
+    (state_dir / "active").unlink()
+    agent_manager.update_session_events(
+        "agent-1", [{"type": "user_message", "timestamp": "2026-11-19T00:01:00Z", "content": "typed in the terminal"}]
+    )
+    (state_dir / "active").touch()
+    _set_lifecycle(agent_manager, "RUNNING")
+    assert _shown_status(agent_manager) is ChatStatus.WORKING
 
 
 def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:

@@ -77,6 +77,7 @@ def test_broadcast_chats_updated() -> None:
         last_messaged_at=None,
         background_tasks=(),
         compaction_cause=None,
+        is_interrupted=False,
     )
     broadcaster.broadcast_chats_updated([snapshot], ChatId("a1"))
 

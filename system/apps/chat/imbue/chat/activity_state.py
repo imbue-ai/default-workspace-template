@@ -144,6 +144,19 @@ def is_lifecycle_dead(lifecycle_state: str) -> bool:
 
 
 @pure
+def is_turn_cut_off(lifecycle_state: str, is_active_marker_present: bool, is_tail_mid_turn: bool) -> bool:
+    """Whether the agent's process died in the middle of a turn: the one read of "interrupted" the chat makes.
+
+    Only DONE counts: the process exited while its tmux pane lives on, which is what a crash, a kill or an
+    out-of-memory shed leaves. A deliberate stop takes the pane with it and reads STOPPED. The turn was in
+    flight when the harness's ``active`` marker outlives the process (its turn-end hook never ran; the
+    plugin clears it only at the next launch) or when the transcript ends mid-turn, which also covers a
+    harness that writes no marker.
+    """
+    return lifecycle_state == EXITED_LIFECYCLE_STATE and (is_active_marker_present or is_tail_mid_turn)
+
+
+@pure
 def resolve_is_turn_in_flight(lifecycle_state: str, is_active_marker_present: bool) -> bool:
     """Whether the agent has a turn in flight, preferring the ``active`` marker over the
     (laggy) observe-reported lifecycle state.

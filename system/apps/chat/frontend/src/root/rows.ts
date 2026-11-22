@@ -11,6 +11,7 @@
  */
 
 import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../models/Chats";
+import { isAgentProcessDead } from "../views/agentLiveness";
 
 /** What a row is: a chat with an agent, one the app has minted but that is not an agent yet, or a room. */
 export type ChatRowKind = "agent" | "provisional" | "room";
@@ -33,6 +34,8 @@ export interface ChatRow {
   /** Who has written in the chat, each once, in order of first message: the row shows their pictures when there
    *  are two or more (the multiplayer spec, section 5.4). */
   participants: readonly string[];
+  /** True when the chat's agent process is positively down; never for a chat that is not an agent yet. */
+  isAgentProcessDead: boolean;
 }
 
 // What a chat that is not an agent yet is doing, as a chat status.
@@ -74,6 +77,7 @@ export function rowsFromSnapshots(
     isMain: chat.chat_id === mainChatId,
     hasMention: mentionedChatIds.has(chat.chat_id),
     participants: chat.participants ?? [],
+    isAgentProcessDead: isAgentProcessDead(chat.active_agent.state),
   }));
   for (const chat of provisional) {
     if (known.has(chat.chat_id)) continue;
@@ -88,6 +92,7 @@ export function rowsFromSnapshots(
       isMain: chat.chat_id === mainChatId,
       hasMention: false,
       participants: [],
+      isAgentProcessDead: false,
     });
   }
   return rows;

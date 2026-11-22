@@ -1,0 +1,1 @@
+A routine whose agent stops in the middle of its run (its process dies mid-turn, which the chat app now reports as an interrupted chat) fails at once with "The agent stopped before it finished.", as a stopped agent does, instead of waiting out the run's time limit.
