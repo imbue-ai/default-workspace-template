@@ -351,7 +351,7 @@ As amended by the post-launch-paths plan, the chat's free-text launch paths are 
 - The intake route answers the page the shell opens: `/?chat=<id>` when the text was sent, or `/?intake=<token>` for the picker of 4.5, which the root shows on load and on `shell:navigate` before selection and finishes by applying the pending intake; on dismissal it discards the intake and reports the selection alone.
   A `send` with no text answers the root's path with nothing pending.
 - The root serves `/` with no params of its own; a draft goes through the `draft` launch path (pinned-taskbar-entries plan section 4.7).
-  The desktop shortcut still opens a second chat list (window-bound-resources decision 15), which this design leaves alone.
+  The desktop shortcut raises the pinned chat window rather than opening a second chat list (window-bound-resources spec section 3.2).
 
 ## 9. mngr-side changes
 
