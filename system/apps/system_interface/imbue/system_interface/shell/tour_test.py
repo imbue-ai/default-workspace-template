@@ -1,6 +1,8 @@
 """Tests for the workspace's tour record."""
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -84,13 +86,14 @@ def test_a_finished_record_round_trips_and_sets_the_marker_on_every_such_write(t
 
     assert store.read() == TourProgress(is_seen=True, resume_index=None, is_finished=True)
     assert json.loads((tmp_path / TOUR_FILENAME).read_text())["is_finished"] is True
-    first_marked_at = marked_at(Marker.TOUR_FINISHED)
-    assert first_marked_at is not None
+    assert is_marked(Marker.TOUR_FINISHED)
+    long_ago = time.time() - 3600
+    os.utime(Path(os.environ[MARKER_DIR_ENV]) / Marker.TOUR_FINISHED.value, (long_ago, long_ago))
 
     store.write(TourProgress(is_seen=True, resume_index=None, is_finished=True))
 
-    second_marked_at = marked_at(Marker.TOUR_FINISHED)
-    assert second_marked_at is not None and second_marked_at >= first_marked_at
+    marked_again_at = marked_at(Marker.TOUR_FINISHED)
+    assert marked_again_at is not None and marked_again_at.timestamp() > long_ago + 1800
 
 
 def test_the_marker_outlives_a_record_that_asks_for_the_tour_again(tmp_path: Path) -> None:
