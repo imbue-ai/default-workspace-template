@@ -1,1 +1,0 @@
-The chat page's built scripts and styles are cached by the browser for good, since their names change with their contents, so reopening a chat (from a phone above all) no longer asks for them again. The voice files kept under stable names are still checked on every load.

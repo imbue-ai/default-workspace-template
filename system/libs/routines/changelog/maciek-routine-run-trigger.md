@@ -1,1 +1,0 @@
-A command routine's run has `ROUTINES_TRIGGER` in its environment, beside `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_RUN_DIR`: `scheduled` for a run the tick started, `manual` for one started with Run now or `routines run`. The README says how a skill run finds the same: the newest record of `routines runs <id> --format json` is its own run, with its trigger.

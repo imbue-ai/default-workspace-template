@@ -1,1 +1,0 @@
-The embed module exposes contract v17's `FIRST_RUN_PROVIDER_STEP` and `FIRST_RUN_EXIT_COVER_MS`, probed with fallbacks like the other optional contract entries, so a template pinned to an older mngr still builds.

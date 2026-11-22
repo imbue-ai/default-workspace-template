@@ -1,1 +1,0 @@
-The first run's "Your own cloud computer, any AI" page matches Imbue Studio's own first-run pages: its headline is set in Besley Medium (bundled with the chat app, SIL Open Font License) at 40px with a 1.15 line height, the line under it is 18px semibold, Next is the same 18px button as Studio's Sign in and Continue, and Skip is 14px.
