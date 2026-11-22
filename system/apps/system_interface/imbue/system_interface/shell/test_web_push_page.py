@@ -14,11 +14,11 @@ from workspace_layout.identity import RequestIdentity
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.testing import identity_headers
-from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import PushNotification
 from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
-from imbue.system_interface.testing import RecordingPushTransport
 from imbue.system_interface.testing import ServedApp
+from imbue.system_interface.testing import push_device_registration
+from imbue.system_interface.testing import recording_push_transport
 from imbue.system_interface.testing import serve_app
 
 pytestmark = [pytest.mark.browser]
@@ -29,24 +29,13 @@ _NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 _VISITOR = RequestIdentity(owner=False, user_id="user-visitor", email="visitor@example.com")
 
 
-def _register(app: Flask, endpoint: str, label: str) -> None:
-    state_of(app).shell.web_push.register(
-        DeviceRegistrationRequest.model_validate(
-            {"subscription": {"endpoint": endpoint, "keys": {"p256dh": "B", "auth": "s"}}, "label": label}
-        ),
-        _NOW,
-    )
-
-
 @pytest.fixture
 def served_shell(app: Flask) -> Generator[ServedApp, None, None]:
     """The shell with two devices, one of which a push service has refused the key for, and one chat's send."""
-    transport = state_of(app).shell.web_push.transport
-    assert type(transport) is RecordingPushTransport
-    transport.status_code_by_endpoint[_LOST] = 403
-    _register(app, _PHONE, "iPhone, Safari (Home Screen app)")
-    _register(app, _LOST, "Android, Chrome")
+    recording_push_transport(app).status_code_by_endpoint[_LOST] = 403
     shell = state_of(app).shell
+    shell.web_push.register(push_device_registration(_PHONE, "iPhone, Safari (Home Screen app)"), _NOW)
+    shell.web_push.register(push_device_registration(_LOST, "Android, Chrome"), _NOW)
     shell.web_push.send(PushNotification(title="Warm-up"), None, _NOW)
     shell.web_push_dispatch.submit(
         PushSendRequest(

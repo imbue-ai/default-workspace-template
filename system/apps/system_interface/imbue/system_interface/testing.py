@@ -37,6 +37,7 @@ from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
+from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import build_presence_sweep
@@ -52,6 +53,7 @@ from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
+from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import PushProviderAnswer
 from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.workspace_name import workspace_name_source
@@ -200,6 +202,20 @@ class RecordingPushTransport(PushTransportInterface):
         self.posted.append(PostedPush(endpoint=subscription.endpoint, payload=payload))
         status_code = self.status_code_by_endpoint.get(subscription.endpoint, 201)
         return PushProviderAnswer(status_code=status_code, detail="" if status_code is not None else "unreachable")
+
+
+def recording_push_transport(app: Flask) -> RecordingPushTransport:
+    """The recording transport ``build_test_state`` gave the app's shell."""
+    transport = state_of(app).shell.web_push.transport
+    assert type(transport) is RecordingPushTransport
+    return transport
+
+
+def push_device_registration(endpoint: str, label: str = "Android, Firefox") -> DeviceRegistrationRequest:
+    """A device's registration at ``endpoint``, with keys a ``RecordingPushTransport`` never decodes."""
+    return DeviceRegistrationRequest.model_validate(
+        {"subscription": {"endpoint": endpoint, "keys": {"p256dh": "BPublic", "auth": "secret"}}, "label": label}
+    )
 
 
 def _fresh_shell_state_directory() -> Path:

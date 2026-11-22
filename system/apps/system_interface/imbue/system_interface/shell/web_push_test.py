@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
 from imbue.system_interface.shell.web_push import DEFAULT_NOTIFICATION_SETTINGS
 from imbue.system_interface.shell.web_push import DEVICES_FILENAME
-from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import MAX_PUSH_PAYLOAD_BYTES
 from imbue.system_interface.shell.web_push import MAX_REGISTERED_DEVICES
 from imbue.system_interface.shell.web_push import NotificationSettings
@@ -27,14 +26,9 @@ from imbue.system_interface.shell.web_push import push_payload
 from imbue.system_interface.shell.web_push import push_provider_name
 from imbue.system_interface.shell.web_push import with_device_registered
 from imbue.system_interface.testing import RecordingPushTransport
+from imbue.system_interface.testing import push_device_registration
 
 _NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
-
-
-def _registration(endpoint: str, label: str = "Android, Firefox") -> DeviceRegistrationRequest:
-    return DeviceRegistrationRequest.model_validate(
-        {"subscription": {"endpoint": endpoint, "keys": {"p256dh": "BPublic", "auth": "secret"}}, "label": label}
-    )
 
 
 @pytest.mark.parametrize(
@@ -55,7 +49,7 @@ def test_a_device_registered_past_the_cap_forgets_the_one_registered_longest_ago
     devices = ()
     for index in range(MAX_REGISTERED_DEVICES + 1):
         devices = with_device_registered(
-            devices, _registration(f"https://push.example.org/{index}"), _NOW + timedelta(minutes=index)
+            devices, push_device_registration(f"https://push.example.org/{index}"), _NOW + timedelta(minutes=index)
         )
 
     assert len(devices) == MAX_REGISTERED_DEVICES
@@ -64,11 +58,11 @@ def test_a_device_registered_past_the_cap_forgets_the_one_registered_longest_ago
 
 
 def test_registering_a_device_again_moves_it_last_with_its_new_label_and_time() -> None:
-    devices = with_device_registered((), _registration("https://push.example.org/a"), _NOW)
-    devices = with_device_registered(devices, _registration("https://push.example.org/b"), _NOW)
+    devices = with_device_registered((), push_device_registration("https://push.example.org/a"), _NOW)
+    devices = with_device_registered(devices, push_device_registration("https://push.example.org/b"), _NOW)
 
     devices = with_device_registered(
-        devices, _registration("https://push.example.org/a", "iPhone"), _NOW + timedelta(1)
+        devices, push_device_registration("https://push.example.org/a", "iPhone"), _NOW + timedelta(1)
     )
 
     assert [(device.label, device.registered_at) for device in devices] == [
@@ -79,7 +73,7 @@ def test_registering_a_device_again_moves_it_last_with_its_new_label_and_time() 
 
 def test_devices_and_the_key_survive_a_new_notifier_over_the_same_directory(tmp_path: Path) -> None:
     first = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
-    first.register(_registration("https://push.example.org/a"), _NOW)
+    first.register(push_device_registration("https://push.example.org/a"), _NOW)
     public_key = first.public_key()
 
     second = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
@@ -99,7 +93,7 @@ def test_an_unreadable_devices_file_reads_as_no_devices(tmp_path: Path) -> None:
 def test_a_device_whose_push_service_did_not_answer_is_kept(tmp_path: Path) -> None:
     transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": None})
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
-    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    notifier.register(push_device_registration("https://push.example.org/a"), _NOW)
 
     outcome = notifier.send(PushNotification(title="Done"), None, _NOW)
 
@@ -124,7 +118,7 @@ def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
     transport = _MeetingPushTransport(barrier=threading.Barrier(3, timeout=10))
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
     for index in range(3):
-        notifier.register(_registration(f"https://push.example.org/{index}"), _NOW)
+        notifier.register(push_device_registration(f"https://push.example.org/{index}"), _NOW)
 
     outcome = notifier.send(PushNotification(title="Done"), None, _NOW)
 
@@ -160,8 +154,8 @@ def test_a_notification_title_is_required_and_bounded() -> None:
 def test_a_device_whose_push_service_refuses_the_signature_is_marked_stale_and_skipped_after(tmp_path: Path) -> None:
     transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": 403})
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
-    notifier.register(_registration("https://push.example.org/a"), _NOW)
-    notifier.register(_registration("https://push.example.org/b"), _NOW)
+    notifier.register(push_device_registration("https://push.example.org/a"), _NOW)
+    notifier.register(push_device_registration("https://push.example.org/b"), _NOW)
 
     first = notifier.send(PushNotification(title="Done"), None, _NOW)
     second = notifier.send(PushNotification(title="Again"), None, _NOW + timedelta(minutes=1))
@@ -186,12 +180,12 @@ def test_a_device_whose_push_service_refuses_the_signature_is_marked_stale_and_s
 def test_a_stale_device_is_still_reached_when_named_and_turning_it_on_again_clears_it(tmp_path: Path) -> None:
     transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": 401})
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
-    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    notifier.register(push_device_registration("https://push.example.org/a"), _NOW)
     stale_id = device_id_of("https://push.example.org/a")
     notifier.send(PushNotification(title="Done"), None, _NOW)
 
     named = notifier.send(PushNotification(title="Test"), frozenset({stale_id}), _NOW)
-    notifier.register(_registration("https://push.example.org/a"), _NOW + timedelta(minutes=5))
+    notifier.register(push_device_registration("https://push.example.org/a"), _NOW + timedelta(minutes=5))
 
     assert [delivery.device_id for delivery in named.deliveries] == [stale_id]
     assert [device.is_stale for device in notifier.list_devices()] == [False]
@@ -199,7 +193,7 @@ def test_a_stale_device_is_still_reached_when_named_and_turning_it_on_again_clea
 
 def test_a_reset_makes_a_new_key_and_send_token_and_forgets_every_device(tmp_path: Path) -> None:
     notifier = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
-    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    notifier.register(push_device_registration("https://push.example.org/a"), _NOW)
     old_key = notifier.public_key()
     old_token = notifier.send_token()
 

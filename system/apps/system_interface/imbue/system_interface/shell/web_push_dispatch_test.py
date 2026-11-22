@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
-from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import NotificationSettings
 from imbue.system_interface.shell.web_push import PushProviderAnswer
 from imbue.system_interface.shell.web_push import WebPushNotifier
@@ -29,6 +28,7 @@ from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_POST_LIMIT
 from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_WINDOW_SECONDS
 from imbue.system_interface.shell.web_push_dispatch import compose_notification
 from imbue.system_interface.testing import RecordingPushTransport
+from imbue.system_interface.testing import push_device_registration
 
 _NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 _CHAT = "agent-research"
@@ -51,15 +51,7 @@ def _dispatcher(
     transport = transport if transport is not None else RecordingPushTransport()
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
     if is_device_registered:
-        notifier.register(
-            DeviceRegistrationRequest.model_validate(
-                {
-                    "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
-                    "label": "iPhone, Safari",
-                }
-            ),
-            _NOW,
-        )
+        notifier.register(push_device_registration("https://web.push.apple.com/a"), _NOW)
     clock = _Clock()
     return (
         PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"), clock=clock),

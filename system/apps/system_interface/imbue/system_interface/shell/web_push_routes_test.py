@@ -12,7 +12,7 @@ from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.web_push import device_id_of
-from imbue.system_interface.testing import RecordingPushTransport
+from imbue.system_interface.testing import recording_push_transport
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _ENDPOINT = "https://fcm.googleapis.com/fcm/send/device-one"
@@ -32,12 +32,6 @@ def _registration(endpoint: str = _ENDPOINT, label: str = "iPhone, Safari (Home 
         },
         "label": label,
     }
-
-
-def _transport(app: Flask) -> RecordingPushTransport:
-    transport = state_of(app).shell.web_push.transport
-    assert type(transport) is RecordingPushTransport
-    return transport
 
 
 def _register(client: FlaskClient, endpoint: str = _ENDPOINT) -> str:
@@ -157,7 +151,7 @@ def test_a_test_send_reaches_only_that_device(client: FlaskClient, app: Flask) -
 
     assert outcome.status_code == 200
     assert outcome.get_json()["accepted_count"] == 1
-    ((posted),) = _transport(app).posted
+    ((posted),) = recording_push_transport(app).posted
     assert posted.endpoint == _ENDPOINT
     assert json.loads(posted.payload)["title"] == "Notifications are on"
     assert client.post("/api/web-push/devices/unknown/test").status_code == 404
@@ -182,15 +176,15 @@ def test_a_send_with_the_token_is_queued_and_the_worker_posts_it_naming_the_chat
 ) -> None:
     _register(client)
     gone_id = _register(client, _OTHER_ENDPOINT)
-    _transport(app).status_code_by_endpoint[_OTHER_ENDPOINT] = 410
+    recording_push_transport(app).status_code_by_endpoint[_OTHER_ENDPOINT] = 410
 
     response = client.post("/api/web-push/send", json=_SEND, headers=_token(app))
 
     assert response.status_code == 202
     assert response.get_json()["status"] == "queued"
-    assert _transport(app).posted == []
+    assert recording_push_transport(app).posted == []
     state_of(app).shell.web_push_dispatch.flush_due()
-    payloads = [json.loads(posted.payload) for posted in _transport(app).posted]
+    payloads = [json.loads(posted.payload) for posted in recording_push_transport(app).posted]
     assert len(payloads) == 2
     assert payloads[0]["title"] == "Research"
     assert payloads[0]["path"] == "/?open=chat%3A%2F%3Fchat%3Dagent-research"
@@ -211,7 +205,7 @@ def test_with_full_text_on_the_device_shows_the_agents_words(client: FlaskClient
 
     assert saved.get_json() == {"is_full_text": True}
     assert client.get("/api/web-push/settings", headers=owner, environ_base=_REMOTE).get_json() == saved.get_json()
-    ((posted,),) = [_transport(app).posted]
+    ((posted,),) = [recording_push_transport(app).posted]
     assert json.loads(posted.payload)["body"] == "Q4: The numbers are in."
 
 
@@ -228,7 +222,7 @@ def test_the_send_route_refuses_a_request_without_the_send_token(
 
     assert response.status_code == 403
     assert "send token" in response.get_json()["detail"]
-    assert _transport(app).posted == []
+    assert recording_push_transport(app).posted == []
     assert client.get("/api/web-push/sends").get_json()["sends"] == []
 
 
@@ -250,7 +244,7 @@ def test_a_send_with_no_device_registered_is_logged_and_posts_nothing(client: Fl
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "no_devices"
-    assert _transport(app).posted == []
+    assert recording_push_transport(app).posted == []
 
 
 def test_the_send_route_refuses_a_remote_caller_and_anything_that_came_through_a_share(
@@ -264,7 +258,7 @@ def test_the_send_route_refuses_a_remote_caller_and_anything_that_came_through_a
 
     assert (remote.status_code, proxied.status_code) == (403, 403)
     state_of(app).shell.web_push_dispatch.flush_due()
-    assert _transport(app).posted == []
+    assert recording_push_transport(app).posted == []
 
 
 def test_a_send_must_name_a_chat(client: FlaskClient, app: Flask) -> None:
@@ -309,7 +303,7 @@ def test_a_reset_forgets_every_device_and_makes_a_new_key_and_token(client: Flas
 
 def test_a_device_whose_push_service_refuses_the_key_is_listed_stale(client: FlaskClient, app: Flask) -> None:
     device_id = _register(client)
-    _transport(app).status_code_by_endpoint[_ENDPOINT] = 403
+    recording_push_transport(app).status_code_by_endpoint[_ENDPOINT] = 403
 
     outcome = client.post(f"/api/web-push/devices/{device_id}/test").get_json()
 
@@ -349,4 +343,4 @@ def test_a_preview_shell_reaches_no_device(tmp_path: Path, broadcaster: WebSocke
 
     assert [refusal.status_code for refusal in refusals] == [403] * 6
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
-    assert _transport(application).posted == []
+    assert recording_push_transport(application).posted == []
