@@ -1,1 +1,0 @@
-The routines tick's cron entry states the boot's `MNGR_HOST_DIR`, so routines run on their schedule on a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`).
