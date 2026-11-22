@@ -124,10 +124,19 @@ def plan_sweep(
 def apply_sweep(
     removals: Iterable[Removal],
 ) -> tuple[tuple[Removal, ...], tuple[tuple[Removal, OSError], ...]]:
-    """Remove each planned path; returns what was removed and what could not be."""
+    """Remove each planned path; returns what was removed and what could not be.
+
+    An expired archive is kept when one of its agent's session copies could not be removed: its
+    session-id history is the only thing naming them, so the next sweep can still find them.
+    """
     removed: list[Removal] = []
     failed: list[tuple[Removal, OSError]] = []
+    first_error_by_agent: dict[AgentId, OSError] = {}
     for removal in removals:
+        earlier_error = first_error_by_agent.get(removal.agent_id)
+        if removal.reason == RemovalReason.EXPIRED_ARCHIVE and earlier_error is not None:
+            failed.append((removal, earlier_error))
+            continue
         try:
             if removal.path.is_dir() and not removal.path.is_symlink():
                 shutil.rmtree(removal.path)
@@ -135,6 +144,7 @@ def apply_sweep(
                 removal.path.unlink(missing_ok=True)
         except OSError as e:
             failed.append((removal, e))
+            first_error_by_agent.setdefault(removal.agent_id, e)
         else:
             removed.append(removal)
     return tuple(removed), tuple(failed)
