@@ -1,0 +1,1 @@
+The template pins mngr to the export of the paired mngr branch, which carries embed contract v17 (`minds:first-run-provider-step`); the system frontends' lockfile adds `@fontsource/besley` for the chat app's first-run headline.
