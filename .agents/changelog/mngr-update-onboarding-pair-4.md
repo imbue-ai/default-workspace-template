@@ -1,0 +1,1 @@
+The `build-app` skill's scaffolder sets the workspace's `app_build_started` onboarding marker on every run, so the chat does not suggest building an app while one is being built. A run that cannot write the marker prints a warning and scaffolds as before.
