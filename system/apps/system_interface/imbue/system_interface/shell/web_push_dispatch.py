@@ -284,6 +284,7 @@ class PushDispatcher(MutableModel):
             if pending is not None:
                 self._pending_by_chat[request.chat_id] = pending.model_copy_update(
                     to_update(pending.field_ref().chat_title, request.chat_title),
+                    to_update(pending.field_ref().workspace_name, workspace_name),
                     to_update(pending.field_ref().send_ids, (*pending.send_ids, send_id)),
                     to_update(pending.field_ref().texts, (*pending.texts, text)),
                 )

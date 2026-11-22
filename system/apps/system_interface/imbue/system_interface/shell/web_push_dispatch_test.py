@@ -125,7 +125,7 @@ def test_a_burst_from_one_chat_waits_out_the_window_and_goes_as_one(tmp_path: Pa
 
     clock.now += 5
     second = dispatcher.submit(_send("two"), "Studio")
-    third = dispatcher.submit(_send("three"), "Studio")
+    third = dispatcher.submit(_send("three"), "Renamed Studio")
     dispatcher.flush_due()
     assert len(transport.posted) == 1
 
@@ -133,7 +133,7 @@ def test_a_burst_from_one_chat_waits_out_the_window_and_goes_as_one(tmp_path: Pa
     dispatcher.flush_due()
 
     assert len(transport.posted) == 2
-    assert json.loads(transport.posted[1].payload)["body"] == "2 updates for you in Studio."
+    assert json.loads(transport.posted[1].payload)["body"] == "2 updates for you in Renamed Studio."
     by_id = {entry.send_id: entry for entry in dispatcher.log.entries()}
     assert by_id[first.send_id].status is SendStatus.SENT
     assert (by_id[second.send_id].status, by_id[second.send_id].carried_by) == (SendStatus.MERGED, third.send_id)
