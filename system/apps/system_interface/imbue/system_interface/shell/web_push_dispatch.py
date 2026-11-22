@@ -56,10 +56,8 @@ MAX_SEND_LOG_ENTRIES: Final[int] = 100
 # A later notification from a chat waits until this long after the chat's last post, and goes out with every other
 # one that arrived meanwhile.
 COALESCE_SECONDS: Final[float] = 60.0
-# At most this many posts per chat in a window this long...
 PER_CHAT_POST_LIMIT: Final[int] = 4
 PER_CHAT_WINDOW_SECONDS: Final[float] = 10 * 60.0
-# ...and this many for the whole workspace in a window this long.
 WORKSPACE_POST_LIMIT: Final[int] = 20
 WORKSPACE_WINDOW_SECONDS: Final[float] = 60 * 60.0
 
