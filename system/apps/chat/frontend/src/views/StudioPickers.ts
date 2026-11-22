@@ -9,7 +9,7 @@
  * their own typed in.
  *
  * A picker takes clicks only in the reply the chat waits on its user to answer; in an earlier message it is drawn
- * as it was, disabled.
+ * disabled. It reads the same draft there, so what was picked from it no longer shows once that was sent.
  */
 
 import m from "mithril";
