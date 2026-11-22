@@ -15,7 +15,9 @@ the agent manager.
 from __future__ import annotations
 
 import base64
+import errno
 import fcntl
+import io
 import json
 import os
 import queue
@@ -1715,3 +1717,10 @@ def running_workspace(
             chat_server.shutdown()
             chat_thread.join(timeout=5.0)
             chat_state.shutdown()
+
+
+class DiskFullStream(io.BytesIO):
+    """A stream whose every read fails as a write to a full disk does, for an upload's copy into storage."""
+
+    def read(self, size: int | None = -1) -> bytes:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))

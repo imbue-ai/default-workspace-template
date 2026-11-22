@@ -1,6 +1,5 @@
 """Tests for the Flask server."""
 
-import errno
 import fcntl
 import io
 import json
@@ -147,6 +146,7 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.testing import DiskFullStream
 from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
@@ -667,13 +667,6 @@ def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) ->
     assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
 
 
-class _DiskFullUploadStream(io.BytesIO):
-    """Takes the request's bytes, then fails the copy into the uploads directory as a full disk does."""
-
-    def read(self, size: int | None = -1) -> bytes:
-        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
-
-
 class _DiskFullUploadRequest(Request):
     def _get_file_stream(
         self,
@@ -682,7 +675,7 @@ class _DiskFullUploadRequest(Request):
         filename: str | None = None,
         content_length: int | None = None,
     ) -> IO[bytes]:
-        return _DiskFullUploadStream()
+        return DiskFullStream()
 
 
 @pytest.mark.parametrize("is_chat_scoped", [False, True], ids=["workspace", "chat"])
