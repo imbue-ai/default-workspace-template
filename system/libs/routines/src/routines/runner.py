@@ -78,6 +78,8 @@ RUNNER_FAILED_SUMMARY: Final[str] = "The runner itself failed before the run cou
 RUN_DIR_ENV: Final[str] = "ROUTINES_RUN_DIR"
 RUN_ID_ENV: Final[str] = "ROUTINES_RUN_ID"
 ROUTINE_ID_ENV: Final[str] = "ROUTINES_ROUTINE_ID"
+# What started the run, spelled as `routines run --trigger` spells it: `scheduled` or `manual`.
+TRIGGER_ENV: Final[str] = "ROUTINES_TRIGGER"
 _TIMED_OUT_EXIT_CODE: Final[int] = 124
 # What a shell answers for a command it could not find, for a command whose executable is missing.
 _MISSING_EXECUTABLE_EXIT_CODE: Final[int] = 127
@@ -180,7 +182,7 @@ class Runner(MutableModel):
             self._record_start(routine_id, effective_run_id, definition, trigger, started_at)
             execution: _Execution | None = None
             try:
-                execution = self._execute(routine_id, effective_run_id, definition, run_dir)
+                execution = self._execute(routine_id, effective_run_id, trigger, definition, run_dir)
             finally:
                 # An error in the runner itself goes on to the caller (and the run's log, which is this process's
                 # stderr); the books are closed first so the run is not later taken for one a restart cut off.
@@ -251,6 +253,7 @@ class Runner(MutableModel):
         self,
         routine_id: RoutineId,
         run_id: RunId,
+        trigger: RunTrigger,
         definition: RoutineDefinition,
         run_dir: Path,
     ) -> _Execution:
@@ -260,6 +263,7 @@ class Runner(MutableModel):
         return self._execute_command(
             routine_id,
             run_id,
+            trigger,
             definition.command,
             definition.timeout.timedelta,
             run_dir,
@@ -269,6 +273,7 @@ class Runner(MutableModel):
         self,
         routine_id: RoutineId,
         run_id: RunId,
+        trigger: RunTrigger,
         command: tuple[str, ...],
         timeout: timedelta,
         run_dir: Path,
@@ -279,6 +284,7 @@ class Runner(MutableModel):
             RUN_DIR_ENV: str(run_dir),
             RUN_ID_ENV: str(run_id),
             ROUTINE_ID_ENV: str(routine_id),
+            TRIGGER_ENV: trigger.lower(),
         }
         with log_path.open("ab") as log_handle:
             try:

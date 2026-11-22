@@ -1,8 +1,9 @@
 /**
  * The status row at the live end of the transcript -- the harness-common shell. It sits where
  * the reply will appear, so it is where the user is already looking once they send: just under
- * their own message while that waits on the agent, and as the last piece of the agent's latest stretch, on its line,
- * while the agent works (``turnStatusPlacement`` says which).
+ * their own message while it waits on the agent or opens the agent's turn, and as the last piece of the agent's
+ * latest stretch, on its line, while the agent works on a turn already in the transcript (``turnStatusPlacement``
+ * says which).
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
@@ -50,14 +51,14 @@
 import m from "mithril";
 import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/components/activityDot";
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
-import { COMPACTING_STATE } from "../models/activityState";
+import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { getEventsForChat, hasMoreAfter } from "../models/Response";
-import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
+import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
-import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
+import { heldSendsShownElsewhere } from "./HeldSendView";
 import { railNodeAttrs } from "./agent-rail";
 import { AGENT_TEXT_EDGE_CLASS, STRETCH_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { resolutionRequestIdOf } from "./message-classification";
@@ -264,16 +265,23 @@ function oldestSendingAt(chatId: string): number | null {
 }
 
 /** Where the status row goes at the live end of the transcript: under the user's own sends while it
- *  stands for one (a send on its way, or waiting on the agent to come up), else under the latest
- *  turn, ahead of anything queued behind it. */
+ *  stands for one (a send on its way, or waiting on the agent to come up) or reports the turn one of
+ *  them opens, until that send reaches the transcript; else under the latest turn, ahead of anything
+ *  queued behind it. */
 export function turnStatusPlacement(chatId: string): "after-sends" | "after-turn" {
   const chat = getChatById(chatId);
-  const isWorking =
-    chat !== undefined &&
-    (chat.handoff !== null ||
-      (chat.active_agent.activity_state !== null && chat.active_agent.activity_state !== "IDLE"));
-  if (isWorking) return "after-turn";
-  return isChatConnecting(chatId) || getOutgoingMessages(chatId).length > 0 ? "after-sends" : "after-turn";
+  const outgoing = getOutgoingMessages(chatId);
+  if (chat !== undefined && chat.handoff !== null) {
+    // A switch that hands its held sends over as the agent's next turn reports that turn's start until the
+    // first of them lands; the rest wait behind that turn.
+    const isSendWaiting = chat.handoff.held_sends.length > 0 || outgoing.length > 0;
+    const isTurnOpening = opensTurnWithHeldSends(chat.handoff) && heldSendsShownElsewhere(chatId) === 0;
+    return isTurnOpening && isSendWaiting ? "after-sends" : "after-turn";
+  }
+  if (chat !== undefined && isWorkingActivityState(chat.active_agent.activity_state)) {
+    return outgoing.some((message) => message.opensTurn) ? "after-sends" : "after-turn";
+  }
+  return isChatConnecting(chatId) || outgoing.length > 0 ? "after-sends" : "after-turn";
 }
 
 // How long the wake-up strip may stand in for the agent after a verdict. Long
@@ -436,24 +444,21 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     return renderStrip(null, STARTING_STATE, columnClass, elapsedSince(startedAt, now));
   };
 
-  /** The activity line: the switch's phase, the turn's caption, the wake-up caption, the row of a send
+  /** The activity line: the turn's caption, the wake-up caption, the row of a send
    *  not yet in a turn, or the row of a turn not yet started; null when there is none. */
   const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
     cancelTick();
     const { chatId, events } = attrs;
     const chat = getChatById(chatId);
-    // A chat switching harness reports the switch, not the retiring agent's turn: that
-    // agent is busy with the summary it was asked for, which is the switch's own business.
-    // The failed phase has its own notice over the composer and shows nothing here.
-    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
+    // A chat switching agent or account says so in one place, the switch's own node in the conversation, so the
+    // status row shows nothing until the switch lands: the agent's turn meanwhile is the switch's own business (the
+    // summary it was asked for). A failed switch has its notice over the composer, and once a handoff has landed
+    // the successor is the chat's agent: both go back to the agent's own activity.
+    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed" && !chat.handoff.has_landed) {
       cancelRelease();
       cancelWake();
       heldToolCaption = null;
-      return renderStrip(
-        handoffPhaseText(chat.handoff, chat.active_agent.harness),
-        `HANDOFF_${chat.handoff.phase}`,
-        columnClass,
-      );
+      return null;
     }
     const state = chat?.active_agent.activity_state ?? null;
     const label = labelForActivityState(

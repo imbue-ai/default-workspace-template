@@ -10,7 +10,9 @@ import pytest
 from werkzeug.test import TestResponse
 from workspace_themes.testing import write_standard_theme
 
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from files_app.connections import shared_paths
 from files_app.device_files import safe_content_disposition
 from files_app.server import create_app
@@ -68,6 +70,18 @@ def test_a_folder_stamp_moves_when_something_is_added_to_it_and_not_when_a_file_
 
     (folder / "Atkinson.otf").write_text("b")
     assert stamps()["/fonts/"] != first["/fonts/"]
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(tmp_path: Path) -> None:
+    """The workspace's own browser is on loopback too, so Files reads a header-less request as the owner's only from
+    loopback under a loopback Host, and never one its browser marks as another origin's."""
+    client = _app(None, tmp_path)
+    (tmp_path / "root" / "notes").mkdir()
+    assert client.get("/notes/?json").status_code == 200
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/notes/?json")
+    cross_site = client.put("/notes/dropped.txt", data=b"x", headers=CROSS_SITE_FETCH_HEADERS)
+    assert cross_site.status_code == 403
+    assert not (tmp_path / "root" / "notes" / "dropped.txt").exists()
 
 
 def test_a_keybindings_read_with_an_unreadable_identity_header_is_refused(tmp_path: Path) -> None:

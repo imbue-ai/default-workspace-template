@@ -4,8 +4,9 @@ import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
 import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
+import { currentResourceGauge, resetResourceGaugeForTesting } from "../model/resourceGauge";
 import { getRoster, resetRosterForTesting } from "../model/Roster";
-import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
+import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -23,7 +24,7 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
-import type { GridCell } from "../model/records";
+import type { BubbleWire, GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
@@ -34,6 +35,8 @@ import {
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   STOP_VIEWING_FIRST_NOTICE,
+  STOP_VIEWING_NOWHERE_NOTICE,
+  STOP_VIEWING_UNANSWERED_NOTICE,
   TRAY_HOP_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
@@ -117,6 +120,27 @@ function makeStore(
   return store;
 }
 
+/** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
+ *  ``reports``; opened to show ``soloWindowId`` alone when given. */
+function makePopOutStore(
+  soloWindowId: string | null = null,
+  isSoloReopened = false,
+): {
+  store: DesktopStore;
+  calls: unknown[];
+  reports: unknown[];
+} {
+  const calls: unknown[] = [];
+  const reports: unknown[] = [];
+  const popOut: PopOutBridge = {
+    requestPopOut: (request) => calls.push(["request", request]),
+    beginWindowDrag: (request) => calls.push(["drag", request]),
+    endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
+    reportDetachedWindows: (windows) => reports.push(windows),
+  };
+  return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
+}
+
 /** A started store; the apps come from the inventory (``api.apps``), no socket message needed. */
 async function startedStore(redraw: () => void = () => undefined): Promise<DesktopStore> {
   const store = makeStore(redraw);
@@ -142,6 +166,7 @@ afterEach(() => {
   resetPresenceForTesting();
   resetRosterForTesting();
   resetChatsActivityForTesting();
+  resetResourceGaugeForTesting();
   vi.useRealTimers();
 });
 
@@ -2067,27 +2092,6 @@ describe("links Imbue Studio hands over", () => {
 });
 
 describe("pulled-out windows", () => {
-  /** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
-   *  ``reports``; opened to show ``soloWindowId`` alone when given. */
-  function makePopOutStore(
-    soloWindowId: string | null = null,
-    isSoloReopened = false,
-  ): {
-    store: DesktopStore;
-    calls: unknown[];
-    reports: unknown[];
-  } {
-    const calls: unknown[] = [];
-    const reports: unknown[] = [];
-    const popOut: PopOutBridge = {
-      requestPopOut: (request) => calls.push(["request", request]),
-      beginWindowDrag: (request) => calls.push(["drag", request]),
-      endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
-      reportDetachedWindows: (windows) => reports.push(windows),
-    };
-    return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
-  }
-
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
 
   /** The stored placement of ``windowId`` on the home desktop, as the shell holds it. */
@@ -2458,26 +2462,45 @@ describe("pulled-out windows", () => {
     expect(socket.reports).toEqual([]);
   });
 
-  it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
+  it("shows a pulled-out window's own desktop window from its taskbar entry, minimized or not, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
     store.setCanPopOut(true);
     await store.detachWindow("win-1");
     expect(calls).toHaveLength(1);
-    // The ghost's "Hide": out of sight, but still out, and still reported as such.
-    store.minimizeWindow("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
-    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
-    // The entry's click shows the ghost again where it stood, asking the chrome for nothing.
-    store.toggleTaskbarEntry("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: false });
-    expect(calls).toHaveLength(1);
-    // With the ghost showing, the click shows the window's own desktop window as before.
     store.toggleTaskbarEntry("win-1");
     expect(calls).toHaveLength(2);
     expect(calls[1]).toMatchObject(["request", { windowId: "win-1" }]);
-    await settle();
-    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true, is_minimized: false });
+    // Minimized (an agent's ``layout.py minimize``): still out, still reported, and the click still shows it.
+    store.minimizeWindow("win-1");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
+    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
+    store.toggleTaskbarEntry("win-1");
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-1" }]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+  });
+
+  it("shows the avatar's pulled-out pinned window for a click on the agent, minimized or not", async () => {
+    api.apps = [chatLikeAppRecord("chat")];
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })] }),
+    ];
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    await store.detachWindow("win-chat");
+    expect(calls).toHaveLength(1);
+
+    await store.openAgentChat();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject(["request", { windowId: "win-chat" }]);
+    store.minimizeWindow("win-chat");
+    await store.openAgentChat();
+    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true });
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-chat" }]);
+    expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
   });
 
   it("reports the active desktop's pulled-out windows with their titles whenever the set changes", async () => {
@@ -2917,6 +2940,87 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
   });
 
+  it("revives the socket at once on coming back into sight, and not on going out of it", async () => {
+    const store = await phoneStore(["win-1"]);
+    store.onVisibilityChange(false);
+    expect(socket.reviveRequests).toBe(0);
+    store.onVisibilityChange(true);
+    expect(socket.reviveRequests).toBe(1);
+  });
+
+  it("lands on the window it last showed before its desktop's layout is read, so that page need not wait", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
+    let answerLayout: () => void = () => undefined;
+    api.layoutReadGate = new Promise((resolve) => {
+      answerLayout = resolve;
+    });
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    const starting = store.start(NO_LINK);
+    await settle();
+    expect(api.calls).toContain("fetchPlacements:home");
+    expect(store.getState().isLayoutLoaded).toBe(false);
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    answerLayout();
+    await starting;
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+  });
+
+  it("lands home when the workspace has no desktop, without recording it, and lands properly once one comes", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [];
+    api.clients = [clientRecord(CLIENT)];
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // A reread that still finds no desktop does not record home as where this client was.
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("recordShown:"))).toEqual([]);
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true })] })];
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+  });
+
+  it("lands home rather than on nothing when the startup read fails, and where it was once a push brings desktops", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // The shell back: its socket pushes the desktops, and the phone reads where this client was before landing.
+    api.refusal = null;
+    socket.deliver().onAppsUpdated([...api.apps]);
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1"]);
+  });
+
+  it("lands home when the startup read fails before the phone layout is known", async () => {
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    store.setThemeMetrics(METRICS, PHONE);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+  });
+
   it("tells the shell again what it shows when a reread finds the show unrecorded", async () => {
     const store = await phoneStore(["win-1"]);
     api.refusal = "the shell is restarting";
@@ -2947,6 +3051,26 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+
+  it("does not reload the shown page on a later reconnect when the socket held while the page was away", async () => {
+    const store = await phoneStore(["win-1"]);
+    const reloaded: string[] = [];
+    store.setPageDriver({
+      reload: (id) => void reloaded.push(id),
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onConnected();
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    socket.deliver().onLiveConfirmed();
+    // A blip long after the page came back: the page's own connections were never in doubt.
+    socket.deliver().onConnected();
+    expect(reloaded).toEqual([]);
   });
 });
 
@@ -3178,6 +3302,20 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(store.getBubbles()).toEqual([]);
   });
 
+  it("takes the resource gauge the shell pushes and redraws", async () => {
+    let redraws = 0;
+    await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    socket.deliver().onResourceGaugeChanged({
+      settings: { visibility: "always" },
+      readings: { cpu: null, memory: null, disk: null },
+      alerts: [{ resource: "disk", severity: "warning", headline: "Disk space is low", detail: "3.2 GB left" }],
+      recent_stops: [],
+    });
+    expect(currentResourceGauge()?.alerts.map((alert) => alert.headline)).toEqual(["Disk space is low"]);
+    expect(redraws).toBe(before + 1);
+  });
+
   it("raises a bubble per speaker, puts it away after its lifetime or on a dismiss, and opens its chat on a click", async () => {
     const store = await startedStore();
     offerApps(api, socket, [
@@ -3185,51 +3323,86 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
         message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
       }),
     ]);
-    const bubble = {
-      speaker: "user:user-bob-4471",
-      chat_id: "agent-2",
-      chat_title: "Lounge",
-      text: "hi",
-      message_id: "m-1",
-      mentions: [],
-    };
-    socket.deliver().onBubble(bubble);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", message_id: "m-2" });
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual([
-      "user:user-bob-4471",
-      "user:user-carol-1d2e",
-    ]);
-
-    store.dismissBubble("user:user-carol-1d2e");
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
-    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS + 1);
-    expect(store.getBubbles()).toEqual([]);
-
-    socket.deliver().onBubble({ ...bubble, message_id: "m-3" });
-    store.openBubble("user:user-bob-4471");
-    await settle();
-    expect(store.getBubbles()).toEqual([]);
-    expect(api.relayedMessages).toEqual([
-      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
-    ]);
-
-    // A mention of the viewer never times out, but showing its chat from anywhere (the agent card's rows) puts
-    // it away; a bubble of another chat stays.
     setOwnIdentityForTesting({
       owner: true,
       user_id: "user-josh-0001",
       email: "josh@example.com",
       participant: VIEWER,
     });
-    socket.deliver().onBubble({ ...bubble, message_id: "m-4", mentions: [VIEWER] });
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-5" });
-    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    const notification: BubbleWire = {
+      speaker: "workspace-agent",
+      chat_id: "agent-2",
+      chat_title: "Main chat",
+      text: "The report is ready.",
+      message_id: "m-1",
+      mentions: [],
+      kind: "notification",
+    };
+    const mention: BubbleWire = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-3",
+      chat_title: "Lounge",
+      text: "@Josh look",
+      message_id: "m-2",
+      mentions: [VIEWER],
+      kind: "message",
+    };
+    socket.deliver().onBubble(notification);
+    socket.deliver().onBubble(mention);
     expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.isMention])).toEqual([
+      ["workspace-agent", false],
       ["user:user-bob-4471", true],
     ]);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-6" });
-    expect(await store.showChat("agent-2")).toBe(true);
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-carol-1d2e"]);
+
+    // The notification times out; the mention of the viewer never does, until it is dismissed.
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
+    store.dismissBubble("user:user-bob-4471");
+    expect(store.getBubbles()).toEqual([]);
+
+    socket.deliver().onBubble({ ...notification, message_id: "m-3" });
+    store.openBubble("workspace-agent");
+    await settle();
+    expect(store.getBubbles()).toEqual([]);
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
+    ]);
+
+    // Showing a chat from anywhere (the agent card's rows) puts its bubbles away, a mention of the viewer included;
+    // a bubble of another chat stays.
+    socket.deliver().onBubble({ ...mention, message_id: "m-4" });
+    socket.deliver().onBubble({ ...notification, chat_id: "agent-4", message_id: "m-5" });
+    expect(await store.showChat("agent-3")).toBe(true);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["workspace-agent"]);
+  });
+
+  it("raises no bubble for a message that does not mention the viewer, the agent's words included, but hops its speaker", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    const message: BubbleWire = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "@Carol hi",
+      message_id: "m-1",
+      mentions: ["user:user-carol-1d2e"],
+      kind: "message",
+    };
+
+    const before = redraws;
+    socket.deliver().onBubble(message);
+    socket.deliver().onBubble({ ...message, speaker: "workspace-agent", text: "Looking into it.", mentions: [] });
+
+    // The hops are painted although no bubble rose.
+    expect(redraws).toBe(before + 2);
+    expect(store.getBubbles()).toEqual([]);
+    expect(store.getHopping()).toEqual(new Set(["user:user-bob-4471", "workspace-agent"]));
   });
 
   it("raises no bubble for the chat the user is looking at, unless it mentions the viewer", async () => {
@@ -3243,41 +3416,52 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
       placements: [placementRecord("win-1"), placementRecord("win-chat")],
     });
     const store = await startedStore();
-    const bubble = {
-      speaker: "user:user-bob-4471",
+    const notification: BubbleWire = {
+      speaker: "workspace-agent",
       chat_id: "agent-2",
       chat_title: "Lounge",
-      text: "hi",
+      text: "The report is ready.",
       message_id: "m-1",
       mentions: [],
+      kind: "notification",
     };
 
-    // The chat's window is focused: its bubbles say nothing the user cannot see, so none is raised; the entry
-    // still hops, and a bubble of another chat still rises.
-    socket.deliver().onBubble(bubble);
+    // The chat's window is focused: its notification says nothing the user cannot see, so none is raised; the
+    // entry still hops, and a notification of another chat still rises.
+    socket.deliver().onBubble(notification);
     expect(store.getBubbles()).toEqual([]);
-    expect(store.getHopping().has(bubble.speaker)).toBe(true);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-2" });
+    expect(store.getHopping().has(notification.speaker)).toBe(true);
+    socket.deliver().onBubble({ ...notification, chat_id: "agent-3", message_id: "m-2" });
     expect(store.getBubbles().map((candidate) => candidate.chatId)).toEqual(["agent-3"]);
 
-    // A mention of the viewer rises even over its own chat; with the chat's window minimized, everything rises.
+    // A mention of the viewer rises even over its own chat; with the chat's window minimized, a notification of it
+    // rises too.
     setOwnIdentityForTesting({
       owner: true,
       user_id: "user-josh-0001",
       email: "josh@example.com",
       participant: VIEWER,
     });
-    socket.deliver().onBubble({ ...bubble, message_id: "m-3", mentions: [VIEWER] });
+    socket.deliver().onBubble({
+      ...notification,
+      speaker: "user:user-bob-4471",
+      message_id: "m-3",
+      mentions: [VIEWER],
+      kind: "message",
+    });
     expect(store.getBubbles().map((candidate) => [candidate.chatId, candidate.isMention])).toEqual([
       ["agent-3", false],
       ["agent-2", true],
     ]);
     store.minimizeWindow("win-chat");
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-dave-9b3c", message_id: "m-4" });
-    expect(last(store.getBubbles())?.speaker).toBe("user:user-dave-9b3c");
+    socket.deliver().onBubble({ ...notification, message_id: "m-4" });
+    expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.chatId])).toEqual([
+      ["workspace-agent", "agent-2"],
+      ["user:user-bob-4471", "agent-2"],
+    ]);
   });
 
-  it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
+  it("drafts a mention of a clicked person through the mention launch path into the pinned window", async () => {
     const store = await startedStore();
     const chat = chatLikeAppRecord("chat", {
       launch_paths: [
@@ -3299,8 +3483,47 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
 
     expect(await store.mentionPerson("Bob")).toBe(true);
     expect(api.calls).toContain('launch:home:chat:lounge:{"message":"@Bob "}:window:win-chat');
-    expect(await store.openMainChat()).toBe(true);
-    expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
+  });
+
+  it("brings the avatar's pinned window back on the chat it holds for a click on the agent, never putting it away", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [appRecord("docs"), chatLikeAppRecord("chat")]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true }),
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    const barIds = () => barEntries(store.getState()).map((entry) => entry.window.id);
+
+    // Closed for this client: out of the bar, and the click lists it back on top.
+    await store.closeOrMinimizeWindow("win-chat");
+    expect(barIds()).toEqual(["win-1"]);
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    expect(barIds()).toEqual(["win-1", "win-chat"]);
+    store.raiseWindow("win-1");
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    // Already on top: it stays, where its own taskbar entry's click would minimize it.
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    // The window keeps its chat: nothing was launched into it.
+    expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-chat")?.path).toBe(
+      "/?chat=agent-2",
+    );
+  });
+
+  it("opens the main chat for a click on the agent when the desktop has no pinned window", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [appRecord("docs"), appRecord("notes"), chatLikeAppRecord("chat")]);
+
+    expect(await store.openAgentChat()).toBe(true);
+    expect(api.calls).toContain("launch:home:chat:new:{}:new");
   });
 
   it("opens the chat about a window's app beside it through the app-chat launch path, and tells the user when there is none", async () => {
@@ -3379,6 +3602,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
       text: "@Josh look",
       message_id: "m-1",
       mentions: [VIEWER],
+      kind: "message",
     });
     expect(await store.mentionPerson("Bob")).toBe(false);
     expect(await store.showChat("agent-1")).toBe(false);
@@ -3413,6 +3637,7 @@ describe("the tray's hops", () => {
       text: "hi",
       message_id: "m-1",
       mentions: [],
+      kind: "message",
     });
     expect(store.getHopping()).toEqual(new Set([bob.key, carol.key]));
 
@@ -3498,6 +3723,18 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   const alices = desktopRecord("alice", { owner: "user:user-alice-0001" });
   const josh = rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true });
   const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice" });
+  const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
+
+  /** Alice visiting a workspace whose desktops are the owner's and Bob's: none is hers. */
+  function visitorWithNoDesktopOfHerOwn(): void {
+    api.desktops = [api.desktops[0], bobs];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+  }
 
   async function viewerStore(): Promise<DesktopStore> {
     api.desktops = [...api.desktops, alices];
@@ -3815,6 +4052,39 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 
+  it("refuses a click on the agent while viewing, asking the chrome for nothing for the owner's pulled-out chat", async () => {
+    api.apps = [appRecord("docs"), chatLikeAppRecord("chat")];
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    api.writeLayout("alice", "alice-laptop", {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-chat", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    socket.deliver().onRosterUpdated([josh, alice]);
+    await store.switchDesktop("alice");
+    const callsBefore = api.calls.length;
+
+    expect(await store.openAgentChat()).toBe(false);
+    expect(calls).toEqual([]);
+    expect(api.calls.slice(callsBefore)).toEqual([]);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+  });
+
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {
     const shortcut = shortcutRecord("docs", { column: 0, row: 0 });
     const withWindows = desktopRecord("alice", {
@@ -3841,9 +4111,10 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
       speaker: alice.key,
       chat_id: "agent-2",
       chat_title: "Lounge",
-      text: "hi",
+      text: "@Josh hi",
       message_id: "m-1",
-      mentions: [],
+      mentions: [VIEWER],
+      kind: "message",
     });
     await store.switchDesktop("alice");
     const callsBefore = api.calls.length;
@@ -3915,7 +4186,6 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("a visitor with no desktop left arrives again when the viewed one is deleted, and lands on the seeded one", async () => {
-    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
     api.desktops = [api.desktops[0], alices, bobs];
     setOwnIdentityForTesting({
       owner: false,
@@ -3939,19 +4209,64 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("stop viewing with no desktop of its own arrives again and lands on the seeded one", async () => {
-    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
     api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("alice-2");
     expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("stop viewing that the shell answers with the viewed desktop says there is nowhere else to go", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(notices()).toEqual([STOP_VIEWING_NOWHERE_NOTICE]);
+  });
+
+  it("stop viewing that cannot reach the shell says so, and leaves when pressed again once the shell answers", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    api.refusal = "the shell is down";
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(notices()).toEqual([STOP_VIEWING_UNANSWERED_NOTICE]);
+
+    api.refusal = null;
+    api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("stop viewing that finds nowhere to go after the window already moved off says nothing", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    let answerArrival: () => void = () => undefined;
+    const arrivalAnswered = new Promise<void>((resolve) => {
+      answerArrival = resolve;
+    });
+    const arrive = api.arriveClient.bind(api);
+    api.arriveClient = async (clientId) => {
+      await arrivalAnswered;
+      return arrive(clientId);
+    };
+
+    const stopping = store.stopViewing();
+    await store.switchDesktop("bob");
+    answerArrival();
+    await stopping;
+    expect(store.getState().activeDesktopId).toBe("bob");
+    expect(notices()).toEqual([]);
   });
 
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {

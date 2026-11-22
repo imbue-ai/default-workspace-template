@@ -132,12 +132,13 @@ def test_human_take_and_return_project_onto_neko(
     assert taken.status_code == 200
     assert taken.get_json()["controller"] == "human"
     assert taken.get_json()["human_name"] == "josh"
-    assert wait_until(lambda: fake_neko.host_id == session["session_id"])
+    # The verbs answer only once neko agrees, so the next session's first input is never a non-host's.
+    assert fake_neko.host_id == session["session_id"]
     assert fake_neko.is_locked is False
     returned = client.post("/api/control/return", json={"session_id": session["session_id"]})
     assert returned.get_json()["ok"] is True
     assert returned.get_json()["controller"] == "nobody"
-    assert wait_until(lambda: "reset" in fake_neko.calls)
+    assert "reset" in fake_neko.calls
     assert fake_neko.host_id is None
 
 
@@ -343,6 +344,35 @@ def test_neko_host_events_record_an_implicit_human_and_its_leaving(
     assert control["human_name"] == "josh"
     service.handle_neko_event("control/host", {"id": session["session_id"], "has_host": False})
     assert client.get("/api/state").get_json()["control"]["controller"] == "nobody"
+
+
+def test_the_services_own_host_changes_echoed_by_neko_do_not_move_the_lease(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
+) -> None:
+    """neko reports the host changes the service makes (give, reset) on the same socket as a human's, naming its
+    API session as the initiator; one that arrives after the lease has moved on must not re-grant a session that
+    has already returned control, which would make the next human's first input a non-host's and drop it."""
+    start_service_stack(service)
+    session = _session(client, _IDENTITY)
+    assert client.post("/api/control/take", json={"session_id": session["session_id"]}).status_code == 200
+    assert fake_neko.host_id == session["session_id"]
+    assert client.post("/api/control/return", json={"session_id": session["session_id"]}).get_json()["ok"] is True
+    assert fake_neko.host_id is None
+    calls_before = list(fake_neko.calls)
+    # The echo of the give, delivered late, then the echo of the reset.
+    service.handle_neko_event("control/host", {"id": "API", "has_host": True, "host_id": session["session_id"]})
+    assert client.get("/api/state").get_json()["control"]["controller"] == "nobody"
+    service.handle_neko_event("control/host", {"id": "API", "has_host": False})
+    assert client.get("/api/state").get_json()["control"]["controller"] == "nobody"
+    assert fake_neko.calls == calls_before
+    # The next human's first input still takes the uncontrolled Screen.
+    other = _session(client, _IDENTITY)
+    service.handle_neko_event(
+        "control/host", {"id": other["session_id"], "has_host": True, "host_id": other["session_id"]}
+    )
+    control = client.get("/api/state").get_json()["control"]
+    assert control["controller"] == "human"
+    assert control["human_session_id"] == other["session_id"]
 
 
 def test_the_services_own_session_becoming_host_is_ignored(

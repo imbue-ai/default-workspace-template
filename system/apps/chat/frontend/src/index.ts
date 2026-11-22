@@ -4,6 +4,7 @@
  */
 
 import m from "mithril";
+import "@fontsource/besley/500.css";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
 import { addActiveAgentChangedListener, addMentionsUpdatedListener, initChats } from "./models/Chats";
@@ -16,7 +17,7 @@ import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
 import { runHook } from "./hooks";
 import { trackBackendArrivals } from "./models/OutgoingMessages";
-import { isMessageCarriedBySwitch } from "./models/Response";
+import { countSentTurnsSince, isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
@@ -60,7 +61,7 @@ async function bootstrap(): Promise<void> {
   const sessionId = getChatSessionId();
   // The chat app's own WebSocket, read for this page's own chat.
   initChats();
-  trackBackendArrivals(isMessageCarriedBySwitch);
+  trackBackendArrivals(isMessageCarriedBySwitch, countSentTurnsSince);
   trackPendingLaneSettlement();
   // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an
   // optimistic pick made for the old agent would otherwise sit on the bar until its timeout.

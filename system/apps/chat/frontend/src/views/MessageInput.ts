@@ -8,12 +8,22 @@ import {
   hasReadyAttachments,
   removeComposerAttachment,
   restoreComposerAttachments,
+  stagePastedText,
+  unstagePastedText,
   uploadFilesToComposer,
   waitForComposerUploads,
 } from "../models/ComposerAttachments";
+import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
+import {
+  forgetDictatedSpeech,
+  hasDictatedSpeech,
+  markDictatedSpeech,
+  withDictationNote,
+  withoutDictationNotes,
+} from "../models/dictationNote";
 import { stageElementReferences } from "../models/elementReferences";
 import {
   drainToComposer,
@@ -39,6 +49,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
+  dropOutgoingByMessageId,
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
@@ -46,15 +57,18 @@ import {
   describeRequestError,
   describeRequestErrorKind,
   isUnansweredRequest,
+  sendFailureKindOf,
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
-  areAccountsLoaded,
   isAccountSignedOut,
+  isFirstRunProviderStepPending,
   loadAccounts,
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { isAwaitingProvider, openFirstSendChooser } from "../models/firstSendChooser";
+import { framingChatRoot } from "../embedApi";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -64,6 +78,7 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  addHeldSendFailedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -74,9 +89,11 @@ import {
   whenChatRegistered,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
+import { browserWakeLockHost, createScreenWakeLock } from "../models/screenWakeLock";
+import type { ScreenWakeLock } from "../models/screenWakeLock";
 import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
-import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -88,6 +105,33 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
+import { isHandledByInputMethod, keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
+import { QueryObserver, skipToken } from "@tanstack/query-core";
+import {
+  createDictation,
+  describeSpeechModelLoadError,
+  isSpeechModelLoadProblem,
+} from "@imbue/workspace-voice/src/dictation";
+import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
+import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
+import { probeEngineDownload } from "@imbue/workspace-voice/src/downloadProbe";
+import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
+import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
+import { createReadyChime } from "@imbue/workspace-voice/src/readyChime";
+import { getSpeechModels, getVoiceQueryClient } from "@imbue/workspace-voice/src/speechModel";
+import type { SpeechModel, SpeechModelProgress } from "@imbue/workspace-voice/src/speechModel";
+import {
+  describeHost,
+  dictationShortcutChord,
+  dictationShortcutLabel,
+  isApplePlatform,
+  isDictationSupported,
+  pageDictationOptions,
+} from "@imbue/workspace-voice/src/support";
+import type { PageDictationOptions } from "@imbue/workspace-voice/src/support";
+import { DictationButton, dictationNotice, dictationProgressPercent } from "./DictationButton";
+import type { DictationButtonState } from "./DictationButton";
 
 export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
@@ -134,6 +178,13 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "nothing_to_compact",
   "compact_unavailable",
 ]);
+
+// A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
+// refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting
+// binary content), so dropping them sends exactly what the user saw.
+function withoutNulCharacters(draft: string): string {
+  return draft.split("\0").join("");
+}
 
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
@@ -222,9 +273,12 @@ const pendingComposerClears = new Set<string>();
 export interface TakenComposerDraft {
   /** What the user typed, for putting back if it could not be sent. */
   text: string;
-  /** What goes on the wire: the text with the attachment references appended. */
+  /** What goes on the wire: the text, the dictation note when the draft may hold dictated words, and the
+   *  attachment references appended. */
   finalText: string;
   attachments: readonly ComposerAttachment[];
+  /** Whether dictation wrote into the draft, so one put back counts as holding dictated words again. */
+  mayContainDictatedSpeech: boolean;
 }
 
 /**
@@ -248,18 +302,46 @@ export async function takeComposerDraft(chatId: string): Promise<TakenComposerDr
   }
   const text = localStorage.getItem(messageTextKey(chatId)) ?? "";
   const attachments = getComposerAttachments(chatId);
-  const finalText = buildMessageWithAttachments(text, getReadyAttachmentPaths(chatId));
+  const mayContainDictatedSpeech = hasDictatedSpeech(chatId);
+  const finalText = buildMessageWithAttachments(
+    mayContainDictatedSpeech ? withDictationNote(text) : text,
+    getReadyAttachmentPaths(chatId),
+  );
   localStorage.removeItem(messageTextKey(chatId));
+  forgetDictatedSpeech(chatId);
   clearComposerAttachments(chatId);
   pendingComposerClears.add(chatId);
   m.redraw();
-  return { text, finalText, attachments };
+  return { text, finalText, attachments, mayContainDictatedSpeech };
 }
 
 /** Hand a taken draft back to ``chatId``'s composer when what it was taken for did not happen. */
 export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft): void {
   restoreToComposer(chatId, taken.text, taken.attachments);
+  if (taken.mayContainDictatedSpeech) markDictatedSpeech(chatId);
 }
+
+// The sends this page posted that the chat app held for an agent still coming up, by send-time id: the draft each
+// was sent from, for handing back if the chat app reports it never reached the agent. Page memory, like the
+// "Sending…" bubble it stands behind.
+const heldSendDrafts = new Map<string, { chatId: string; draft: TakenComposerDraft }>();
+
+/** Note a send the chat app answered "held", so a later report that it never landed can hand it back. */
+function rememberHeldSend(chatId: string, messageId: string, draft: TakenComposerDraft): void {
+  heldSendDrafts.set(messageId, { chatId, draft });
+}
+
+// Only the page that sent a held send holds its draft, so only that page answers.
+addHeldSendFailedListener((chatId, messageId, detail, kind) => {
+  const held = heldSendDrafts.get(messageId);
+  if (held === undefined || held.chatId !== chatId) {
+    return;
+  }
+  heldSendDrafts.delete(messageId);
+  dropOutgoingByMessageId(chatId, [messageId]);
+  restoreComposerDraft(chatId, held.draft);
+  raiseFailureNotice(chatId, { title: "Couldn't send your message", detail, kind: sendFailureKindOf(kind) });
+});
 
 /**
  * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
@@ -296,9 +378,6 @@ function clearComposerHint(chatId: string): void {
   localStorage.removeItem(composerHintKey(chatId));
 }
 
-/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
- *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
- *  text (``stageElementReferences``). */
 // The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
 let mountedComposerTextarea: HTMLTextAreaElement | null = null;
 
@@ -311,22 +390,28 @@ export function focusComposer(): boolean {
   return true;
 }
 
+/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
+ *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
+ *  text (``stageElementReferences``). Delivered text comes back without the dictation notes its messages carried:
+ *  the draft it joins counts as holding dictated words instead, so the next send carries one note. */
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
+  const returned = withoutDictationNotes(block);
   const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
   // The block already leads the draft (the app-chat button pressed again while its lead-in sits unsent):
   // prepending it once more would stack identical copies. Checked before staging, which attaches files.
-  if (existingDraft.startsWith(block)) {
+  if (existingDraft.startsWith(returned.text)) {
     return;
   }
-  const text = stageElementReferences(chatId, block);
+  const text = stageElementReferences(chatId, returned.text);
   if (!text) {
     return;
   }
   const merged = existingDraft.trim().length === 0 ? text : `${text}\n\n${existingDraft}`;
   localStorage.setItem(messageTextKey(chatId), merged);
+  if (returned.hadNote) markDictatedSpeech(chatId);
   pendingComposerPrepends.set(chatId, merged);
   m.redraw();
 }
@@ -404,6 +489,50 @@ function warmUpStoppedChat(chatId: string): void {
     })
     .catch((err: unknown) => console.warn(`Could not start chat ${chatId} ahead of its message: ${String(err)}`))
     .finally(() => warmingAgentIds.delete(agentId));
+}
+
+/** Whether this page offers dictation at all (the workspace-voice-input spec, D5): a secure context with a
+ *  microphone, an audio worklet, WebAssembly, and a worker. */
+function isDictationOffered(): boolean {
+  return isDictationSupported(describeHost());
+}
+
+/** The kind of device this page is on, which picks the engine it dictates with (the spec's D9): touch where a
+ *  finger is the primary pointer. A page with no window to ask has no pointer, and is a desktop. */
+function pageDeviceClass(): DeviceClass {
+  return typeof matchMedia === "function" && matchMedia(TOUCH_MEDIA_QUERY).matches ? "touch" : "desktop";
+}
+
+function isAppleKeyboard(): boolean {
+  return typeof navigator !== "undefined" && isApplePlatform(navigator);
+}
+
+// The mounted composer's hook for the page going out of view, which stops its dictation, keeping the words, and
+// dismisses a load of the speech model it is showing.
+let mountedDictationHide: (() => void) | null = null;
+
+// The chime that says the microphone is open: one for the page, since a browser caps the audio contexts a page
+// may hold and every open chat panel mounts a composer of its own.
+const readyChime = createReadyChime();
+
+// How long a composer waits, from its mount, to learn the speech model's state before it stops drawing the mic as
+// ready: a worker that neither answers nor fails would otherwise leave the state unknown for good.
+const SPEECH_MODEL_STATE_WAIT_MS = 5000;
+
+// How long after a press shows the speech model's load a second press is taken for the first one landing twice:
+// a double click, or a second click that finds the label where the mic was.
+const REPEATED_PRESS_WINDOW_MS = 500;
+
+/** The dictation this page runs; the page's own URL roots the runtime's files, and a document-less test has none. */
+function dictationPageOptions(): PageDictationOptions {
+  const pageUrl = typeof location === "undefined" ? "" : location.href;
+  return pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass());
+}
+
+/** Stop the page's dictation, keeping the words it heard, and dismiss a load of the speech model it is showing:
+ *  what the page does when the shell says it is hidden. */
+export function stopDictationWhenHidden(): void {
+  mountedDictationHide?.();
 }
 
 export interface MessageInputAttrs {
@@ -569,6 +698,362 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let switchPreparingChatId: string | null = null;
   // The mention being typed, while the caret follows an ``@`` (section 7.2); null otherwise.
   let mentionDraft: MentionDraft | null = null;
+  // Dictation (the workspace-voice-input spec), made on first use since it pulls the speech runtime in; its
+  // state is mirrored here for the view, with the engine's own the truth for what a press does.
+  let dictation: Dictation | null = null;
+  let dictationState: DictationState = "idle";
+  let dictationProblem: DictationProblem | null = null;
+  // The stretch of the box the dictation owns, from the caret it started at; null while none runs.
+  let dictationSpan: LiveSpan | null = null;
+  // Keeps a phone's screen awake while a dictation runs or the speech model's load is shown: a locked screen
+  // hides the page, which stops the words and takes the load's display down.
+  let screenWakeLock: ScreenWakeLock | null = null;
+  // Fills the mic's capsule, handed over by the button while its glyph is in the document.
+  let setMeterLevel: ((level: number) => void) | null = null;
+  // Send or Enter came while dictating: the words are finished first, then the box is sent (spec D8).
+  let isSendPendingAfterDictation = false;
+  // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
+  let isComposerDisabledNow = false;
+  // The pasted-text chips whose text is being read back, so a second click does not put it back twice.
+  const pastedTextPutBacksInFlight = new Set<string>();
+  // The page's speech model, which dictation needs loaded and every composer of the page shares: its load and
+  // the load's progress as the page's cache holds them, observed for as long as the composer is on the page.
+  let speechModelLoad: QueryObserver<SpeechModel, Error> | null = null;
+  let speechModelProgress: QueryObserver<SpeechModelProgress | null, Error> | null = null;
+  let stopObservingSpeechModel: (() => void) | null = null;
+  let lastShownProgressPercent = -1;
+  // Whether this composer is showing the model's load: from the press that asked for it until the load settles
+  // or the user dismisses it. The load is the page's, and runs on either way.
+  let isWatchingModelLoad = false;
+  // When this composer last began showing the load, by ``Date.now``; null until it has.
+  let modelLoadShownAtMs: number | null = null;
+  // Whether the page has found out, since the composer mounted, what state the model is in, or has stopped
+  // waiting to. Until then the mic is drawn as ready, so a model that is loaded never flashes the badge.
+  let isSpeechModelStateKnown = false;
+  // Whether the model's files are on this device: what the probe at mount said (null until it answers), and true
+  // once the model has been seen loaded. While false a load is a download, sized by the probe.
+  let isSpeechModelDownloaded: boolean | null = null;
+  let speechModelDownloadBytes: number | null = null;
+
+  /** Write the dictation's words into the box: the live span, with the caret at its end so the words stay in
+   *  view, and only the final words to the saved draft. */
+  function applyDictationSpan(): void {
+    if (dictationSpan === null || currentChatId === null) return;
+    const rendered = renderSpan(dictationSpan);
+    messageText = rendered.text;
+    if (rendered.draft === "") localStorage.removeItem(messageTextKey(currentChatId));
+    else localStorage.setItem(messageTextKey(currentChatId), rendered.draft);
+    if (messageTextareaElement !== null) {
+      messageTextareaElement.value = rendered.text;
+      messageTextareaElement.setSelectionRange(rendered.spanEnd, rendered.spanEnd);
+      refitAfterEdit();
+    }
+    m.redraw();
+  }
+
+  /** Fix where the words will land: the caret (or the selection) as it is when dictation starts. */
+  function openDictationSpan(): void {
+    const textarea = messageTextareaElement;
+    const start = textarea?.selectionStart ?? messageText.length;
+    const end = textarea?.selectionEnd ?? messageText.length;
+    dictationSpan = openSpan(messageText, start, end);
+  }
+
+  function ensureDictation(): Dictation {
+    if (dictation !== null) return dictation;
+    dictation = createDictation(dictationPageOptions(), {
+      onStateChange: (state) => {
+        dictationState = state;
+        syncScreenWakeLock();
+        // Once idle the words are ordinary text; the next dictation opens a span of its own.
+        if (state === "idle") dictationSpan = null;
+        if (state === "listening") readyChime.play();
+        m.redraw();
+      },
+      onLevel: (level) => setMeterLevel?.(level),
+      onFinalWords: (words) => {
+        if (dictationSpan === null) return;
+        dictationSpan = appendFinal(dictationSpan, words);
+        applyDictationSpan();
+        if (currentChatId !== null) {
+          markDictatedSpeech(currentChatId);
+          warmUpStoppedChat(currentChatId);
+        }
+      },
+      onTentativeWords: (words) => {
+        if (dictationSpan === null) return;
+        dictationSpan = setTentative(dictationSpan, words);
+        applyDictationSpan();
+      },
+      onUtteranceEnd: () => {
+        if (dictationSpan === null) return;
+        dictationSpan = clearTentative(dictationSpan);
+        applyDictationSpan();
+      },
+      onProblem: (problem) => {
+        dictationProblem = problem;
+        m.redraw();
+      },
+    });
+    return dictation;
+  }
+
+  function isSpeechModelLoaded(): boolean {
+    return speechModelLoad?.getCurrentResult().status === "success";
+  }
+
+  /** Whether the model's load is drawn: this composer is watching it, and it is still running. */
+  function isModelLoadShown(): boolean {
+    return (
+      isWatchingModelLoad && !isSpeechModelLoaded() && speechModelLoad?.getCurrentResult().fetchStatus === "fetching"
+    );
+  }
+
+  /** What the mic shows: dictation's own state while one runs, else the speech model's as this composer sees it. */
+  function micState(): DictationButtonState {
+    if (dictationState !== "idle") return dictationState;
+    if (isModelLoadShown()) return "loading";
+    return isSpeechModelLoaded() || !isSpeechModelStateKnown ? "ready" : "load-needed";
+  }
+
+  /** The page knows what state the model is in, or has stopped waiting to. From here the mic is drawn as the
+   *  page's cache has the model, so a worker that answers late with a loaded one still turns it ready. */
+  function endSpeechModelStateWait(): void {
+    if (isSpeechModelStateKnown) return;
+    isSpeechModelStateKnown = true;
+    m.redraw();
+  }
+
+  /** Follow the page's speech model from mount: observe its load and the load's progress in the page's cache,
+   *  and find out what state it is in, on this device (the probe) and in the workspace's worker. */
+  function observeSpeechModel(): void {
+    const options = dictationPageOptions();
+    const models = getSpeechModels();
+    const queryClient = getVoiceQueryClient();
+    // Not enabled: an observer that is would start the load by subscribing.
+    speechModelLoad = new QueryObserver<SpeechModel, Error>(queryClient, {
+      ...models.loadQueryOptions(options),
+      enabled: false,
+    });
+    // The progress is written into the cache as the worker reports it, so its query has nothing to fetch with.
+    speechModelProgress = new QueryObserver<SpeechModelProgress | null, Error>(queryClient, {
+      queryKey: models.progressQueryKey(options),
+      queryFn: skipToken,
+    });
+    const stopObservingLoad = speechModelLoad.subscribe((result) => {
+      if (result.status === "success") {
+        // A loaded model's files are on this device, whatever the probe said at mount.
+        isSpeechModelDownloaded = true;
+        // A failed load's notice has nothing left to ask for again: its Retry is the mic pressed, which dictates
+        // once the model is loaded.
+        if (dictationProblem !== null && isSpeechModelLoadProblem(dictationProblem)) dictationProblem = null;
+      }
+      m.redraw();
+    });
+    const stopObservingProgress = speechModelProgress.subscribe((result) => {
+      // A download reports every chunk; the bar and the tooltip move by whole percents.
+      const percent = result.data == null ? -1 : dictationProgressPercent(result.data);
+      if (percent !== lastShownProgressPercent) {
+        lastShownProgressPercent = percent;
+        m.redraw();
+      }
+    });
+    // A worker that neither greets nor fails never answers the discovery below.
+    const stateWaitTimer = setTimeout(endSpeechModelStateWait, SPEECH_MODEL_STATE_WAIT_MS);
+    stopObservingSpeechModel = () => {
+      stopObservingLoad();
+      stopObservingProgress();
+      clearTimeout(stateWaitTimer);
+    };
+    probeEngineDownload(options)
+      .then((probe) => {
+        isSpeechModelDownloaded = probe.isDownloaded;
+        speechModelDownloadBytes = probe.totalBytes;
+        return models.discover(options, probe.isDownloaded);
+      })
+      .catch((error: unknown) => console.warn(`Could not tell what state the speech model is in: ${String(error)}`))
+      .finally(() => {
+        clearTimeout(stateWaitTimer);
+        endSpeechModelStateWait();
+      });
+  }
+
+  /** Keep the screen awake while this composer has something running in front of the user: a dictation, or a
+   *  load of the speech model it is showing. A load dismissed to run on in the background holds nothing. */
+  function syncScreenWakeLock(): void {
+    screenWakeLock ??= createScreenWakeLock(browserWakeLockHost());
+    screenWakeLock.setWanted(dictationState !== "idle" || isWatchingModelLoad);
+  }
+
+  /** The load this composer asked for has settled. One still shown ends as the press that asked for it meant:
+   *  it goes on to dictate, with no second press, or says why the load failed. One dismissed since ends
+   *  unremarked: nothing starts, and its failure is left for the press that asks again. */
+  function handleModelLoadSettled(failure: DictationProblem | null): void {
+    if (isWatchingModelLoad) {
+      isWatchingModelLoad = false;
+      if (failure !== null) dictationProblem = failure;
+      else if (currentChatId !== null && !isComposerDisabledNow) beginDictation();
+    }
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /** Ask the page for the speech model and show its load until it settles or is dismissed. A load already
+   *  running is joined, and shown from where it has got to. */
+  function watchModelLoad(): void {
+    isWatchingModelLoad = true;
+    modelLoadShownAtMs = Date.now();
+    dictationProblem = null;
+    getSpeechModels()
+      .request(dictationPageOptions())
+      .then(
+        () => handleModelLoadSettled(null),
+        (error: unknown) => handleModelLoadSettled(describeSpeechModelLoadError(error)),
+      );
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /**
+   * Stop showing the speech model's load, which calls off the dictation the load was to go on to. The load
+   * itself runs on, since nothing cancels one, and the mic becomes ready by itself when it ends.
+   *
+   * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
+   * too. The triggers: a press on the loading label, or on the mic or its shortcut while the load is shown
+   * (``handleLoadingPress``); Escape from the page (``handleLoadingEscape``); text entered into the box (the
+   * text box's ``oninput``; a press or a tap in the box alone dismisses nothing); the page going out of view
+   * (``handlePageHidden``); and the composer turning to another chat, or leaving the page.
+   */
+  function dismissModelLoad(): void {
+    if (!isWatchingModelLoad) return;
+    isWatchingModelLoad = false;
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /** A press on what stands for the shown load, the label or the mic under it (which the shortcut presses),
+   *  dismisses it. One right behind the press that asked for the load is that press landing twice, and does
+   *  nothing; Escape and the page hiding are other gestures, and dismiss at any time. */
+  function handleLoadingPress(): void {
+    if (modelLoadShownAtMs !== null && Date.now() - modelLoadShownAtMs < REPEATED_PRESS_WINDOW_MS) return;
+    dismissModelLoad();
+    focusTextboxAfterDismissal();
+  }
+
+  /** A dismissal made on the load itself (the label, the shortcut, Escape) is the user turning back to typing,
+   *  so on a desktop the text box takes the focus. A touch device's stays where it is: focusing the box there
+   *  raises the keyboard, which a tap on the label did not ask for. */
+  function focusTextboxAfterDismissal(): void {
+    if (pageDeviceClass() === "desktop") focusMessageTextarea();
+  }
+
+  /** Begin a dictation whose words land where the caret is now. The speech model is loaded; a load this
+   *  composer was showing for it is over. */
+  function beginDictation(): void {
+    isWatchingModelLoad = false;
+    openDictationSpan();
+    void ensureDictation().start();
+  }
+
+  /** The mic and the shortcut. While dictating, a press stops it. Otherwise a press on a shown load is the
+   *  label's own (``handleLoadingPress``), a press on a loaded model dictates, and a press on one that is not
+   *  loaded means the same with the load first: it asks for the model, shows the load, and goes on to dictate
+   *  when the load ends, unless the load was dismissed meanwhile. */
+  function handleMicPress(): void {
+    if (currentChatId === null || isComposerDisabledNow) return;
+    if (dictation !== null && dictation.state !== "idle") {
+      if (dictation.state === "listening") void dictation.stop();
+      return;
+    }
+    if (isModelLoadShown()) {
+      handleLoadingPress();
+      return;
+    }
+    // The press is the user gesture after which the browser lets the page sound.
+    readyChime.wake();
+    if (!isSpeechModelLoaded()) {
+      watchModelLoad();
+      return;
+    }
+    beginDictation();
+  }
+
+  /** Stop and keep the words heard so far; a dictation still starting has none, so it is called off. */
+  function stopDictationKeepingWords(): void {
+    if (dictation === null) return;
+    if (dictation.state === "listening") void dictation.stop();
+    else if (dictation.state === "starting") void dictation.cancel();
+  }
+
+  function disposeDictation(): void {
+    dictation?.dispose();
+    dictation = null;
+    dictationState = "idle";
+    dictationProblem = null;
+    dictationSpan = null;
+    isSendPendingAfterDictation = false;
+    // Disposal reaches idle without a state change of its own.
+    syncScreenWakeLock();
+  }
+
+  /** Escape while the model's load is shown dismisses it, from anywhere in the composer (the text box, or the
+   *  label, which takes the focus the mic held) or from no control at all. A key meant for another control (a
+   *  menu, a dialog), or one something in the composer has already answered, is left alone. */
+  function handleLoadingEscape(event: KeyboardEvent): boolean {
+    if (event.key !== "Escape" || event.defaultPrevented || !isModelLoadShown()) return false;
+    const target = event.target;
+    if (target == null) return false;
+    const isFromPage = target === document || target === document.documentElement || target === document.body;
+    const isFromComposer =
+      typeof Element !== "undefined" && target instanceof Element && target.closest(".message-input") !== null;
+    if (!isFromPage && !isFromComposer) return false;
+    event.preventDefault();
+    dismissModelLoad();
+    focusTextboxAfterDismissal();
+    return true;
+  }
+
+  function handleDictationShortcut(event: KeyboardEvent): void {
+    if (handleLoadingEscape(event)) return;
+    if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
+    event.preventDefault();
+    // A chord held down repeats: it stays the page's, and is one press.
+    if (event.repeat) return;
+    handleMicPress();
+  }
+
+  /** The page went out of view: its dictation stops, keeping the words, and a load it was showing is dismissed. */
+  function handlePageHidden(): void {
+    stopDictationKeepingWords();
+    dismissModelLoad();
+  }
+
+  function handleVisibilityChange(): void {
+    if (document.visibilityState === "hidden") handlePageHidden();
+  }
+
+  /** The shortcut works anywhere in the chat page, and the page going away takes the dictation with it: hidden
+   *  keeps the words, closed drops the unfinished ones. The page's speech model is followed from here on. */
+  function attachDictationToPage(): void {
+    document.addEventListener("keydown", handleDictationShortcut);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", disposeDictation);
+    mountedDictationHide = handlePageHidden;
+    observeSpeechModel();
+  }
+
+  function detachDictationFromPage(): void {
+    document.removeEventListener("keydown", handleDictationShortcut);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("pagehide", disposeDictation);
+    if (mountedDictationHide === handlePageHidden) mountedDictationHide = null;
+    stopObservingSpeechModel?.();
+    stopObservingSpeechModel = null;
+    speechModelLoad = null;
+    speechModelProgress = null;
+    dismissModelLoad();
+    disposeDictation();
+  }
 
   function mentionRows(): MentionHandle[] {
     return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
@@ -659,9 +1144,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    * One attachment chip, 40px tall: an image is its thumbnail alone; anything else is an icon beside
    * its name and its size, or what it points at for a file the chat made for the user (an element
    * reference). While uploading, a spinner sits over the thumbnail on a dark wash, or where the icon
-   * would be. The remove button rides the top-right corner, shown on hover.
+   * would be. The remove button rides the top-right corner, shown on hover, and a long paste's
+   * "Paste as text" button sits beside it.
    */
-  function renderComposerAttachment(chatId: string, attachment: ComposerAttachment): m.Vnode {
+  function renderComposerAttachment(
+    chatId: string,
+    attachment: ComposerAttachment,
+    putPastedTextBack: (localId: string) => void,
+  ): m.Vnode {
     const isUploading = attachment.status === "uploading";
     const isError = attachment.status === "error";
     // The local pixels while uploading, then the uploaded copy.
@@ -670,6 +1160,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const size = attachment.uploaded?.size ?? attachment.localSize;
     const spinner = m.trust(spinnerIcon(16));
     const isDescribed = attachment.summary !== undefined;
+    // A picked file of the same name has no summary, so it stays an ordinary file.
+    const isPastedText = isDescribed && isPastedTextFileName(attachment.fileName);
     const remove = isUploading
       ? null
       : m(
@@ -688,6 +1180,23 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
         );
+    const putBack =
+      isUploading || !isPastedText
+        ? null
+        : m(
+            "button",
+            {
+              type: "button",
+              class:
+                "composer-attachment-put-back absolute -top-[9px] right-[17px] z-10 inline-flex h-5 w-5 cursor-pointer " +
+                "items-center justify-center rounded-full bg-inverse text-on-accent opacity-0 shadow-sm " +
+                "transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100",
+              "aria-label": "Paste as text",
+              ...hoverTooltipAttrs("Paste as text", "above"),
+              onclick: () => putPastedTextBack(attachment.localId),
+            },
+            m.trust(icon("edit", { size: 11, strokeWidth: 2.5 })),
+          );
     // The status modifier is an interpolated marker; the one status the look distinguishes (a
     // failed upload's red border) rides beside it.
     const chipMarker = `composer-attachment composer-attachment--${attachment.status}`;
@@ -750,7 +1259,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           isUploading
             ? m("span", { class: "composer-attachment-uploading", "aria-label": "Uploading", role: "img" }, spinner)
-            : m.trust(icon(isDescribed ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
+            : m.trust(icon(isDescribed && !isPastedText ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
         ),
         m("span", { class: "composer-attachment-info flex min-w-0 flex-col" }, [
           m(
@@ -762,6 +1271,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           ),
           detail,
         ]),
+        putBack,
         remove,
       ],
     );
@@ -776,6 +1286,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       if (currentChatId !== chatId) {
+        // A dictation belongs to the chat it started in, and so does the showing of a load asked for from it.
+        disposeDictation();
+        dismissModelLoad();
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         const persistedHint = localStorage.getItem(composerHintKey(chatId));
@@ -841,13 +1354,24 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
       }
 
+      // The box's text is settled for this pass, and an emptied box holds no dictated words, whatever emptied
+      // it: the user's own deleting, a command the composer acted on, a delivered copy taken out just above.
+      // The saved draft is asked as well, since another page showing this chat has a box of its own, and
+      // its empty one says nothing about a draft dictation wrote into here.
+      if (messageText === "" && !localStorage.getItem(messageTextKey(chatId))) {
+        forgetDictatedSpeech(chatId);
+      }
+
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
       interface PreparedSend {
         /** What the user typed, for the bubble and for restoring the composer. */
         text: string;
-        /** What goes to the agent: the text with the attachment references appended. */
+        /** What goes to the agent: the text, the dictation note when the draft may hold dictated words, and
+         *  the attachment references appended. */
         finalText: string;
         attachments: readonly ComposerAttachment[];
+        /** Whether dictation wrote into the draft, so a message put back counts as holding dictated words again. */
+        mayContainDictatedSpeech: boolean;
       }
 
       /**
@@ -867,14 +1391,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Only slash-shaped messages consult it, and only those block on the
         // catalog when it has not loaded yet -- otherwise an early /login could
         // slip through the fetch window.
-        if (messageText.trim().startsWith("/")) {
+        const guardedText = withoutNulCharacters(messageText);
+        if (guardedText.trim().startsWith("/")) {
           const harness = getChatById(chatId)?.active_agent.harness;
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
           }
           // ``/fast on`` and ``/fast off`` choose the chat's fast mode (on a harness that has
           // one) rather than reaching the harness or its notice: the mode is the chat's setting.
-          const fastMode = parseFastModeCommand(messageText);
+          const fastMode = parseFastModeCommand(guardedText);
           if (fastMode !== null && hasFastModeLimit(harness)) {
             chooseFastMode(chatId, fastMode, getEventsForChat(chatId));
             messageText = "";
@@ -882,7 +1407,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             m.redraw();
             return null;
           }
-          const match = findComposerPopup(harness, messageText);
+          const match = findComposerPopup(harness, guardedText);
           if (match !== null) {
             if (match.popup.action === "open_auth") {
               interceptedAuthCommand = match.command;
@@ -901,7 +1426,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         await waitForComposerUploads(chatId);
 
         const attachmentPaths = getReadyAttachmentPaths(chatId);
-        const text = messageText;
+        const text = withoutNulCharacters(messageText);
 
         // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
         // below, so without this the file would leave the message silently and the only clue
@@ -929,14 +1454,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return null;
         }
 
-        const finalText = buildMessageWithAttachments(text, attachmentPaths);
+        // The note goes before the attachment block, which is only recognised at the very end of a message.
+        const mayContainDictatedSpeech = hasDictatedSpeech(chatId);
+        const finalText = buildMessageWithAttachments(
+          mayContainDictatedSpeech ? withDictationNote(text) : text,
+          attachmentPaths,
+        );
         // Snapshot for rollback if the send fails.
         const attachments = getComposerAttachments(chatId);
 
         messageText = "";
         clearComposerAttachments(chatId);
         localStorage.removeItem(messageTextKey(chatId));
-        return { text, finalText, attachments };
+        forgetDictatedSpeech(chatId);
+        return { text, finalText, attachments, mayContainDictatedSpeech };
       }
 
       async function handleSend(): Promise<void> {
@@ -949,7 +1480,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The hint asked a question; the send answered it.
         clearComposerHint(chatId);
-        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        const { text: sentText, finalText, attachments: sentAttachments, mayContainDictatedSpeech } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
         // optimism the frontend is allowed (contract A2). It is a client-only overlay
@@ -959,7 +1490,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // the send too, so a chat app that holds the message while the chat switches
         // harness can name it back and the bubble stands down for that rendering.
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         let priorTurnIds: ReadonlySet<string> = new Set();
 
@@ -982,7 +1513,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
               dropOutgoing(chatId, outgoingId);
-              restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+              restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
               m.redraw();
               return;
             }
@@ -995,7 +1526,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              if (firstStatus === "held") rememberHeldSend(chatId, messageId, prepared);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1023,6 +1556,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
+          if (status === "held") rememberHeldSend(chatId, messageId, prepared);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
@@ -1040,7 +1574,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments, messageId };
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
@@ -1106,19 +1640,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m.redraw();
           return;
         }
-        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        const { text: sentText, finalText, attachments: sentAttachments, mayContainDictatedSpeech } = prepared;
         // Read once the message is ready, not at the press: until then the choice could still be
         // changed or taken back, and the account and its pick must go out as one.
         const target = nextSendSwitchTarget(chatId);
         if (target === null) {
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           m.redraw();
           return;
         }
         const pick = getPendingPick(chatId)?.identity ?? null;
         setSwitchSending(chatId, true);
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         try {
           await whenChatRegistered(chatId);
@@ -1128,7 +1662,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const detail = describeRequestError(err);
           console.error(`Failed to switch chat ${chatId} to ${target.id}: ${detail}`);
           dropOutgoing(chatId, outgoingId);
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           if (currentChatId === chatId) {
             clearActionFailureNotice();
             actionFailureTitle = `Couldn't switch to ${harnessLabel(target.harness)}`;
@@ -1203,10 +1737,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             // (block, blank line, draft) rather than dropping it when the composer is
             // non-empty. Under pi's native retract the messages survive nowhere else, so
             // dropping them here would lose them outright.
+            // The dictation notes the queued messages carried are for the model, not the box: the
+            // draft counts as holding dictated words instead, so its next send carries one note.
+            const returned = withoutDictationNotes(block);
             const draft = messageText;
-            const merged = draft.trim().length === 0 ? block : `${block}\n\n${draft}`;
+            const merged = draft.trim().length === 0 ? returned.text : `${returned.text}\n\n${draft}`;
             messageText = merged;
             localStorage.setItem(messageTextKey(chatId), merged);
+            if (returned.hadNote) markDictatedSpeech(chatId);
           }
         } catch (err) {
           const detail = describeRequestError(err);
@@ -1230,6 +1768,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (chatId && isSwitchSending(chatId)) {
           return Promise.resolve();
         }
+        if (dictation !== null && dictation.state !== "idle") {
+          // One action sends what was said: the words are finished first, and the send follows (spec D8).
+          isSendPendingAfterDictation = true;
+          stopDictationKeepingWords();
+          m.redraw();
+          return Promise.resolve();
+        }
         if (switchTarget !== null) {
           return chatId && canSend ? handleSwitchAndSend() : Promise.resolve();
         }
@@ -1237,6 +1782,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (isHandledByInputMethod(event)) return;
+        // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
+        if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
+          event.preventDefault();
+          void dictation.cancel();
+          return;
+        }
         if (handleMentionKeydown(event)) {
           event.preventDefault();
           m.redraw();
@@ -1258,7 +1810,58 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (files.length > 0) {
           event.preventDefault();
           uploadFilesToComposer(chatId, files);
+          return;
         }
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (isLongPaste(text)) {
+          event.preventDefault();
+          stagePastedText(chatId, text);
+          warmUpStoppedChat(chatId);
+        }
+      }
+
+      /** Put a long paste's text back into the box where the caret is, in place of its attachment. */
+      async function putPastedTextBack(forChatId: string, localId: string): Promise<void> {
+        if (pastedTextPutBacksInFlight.has(localId)) return;
+        pastedTextPutBacksInFlight.add(localId);
+        let text: string | null;
+        try {
+          text = await unstagePastedText(forChatId, localId);
+        } catch (error) {
+          console.warn(`The pasted text of chat ${forChatId} could not be put back`, error);
+          if (currentChatId !== forChatId) return;
+          clearActionFailureNotice();
+          actionFailureTitle = "Couldn't paste the text back";
+          actionFailureDetail = "The attachment is still there, and will be sent as it is. Try again, or remove it.";
+          m.redraw();
+          return;
+        } finally {
+          pastedTextPutBacksInFlight.delete(localId);
+        }
+        if (text === null) return;
+        if (currentChatId !== forChatId) {
+          // The user moved to another chat while the text was read back: it joins that chat's saved draft.
+          const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
+          const merged = savedDraft.trim().length === 0 ? text : `${savedDraft}\n\n${text}`;
+          localStorage.setItem(messageTextKey(forChatId), merged);
+          // A hand-back waiting for that chat is taken in verbatim when it is shown, so it carries the text too.
+          if (pendingComposerPrepends.has(forChatId)) {
+            pendingComposerPrepends.set(forChatId, merged);
+          }
+          return;
+        }
+        const textarea = messageTextareaElement;
+        const start = textarea?.selectionStart ?? messageText.length;
+        const end = textarea?.selectionEnd ?? messageText.length;
+        messageText = messageText.slice(0, start) + text + messageText.slice(end);
+        localStorage.setItem(messageTextKey(forChatId), messageText);
+        if (textarea !== null) {
+          textarea.value = messageText;
+          textarea.setSelectionRange(start + text.length, start + text.length);
+          refitAfterEdit();
+        }
+        focusMessageTextarea();
+        m.redraw();
       }
 
       function openFilePicker(): void {
@@ -1279,15 +1882,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
 
-      /** Put a failed message back in the composer, in FRONT of whatever is already there. */
+      /** Put a failed message back in the composer, in FRONT of whatever is already there; one that may
+       *  hold dictated words makes the draft it joins one that may. */
       function restoreFailedMessageToComposer(
         forChatId: string,
         text: string,
         attachments: readonly ComposerAttachment[],
+        mayContainDictatedSpeech: boolean,
       ): void {
         // Reuses the module-level hand-back that Stop's drain, QueuedMessageView and the switch
         // dialog already go through, rather than inventing a second set of rules for the same job.
         restoreToComposer(forChatId, text, attachments);
+        if (mayContainDictatedSpeech) markDictatedSpeech(forChatId);
         if (currentChatId === forChatId) {
           messageText = localStorage.getItem(messageTextKey(forChatId)) ?? text;
         }
@@ -1418,7 +2024,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
         const messageId = recovery.messageId;
-        const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
+        const outgoingId = addOutgoing(recovery.chatId, recovery.sentText, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {
           refuseSendToFailedChat(recovery.chatId);
@@ -1620,6 +2226,26 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
+      /** What dictation has to say, over the composer: Retry runs held words again, or is the mic pressed again,
+       *  which asks for the speech model when its load failed and starts dictation when the microphone did. */
+      function renderDictationNotice(problem: DictationProblem): m.Children {
+        return dictationNotice(problem, {
+          onRetry: () => {
+            if (dictation?.isHeld) dictation.retryHeld();
+            else handleMicPress();
+            m.redraw();
+          },
+          onDiscard: () => {
+            dictation?.discardHeld();
+            m.redraw();
+          },
+          onDismiss: () => {
+            dictationProblem = null;
+            m.redraw();
+          },
+        });
+      }
+
       function renderDeclinedCommandNotice(declined: { title: string; body: string }): m.Children {
         return m(declinedCommandNotice, {
           title: declined.title,
@@ -1660,36 +2286,32 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /**
-       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
-       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
-       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
-       * refuses lands on the page as a failed create, with its "Try again".
-       */
+      /** The chooser for a chat with no provider to start on (``models/firstSendChooser.ts``): the chat root's, when
+       *  one frames this page, else this page's own. */
       function openProviderChooserForFirstSend(awaitingChatId: string): void {
-        openProviderChooser({
-          onSignedIn: (accountId) => {
-            const awaiting = getProvisionalChat(awaitingChatId);
-            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
-            if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
-              console.error(
-                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
-              );
-            });
-          },
-          onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId),
-        });
+        const root = framingChatRoot();
+        if (root !== null) {
+          root.chooseProviderForFirstSend();
+          return;
+        }
+        openFirstSendChooser(
+          () => awaitingChatId,
+          (chatId) => void launchAwaitingChatAsRoom(chatId),
+        );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
-       *  notice appears, and its button opens it again once dismissed. */
+      /** In place of the composer while nothing is signed in that a new chat could start on; its button opens the
+       *  chooser again once dismissed. A page no chat root frames opens it as the notice appears; under a root, the
+       *  root has opened it already, over the whole list. On a first-run workspace the shell's cover is asking the
+       *  same thing over the whole desktop, so nothing opens by itself. */
       function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
           () => openProviderChooserForFirstSend(awaitingChatId),
-          () => openProviderChooserForFirstSend(awaitingChatId),
+          framingChatRoot() === null && !isFirstRunProviderStepPending()
+            ? () => openProviderChooserForFirstSend(awaitingChatId)
+            : undefined,
         );
       }
 
@@ -1712,13 +2334,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
       // Until the account list has loaded the composer shows as usual: most pages have an account.
-      const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
-      const isBlockedByNoProvider =
-        awaitingFirstSend?.phase === "awaiting_first_send" &&
-        areAccountsLoaded() &&
-        accountForFirstSend(awaitingFirstSend.account_id) === null;
+      const isBlockedByNoProvider = chatId !== null && isAwaitingProvider(chatId);
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
+      isComposerDisabledNow = isComposerDisabled;
       const canSendNow = canSend && !isComposerDisabled;
+      // The box is read-only while dictation owns it, from the press until the last words land.
+      const isDictating = dictationState !== "idle";
+      // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
+      if (isSendPendingAfterDictation && !isDictating) {
+        isSendPendingAfterDictation = false;
+        queueMicrotask(() => void handleSubmit());
+      }
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
         : isBlockedByNoProvider && chatId !== null
@@ -1737,8 +2363,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const isUninterruptibleCompaction =
         activityState === COMPACTING_STATE &&
         getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      // A handoff that has landed runs on its successor already: that agent's turn is stoppable like any other.
+      const isSwitchInTheWay = handoff !== null && !handoff.has_landed;
       const isStopButtonVisible =
-        (isAgentWorking || isConnecting) && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
+        (isAgentWorking || isConnecting) && !isInterruptInFlight && !isSwitchInTheWay && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
@@ -1749,216 +2377,255 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ? "Interrupt agent and bring queued messages to draft area"
             : "Interrupt agent";
 
-      return m("div", { class: "message-input mx-auto w-full max-w-(--width-message-column)" }, [
-        interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
-        declinedSend !== null ? renderDeclinedCommandNotice(declinedSend) : null,
-        actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-        switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
-        blockingNotice,
-        m("input", {
-          type: "file",
-          multiple: true,
-          class: "message-input-file-input hidden",
-          oncreate: (inputVnode: m.VnodeDOM) => {
-            fileInputElement = inputVnode.dom as HTMLInputElement;
-          },
-          onremove: () => {
-            fileInputElement = null;
-          },
-          onchange: (event: Event) => {
-            const input = event.target as HTMLInputElement;
-            uploadFilesToComposer(chatId, input.files);
-            input.value = "";
-          },
-        }),
-        composeRow(
-          vnode.attrs.leading,
-          // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
-          [
-            mentionPopover({
-              rows: mentionRows(),
-              selectedIndex: mentionDraft?.index ?? 0,
-              onPick: pickMention,
-              onHover: (index) => {
-                if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
-              },
-            }),
-            m(
-              "div",
-              {
-                class: MESSAGE_ROW_CLASS,
-                "data-attachments": attachments.length > 0 ? "" : undefined,
-                oncreate: attachMessageRow,
-                onremove: detachMessageRow,
-              },
-              [
-                m("textarea", {
-                  class:
-                    "message-input-textbox col-start-2 row-start-1 w-full resize-none border-none bg-transparent " +
-                    "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
-                    "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
-                    "disabled:cursor-not-allowed disabled:opacity-60",
-                  // A switch off a room holds the message like any switch, so its wording comes first.
-                  placeholder:
-                    handoff !== null
-                      ? handoffComposerPlaceholder(handoff)
-                      : composerHint !== null
-                        ? composerHint
-                        : isRoomChat(chatId)
-                          ? "Message (tag @agent to ask the agent)"
-                          : isAgentWorking
-                            ? "Type to queue more messages..."
-                            : "Type a message...",
-                  rows: 1,
-                  disabled: isComposerDisabled,
-                  value: messageText,
-                  oncreate: (textareaVnode: m.VnodeDOM) => {
-                    messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                    mountedComposerTextarea = messageTextareaElement;
-                    wasComposerDisabled = isComposerDisabled;
-                    refitComposer();
-                    focusMessageTextarea();
-                  },
-                  onupdate: (textareaVnode: m.VnodeDOM) => {
-                    messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                    mountedComposerTextarea = messageTextareaElement;
-                    refitComposer(isTypingUntilRedraw);
-                    isTypingUntilRedraw = false;
-                    if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
-                    wasComposerDisabled = isComposerDisabled;
-                  },
-                  onremove: () => {
-                    if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
-                    messageTextareaElement = null;
-                  },
-                  oninput: (event: Event) => {
-                    const textarea = event.target as HTMLTextAreaElement;
-                    messageText = textarea.value;
-                    localStorage.setItem(messageTextKey(chatId), messageText);
-                    updateMentionDraft(textarea);
-                    refitAfterEdit();
-                    if (messageText.trim() !== "") warmUpStoppedChat(chatId);
-                  },
-                  onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
-                  onblur: () => {
-                    mentionDraft = null;
-                  },
-                  onkeydown: handleKeydown,
-                  onpaste: handlePaste,
-                }),
-                m(
-                  Button,
-                  {
-                    variant: "ghost",
-                    icon: true,
-                    sm: true,
-                    extra: ATTACH_BUTTON_CLASS,
-                    ...hoverTooltipAttrs("Attach files", "above"),
-                    "aria-label": "Attach files",
+      const isDictationShown = isDictationOffered();
+      return m(
+        "div",
+        {
+          class: "message-input mx-auto w-full max-w-(--width-message-column)",
+          oncreate: isDictationShown ? attachDictationToPage : undefined,
+          onremove: isDictationShown ? detachDictationFromPage : undefined,
+        },
+        [
+          interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
+          declinedSend !== null ? renderDeclinedCommandNotice(declinedSend) : null,
+          actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
+          dictationProblem !== null ? renderDictationNotice(dictationProblem) : null,
+          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
+          blockingNotice,
+          m("input", {
+            type: "file",
+            multiple: true,
+            class: "message-input-file-input hidden",
+            oncreate: (inputVnode: m.VnodeDOM) => {
+              fileInputElement = inputVnode.dom as HTMLInputElement;
+            },
+            onremove: () => {
+              fileInputElement = null;
+            },
+            onchange: (event: Event) => {
+              const input = event.target as HTMLInputElement;
+              uploadFilesToComposer(chatId, input.files);
+              input.value = "";
+            },
+          }),
+          composeRow(
+            vnode.attrs.leading,
+            // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
+            [
+              mentionPopover({
+                rows: mentionRows(),
+                selectedIndex: mentionDraft?.index ?? 0,
+                onPick: pickMention,
+                onHover: (index) => {
+                  if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
+                },
+              }),
+              m(
+                "div",
+                {
+                  class: MESSAGE_ROW_CLASS,
+                  "data-attachments": attachments.length > 0 ? "" : undefined,
+                  oncreate: attachMessageRow,
+                  onremove: detachMessageRow,
+                },
+                [
+                  m("textarea", {
+                    class:
+                      "message-input-textbox col-start-2 row-start-1 w-full resize-none border-none bg-transparent " +
+                      "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
+                      "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
+                      "disabled:cursor-not-allowed disabled:opacity-60",
+                    // A switch off a room holds the message like any switch, so its wording comes first.
+                    placeholder:
+                      isSwitchInTheWay && handoff !== null
+                        ? handoffComposerPlaceholder(handoff)
+                        : composerHint !== null
+                          ? composerHint
+                          : isRoomChat(chatId)
+                            ? "Message (tag @agent to ask the agent)"
+                            : isAgentWorking
+                              ? "Type to queue more messages..."
+                              : "Type a message...",
+                    rows: 1,
                     disabled: isComposerDisabled,
-                    onclick: openFilePicker,
-                  },
-                  m.trust(icon("attach", { size: 16, strokeWidth: 1.5 })),
-                ),
-                attachments.length > 0
-                  ? m(
-                      "div",
-                      { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
-                      m(AttachmentStrip, {
-                        children: attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
-                      }),
-                    )
-                  : null,
-                m("div", { class: TOOLBAR_CLASS }, [
-                  isCancelSwitchVisible
+                    readonly: isDictating,
+                    value: messageText,
+                    oncreate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      mountedComposerTextarea = messageTextareaElement;
+                      wasComposerDisabled = isComposerDisabled;
+                      refitComposer();
+                      focusMessageTextarea();
+                    },
+                    onupdate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      mountedComposerTextarea = messageTextareaElement;
+                      refitComposer(isTypingUntilRedraw);
+                      isTypingUntilRedraw = false;
+                      if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
+                      wasComposerDisabled = isComposerDisabled;
+                    },
+                    onremove: () => {
+                      if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
+                      messageTextareaElement = null;
+                    },
+                    oninput: (event: Event) => {
+                      const textarea = event.target as HTMLTextAreaElement;
+                      messageText = textarea.value;
+                      localStorage.setItem(messageTextKey(chatId), messageText);
+                      updateMentionDraft(textarea);
+                      refitAfterEdit();
+                      if (messageText.trim() !== "") warmUpStoppedChat(chatId);
+                      // Text entered while the speech model's load is shown is the user going back to typing. A
+                      // press or a tap in the box alone is not: it leaves the load shown, and sets where the
+                      // dictated words will land.
+                      dismissModelLoad();
+                    },
+                    onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
+                    onblur: () => {
+                      mentionDraft = null;
+                    },
+                    onkeydown: handleKeydown,
+                    onpaste: handlePaste,
+                  }),
+                  m(
+                    Button,
+                    {
+                      variant: "ghost",
+                      icon: true,
+                      sm: true,
+                      extra: ATTACH_BUTTON_CLASS,
+                      ...hoverTooltipAttrs("Attach files", "above"),
+                      "aria-label": "Attach files",
+                      disabled: isComposerDisabled,
+                      onclick: openFilePicker,
+                    },
+                    m.trust(icon("attach", { size: 16, strokeWidth: 1.5 })),
+                  ),
+                  attachments.length > 0
                     ? m(
-                        Button,
-                        {
-                          variant: "secondary",
-                          sm: true,
-                          extra: "message-input-cancel-switch-button shrink-0",
-                          readonly: isCancelSwitchInFlight,
-                          ...hoverTooltipAttrs(
-                            "Keep this chat on its current agent; your message comes back here",
-                            "above",
+                        "div",
+                        { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
+                        m(AttachmentStrip, {
+                          children: attachments.map((attachment) =>
+                            renderComposerAttachment(chatId, attachment, (localId) => {
+                              void putPastedTextBack(chatId, localId);
+                            }),
                           ),
-                          "aria-label": "Cancel switch",
-                          onclick: () => void handleCancelSwitch(),
-                        },
-                        isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                        }),
                       )
                     : null,
-                  isStopButtonVisible
-                    ? m(
-                        Button,
-                        {
-                          variant: "stop",
-                          icon: true,
-                          sm: true,
-                          extra: "message-input-stop-button shrink-0",
-                          // The label states what THIS press will do. The button always interrupts;
-                          // it only hands messages back when there are some parked in the harness,
-                          // so promising that unconditionally described a case that usually is not
-                          // the one in front of the user.
-                          ...hoverTooltipAttrs(stopButtonLabel, "above"),
-                          "aria-label": stopButtonLabel,
-                          onclick: handleStopToComposer,
-                        },
-                        m.trust(stopIcon(14)),
-                      )
-                    : null,
-                  // The send button reads "Switch and send" while a pending lane differs from the
-                  // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
-                  // Otherwise it stays in place: the green send button, or with nothing it can send a
-                  // disabled ghost -- the bare arrow, faded.
-                  canSendNow && switchTarget !== null
-                    ? m(
-                        Button,
-                        {
-                          variant: "primary",
-                          sm: true,
-                          extra: "message-input-send-button message-input-send-button--switch shrink-0",
-                          ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
-                          "aria-label": "Switch and send",
-                          onclick: handleSubmit,
-                        },
-                        [
-                          m("span", "Switch and send"),
-                          m(
-                            "span",
-                            { class: "ml-1.5 inline-flex items-center" },
-                            m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
-                          ),
-                        ],
-                      )
-                    : m(
-                        Button,
-                        {
-                          variant: canSendNow ? "primary" : "ghost",
-                          icon: true,
-                          sm: true,
-                          extra: "message-input-send-button shrink-0",
-                          disabled: !canSendNow,
-                          readonly: isSendHeldForSwitch,
-                          ...hoverTooltipAttrs(
-                            !canSendNow
-                              ? null
-                              : isSendHeldForSwitch
-                                ? "Sending is paused until the switch starts"
-                                : "Send message",
-                            "above",
-                          ),
-                          "aria-label": "Send message",
-                          onclick: handleSubmit,
-                        },
-                        m.trust(icon("send", { size: 16, strokeWidth: 2 })),
-                      ),
-                ]),
-              ],
-            ),
-          ],
-        ),
-      ]);
+                  m("div", { class: TOOLBAR_CLASS }, [
+                    isCancelSwitchVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "secondary",
+                            sm: true,
+                            extra: "message-input-cancel-switch-button shrink-0",
+                            readonly: isCancelSwitchInFlight,
+                            ...hoverTooltipAttrs(
+                              "Keep this chat on its current agent; your message comes back here",
+                              "above",
+                            ),
+                            "aria-label": "Cancel switch",
+                            onclick: () => void handleCancelSwitch(),
+                          },
+                          isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                        )
+                      : null,
+                    isStopButtonVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "stop",
+                            icon: true,
+                            sm: true,
+                            extra: "message-input-stop-button shrink-0",
+                            // The label states what THIS press will do. The button always interrupts;
+                            // it only hands messages back when there are some parked in the harness,
+                            // so promising that unconditionally described a case that usually is not
+                            // the one in front of the user.
+                            ...hoverTooltipAttrs(stopButtonLabel, "above"),
+                            "aria-label": stopButtonLabel,
+                            onclick: handleStopToComposer,
+                          },
+                          m.trust(stopIcon(14)),
+                        )
+                      : null,
+                    isDictationShown
+                      ? m(DictationButton, {
+                          state: micState(),
+                          progress: speechModelProgress?.getCurrentResult().data ?? null,
+                          download:
+                            isSpeechModelDownloaded === false ? { totalBytes: speechModelDownloadBytes } : null,
+                          shortcutLabel: dictationShortcutLabel(isAppleKeyboard()),
+                          disabled: isComposerDisabled,
+                          onPress: handleMicPress,
+                          onDismissLoading: handleLoadingPress,
+                          onMeter: (setLevel) => {
+                            setMeterLevel = setLevel;
+                          },
+                        })
+                      : null,
+                    // The send button reads "Switch and send" while a pending lane differs from the
+                    // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                    // Otherwise it stays in place: the green send button, or with nothing it can send a
+                    // disabled ghost -- the bare arrow, faded.
+                    canSendNow && switchTarget !== null
+                      ? m(
+                          Button,
+                          {
+                            variant: "primary",
+                            sm: true,
+                            extra: "message-input-send-button message-input-send-button--switch shrink-0",
+                            ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
+                            "aria-label": "Switch and send",
+                            onclick: handleSubmit,
+                          },
+                          [
+                            m("span", "Switch and send"),
+                            m(
+                              "span",
+                              { class: "ml-1.5 inline-flex items-center" },
+                              m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
+                            ),
+                          ],
+                        )
+                      : m(
+                          Button,
+                          {
+                            variant: canSendNow ? "primary" : "ghost",
+                            icon: true,
+                            sm: true,
+                            extra: "message-input-send-button shrink-0",
+                            disabled: !canSendNow && !isSendPendingAfterDictation,
+                            // While the dictation's last words are landing, the send waits and says so (spec D8).
+                            readonly: isSendHeldForSwitch || isSendPendingAfterDictation,
+                            ...hoverTooltipAttrs(
+                              isSendPendingAfterDictation
+                                ? "Finishing your words"
+                                : !canSendNow
+                                  ? null
+                                  : isSendHeldForSwitch
+                                    ? "Sending is paused until the switch starts"
+                                    : "Send message",
+                              "above",
+                            ),
+                            "aria-label": "Send message",
+                            onclick: handleSubmit,
+                          },
+                          isSendPendingAfterDictation
+                            ? m.trust(spinnerIcon(16))
+                            : m.trust(icon("send", { size: 16, strokeWidth: 2 })),
+                        ),
+                  ]),
+                ],
+              ),
+            ],
+          ),
+        ],
+      );
     },
   };
 }

@@ -99,7 +99,7 @@ export interface Placement {
   readonly state: WindowState;
   readonly is_minimized: boolean;
   /** Whether the window is pulled out into a desktop window of the embedding chrome's own (the pull-out-window
-   *  spec): drawn as a ghost at its frame here, its page shown elsewhere. Orthogonal to the state; a file
+   *  spec): not drawn here, its page shown elsewhere. Orthogonal to the state; a file
    *  without the key reads as attached. */
   readonly is_detached: boolean;
 }
@@ -207,6 +207,8 @@ export interface AppRecord {
   readonly critical: boolean;
   /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
   readonly stop_when_no_windows: boolean;
+  /** Whether the app's pages listen to the microphone, which the shell then delegates to their frames. */
+  readonly uses_microphone: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
   /** The shortcuts a new desktop is seeded with, as the app declares them; none for an app that leaves the choice to
@@ -358,7 +360,12 @@ export interface ChatActivity {
   readonly kind: "agent" | "room";
 }
 
-/** A speech bubble as the shell pushes it (the multiplayer spec, section 6.5): what somebody just said. */
+/** What a ``bubble`` push carries: a message somebody sent, or a chat's notification to the user. */
+export const BUBBLE_KINDS = ["message", "notification"] as const;
+export type BubbleKind = (typeof BUBBLE_KINDS)[number];
+
+/** A ``bubble`` push as the shell sends it (the multiplayer spec, section 6.5): what somebody just said, or what a
+ *  chat just notified the user of. */
 export interface BubbleWire {
   readonly speaker: string;
   readonly chat_id: string;
@@ -366,6 +373,7 @@ export interface BubbleWire {
   readonly text: string;
   readonly message_id: string;
   readonly mentions: readonly string[];
+  readonly kind: BubbleKind;
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -638,6 +646,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,
+    uses_microphone: record.uses_microphone === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
     default_shortcuts: asArray(record.default_shortcuts ?? [], "app.default_shortcuts").map(parseDefaultShortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
@@ -863,6 +872,7 @@ export function parseBubble(raw: unknown): BubbleWire {
     mentions: asArray(record.mentions ?? [], "bubble.mentions").map((mention, index) =>
       asString(mention, `bubble.mentions[${index}]`),
     ),
+    kind: asOneOf(record.kind, BUBBLE_KINDS, "bubble.kind"),
   };
 }
 

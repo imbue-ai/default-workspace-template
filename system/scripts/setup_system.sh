@@ -52,17 +52,16 @@ provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.13.4}"
 : "${NODE_VERSION:=24.22.1}"
-: "${CLAUDE_CODE_VERSION:=2.1.307}"
-: "${CODEX_VERSION:=0.161.0}"
+: "${CLAUDE_CODE_VERSION:=2.1.323}"
+: "${CODEX_VERSION:=0.169.0}"
 : "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
-: "${OPENCODE_VERSION:=1.19.4}"
+: "${OPENCODE_VERSION:=1.19.5}"
 : "${MODAL_VERSION:=1.6.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.19.4}"
-: "${MCPC_VERSION:=0.7.0}"
+: "${LATCHKEY_VERSION:=3.22.1}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
@@ -222,10 +221,13 @@ if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
 fi
 printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/default_workspace_template_path.sh
 
-# Source /home/user/.mngr/env (when present) for interactive bash sessions so terminals can
-# run mngr commands without manual setup.
-if ! grep -q '/home/user/.mngr/env' /root/.bashrc 2>/dev/null; then
-    printf '%s\n' 'if [ -f /home/user/.mngr/env ]; then set -a; . /home/user/.mngr/env; set +a; fi' >> /root/.bashrc
+# Source mngr's host env (when present) for interactive bash sessions so terminals can
+# run mngr commands without manual setup. The host dir is not the same path on every
+# host; a provisioning run has it in MNGR_HOST_DIR, and an image build (which has no
+# host yet) gets the container's.
+mngr_host_env="${MNGR_HOST_DIR:-/home/user/.mngr}/env"
+if ! grep -qF "$mngr_host_env" /root/.bashrc 2>/dev/null; then
+    printf 'if [ -f %s ]; then set -a; . %s; set +a; fi\n' "$mngr_host_env" "$mngr_host_env" >> /root/.bashrc
 fi
 
 # Claude Code CLI (pinned; the provisioning-time version check expects this exact version).
@@ -356,11 +358,12 @@ test -d /opt/pi-extensions/npm/node_modules
 cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
-[ -d /home/user/.mngr ] || exit 0
+export MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}"
+[ -d "$MNGR_HOST_DIR" ] || exit 0
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
+timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \
@@ -412,17 +415,6 @@ chmod 600 /root/.ssh/known_hosts
 
 # latchkey (gateway CLI) and modal (python tool).
 npm install -g "latchkey@${LATCHKEY_VERSION}"
-# mcpc: the one MCP client every harness, app, and scheduled job shares, so a
-# connected MCP server is reachable from all of them without per-harness config.
-npm install -g "@apify/mcpc@${MCPC_VERSION}"
-command -v mcpc >/dev/null
-# Remove mcpc's native keyring binding so it keeps sign-ins and stored headers
-# in its credentials file in ~/.mcpc (linked to data/.secrets/mcpc) on every
-# provider. With the binding present, a VM with a real kernel (lima) stores
-# them in the kernel keyring instead: in memory only, so a reboot loses them,
-# and outside the secrets guard and the backup. mcpc has no setting that picks
-# the file, and --omit=optional does not skip the binding on a global install.
-rm -rf "$(npm root -g)/@apify/mcpc/node_modules/@napi-rs/"keyring-*
 uv tool install "modal==${MODAL_VERSION}"
 
 # Secret-scanner binaries (betterleaks + kingfisher) for the publish-template

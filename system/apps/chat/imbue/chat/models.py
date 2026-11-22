@@ -6,6 +6,7 @@ from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import model_validator
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterParticipant
 
@@ -31,6 +32,10 @@ from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+
+
+class EmptySeedError(ValueError):
+    """A seed that is not a first-run arrival came with no turns."""
 
 
 class AgentCreationError(ValueError):
@@ -261,6 +266,19 @@ class AttachmentUploadResponse(FrozenModel):
     size: int = Field(description="Size of the stored upload in bytes")
 
 
+class InterruptAgentRequest(FrozenModel):
+    """Optional request body for the /api/chats/{id}/interrupt endpoint."""
+
+    only_if_idle: bool = Field(
+        default=False,
+        description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
+    )
+    keep_queue: bool = Field(
+        default=False,
+        description="Resend the messages queued for the agent as one turn after the restart, instead of dropping them",
+    )
+
+
 class InterruptAgentResponse(FrozenModel):
     """Response from the /api/chats/{id}/interrupt endpoint."""
 
@@ -278,6 +296,13 @@ class ChatWatchersResponse(FrozenModel):
     """Response from GET /api/chats/{id}/watchers."""
 
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
+class ChatNotificationRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/notification: the notification the chat just sent the user."""
+
+    message: str = Field(min_length=1, description="What the notification says")
+    title: str | None = Field(default=None, description="Its optional title, shown as a prefix on the message")
 
 
 class DrainToComposerResponse(FrozenModel):
@@ -361,7 +386,17 @@ class DisplayDecisionFields(FrozenModel):
     display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
 
 
-class QueuedMessageState(DisplayDecisionFields):
+class MessageAuthorFields(FrozenModel):
+    """The author a not-yet-delivered message's turn will be stamped with (``authors.py``), so the page draws it under
+    its sender."""
+
+    author: ParticipantKey | None = Field(
+        default=None, description="Who sent it; None for an unattributed message, which is the owner's"
+    )
+    author_name: str | None = Field(default=None, description="What the sender was called when they sent it")
+
+
+class QueuedMessageState(DisplayDecisionFields, MessageAuthorFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -370,7 +405,7 @@ class QueuedMessageState(DisplayDecisionFields):
     """
 
     queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
-    content: str = Field(description="Verbatim text the user queued")
+    content: str = Field(description="The text as the agent was handed it: a non-owner's carries their author prefix")
     timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
     is_sending: bool = Field(
         default=False,
@@ -512,11 +547,18 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(DisplayDecisionFields):
-    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
+class HeldSendSnapshot(DisplayDecisionFields, MessageAuthorFields):
+    """One message the chat app holds while the chat converges or is still being created, as the chat pages draw it."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
     text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
+    is_delivered: bool = Field(
+        default=False,
+        description=(
+            "Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue; "
+            "False while it is still held"
+        ),
+    )
 
 
 class HandoffState(FrozenModel):
@@ -539,8 +581,9 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
-            "too) keeps showing them until they land in the transcript"
+            "The messages sent during the switch, the confirming message first, those the switch has already "
+            "delivered included until it is done, so a page (a reloaded one too) keeps showing them until they "
+            "land in the transcript"
         ),
     )
     model_pick: ModelPick | None = Field(
@@ -560,6 +603,14 @@ class HandoffState(FrozenModel):
         description=(
             "Whether the chat had no user turn to carry over, so the switch only starts it on the target: the page "
             "shows no handoff for it"
+        ),
+    )
+    has_landed: bool = Field(
+        default=False,
+        description=(
+            "Whether a handoff's successor is already the chat's agent, with only the prompt and the held sends "
+            "left to deliver: the page then shows the successor as it shows any agent, and an interrupt waits for "
+            "the delivery rather than being refused"
         ),
     )
 
@@ -615,6 +666,12 @@ class ConvergingResponse(ErrorResponse):
     """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
 
     phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class InterruptBusyResponse(ErrorResponse):
+    """The 409 an ``only_if_idle`` interrupt answers for a chat that has not ended its turn."""
+
+    busy_with: str = Field(description="What the chat is in the middle of, in plain words")
 
 
 class HandoffCancelResponse(FrozenModel):
@@ -850,7 +907,7 @@ class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
     Keyed by its chat id (the id mngr will give its first agent), listed among the chats, and pushed
-    to the chat pages verbatim as the ``provisional_chat_created`` message.
+    to the chat pages as the ``provisional_chat_created`` message in the form ``ProvisionalChatAsShown`` gives it.
     """
 
     chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")
@@ -880,6 +937,15 @@ class ProvisionalChat(FrozenModel):
     )
 
 
+class ProvisionalChatAsShown(FrozenModel):
+    """A provisional chat as the pages are sent it (the ``provisional_chat_created`` message)."""
+
+    chat: ProvisionalChat = Field(description="The chat's record, under the name it is shown by")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        description="The sends held for it, as the page draws them: the sender's words, and who the sender is"
+    )
+
+
 class SetLaunchChoiceRequest(FrozenModel):
     """Request body for POST /api/chats/{id}/launch-choice: the account and model a chat with no agent yet runs on."""
 
@@ -892,7 +958,17 @@ class SeedChatRequest(FrozenModel):
 
     # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
     title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
-    turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
+    turns: tuple[SeedTurn, ...] = Field(default=(), description="The turns, in order")
+    is_first_run: bool = Field(
+        default=False, description="A first-run arrival: the chat opens on ``FIRST_RUN_WELCOME`` instead of turns"
+    )
+    context: str = Field(default="", description="What the user told the first run, for the agent; never shown")
+
+    @model_validator(mode="after")
+    def _require_turns_unless_first_run(self) -> "SeedChatRequest":
+        if not self.is_first_run and len(self.turns) == 0:
+            raise EmptySeedError("A seeded chat needs at least one turn unless it is a first-run arrival")
+        return self
 
 
 class IntakeTarget(LowerCaseStrEnum):

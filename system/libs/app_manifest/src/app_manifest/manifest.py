@@ -254,6 +254,11 @@ class MessageHandler(FrozenModel):
         default=(),
         description="The app's other pages, built the same way, that count as already showing it",
     )
+    reload_when_raised: bool = Field(
+        default=False,
+        description="Whether a window the message raises at the ``show`` page itself (not at a ``showing`` page) has "
+        "its page reloaded",
+    )
 
     @model_validator(mode="after")
     def _check_one_delivery(self) -> Self:
@@ -264,6 +269,10 @@ class MessageHandler(FrozenModel):
             )
         if self.showing and self.show is None:
             raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
+        if self.reload_when_raised and self.show is None:
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives 'reload_when_raised' only beside 'show'"
+            )
         return self
 
 
@@ -510,6 +519,11 @@ class AppManifest(FrozenModel):
         default=False,
         description="Whether the shell may stop the app's program once no window on any desktop shows it "
         "(docs/system/specs/stop-when-no-windows.md); a critical app never is",
+    )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the app's pages listen to the microphone; the shell delegates it to the frames of "
+        "an app that declares this, and to no other",
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")

@@ -28,8 +28,9 @@ from app_schema.api_schema import (
     flask_rule_to_openapi_path,
     register_api_schema_route,
 )
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response, model_response, parse_request_body
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, Flask, Response, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -84,7 +85,9 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
+    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__"
+)
 
 # xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
 _XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
@@ -467,17 +470,27 @@ _EMPTY_TITLE: Final[str] = "Terminal"
 class SessionPage(FrozenModel):
     """What the wrapper needs to frame one session; ``model_dump`` is what the page and its API read."""
 
-    name: TmuxSessionName = Field(description="The session, which is the terminal's name")
+    name: TmuxSessionName = Field(
+        description="The session, which is the terminal's name"
+    )
     title: TerminalTitle = Field(description="What the window is called")
-    pty_path: str = Field(description="The path on the pty origin that attaches to the session")
-    pty_label: str = Field(description="The pty's origin label, or \"\" while it is not registered")
+    pty_path: str = Field(
+        description="The path on the pty origin that attaches to the session"
+    )
+    pty_label: str = Field(
+        description='The pty\'s origin label, or "" while it is not registered'
+    )
 
 
 class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
-    session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
-    page: SessionPage | None = Field(description="The session's page, when there is a session")
+    session: TmuxSessionName | None = Field(
+        description="The session the page opened on; None for the bare root"
+    )
+    page: SessionPage | None = Field(
+        description="The session's page, when there is a session"
+    )
 
 
 class NewTerminalRequest(FrozenModel):
@@ -487,7 +500,8 @@ class NewTerminalRequest(FrozenModel):
     model_config = ConfigDict(extra="ignore")
 
     workdir: Workdir | None = Field(
-        default=None, description="The directory the terminal's shell starts in; absent or \"\" for the default"
+        default=None,
+        description='The directory the terminal\'s shell starts in; absent or "" for the default',
     )
 
     @field_validator("workdir", mode="before")
@@ -499,7 +513,9 @@ class NewTerminalRequest(FrozenModel):
 class NewTerminalResponse(FrozenModel):
     """What a ``new`` launch answers: where the new terminal's page is."""
 
-    path: str = Field(description="The path of the new terminal's page on this origin, which a window shows")
+    path: str = Field(
+        description="The path of the new terminal's page on this origin, which a window shows"
+    )
 
 
 class HealthResponse(FrozenModel):
@@ -511,11 +527,19 @@ class HealthResponse(FrozenModel):
 # What every route exchanges, which the app's API document publishes and every parse and answer is checked against.
 ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the page framing one terminal"),
-    ("POST", NEW_PATH): RouteModels(request_model=NewTerminalRequest, response_model=NewTerminalResponse),
-    ("GET", flask_rule_to_openapi_path(SESSION_API_PATH)): RouteModels(response_model=SessionPage),
+    ("POST", NEW_PATH): RouteModels(
+        request_model=NewTerminalRequest, response_model=NewTerminalResponse
+    ),
+    ("GET", flask_rule_to_openapi_path(SESSION_API_PATH)): RouteModels(
+        response_model=SessionPage
+    ),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
-    ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
-    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+    ("POST", WINDOW_CLOSED_PATH): RouteModels(
+        request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT
+    ),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(
+        reason="the app contract module, a JavaScript file"
+    ),
     **THEME_STATIC_ROUTE_TABLE,
 }
 
@@ -558,6 +582,27 @@ def render_page(config: PageConfig) -> str:
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
 
+def build_pages_app(
+    source: TmuxSessionSource,
+    registry_path: Path,
+    contract_path: Path,
+    on_window_closed: Callable[[TmuxSessionName | None], None],
+) -> Flask:
+    """The pages as the one Flask app the terminal serves: the request guard every app installs ahead of its routes
+    (``app_schema.request_guard``), then the blueprint ``build_pages_blueprint`` builds from the same arguments."""
+    app = Flask(__name__, static_folder=None)
+    install_request_guard(app, exempt_rules=frozenset())
+    app.register_blueprint(
+        build_pages_blueprint(
+            source=source,
+            registry_path=registry_path,
+            contract_path=contract_path,
+            on_window_closed=on_window_closed,
+        )
+    )
+    return app
+
+
 def build_pages_blueprint(
     source: TmuxSessionSource,
     registry_path: Path,
@@ -581,12 +626,17 @@ def build_pages_blueprint(
     attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
-        listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)
+        listed = next(
+            (terminal for terminal in source.list_terminals() if terminal.name == name),
+            None,
+        )
         record = source.remembered_record(name)
         return SessionPage(
             name=name,
             title=listed.title if listed is not None else derive_terminal_title(name),
-            pty_path=pty_path_for_session(name, record.workdir if record is not None else None),
+            pty_path=pty_path_for_session(
+                name, record.workdir if record is not None else None
+            ),
             pty_label=read_origin_label(registry_path, PTY_APP_NAME),
         )
 
@@ -595,7 +645,9 @@ def build_pages_blueprint(
         """The page framing one terminal (``?session=<name>``), or the bare page when no session is named."""
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
-        config = PageConfig(session=session, page=session_page(session) if session is not None else None)
+        config = PageConfig(
+            session=session, page=session_page(session) if session is not None else None
+        )
         response = Response(render_page(config), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -629,7 +681,8 @@ def build_pages_blueprint(
         """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
             return error_response(
-                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
+                f"the workspace shell's frontend is not built: {contract_path} is missing",
+                HTTP_NOT_FOUND,
             )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")

@@ -22,7 +22,13 @@
 # The routines tick is the one code-owned cron entry that goes through it
 # (an entry `routines migrate-cron` leaves with cron is pointed at it too):
 #
+#   MNGR_HOST_DIR=/home/user/.mngr
 #   * * * * *   root   /home/user/workspace/system/libs/routines/with_agent_env.sh uv run --no-sync routines tick >> /var/log/supervisor/routines-tick.log 2>&1
+#
+# The host dir is not the same path on every host (a container keeps it at
+# /home/user/.mngr; other providers put it elsewhere), and the env files that
+# name it are inside it. So the caller states it in MNGR_HOST_DIR, as the
+# tick's entry does, and a caller that states nothing gets the container's path.
 #
 # One deliberate exception: the built-in update-apply recovery guard the
 # bootstrap writes (/etc/cron.d/update-apply-recover). It exists to repair a
@@ -30,15 +36,16 @@
 # cannot be assumed, so it carries its own PATH line and cd instead.
 set -euo pipefail
 
-if [ ! -f /home/user/.mngr/env ]; then
-    echo "with_agent_env.sh: /home/user/.mngr/env not found -- this wrapper only works inside a mngr-managed workspace container" >&2
+host_dir="${MNGR_HOST_DIR:-/home/user/.mngr}"
+if [ ! -f "$host_dir/env" ]; then
+    echo "with_agent_env.sh: $host_dir/env not found -- this wrapper only works inside a mngr-managed workspace, and takes the host dir from MNGR_HOST_DIR" >&2
     exit 1
 fi
 
 set -a
 # shellcheck source=/dev/null
-. /home/user/.mngr/env
-host_dir="${MNGR_HOST_DIR:-/home/user/.mngr}"
+. "$host_dir/env"
+host_dir="${MNGR_HOST_DIR:-$host_dir}"
 # The services agent (labelled is_primary=true) is the one whose environment
 # background jobs run under; its env file carries the per-agent vars
 # (MNGR_AGENT_ID, MNGR_AGENT_STATE_DIR, ...).

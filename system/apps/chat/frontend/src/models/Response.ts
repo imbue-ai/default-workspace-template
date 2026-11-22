@@ -8,6 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
+import { ensureParticipantsKnowAuthors } from "./Participants";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -108,6 +109,9 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
+  // True for a message the agent took into the turn it was already running (the user sent
+  // it while the agent worked), rather than one that started a turn. Claude's parser stamps it.
+  delivered_mid_turn?: boolean;
   // The body to display when a wrapper sentinel was stripped (a fleet nudge), a notice's
   // summary line, or the user's own words behind machine context (prompt_with_context: a
   // seeded chat's context block, or background-task reports flushed into the turn). On a
@@ -720,6 +724,16 @@ function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
   return events.filter(isSentUserTurn).map((event) => event.event_id);
 }
 
+/** How many turns users' messages opened for ``agentId`` from ``since`` (ISO 8601) on, in the chat's loaded
+ *  transcript: the real forms of the messages a switch that began then has delivered to it. */
+export function countSentTurnsSince(chatId: string, agentId: string, since: string): number {
+  const sinceMs = Date.parse(since);
+  return getEventsForChat(chatId).filter(
+    (event) =>
+      isSentUserTurn(event) && (event.agent_id ?? agentId) === agentId && Date.parse(event.timestamp) >= sinceMs,
+  ).length;
+}
+
 function isSentUserTurn(event: TranscriptEvent): event is UserMessageEvent {
   return event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event);
 }
@@ -800,6 +814,7 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  ensureParticipantsKnowAuthors(newEvents.filter(isSentUserTurn));
   // A switch marker is the real form of the message it carries (the successor's opening
   // bubble), so it stands that message's bubble down by id: a bubble the switch's end
   // brought back before the marker landed goes here, and one the marker preceded is

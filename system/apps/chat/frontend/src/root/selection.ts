@@ -15,6 +15,8 @@ export const CHAT_QUERY_KEY = "chat";
 export const INTAKE_QUERY_KEY = "intake";
 export const OPEN_QUERY_KEY = "open";
 export const OPEN_PROVIDERS = "providers";
+const VIEW_QUERY_KEY = "view";
+const VIEW_FIRST_RUN = "first-run";
 
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
@@ -32,6 +34,11 @@ export function intakeTokenFromSearch(search: string): string | null {
 /** Whether the URL asks the root to open the provider chooser on arrival. */
 export function isProviderChooserRequested(search: string): boolean {
   return new URLSearchParams(search).get(OPEN_QUERY_KEY) === OPEN_PROVIDERS;
+}
+
+/** Whether the URL asks for the first run's provider page in place of the chats (the shell's cover frames it). */
+export function isFirstRunProvidersViewRequested(search: string): boolean {
+  return new URLSearchParams(search).get(VIEW_QUERY_KEY) === VIEW_FIRST_RUN;
 }
 
 /** The root's path for a selection: what it reports to the shell and writes into its own URL. */
@@ -55,17 +62,25 @@ export interface SlotState {
   /** The phone layout, where the list's drawer is open over the empty chat while nothing is selected. */
   isCompact: boolean;
   isShown: boolean;
+  /** A delete is on its way, so a chat hidden from the list may still exist or come back. */
+  isDeletePending: boolean;
+  /** An account is signed in that a new chat could start on, and no sign-in is waiting to start a chat that has not
+   *  appeared yet (``models/firstSendChooser.ts``). */
+  canStartNew: boolean;
 }
 
-/** The chat list is never left open empty: with nothing selected (opened bare, or the chat on screen was deleted) it
- *  shows the head of the list -- the main chat, else the most recent -- and with no chats a new one awaiting its
- *  first send. That new one is only asked for while the root is on screen, so a list open on
- *  a desktop nobody is looking at does not add one. */
+/** The chat list is never left open empty while it can start a chat: with nothing selected (opened bare, or the chat
+ *  on screen was deleted) it shows the head of the list -- the main chat, else the most recent -- and with no chats a
+ *  new one awaiting its first send. That new one is only asked for while the root is on screen, so a list open on a
+ *  desktop nobody is looking at does not add one; only once an account is signed in: before that the provider
+ *  chooser stands over the empty slot, and a new workspace's welcome chat lands alone rather than beside an empty
+ *  one; and only once no delete is on its way: the chat app answers that ask with a chat already waiting for its
+ *  first send, which could be the one being deleted. */
 export function slotFill(state: SlotState): SlotFill {
   if (state.selectedChatId !== null || !state.isChatListKnown || state.isChoosing || state.isCompact) {
     return { kind: "keep" };
   }
   const head = state.chatIds[0];
   if (head !== undefined) return { kind: "select", chatId: head };
-  return state.isShown ? { kind: "open_new" } : { kind: "keep" };
+  return state.isShown && !state.isDeletePending && state.canStartNew ? { kind: "open_new" } : { kind: "keep" };
 }

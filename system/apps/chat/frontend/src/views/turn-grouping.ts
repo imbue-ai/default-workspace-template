@@ -33,11 +33,17 @@
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state. It belongs to the earlier request, so the new turn's
  * prose does not join it until the agent works while it is open or moves a
- * step, and a turn that never works in it or closes it does not draw it at all;
- * the same holds for a step carried over a switch to another agent, whose
- * successor starts on the message the user switched with. A turn the agent did
- * nothing in (two boundaries back to back) keeps no copy either, so the step is
- * drawn again at most once, under the later boundary.
+ * step (re-starting that same step is no move). The agent's first prose in a
+ * turn the user started, before it moves a step, is its answer: it stays a
+ * reply even if the agent worked first and works on after it. After a message
+ * the agent took into the turn it was running (sent while it worked), all of
+ * its prose to that turn's end is a reply: its answer can follow a line about
+ * the earlier work or a step move, so its work still groups under the steps but
+ * its prose does not. A turn that never works in the carried-over step or closes
+ * it does not draw it at all; the same holds for a step carried over a switch to
+ * another agent, whose successor starts on the message the user switched with.
+ * A turn the agent did nothing in (two boundaries back to back) keeps no copy
+ * either, so the step is drawn again at most once, under the later boundary.
  *
  * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
  * background task, a bash-mode command and its output) breaks the timeline the
@@ -258,6 +264,16 @@ function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.display === "hidden";
 }
 
+/** True when a tool call ran a tk lifecycle command that a step hook refused (a `cd` before a
+ *  `tk close`), so it did no work and moved no step. Counting it as work would turn a line the agent
+ *  said just before closing a step into mid-step narration. A refusal fails with neither tk output
+ *  nor an error snippet (the backend gives a hook's refusal none); a chained command whose own work
+ *  failed (`pytest && tk close s1`) has a snippet and still renders. */
+function isRefusedTkCall(tc: ToolCall, toolResults: Map<string, ToolResultEvent>): boolean {
+  const toolResult = toolResults.get(tc.tool_call_id);
+  return tkCommand(tc) !== null && toolResult?.is_error === true && !toolResult.tk_stamp && !toolResult.error_snippet;
+}
+
 /** True when an assistant message FILED a permission request -- one the user can
  *  still answer. A call the harness refused never reached the gateway, so it
  *  neither breaks out of its step nor takes a place in the queue a later verdict
@@ -424,10 +440,10 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
     }
   }
 
-  // Only a recognised, pure tk lifecycle call is hidden from the rendered
-  // output. Anything else (including a command that merely mentions a tk verb)
-  // renders as normal work, so real work is never silently dropped.
-  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
+  // Only a recognised, pure tk lifecycle call or a refused one is hidden from the
+  // rendered output. Anything else (including a command that merely mentions a tk
+  // verb) renders as normal work, so real work is never silently dropped.
+  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc) && !isRefusedTkCall(tc, toolResults));
   if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
   }
@@ -488,12 +504,20 @@ interface SectionBuilder {
   current_step_id: string | null;
   /** A step carried over into a turn the user started (a message, or a switch to another
    *  agent), which the agent has not taken up again in it: nothing the agent says joins it until
-   *  the agent works while it is open or moves a step. */
+   *  the agent works while it is open or moves a step (re-starting this one is no move). */
   dormant_step_id: string | null;
   /** Carried-over steps left off this section's timeline unless the agent takes them up in it
    *  (they still show, frozen, in the turn they came from): all of them in a turn the user started,
    *  and after a chip those the turn before it never took up. */
   untaken_carryover_ids: Set<string>;
+  /** In a turn the user started, true until the agent's first prose or its first step move: that
+   *  prose is its answer to them, so it stays a reply even when the agent looked something up
+   *  first and keeps working after it. */
+  awaiting_answer: boolean;
+  /** In a turn opened by a message the agent took into the turn it was running, true to the turn's
+   *  end: everything it says is shown as a reply. Its answer to a question asked mid-task can come
+   *  after a line about the earlier work or a step move, so no single line can be picked out. */
+  answering_mid_task: boolean;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -510,6 +534,8 @@ function newSection(user_event: UserMessageEvent | null, key: string, is_after_s
     current_step_id: null,
     dormant_step_id: null,
     untaken_carryover_ids: new Set(),
+    awaiting_answer: false,
+    answering_mid_task: false,
     open_handoff: null,
   };
 }
@@ -563,6 +589,20 @@ export function hasOpenHandoffRequest(events: readonly TranscriptEvent[], handof
     const event = events[i];
     if (event.type === "agent_switch") return false;
     if (event.type === "user_message" && isHandoffSummaryRequest(event)) return isLiveHandoffRequest(event, handoff);
+  }
+  return false;
+}
+
+/** Whether the live switch has already landed on the transcript: its ``agent_switch`` marker is there while the
+ *  chat still delivers to the successor. The walk's node for that switch is then the one showing it, done. */
+export function hasLandedLiveSwitch(events: readonly TranscriptEvent[], handoff: HandoffState | null): boolean {
+  if (handoff === null) return false;
+  const startedAt = Date.parse(handoff.started_at);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type !== "agent_switch") continue;
+    const switchedAt = Date.parse(event.timestamp);
+    return !Number.isNaN(switchedAt) && !Number.isNaN(startedAt) && switchedAt >= startedAt;
   }
   return false;
 }
@@ -667,8 +707,15 @@ export function buildSections(
     const previous = current;
     carryover = previous === null ? [] : openStepsAtEnd(previous);
     current = ensureSection(user_event, key, isAfterSwitch);
-    if (isNewRequest) setCarryoverDormant(current);
-    else continueCarryover(previous, current);
+    if (isNewRequest) {
+      setCarryoverDormant(current);
+      current.awaiting_answer = true;
+      current.answering_mid_task = user_event?.delivered_mid_turn === true;
+    } else {
+      continueCarryover(previous, current);
+      current.awaiting_answer = previous?.awaiting_answer ?? false;
+      current.answering_mid_task = previous?.answering_mid_task ?? false;
+    }
   };
 
   // The node a switch just closed, until the successor's first turn-making event: the handoff
@@ -808,11 +855,19 @@ export function buildSections(
       // a `-step-` id nor a known step) rather than mint a phantom node titled
       // with the raw ticket id. Any work batched with that command stays in
       // the step that was already open (or renders inline if none was).
-      const stepTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
-      if (
-        current.dormant_step_id !== null &&
-        ((parsed.render !== null && isWork(parsed.render)) || stepTransitions.length > 0)
-      ) {
+      const knownTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
+      const isWorkMessage = parsed.render !== null && isWork(parsed.render);
+      // Re-starting the dormant step itself, as the open-steps reminder asks the agent to do before
+      // it answers, only says the step is still open: the step stays out of the new turn, so the
+      // answer that follows stays a reply, until the agent does real work.
+      const dormantId = current.dormant_step_id;
+      const onlyRestartsDormant =
+        dormantId !== null &&
+        !isWorkMessage &&
+        knownTransitions.length > 0 &&
+        knownTransitions.every((t) => t.status === "in_progress" && t.id === dormantId);
+      const stepTransitions = onlyRestartsDormant ? [] : knownTransitions;
+      if (current.dormant_step_id !== null && (isWorkMessage || stepTransitions.length > 0)) {
         current.current_step_id = current.dormant_step_id;
         current.dormant_step_id = null;
       }
@@ -828,6 +883,7 @@ export function buildSections(
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
+      if (stepTransitions.length > 0) current.awaiting_answer = false;
       // Whitespace-only text draws nothing, so it counts as no text.
       if (parsed.render !== null && (parsed.render.text.trim() || parsed.render.tool_calls.length > 0)) {
         if (hasPermissionRequest(parsed.render, toolResults)) {
@@ -837,6 +893,9 @@ export function buildSections(
           // responds keeps grouping under it.
           supersedeOlderSecretRequests(parsed.render, toolResults, pendingSecretRequestByFile, resolutionsByRequestId);
           current.entries.push({ kind: "permission", event: parsed.render });
+        } else if ((current.awaiting_answer || current.answering_mid_task) && isProse(parsed.render)) {
+          routeMessage(current, parsed.render, null);
+          current.awaiting_answer = false;
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -1207,6 +1266,7 @@ function finalizeSection(
     items,
     trailing_reply,
     trailing_status,
-    live_step_id: section.open_handoff === null ? frontierId : null,
+    live_step_id:
+      section.open_handoff === null && !section.awaiting_answer && !section.answering_mid_task ? frontierId : null,
   };
 }

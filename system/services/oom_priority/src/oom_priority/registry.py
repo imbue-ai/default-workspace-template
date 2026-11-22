@@ -25,7 +25,8 @@ gone, so it can check only the boot.
 
 One agent can register more than one pid: codex runs both a visible ``--remote`` TUI
 and an ``app-server`` daemon from the same launch command, so both are recorded under
-its id, and ``lookup_pids_by_agent_id`` returns them all.
+its id, and ``live_pids_by_agent_id`` (every agent's live pids from one read of the
+directory) and ``lookup_pids_by_agent_id`` (one agent's) return them all.
 
 Stdlib-only (see ``paths``): imported by the launch wrapper and the kill hook
 under a plain ``python3``.
@@ -126,7 +127,7 @@ def record_agent_pid(
     ``agent_id`` (mngr's stable per-agent id) is recorded alongside the name so a
     consumer that knows only the id -- e.g. the chat app's OOM prioritizer, which
     re-tags a chat by id -- can resolve the live pids via
-    ``lookup_pids_by_agent_id``. It is optional so older callers/tests that pass
+    ``live_pids_by_agent_id``. It is optional so older callers/tests that pass
     only a name still work.
 
     Overwrites any prior entry for the same pid (a reused pid), and prunes
@@ -194,10 +195,10 @@ def live_pids_by_agent_id(proc_dir: Path = _PROC_DIR) -> dict[str, list[int]]:
 def lookup_pids_by_agent_id(agent_id: str, proc_dir: Path = _PROC_DIR) -> list[int]:
     """Every live main-process pid recorded for ``agent_id``, sorted; empty when none.
 
-    So a consumer holding only the id (the OOM prioritizer) can re-tag each of the
-    agent's processes. Empty for a dormant chat with no running process, an id
-    recorded before ``agent_id`` was captured, or entries whose pid no longer names
-    the recorded process.
+    The one-agent form of ``live_pids_by_agent_id``, reading the whole registry for
+    it; a consumer that resolves several agents at once reads that map itself. Empty
+    for a dormant chat with no running process, an id recorded before ``agent_id``
+    was captured, or entries whose pid no longer names the recorded process.
     """
     return sorted(live_pids_by_agent_id(proc_dir).get(agent_id, []))
 

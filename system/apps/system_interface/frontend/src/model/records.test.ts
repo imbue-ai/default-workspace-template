@@ -217,10 +217,14 @@ describe("parseAppRecord", () => {
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.stop_when_no_windows).toBe(false);
+    expect(app.uses_microphone).toBe(false);
     expect(app.pin).toBeNull();
     const bare = parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true });
     expect(bare.stop_when_no_windows).toBe(true);
     expect(bare.default_shortcuts).toEqual([]);
+    expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", uses_microphone: true }).uses_microphone).toBe(
+      true,
+    );
   });
 
   it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
@@ -455,6 +459,7 @@ describe("the tray's records (the multiplayer spec)", () => {
         text: "hi",
         message_id: "m-1",
         mentions: ["user:user-josh-0001"],
+        kind: "message",
       }),
     ).toEqual({
       speaker: "user:user-bob-4471",
@@ -463,7 +468,19 @@ describe("the tray's records (the multiplayer spec)", () => {
       text: "hi",
       message_id: "m-1",
       mentions: ["user:user-josh-0001"],
+      kind: "message",
     });
+    expect(() =>
+      parseBubble({
+        speaker: "workspace-agent",
+        chat_id: "agent-2",
+        chat_title: "",
+        text: "hi",
+        message_id: "m",
+        mentions: [],
+        kind: "shout",
+      }),
+    ).toThrow(WireShapeError);
     expect(() =>
       parseBubble({
         speaker: "user:x",
@@ -472,6 +489,7 @@ describe("the tray's records (the multiplayer spec)", () => {
         text: "hi",
         message_id: "m",
         mentions: [7],
+        kind: "message",
       }),
     ).toThrow(WireShapeError);
     const mentioning = { id: "lounge", label: "Lounge", path: "/x", mention_param: "message" };

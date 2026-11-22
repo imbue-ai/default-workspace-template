@@ -239,6 +239,21 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
+def test_the_screen_video_server_port_is_never_picked(tmp_path: Path) -> None:
+    """8091 is the Screen's neko port, which no config scan or bind probe sees.
+
+    With 8080-8090 taken, the auto pick must skip 8091 and an explicit --port 8091
+    must be refused, or the new app takes the port and the Screen cannot start.
+    """
+    root = _make_workspace(
+        tmp_path / "workspace", {f"app{port}": port for port in range(8080, 8091)}
+    )
+
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8092
+    with pytest.raises(SystemExit, match="8091 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8091, _nothing_bound)
+
+
 def test_a_port_something_is_listening_on_is_skipped_and_refused(
     tmp_path: Path,
 ) -> None:
@@ -795,6 +810,7 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
         "system/libs/app_schema",
         "system/libs/app_manifest",
         "system/libs/app_registration",
+        "system/libs/workspace_layout",
     ):
         shutil.rmtree(root / library)
         shutil.copytree(
@@ -856,6 +872,12 @@ def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
         for package in root_lock["package"]
         if package["name"] == "imbue-common"
     )
+    # The harden pass's browser tests run from this venv, which the repo root's does not reach.
+    assert by_name["playwright"]["version"] == root_versions["playwright"]
+    assert "pytest-timeout" in by_name
+    pyproject = tomllib.loads((app / "pyproject.toml").read_text())
+    marks = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+    assert {mark.split(":")[0] for mark in marks} == {"browser", "frontend"}
     # The program line, run as supervisord would (less the registration with the shell,
     # which needs a live workspace), boots the app from its own venv.
     command = configparser.RawConfigParser()

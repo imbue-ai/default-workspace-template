@@ -39,6 +39,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.display_name is None
     assert row.critical is False
     assert row.stop_when_no_windows is False
+    assert row.uses_microphone is False
     assert row.priority == "user"
     assert row.default_shortcuts == ()
     assert row.launch_paths == ()
@@ -61,6 +62,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'display_name = "Files"\n'
         "critical = false\n"
         "stop_when_no_windows = true\n"
+        "uses_microphone = true\n"
         'priority = "files"\n'
         'default_shortcuts = [{launch = "new", mode = "focus"}, {launch = "recent", mode = "new"}]\n'
         'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
@@ -79,6 +81,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.icon == APP_ICON_MARKUP
     assert row.window_closed_path == "/api/window-closed"
     assert row.stop_when_no_windows is True
+    assert row.uses_microphone is True
     assert [(handler.type, handler.path, handler.show, handler.showing) for handler in row.message_handlers] == [
         ("minds:focus-chat", "/api/focus-chat", None, ()),
         ("open:file", None, "{path}?view", ("{path}", "{path}/")),

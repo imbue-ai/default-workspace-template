@@ -2,7 +2,13 @@ import pytest
 
 from workspace_layout.errors import InvalidIdentityHeaderError
 from workspace_layout.identity import ANONYMOUS_OWNER
+from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
+from workspace_layout.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import RequestProvenance
+from workspace_layout.identity import describe_provenance_refusal
+from workspace_layout.identity import is_from_another_origin
+from workspace_layout.identity import is_loopback_host
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import parse_identity_header
 from workspace_layout.identity import participant_key_of
@@ -82,3 +88,74 @@ def test_only_a_signed_in_visitor_has_a_visiting_user_id() -> None:
         visiting_user_id(RequestIdentity(owner=False, user_id="user-bob-4471", email="b@example.com"))
         == "user-bob-4471"
     )
+
+
+def test_a_host_names_loopback_by_address_or_as_localhost_with_or_without_a_port() -> None:
+    for host in ("127.0.0.1", "127.0.0.1:8090", "localhost", "localhost:8000", "[::1]:8090", "[::1]"):
+        assert is_loopback_host(host) is True, host
+    for host in ("agent-1.localhost:8421", "evil.example:8090", "", "10.0.0.7:8090", "[::1"):
+        assert is_loopback_host(host) is False, host
+
+
+@pytest.mark.parametrize(
+    ("method", "fetch_site", "fetch_mode", "is_other"),
+    [
+        pytest.param("POST", None, None, False, id="no-fetch-metadata"),
+        pytest.param("POST", "same-origin", "cors", False, id="same-origin"),
+        pytest.param("GET", "none", "navigate", False, id="user-typed"),
+        pytest.param("GET", "cross-site", "navigate", False, id="cross-site-navigation"),
+        pytest.param("HEAD", "same-site", "navigate", False, id="same-site-head-navigation"),
+        pytest.param("POST", "cross-site", "navigate", True, id="cross-site-form-navigation"),
+        pytest.param("POST", "cross-site", "no-cors", True, id="cross-site-no-cors"),
+        pytest.param("GET", "cross-site", "cors", True, id="cross-site-fetch"),
+        pytest.param("GET", "same-site", "websocket", True, id="same-site-websocket"),
+        pytest.param("POST", "same-site", None, True, id="same-site-without-a-mode"),
+    ],
+)
+def test_a_browser_marks_a_page_of_another_origin_except_on_a_get_or_head_navigation(
+    method: str, fetch_site: str | None, fetch_mode: str | None, is_other: bool
+) -> None:
+    assert is_from_another_origin(method, fetch_site, fetch_mode) is is_other
+
+
+def _provenance(**overrides: object) -> RequestProvenance:
+    fields: dict[str, object] = {
+        "method": "POST",
+        "identity_header": None,
+        "fetch_site": None,
+        "fetch_mode": None,
+        "host": "127.0.0.1:8090",
+        "remote_address": "127.0.0.1",
+    }
+    fields.update(overrides)
+    return RequestProvenance.model_validate(fields)
+
+
+def test_a_header_less_request_is_admitted_from_loopback_alone_under_a_loopback_host() -> None:
+    assert describe_provenance_refusal(_provenance()) is None
+    assert describe_provenance_refusal(_provenance(host="localhost:8090", remote_address="::1")) is None
+    assert describe_provenance_refusal(_provenance(host="rebound.example:8090")) == UNTRUSTED_LOOPBACK_REFUSAL
+    assert describe_provenance_refusal(_provenance(remote_address="10.0.0.7")) == UNTRUSTED_LOOPBACK_REFUSAL
+    assert describe_provenance_refusal(_provenance(remote_address=None)) == UNTRUSTED_LOOPBACK_REFUSAL
+
+
+def test_a_request_a_proxy_stamped_is_read_by_its_header_wherever_it_came_from() -> None:
+    stamped = _provenance(identity_header='{"owner":true}', host="screen-x.agent-1.localhost:8421")
+    assert describe_provenance_refusal(stamped) is None
+    assert describe_provenance_refusal(_provenance(identity_header="   ")) is None
+    assert (
+        describe_provenance_refusal(_provenance(identity_header="   ", host="rebound.example:8090"))
+        == UNTRUSTED_LOOPBACK_REFUSAL
+    )
+
+
+def test_a_page_of_another_origin_is_refused_whatever_it_carries() -> None:
+    cross_site = _provenance(fetch_site="cross-site", fetch_mode="cors", identity_header='{"owner":true}')
+    assert describe_provenance_refusal(cross_site) == OTHER_ORIGIN_REFUSAL
+    assert (
+        describe_provenance_refusal(_provenance(fetch_site="same-site", fetch_mode="no-cors")) == OTHER_ORIGIN_REFUSAL
+    )
+    framed = _provenance(method="GET", fetch_site="same-site", fetch_mode="navigate")
+    assert describe_provenance_refusal(framed) is None
+    own_page = _provenance(fetch_site="same-origin", fetch_mode="cors")
+    assert describe_provenance_refusal(own_page) is None

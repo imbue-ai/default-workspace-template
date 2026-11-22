@@ -180,15 +180,10 @@
 - `apps/minds/docs/deploy/history/rollouts/earlyoom-gvisor-shed-order.md` (new): the symptom, the root cause, who is affected and who the command can't reach, what the command does, and survey counts per class and tier.
 - Changelog entries: `apps/minds_admin/changelog/` and `apps/minds/changelog/`.
 
-### mngr-internal, PR 2: guards and doc fix (off `main`, lands with the dwt PR)
+### mngr-internal, PR 2: doc fix (off `main`, lands with the dwt PR)
 
-- `apps/minds/test_aws_workspace_oom_release.py` (new, `release` only): a sibling of `test_aws_workspace_release.py`.
-  - Creates a full dwt workspace (`--template main --template aws`) under runsc on EC2, and asserts gVisor with the `dmesg` probe.
-  - Stops the browser and every chat, then streams `oom_drill.py` in with sleepers from band 1000 down to the service bands.
-  - Asserts both strict descending band order of the sleeper sheds and the drill's prediction check, reading the ledger's new fields.
-- `apps/minds/docs/deploy/ops/app-release.md`: a step that runs the test whenever a release changes `install_earlyoom.sh`, the runsc pin, or `oom_priority`. `apps/minds/docs/testing-overview.md`: a row for it.
 - `libs/mngr_imbue_cloud/imbue/mngr_imbue_cloud/slices/bare_metal.py`: correct the docstring claiming the host cgroup OOM killer is steered by the bands. It isn't under runsc.
-- Changelog entries: `apps/minds/changelog/` and `libs/mngr_imbue_cloud/changelog/`.
+- Changelog entry: `libs/mngr_imbue_cloud/changelog/`.
 
 ## Implementation phases
 
@@ -213,9 +208,8 @@
    - Survey, then apply staging, then production. Production waits for the owner's go-ahead.
    - geebspace gets the hotpatch, then a probe whose `--dryrun` pick of the installed fork is the predicted first victim. Nothing in the sweep stops a user's chats or browser; the drill is for disposable workspaces only.
    - Any tagging bugs the survey finds get fixed in the dwt PR, or a follow-up if found after merge.
-6. **Guards and release (mngr PR 2).**
-   - The AWS release test: a control run against dwt `main` fails, then the branch passes.
-   - The runbook step and the `bare_metal.py` fix.
+6. **Doc fix and release (mngr PR 2).**
+   - The `bare_metal.py` fix.
    - Merge the dwt PR; it ships in the next minds release.
 
 ## Testing strategy
@@ -241,7 +235,6 @@
   - The branch's `setup_system.sh` masks and stops `earlyoom.service` and purges the package, leaving one earlyoom process.
   - The drill passes, and its order matches the kernel's `oom_score` order.
 - **geebspace.** Hotpatch, then a probe. It passes if the installed fork's `--dryrun` pick (read-only: it logs the victim and sends nothing) is the predicted first victim.
-- **AWS release test.** A control run against dwt `main` must fail on ordering; the branch must pass.
 - **Pass criterion for realistic drills.** Each victim had the highest predicted badness among eligible processes when it was shed, and no built-in service was shed while any process at adj ≥ 900 remained.
 
 ## Open questions

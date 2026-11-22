@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import m from "mithril";
+import { buildMessageWithAttachments } from "../models/attachments";
+import { DICTATION_NOTE, withDictationNote } from "../models/dictationNote";
 import { setParticipantsForTesting, type Participant } from "../models/Participants";
+import { personFixture } from "../models/participantFixture";
 import type { UserMessageEvent } from "../models/Response";
 import { authorOfTurn, renderUserMessage, StableUserMessage } from "./user-message-display";
 
@@ -114,7 +117,8 @@ describe("user-message-display status messages", () => {
 
 describe("user-message-display prompt bubbles", () => {
   const SEED_BLOCK = "<chat-seed-context>\nthe conversation the chat opened on\n</chat-seed-context>";
-  const ATTACHMENT = "See attachment here: ![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT_MARKDOWN = "![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT = `See attachment here: ${ATTACHMENT_MARKDOWN}`;
 
   function wrappedSend(spoken: string): UserMessageEvent {
     return {
@@ -140,31 +144,78 @@ describe("user-message-display prompt bubbles", () => {
     const inner = renderBubble(wrappedSend(`here you go\n\n${ATTACHMENT}`));
 
     expect(allText(inner)).toBe("here you go");
-    expect(markdownContents(inner)).toEqual([ATTACHMENT]);
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
+  });
+});
+
+describe("user-message-display dictated messages", () => {
+  const IMAGE_PATH = "/code/uploads/aaa/diagram.png";
+  const ATTACHMENT_MARKDOWN = `![${IMAGE_PATH}](${IMAGE_PATH})`;
+
+  function sentMessage(content: string): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-dictated",
+      source: "claude",
+      role: "user",
+      content,
+    };
+  }
+
+  it("shows only the words of a message sent with a dictation note", () => {
+    const inner = renderBubble(sentMessage(withDictationNote("rename the parser module")));
+
+    expect(allText(inner)).toBe("rename the parser module");
+    expect(markdownContents(inner)).toEqual([]);
+  });
+
+  it("shows the words and still renders the attachment of a dictated message that carries one", () => {
+    const content = buildMessageWithAttachments(withDictationNote("here you go"), [IMAGE_PATH]);
+
+    const inner = renderBubble(sentMessage(content));
+
+    expect(allText(inner)).toBe("here you go");
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
+  });
+
+  it("shows only the words of a dictated message the chat app wrapped in context", () => {
+    const spoken = buildMessageWithAttachments(withDictationNote("here you go"), [IMAGE_PATH]);
+    const event: UserMessageEvent = {
+      ...sentMessage(`[from: Bob] ${spoken}`),
+      display: "prompt_with_context",
+      display_body: spoken,
+    };
+
+    const inner = renderBubble(event);
+
+    expect(allText(inner)).toBe("here you go");
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
+  });
+
+  it("still renders an attachment the words themselves name when the note comes after it", () => {
+    // A message handed back to the composer returns as text, attachment block and all, and is sent again from there.
+    const resent = withDictationNote(buildMessageWithAttachments("here you go", [IMAGE_PATH]));
+
+    const inner = renderBubble(sentMessage(resent));
+
+    expect(allText(inner)).toBe("here you go");
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
+  });
+
+  it("draws the attachment alone for a message that is only a note and an attachment", () => {
+    const inner = renderBubble(sentMessage(buildMessageWithAttachments(DICTATION_NOTE, [IMAGE_PATH])));
+
+    expect(allText(inner)).toBe("");
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
   });
 });
 
 describe("user-message-display other people's turns", () => {
   function roster(): Participant[] {
-    const base = {
-      kind: "person" as const,
-      profile_picture_url: null,
-      email: null,
-      color: "#000",
-      is_owner: false,
-      is_connected: true,
-      last_seen: null,
-      last_input_at: null,
-    };
     return [
-      { ...base, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
-      {
-        ...base,
-        key: "user:bob-2",
-        display_name: "Bob",
-        handle: "Bob",
-        profile_picture_url: "https://p.example/bob.png",
-      },
+      personFixture("user:owner-1", "Josh", { is_owner: true }),
+      personFixture("user:bob-2", "Bob", { profile_picture_url: "https://p.example/bob.png" }),
     ];
   }
 
@@ -233,6 +284,23 @@ describe("user-message-display other people's turns", () => {
     expect(root.querySelector("[data-participant-picture] img")?.getAttribute("src")).toBe(
       "https://p.example/bob.png",
     );
+  });
+
+  it("redraws a turn whose author the roster names differently once the page reads the roster again", () => {
+    // The page read the roster before Bob arrived, when it named him by his id.
+    const beforeBobArrived = roster().map((entry) =>
+      entry.key === "user:bob-2" ? { ...entry, display_name: "bob-2-account-id" } : entry,
+    );
+    setParticipantsForTesting("user:owner-1", beforeBobArrived);
+    const root = document.createElement("div");
+    const event = turn({ author: "user:bob-2", author_name: "Bob" });
+    m.render(root, renderUserMessage(event));
+    expect(root.querySelector(".message-author")?.textContent).toBe("bob-2-account-id");
+
+    setParticipantsForTesting("user:owner-1", roster());
+    m.render(root, renderUserMessage(event));
+
+    expect(root.querySelector(".message-author")?.textContent).toBe("Bob");
   });
 
   it("folds a turn annotated under the synthetic owner key into the owner, for the owner and for a visitor", () => {

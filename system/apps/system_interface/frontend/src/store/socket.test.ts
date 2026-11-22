@@ -2,12 +2,13 @@
 /**
  * The shell socket over a stub WebSocket: what reaches the handlers from each message type (and
  * what does not: another client's op, an unknown op, the tabbed shell's messages, a malformed
- * frame), the client-state report, and the reconnect after a close.
+ * frame), the client-state report, the reconnect after a close, and the revival a page coming back into sight
+ * asks for.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { presentUserRecord } from "../testing/records";
 import { WireShapeError } from "../model/records";
-import { ShellSocket } from "./socket";
+import { LIVENESS_DEADLINE_MS, ShellSocket } from "./socket";
 import type { SocketHandlers } from "./socket";
 
 class StubWebSocket {
@@ -74,8 +75,10 @@ beforeEach(() => {
     onRosterUpdated: vi.fn(),
     onClientsUpdated: vi.fn(),
     onChatsActivity: vi.fn(),
+    onResourceGaugeChanged: vi.fn(),
     onBubble: vi.fn(),
     onConnected: vi.fn(),
+    onLiveConfirmed: vi.fn(),
   };
   socket = new ShellSocket("client-1");
   socket.connect(handlers);
@@ -219,6 +222,13 @@ describe("ShellSocket", () => {
     expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
   });
 
+  it("hands the pushed resource gauge to its handler as it came", () => {
+    current().open();
+    const view = { settings: { visibility: "always" }, alerts: [] };
+    current().receive({ type: "resource_gauge_changed", view });
+    expect(handlers.onResourceGaugeChanged).toHaveBeenCalledWith(view);
+  });
+
   it("delivers the theme catalog the shell pushes, leaving out a malformed theme", () => {
     current().open();
     current().receive({
@@ -270,6 +280,69 @@ describe("ShellSocket", () => {
     vi.runOnlyPendingTimers();
     expect(StubWebSocket.instances).toHaveLength(2);
     expect(current()).not.toBe(first);
+    current().open();
+    expect(handlers.onConnected).toHaveBeenCalledTimes(2);
+  });
+
+  it("reopens a dropped socket at once when revived, without waiting out its backoff, and only once", () => {
+    current().open();
+    current().close();
+    expect(StubWebSocket.instances).toHaveLength(1);
+    socket.reviveNow();
+    expect(StubWebSocket.instances).toHaveLength(2);
+    // The backoff's own retry was called off, so it opens no second socket beside this one.
+    vi.runOnlyPendingTimers();
+    expect(StubWebSocket.instances).toHaveLength(2);
+  });
+
+  it("starts the backoff over when revived, so a revival that fails retries at the base delay", () => {
+    current().open();
+    // Five failed retries push the next one out to about 30 s.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      current().close();
+      vi.runOnlyPendingTimers();
+    }
+    socket.reviveNow();
+    const revived = current();
+    revived.close();
+    vi.advanceTimersByTime(1200);
+    expect(current()).not.toBe(revived);
+  });
+
+  it("replaces a socket still connecting when revived, and the one it replaced has no say after", () => {
+    const hung = current();
+    socket.reviveNow();
+    const fresh = current();
+    expect(fresh).not.toBe(hung);
+    expect(hung.readyState).toBe(3);
+    // The replaced socket's late events reach nothing: no reconnect is scheduled beside the fresh socket.
+    hung.onclose?.({ code: 1006, reason: "", wasClean: false } as CloseEvent);
+    vi.runOnlyPendingTimers();
+    expect(StubWebSocket.instances).toHaveLength(2);
+    fresh.open();
+    expect(handlers.onConnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks an open socket to answer when revived, and keeps it when it does", () => {
+    current().open();
+    socket.reviveNow();
+    expect(current().sent.map((frame) => JSON.parse(frame) as { type: string })).toContainEqual({ type: "ping" });
+    current().receive({ type: "pong" });
+    expect(handlers.onLiveConfirmed).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(LIVENESS_DEADLINE_MS * 2);
+    expect(StubWebSocket.instances).toHaveLength(1);
+  });
+
+  it("replaces an open socket that does not answer in time, as one the network dropped would", () => {
+    current().open();
+    const silent = current();
+    socket.reviveNow();
+    vi.advanceTimersByTime(LIVENESS_DEADLINE_MS - 1);
+    expect(StubWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(StubWebSocket.instances).toHaveLength(2);
+    expect(silent.readyState).toBe(3);
+    expect(handlers.onLiveConfirmed).not.toHaveBeenCalled();
     current().open();
     expect(handlers.onConnected).toHaveBeenCalledTimes(2);
   });

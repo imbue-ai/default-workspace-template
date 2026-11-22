@@ -115,6 +115,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: fr
         program=row.program or "",
         critical=row.critical,
         stop_when_no_windows=row.stop_when_no_windows,
+        uses_microphone=row.uses_microphone,
         launch_paths=effective_launch_paths(row),
         default_shortcuts=row.default_shortcuts,
         launcher_rank=row.launcher_rank,
@@ -392,6 +393,10 @@ class ShownWindow(FrozenModel):
     is_raised_in_own_window: bool = Field(
         description="The window was pulled out into a desktop window of the embedder's own, so that was raised and "
         "nothing on the desktop moved"
+    )
+    raised_at: WindowPath | None = Field(
+        description="For a raise, the path the raised window was at as the client sees it (the shown path or one of "
+        "``showing``); None otherwise"
     )
 
 

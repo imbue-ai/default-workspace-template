@@ -89,13 +89,23 @@ export interface DisplayDecision {
   display_body?: string | null;
 }
 
+/** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will
+ *  be (a user_message's fields of the same names; the backend's ``MessageAuthorFields``); null for an
+ *  unattributed one, which is the owner's. */
+export interface MessageAuthor {
+  author?: string | null;
+  author_name?: string | null;
+}
+
 /** One message the chat app holds while the chat switches or is still being created (the backend's
- *  ``HeldSendSnapshot``, or a provisional chat's ``HeldSend``). Rendered from the backend's record until it
- *  lands in the transcript. */
-export interface HeldSend extends DisplayDecision {
+ *  ``HeldSendSnapshot``). Rendered from the backend's record until it lands in the transcript. */
+export interface HeldSend extends DisplayDecision, MessageAuthor {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
+  // Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue. False
+  // for a provisional chat's held sends; absent from an older backend's snapshot.
+  is_delivered?: boolean;
 }
 
 /** The in-progress switch a chat carries while it converges: a handoff or a rebind (spec 5, 6). */
@@ -111,7 +121,8 @@ export interface HandoffState {
   target_harness: string;
   // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
   target_label: string;
-  // The messages held for after the switch, the confirming one first.
+  // The messages sent during the switch, the confirming one first, those it has already delivered
+  // included until it is done.
   held_sends: HeldSend[];
   // The model the chat runs on once the switch lands, applied on the far side of the restart or
   // the create; null when none was picked. Read by a page that has no armed switch of its own to
@@ -123,6 +134,9 @@ export interface HandoffState {
   failed_step: "start" | "model" | null;
   // Whether the chat had no user turn to carry over, so the switch only starts it on the target: no handoff to show.
   is_fresh_start: boolean;
+  // A handoff whose successor is already the chat's agent, with only the prompt and the held sends left to
+  // deliver: the page shows that agent as it shows any, and its Stop waits for the delivery on the server.
+  has_landed: boolean;
 }
 
 /** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
@@ -179,7 +193,7 @@ export interface ChatSnapshot {
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
  *  ``QueuedMessageState``). The frontend keys the bubble on ``queued_id`` and never derives or
  *  reconciles these. */
-export interface QueuedMessage extends DisplayDecision {
+export interface QueuedMessage extends DisplayDecision, MessageAuthor {
   queued_id: string;
   content: string;
   timestamp: string;
@@ -192,7 +206,8 @@ export interface QueuedMessage extends DisplayDecision {
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
 export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
-/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
+/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat`` as its
+ *  ``ProvisionalChatAsShown`` sends it, its held sends as the page draws them. */
 export interface ProvisionalChat {
   chat_id: string;
   name: string;
@@ -219,7 +234,12 @@ type WsEvent =
   | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
-  | { type: "accounts_updated" };
+  | { type: "accounts_updated" }
+  | { type: "held_send_failed"; chat_id: string; message_id: string; detail: string; kind: string };
+
+/** Notified when a message the chat app held while its agent came up never reached the agent: the chat, the message's
+ *  send-time id, why (in the harness's words when it gave any) and mngr's classification of it. */
+export type HeldSendFailedListener = (chatId: string, messageId: string, detail: string, kind: string) => void;
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -256,6 +276,7 @@ const registrationWaiters = new Map<string, { resolve: () => void; reject: (erro
 const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
+const heldSendFailedListeners: HeldSendFailedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -345,6 +366,11 @@ function handleEvent(event: WsEvent): void {
       break;
     case "mentions_updated":
       notifyMentionsUpdated();
+      break;
+    case "held_send_failed":
+      for (const listener of heldSendFailedListeners) {
+        listener(event.chat_id, event.message_id, event.detail, event.kind);
+      }
       break;
     case "chats_updated": {
       isChatListReceived = true;
@@ -526,6 +552,10 @@ export function addMentionsUpdatedListener(listener: () => void): void {
 
 export function removeMentionsUpdatedListener(listener: () => void): void {
   mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
+export function addHeldSendFailedListener(listener: HeldSendFailedListener): void {
+  heldSendFailedListeners.push(listener);
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */

@@ -10,22 +10,23 @@
  */
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
-import type { DisplayDecision } from "../models/Chats";
+import type { DisplayDecision, MessageAuthor } from "../models/Chats";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import {
   NOTICE_ROW_SPACING_CLASS,
-  USER_BUBBLE_CLASS,
-  USER_BUBBLE_CONTINUED_CLASS,
-  USER_MESSAGE_PART,
-  USER_MESSAGE_ROW_CLASS,
+  authorOfTurn,
+  isSameSpeaker,
   renderNoticeRow,
-  renderOwnSpeakerLabel,
+  renderUserBubble,
+  renderUserBubbleContent,
+  userMessageRowClass,
 } from "./user-message-display";
+import type { TurnAuthor } from "./user-message-display";
 
-// The user rail's own recipes; the extra classes are bare markers for tests.
-const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending`;
+// Bare markers for tests, beside the user rail's own row recipe.
+const OUTGOING_ROW_MARKERS = "outgoing-message outgoing-message--sending";
 
 // The committed user row's spacing, so consecutive not-yet-delivered bubbles stand apart and the
 // real turn replaces one without a reflow.
@@ -33,7 +34,8 @@ const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 export interface NotYetRealBubble {
   key: string;
-  /** The message's text, shown verbatim unless ``displayDecision`` draws it as a notice. */
+  /** The message's text, shown verbatim (its attachments drawn as the delivered turn draws them) unless
+   *  ``displayDecision`` draws it as a notice. */
   content: string;
   /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
    *  carries no bottom margin of its own. */
@@ -42,49 +44,72 @@ export interface NotYetRealBubble {
   extraRowClass?: string;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
+  /** Who sent it, for a message the backend reports (queued, or held); absent for the viewer's own send, which is
+   *  drawn as theirs. */
+  author?: MessageAuthor;
 }
 
-/** The viewer's run of bubbles as pending sends are drawn down the page: open while the last thing drawn is a bubble
- *  of theirs, so the next one carries on its run and wears no "You", as the turn it becomes will not. Each send drawn
- *  moves it on: a bubble opens it, a notice (the agent's line, not the viewer's words) closes it. */
-export interface OwnBubbleRun {
+/** The run of one person's bubbles as pending sends are drawn down the page: open while the last thing drawn is a
+ *  bubble of theirs, so the next one by the same person carries on it and wears no name ("You" for the viewer's own),
+ *  as the turn it becomes will not. Each send drawn moves it on: a bubble opens it on its author, a notice (the
+ *  agent's line, not a person's words) closes it. */
+export interface PendingBubbleRun {
   isOpen: boolean;
+  /** Whose bubbles the run holds while it is open: null for the viewer's own. */
+  author: TurnAuthor | null;
+}
+
+/** A run nothing has opened yet. */
+export function closedPendingRun(): PendingBubbleRun {
+  return { isOpen: false, author: null };
+}
+
+/** Whether a bubble by `author` carries on `run`, which it then holds. */
+export function continuesPendingRun(run: PendingBubbleRun, author: TurnAuthor | null): boolean {
+  const isContinued = run.isOpen && isSameSpeaker(run.author, author);
+  run.isOpen = true;
+  run.author = author;
+  return isContinued;
 }
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
  *  one-line notice when the backend decided its text renders as one (a background-task report).
  *  Every not-yet-delivered message renders through here (optimistic, held by a switch, re-sent by
  *  a tap), so they look the same and the handoff to the real turn is invisible. */
-export function renderNotYetRealBubble(bubble: NotYetRealBubble, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode {
+export function renderNotYetRealBubble(bubble: NotYetRealBubble, run: PendingBubbleRun = closedPendingRun()): m.Vnode {
   const cls = classifyDecidedMessage(bubble.content, bubble.displayDecision);
   const isNotice = cls.kind === UserMessageKind.Notice;
+  const author = bubble.author === undefined ? null : authorOfTurn(bubble.author);
   const [baseClass, spacingClass] = isNotice
     ? ["message-notice-row", NOTICE_ROW_SPACING_CLASS]
-    : [OUTGOING_ROW_CLASS, STANDALONE_ROW_SPACING_CLASS];
+    : [`${userMessageRowClass(author)} ${OUTGOING_ROW_MARKERS}`, STANDALONE_ROW_SPACING_CLASS];
   const rowClass = [baseClass, bubble.isGroupSpaced === true ? null : spacingClass, bubble.extraRowClass ?? null]
     .filter((part) => part !== null)
     .join(" ");
   if (isNotice) {
-    ownRun.isOpen = false;
+    run.isOpen = false;
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
-  const isContinued = ownRun.isOpen;
-  ownRun.isOpen = true;
-  return m("div", { class: rowClass, key: bubble.key }, [
-    isContinued ? null : renderOwnSpeakerLabel(),
-    m("div", { class: isContinued ? USER_BUBBLE_CONTINUED_CLASS : USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
-    ]),
-  ]);
+  const isContinued = continuesPendingRun(run, author);
+  return m(
+    "div",
+    { class: rowClass, key: bubble.key },
+    renderUserBubble(author, renderUserBubbleContent(cls.body), { isContinued }),
+  );
 }
 
-/** The optimistic outgoing bubbles for a chat, in send order, drawn down `ownRun`. Returns [] when
+/** The optimistic outgoing bubbles for a chat, in send order, drawn down `run`. Returns [] when
  *  there are none. */
-export function renderOutgoingMessages(chatId: string, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode[] {
+export function renderOutgoingMessages(chatId: string, run: PendingBubbleRun = closedPendingRun()): m.Vnode[] {
   return getOutgoingMessages(chatId).map((outgoing: OutgoingMessage) =>
     renderNotYetRealBubble(
-      { key: outgoing.id, content: outgoing.content, displayDecision: outgoing.displayDecision },
-      ownRun,
+      {
+        key: outgoing.id,
+        content: outgoing.content,
+        displayDecision: outgoing.displayDecision,
+        author: outgoing.author,
+      },
+      run,
     ),
   );
 }

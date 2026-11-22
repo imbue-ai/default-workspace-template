@@ -18,9 +18,11 @@ cannot reopen the page.
 Two readers. The OOM prioritizer reads the aggregate: a chat is *open* while any instance has
 an unexpired visible or hidden report, and *visible* while any instance's last report says so;
 a report expires after ten minutes, so a page that vanished without its ``pagehide`` (a
-crashed tab, a lost laptop) stops counting on its own. The notify path reads the *watchers*:
-the instances whose last report is visible and focused and younger than ninety seconds, three
-heartbeats, so a watcher that went away unannounced stops suppressing notifications quickly.
+crashed tab, a lost laptop) stops counting on its own. Each report also says whether it
+changed either answer, so the prioritizer can leave a heartbeat that changed nothing alone.
+The notify path reads the *watchers*: the instances whose last report is visible and focused
+and younger than ninety seconds, three heartbeats, so a watcher that went away unannounced
+stops suppressing notifications quickly.
 """
 
 import threading
@@ -72,6 +74,8 @@ class PresenceTransition(FrozenModel):
 
     is_newly_visible: bool = Field(description="The chat was not visible before the report and is now")
     is_newly_watched: bool = Field(description="The chat had no watcher before the report and has one now")
+    is_open_changed: bool = Field(description="The report changed whether any instance has the chat open")
+    is_visible_changed: bool = Field(description="The report changed whether any instance shows the chat")
 
 
 class _InstancePresence(FrozenModel):
@@ -110,16 +114,22 @@ class PresenceTracker(MutableModel):
             by_instance = self._live_reports_locked(chat_id, now)
             standing = by_instance.get(report.instance_id)
             if standing is not None and report.sequence <= standing.sequence:
-                return PresenceTransition(is_newly_visible=False, is_newly_watched=False)
+                return PresenceTransition(
+                    is_newly_visible=False, is_newly_watched=False, is_open_changed=False, is_visible_changed=False
+                )
+            was_open = _is_any_open(by_instance)
             was_visible = _is_any_visible(by_instance)
             was_watched = len(self._watchers_among(by_instance, now)) > 0
             by_instance[report.instance_id] = _InstancePresence(
                 state=report.state, is_focused=report.is_focused, reported_at=now, sequence=report.sequence
             )
             self._presence_by_instance_by_chat[chat_id] = by_instance
+            is_visible = _is_any_visible(by_instance)
             return PresenceTransition(
-                is_newly_visible=not was_visible and _is_any_visible(by_instance),
+                is_newly_visible=not was_visible and is_visible,
                 is_newly_watched=not was_watched and len(self._watchers_among(by_instance, now)) > 0,
+                is_open_changed=was_open != _is_any_open(by_instance),
+                is_visible_changed=was_visible != is_visible,
             )
 
     def forget_chat(self, chat_id: ChatId) -> None:
@@ -129,10 +139,7 @@ class PresenceTracker(MutableModel):
     def is_open(self, chat_id: ChatId) -> bool:
         """Whether any instance holds an unexpired report about the chat, visible or hidden."""
         with self._lock:
-            return any(
-                report.state is not PresenceState.CLOSED
-                for report in self._live_reports_locked(chat_id, self.clock()).values()
-            )
+            return _is_any_open(self._live_reports_locked(chat_id, self.clock()))
 
     def is_visible(self, chat_id: ChatId) -> bool:
         """Whether any instance's unexpired last report says the chat is showing."""
@@ -178,6 +185,10 @@ class PresenceTracker(MutableModel):
             and report.is_focused
             and now - report.reported_at < self.watching_stale_seconds
         )
+
+
+def _is_any_open(by_instance: dict[str, _InstancePresence]) -> bool:
+    return any(report.state is not PresenceState.CLOSED for report in by_instance.values())
 
 
 def _is_any_visible(by_instance: dict[str, _InstancePresence]) -> bool:
