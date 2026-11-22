@@ -15,6 +15,12 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Added: `preview_app.py up --private` boots a preview with no window, for an agent to drive on its loopback port.
 - Added: `memory_candidates.py` reports how much free memory is left before the memory guard acts (`shed_line_kib` / `room_kib` in its JSON).
 - Added: `workspace_ui` exports `sendFailureKindOf`, which reads a send-failure kind reported by the chat app.
+- Added: An image open in Files zooms with a pinch or Ctrl+scroll and pans by dragging while zoomed.
+- Added: A first-run workspace opens for its owner on a full-window "Your own cloud computer, any AI" provider sign-in page (reported to Imbue Studio as `minds:first-run-provider-step`, embed contract v17); leaving it with a provider connected starts the Main chat's agent, which speaks first about what the user wants Studio for.
+- Added: A command routine's run gets `ROUTINES_TRIGGER` (`scheduled` or `manual`); `manage-routines` says how a skill run reads its own trigger.
+- Added: `app_manifest.built_assets.send_built_asset` serves an app's frontend build, caching content-hashed scripts and styles as immutable; the shell, chat, Files, Routines and style guide use it.
+- Added: A shared workspace compresses the pages, scripts, styles, JSON and SVGs its apps serve (zstd or gzip); over a phone's connection the main script shrinks to about a third.
+- Added: `workspace_ui` exports `reportProviderChooserOnScreen`, `IS_CHAT_ROOT_FOCUS_ACCEPTED` and contract v17's `FIRST_RUN_PROVIDER_STEP` and `FIRST_RUN_EXIT_COVER_MS`; `announceReadyToEmbedder` takes `reportsProviderChooserOnScreen`.
 
 ### Changed
 
@@ -34,6 +40,13 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: The resource gauge warns by default when CPU averages 90% or more over five minutes, shown on the taskbar's CPU bar with no notification; short bursts no longer count.
 - Changed: update-self's `resume-chats` restarts and messages only chats that were busy when paused, the apply stops its own idle worker before merging, and a pre-flight boot stopped by the memory guard is named in the failure.
 - Changed: `preview_app.py`, `mock_frame.py` and `serve_isolated_instance.py` refuse to register a window from a git worktree, and a preview's default title is `<App> (preview)`.
+- Changed: Skills, hooks and docs that pointed at `CLAUDE.md` for agent instructions now point at `AGENTS.md`; `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`.
+- Changed: The OOM drill (`oom_priority/bin/oom_drill.py`) uses the shed policy's own bands by default, stops the Screen's desktop and watcher before its run and restarts the watcher after; the oom_priority README has a policy change run it.
+- Changed: The `datalib` skill has the agent check how a sync ended before answering from the store, size a source's `since` to the data the user wants kept (`refresh_every_minutes = 0` for on-demand refresh), and answer mechanical questions with SQL via `datalib-doltlite -readonly`; Linear is listed as a gateway source.
+- Changed: With nothing signed in, the provider chooser belongs to the chat list: it opens as soon as the list is on screen, even before any chat exists, and stays open across chat changes, and the empty list offers "Choose a provider" instead of creating "Chat 1".
+- Changed: `POST /api/focus-chat` without a `chatId` shows the chat list as it stands, and the shell announces `reportsProviderChooserOnScreen` and forwards the chat list's `minds:provider-chooser-on-screen` (embed contract v16).
+- Changed: mngr is pinned to a commit that carries embed contract v17.
+- Changed: `AGENTS.md` tells agents to say anything the user must read at a step boundary rather than mid-step, where it folds out of sight.
 
 ### Removed
 
@@ -51,6 +64,15 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Fixed: An isolated instance or preview booted from a git worktree runs over copies of the user's live app data and secrets instead of an empty store.
 - Fixed: Clicking a link to a file already open in Files reloads its window, so a rewritten file shows its new content.
 - Fixed: The `crystallize-creation`, `heal-creation` and `update-creation` skills start their ticket with a standalone `tk start`, so the tk-standalone hook no longer rejects their ticket block.
+- Fixed: A newly built app's harden pass can run its browser tests: `build-app`'s scaffold gives the app's test environment Playwright and pytest-timeout.
+- Fixed: Preview and UI-sketch frames load their app on a shared workspace; `preview_wrapper_server.py` takes `--apps-file` and reads the service's registered origin label.
+- Fixed: A Claude browser sign-in retries with a fresh callback port, up to three in all, when the port is already in use, instead of dropping to the paste-a-code flow.
+- Fixed: On a workspace whose mngr host dir is not `/home/user/.mngr` (Modal keeps it at `/mngr`), the System Monitor names chats and attributes their processes, terminals get the agent environment, and the apt hook refreshes the environment record; each now reads `MNGR_HOST_DIR`.
+- Fixed: The agent's answer to a message sent mid-task, or while a step is open, shows as a message instead of folding into a step as its passing caption.
+- Fixed: A remark the agent makes just before closing a step no longer folds into that step when its first `tk close` was refused, and the refused call no longer shows as a failed command.
+- Fixed: Dragging or resizing a window no longer makes the desktop flicker: windows behind ones that stay put stay paused, and the dragged window gets its own compositor layer.
+- Fixed: On a phone, the workspace no longer flashes its home screen before opening on a window, and reconnects at once after the phone wakes instead of after up to 30 seconds.
+- Fixed: Scheduled routines run on a host whose mngr host dir is not `/home/user/.mngr` (Modal's `/mngr`): the tick's cron entry sets `MNGR_HOST_DIR` and `with_agent_env.sh` reads it.
 
 ## [minds-v0.10.5] - 2026-11-17
 

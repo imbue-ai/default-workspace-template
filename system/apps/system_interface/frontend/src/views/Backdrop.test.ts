@@ -157,3 +157,20 @@ describe("the shield over a window's content", () => {
     expect(shieldOf(touchRoot, "win-2")).not.toBeNull();
   });
 });
+
+describe("the window being moved", () => {
+  it("has a compositor layer of its own until the move ends, and no other window has one", () => {
+    const root = render();
+    const promoted = (): (string | null)[] =>
+      [...root.querySelectorAll<HTMLElement>("[data-window-id]")]
+        .filter((chrome) => chrome.style.willChange === "transform")
+        .map((chrome) => chrome.getAttribute("data-window-id"));
+    expect(promoted()).toEqual([]);
+    store.beginWindowMove("win-1", { x: 300, y: 60 });
+    m.redraw.sync();
+    expect(promoted()).toEqual(["win-1"]);
+    store.endWindowMove({ x: 300, y: 60 });
+    m.redraw.sync();
+    expect(promoted()).toEqual([]);
+  });
+});

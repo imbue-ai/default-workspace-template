@@ -648,7 +648,7 @@ describe("covered pages", () => {
     expect(isParked(wrapperOf("win-1"))).toBe(false);
   });
 
-  it("unparks every covered page while a window is moved, which moves it with no reconcile, but not for a press", () => {
+  it("unparks a page the moved window covers, which moves with no reconcile, but not for a press", () => {
     drawChromeAt("win-2", CASCADE_RECT);
     layer.reconcile();
     // A press that may still become a drag moves nothing yet.
@@ -660,6 +660,44 @@ describe("covered pages", () => {
     store.endWindowMove({ x: 300, y: 60 });
     layer.setGestureActive(false);
     expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("keeps parked, while another window is moved, a page that a window staying put covers", () => {
+    // win-2 covers win-1 and stays put; win-3, raised in front of both and clear of them, is the one dragged.
+    store.restoreWindow("win-3");
+    store.raiseWindow("win-3");
+    drawChromeAt("win-2", CASCADE_RECT);
+    drawChromeAt("win-3", { left: 700, top: 48, width: 280, height: 300 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    layer.setGestureActive(true);
+    store.beginWindowMove("win-3", { x: 800, y: 60 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(isParked(wrapperOf("win-2"))).toBe(false);
+    expect(isParked(wrapperOf("win-3"))).toBe(false);
+    store.endWindowMove({ x: 800, y: 60 });
+    layer.setGestureActive(false);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("gives the moved window's page a compositor layer of its own until the move ends, and no other page one", () => {
+    store.restoreWindow("win-3");
+    layer.reconcile();
+    const promoted = (): string[] =>
+      ["win-1", "win-2", "win-3"].filter((windowId) => wrapperOf(windowId).style.willChange === "transform");
+    layer.setGestureActive(true);
+    expect(promoted()).toEqual([]);
+    store.beginWindowMove("win-2", { x: 300, y: 60 });
+    layer.reconcile();
+    expect(promoted()).toEqual(["win-2"]);
+    store.endWindowMove({ x: 300, y: 60 });
+    layer.setGestureActive(false);
+    expect(promoted()).toEqual([]);
+    // A resize changes the page's size on every move, which a layer of its own would not spare it repainting.
+    store.beginWindowResize("win-2", "se");
+    layer.reconcile();
+    expect(promoted()).toEqual([]);
   });
 
   it("parks a page whose content is below the backdrop, but not the focused window's, which keeps the keyboard", () => {
@@ -741,6 +779,15 @@ describe("the contract", () => {
     spy.mockClear();
     new LivePagesLayer(document.createElement("div"), store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
     void wearTheme({ id: "windows-2000", revision: "r2" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("tells the pages no theme once the layer is stopped", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    layer.stop();
+    void wearTheme({ id: "mac-classic", revision: "r1" });
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -1816,6 +1863,27 @@ describe("raising the window the document's focus lands in", () => {
     tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
+
+  it("stops its watcher when the layer is stopped, and raises for no landing after", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    const timers = vi.getTimerCount();
+    layer.stop();
+    expect(vi.getTimerCount()).toBe(timers - 1);
+    blurIntoFrameOf("win-1");
+    tick();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("leaves the watcher of the layer that replaced it running when a replaced layer is stopped", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    const timers = vi.getTimerCount();
+    const newer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+    newer.start();
+    layer.stop();
+    expect(vi.getTimerCount()).toBe(timers);
+    newer.stop();
+    expect(vi.getTimerCount()).toBe(timers - 1);
+  });
 });
 
 describe("the focus grants a raised window's page is sent", () => {
@@ -1968,6 +2036,19 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
       "480px",
       "scale(0.5)",
     ]);
+  });
+
+  it("takes the moved window's compositor layer away when the move ends with the overview up", () => {
+    layer.reconcile();
+    store.beginWindowMove("win-1", { x: 300, y: 60 });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.willChange).toBe("transform");
+    renderTiles();
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    store.endWindowMove({ x: 300, y: 60 });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.willChange).toBe("");
   });
 
   it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {

@@ -4,6 +4,176 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-21
+
+### .agents
+
+`manage-routines` says how a routine tells a run started by hand from a scheduled one: a command reads `$ROUTINES_TRIGGER` (`scheduled` or `manual`), and a skill run reads the trigger of its own run, the newest record of `routines runs <id> --limit 1 --format json`.
+
+### system
+
+The template pins mngr to the export of the paired mngr branch, which carries embed contract v17 (`minds:first-run-provider-step`); the system frontends' lockfile adds `@fontsource/besley` for the chat app's first-run headline.
+
+The desktop plan now says that a window being moved or resized neither covers nor is covered for the length of the gesture, so the pages behind the windows that stay put stay parked, and that the moved window gets a compositor layer of its own until the move ends.
+
+The phone interface plan now describes landing without a home-screen flash, the provisional home shown when there is nothing to land on, and how the shell revives its connection when the page comes back into sight.
+
+The routines spec lists `ROUTINES_TRIGGER` (`scheduled` or `manual`) among the variables a run is given, and says where a skill run reads its trigger.
+
+The Routines spec shows the tick's cron entry with the `MNGR_HOST_DIR` line the boot writes ahead of it.
+
+- `AGENTS.md` now tells agents more firmly never to tell the user something in the middle of a step, even when the user asked to hear things as they go: say it at the end of the step, before the call that closes it (a line written after that call opens the next step and folds the same way), or end the step early to say it. In real runs with the previous wording, Opus folded a finding into a step in every run.
+
+The post-launch-paths plan now says the chat root opens the provider chooser for a chat waiting for its first message with nothing signed in, and the desktop-interface contracts list `reportsProviderChooserOnScreen` in the shell's `minds:workspace-ready` and the chat list's `minds:provider-chooser-on-screen {}` report that the shell forwards up (embed contract v16).
+
+- `AGENTS.md` tells an agent where to put something the user must read before it finishes (a finding, a heads-up, a question it will keep working past): at a step boundary, right after the step's last piece of work. Prose in the middle of a step shows only as its passing caption, replaced by the next line and then folded inside the step, so things the user needed to see were going unread.
+
+The app contract gains `shell:first-run-provider-step`, an app's word to the shell that the first run's provider page is owed (or no longer is).
+
+### system/apps/chat
+
+The first run's "Your own cloud computer, any AI" page matches Imbue Studio's own first-run pages: its headline is set in Besley Medium (bundled with the chat app, SIL Open Font License) at 40px with a 1.15 line height, the line under it is 18px semibold, Next is the same 18px button as Studio's Sign in and Continue, and Skip is 14px.
+
+The chat page's built scripts and styles are cached by the browser for good, since their names change with their contents, so reopening a chat (from a phone above all) no longer asks for them again. The voice files kept under stable names are still checked on every load.
+
+- The agent's answer to a message you send while it is working no longer folds into a progress step. A Claude chat takes such a message into the turn it is already running, and the agent often moves a step, looks something up, or says a line about the earlier work before it answers, so the answer used to show as a step's passing caption and then vanish into the step. Everything the agent says after a message it took mid-task, until it finishes, now shows as a message; its work still groups under the steps. A message sent after Stop or after the agent finished is unchanged: once the agent takes up a step, its progress lines stay that step's captions. Codex and Pi chats keep the previous rule (the agent's first words after your message are its answer).
+
+- Something the agent says just before closing a step no longer folds into that step when its first try at closing it was refused (agents often put a `cd` before `tk close`, which the step hooks refuse). The refused call did nothing, so it no longer counts as work and no longer shows as a failed command.
+
+On a new workspace with no AI account signed in, the provider chooser now opens as soon as the chat list is on screen. It no longer waits for the welcome chat to be seeded or for the chat app's first read of the agent list.
+
+- The provider chooser that a chat with nothing signed in asks for now belongs to the chat list rather than to the chat's page. The chat list opens it over everything it shows, and the chat's "Choose a provider" button opens the same one. It stays open when the chat on screen changes, so a sign-in already under way is kept when the welcome chat arrives, and no second chooser opens behind it. A chat page opened on its own, outside the chat list, still opens its own chooser.
+
+- With nothing signed in, the chat list opens the chooser even before any chat exists, once per page load. The first chat it shows after that counts as covered by that chooser; if the user closed it, it stays closed. While nothing is signed in, the empty list says "Connect an AI provider to start chatting." and has a "Choose a provider" button, and it no longer creates an empty "Chat 1", so the welcome chat lands on its own. With an account signed in, nothing changes.
+
+- A sign-in launches the chat waiting on screen when it finishes. If no waiting chat is on screen, it launches the first waiting chat the list shows afterwards (the welcome chat).
+
+- `POST /api/focus-chat` takes a missing `chatId` to mean "show the chat list as it stands". The Imbue Studio app sends this when it enters a new workspace. A chat list window already showing a chat stays on it; if none is open, the pinned one comes up.
+
+- The chat list tells the Imbue Studio app once per page load, with `minds:provider-chooser-on-screen {}`, when its chooser is drawn with its providers listed in a window the user can see.
+
+A question asked while a step is still open is answered as a reply again, even when the agent does something before answering and goes back to the earlier work after. The agent's first words after your message, before it closes or starts a step, are its answer: they show as a reply (and stream there while being written), and the work before and after them still groups under the step. Before, the agent re-starting that step (which the open-steps reminder asks it to do) or running a quick lookup took the step up again, so the answer showed as the spinning step's caption and then vanished into the step once the agent's next note replaced it. A re-start alone no longer takes the step up at all; it joins the turn with the agent's next real work.
+
+The seed route takes Imbue Studio's first-run body: a first-run seed opens the Main chat on the agent's welcome ("Hi, I'm your Studio agent...", what Studio is for, "How would you like to get started?"), and what the user told the first run about what they want Studio for goes ahead of the chat's first send for the agent, without being shown in the chat.
+
+A first-run workspace now opens on a full-window page, "Your own cloud computer, any AI": a tile per provider, each opening that provider's sign-in, the connected ones listed above "Add another", and Skip / Next. It is shown to the workspace's owner once; while it is owed, the chat's own provider dialog no longer opens by itself.
+
+Once a provider is connected on that page, Skip goes away and Next is the way on. Leaving the page with a provider connected starts the Main chat's agent at once, and it speaks first: about the (up to three) things the user said they want Studio for, or, with nothing said, that it is here and ready to help. The note that starts it is hidden from the chat.
+
+### system/apps/files
+
+The Files app's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/routines
+
+The Routines app's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/screen
+
+The browser launch-path integration test no longer fails when the browser-command test runs before it in the same process. The module shares one browser, so the earlier test's tab was restored into this one's launch and broke its exact tab-list check; it now checks that its own tab was checkpointed once.
+
+### system/apps/style_guide
+
+The style guide's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/system_interface
+
+The shell tells Imbue Studio while the first run's provider page covers a new workspace (`minds:first-run-provider-step`), so Studio's title bar stays in the page's cream instead of the workspace's color. When the owner connects a provider or skips, a Studio that announces `washesFirstRunExit` grows the workspace's color over the window from its center, and the shell takes the page down under that color; an older Studio sees the page come down at once, as before.
+
+Dragging a window no longer makes the desktop flicker. Two things together ran the browser out of the GPU memory it draws the desktop with during a drag. First, every window hidden behind another started rendering again for as long as a window was dragged or resized; now only a window that the moving one was covering does, and windows behind ones that stay put stay paused. Second, the dragged window was repainted on every pointer move; it now gets a compositor layer of its own until the drag ends, so a move only slides it. On a test desktop with three maximized windows behind a fourth and a chat floating on top, a drag used to fill that memory (about 650 MB against a budget of 655 MB); with this change, drags on a similar desktop peaked at about 440 MB, with no flicker or lag.
+
+On a phone, the workspace no longer flashes its home screen before opening on a window. Until the page knows where it lands, the bar reads "Opening…" over a plain background, and the page lands as soon as it knows its desktop. A window other than the pinned chat therefore starts loading without waiting for that desktop's layout.
+
+If the shell cannot be read when the page opens (while it restarts, say), the phone shows home rather than a blank page, and lands where it was once the shell answers.
+
+Coming back to the workspace after the phone slept reconnects at once, instead of waiting out a reconnect delay that can grow to 30 seconds. A connection that still looks open is checked and replaced if it does not answer. The shown page is no longer reloaded by a reconnect long after a return during which the connection held.
+
+The page's built scripts and styles are cached by the browser for good, since their names change with their contents, so reopening the workspace no longer asks for them again.
+
+The shell's `minds:workspace-ready` announces `reportsProviderChooserOnScreen: true` when the embed contract it is built with is v16 or later: the chat list then sends `minds:provider-chooser-on-screen` once its provider chooser is on screen, and a `minds:focus-chat` with no chat brings the chat list up, so the chooser can open before any chat exists on a workspace with nothing signed in. With an older contract, which drops that `minds:focus-chat`, it announces `false`. The shell forwards the new message up like the other `minds:` messages.
+
+A first-run workspace opens with the chat app's "Your own cloud computer, any AI" page covering the whole desktop, for the workspace's owner, until they connect an AI provider or skip. The show-around tour waits until the cover is down.
+
+The shell stops its page layer's focus watcher when its view is removed, so the watcher's timer no longer goes on ticking against a document that is gone (the cause of a `document is not defined` error at the end of the shell's frontend test run).
+
+### system/libs/app_manifest
+
+New `built_assets` module: `send_built_asset` serves a file of an app's frontend build. A flat, content-hashed script or stylesheet is cached for a year and marked immutable; anything else is revalidated on every load. The shell, chat, Files, Routines and style guide apps now share it, in place of five copies of the same rule.
+
+### system/libs/bootstrap
+
+The routines tick's cron entry states the boot's `MNGR_HOST_DIR`, so routines run on their schedule on a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`).
+
+### system/libs/routines
+
+A command routine's run has `ROUTINES_TRIGGER` in its environment, beside `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_RUN_DIR`: `scheduled` for a run the tick started, `manual` for one started with Run now or `routines run`. The README says how a skill run finds the same: the newest record of `routines runs <id> --format json` is its own run, with its trigger.
+
+`with_agent_env.sh` reads the agent environment from the host dir named in `MNGR_HOST_DIR`, falling back to `/home/user/.mngr`, so a scheduled routine runs on a host that keeps the dir elsewhere.
+
+### system/libs/workspace_ui
+
+The embed module exposes contract v17's `FIRST_RUN_PROVIDER_STEP` and `FIRST_RUN_EXIT_COVER_MS`, probed with fallbacks like the other optional contract entries, so a template pinned to an older mngr still builds.
+
+`announceReadyToEmbedder` takes `reportsProviderChooserOnScreen`. The new `reportProviderChooserOnScreen` sends `minds:provider-chooser-on-screen {}` (embed contract v16), and `IS_CHAT_ROOT_FOCUS_ACCEPTED` says whether the vendored contract lets a `minds:focus-chat` with no chat through. Both are probed by name, so an older vendored contract still builds.
+
+### system/services/share_gateway
+
+A shared workspace now compresses the pages, scripts, styles, JSON and SVGs its apps serve (zstd or gzip, as the client accepts). Over a phone's connection, the workspace's main script shrinks to about a third of its size. A HEAD request, a ranged request, an event stream and any already-compressed type pass through untouched, so file sizes, partial downloads and live streams behave as before.
+
+## 2026-11-20
+
+### .agents
+
+The datalib skill is written as the skill it will be once datalib is announced, with the dark-launch gating confined to its frontmatter description and one paragraph between `<!-- dark-launch -->` markers, so an eval can derive the announced skill from it by stripping that block and replacing the description. Its body now tells the agent to read how a sync ended before answering from the store (a `failed` request leaves a conversation missing until the next sync), to size a source's `since` to the data the user wants kept rather than to the question and to set `refresh_every_minutes = 0` for a copy refreshed on demand, and that a mechanical question is a SQL query over the raw store with `datalib-doltlite -readonly`. Linear joins the list of sources that work through the gateway, with its scope in the permission-request example.
+
+### system
+
+- The interactive-shell line that sources mngr's host env, written into `.bashrc` at provisioning, names the provisioning run's own host dir rather than always `/home/user/.mngr`, so a terminal on a Modal-hosted workspace (host dir `/mngr`) gets the agent environment.
+
+- The apt hook that refreshes the environment record looks for the host dir named in `MNGR_HOST_DIR`, falling back to `/home/user/.mngr`.
+
+### system/apps/system_monitor
+
+On a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`), the System Monitor names chats and attributes their processes to them: it reads the agent records from `MNGR_HOST_DIR` and recognises agent paths under `/mngr/agents/`.
+
+## 2026-11-19
+
+### .agents
+
+A newly built app's harden pass can now run its browser tests.
+
+- `build-app`'s scaffold gives each new app's own test environment Playwright and pytest-timeout, and registers the `browser` and `frontend` test marks. Before, an app's suite had neither package, so a harden worker's phone browser test failed with `No module named 'playwright'` or `No module named 'pytest_timeout'` and never ran.
+
+- The worker guides `type-app.md` and `web-frontend-testing.md` say the scaffold provides these, and give the one `uv add --dev playwright pytest-timeout` an app scaffolded earlier needs.
+
+Skills and shared agent references that pointed at `CLAUDE.md` for content that lives in `AGENTS.md` (the preserve-and-surface principle, the shared instruction sections) now point at `AGENTS.md`. `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`, keeping only Claude-specific notes for `CLAUDE.md`.
+
+Preview and UI-sketch frames now load their framed app on a shared workspace. The frame pointed its inner page at `<service name>.<workspace host>`, but a share routes only a service's registered `<name>-<rand>` origin label, so the inner page never loaded there: the bare name is refused when connecting, or answered with "Not shared with you". Locally the forwarder's name fallback hid this. `preview_wrapper_server.py` takes `--apps-file` and reads the inner service's label from the app registry on each request, so a service registered again under a fresh label is followed. It answers 503 when the service has no valid label or the registry cannot be read. `serve_isolated_instance.py` passes the registry it registers into.
+
+### system
+
+The step reminder hooks (including the pi harness extension) now say "See AGENTS.md > Task management", since `CLAUDE.md` only imports `AGENTS.md`. `README.md`, `docs/system/workspace-internals.md` and `.gitignore` point at `AGENTS.md` for the agent instructions as well. `AGENTS.md`'s self-modification note names `AGENTS.md` as the file to update, and the `docker_runsc` template comment in `.mngr/settings.toml` drops its pointer to `CLAUDE.md`, which never covered installing gVisor.
+
+The earlyoom shed-order plan (`docs/system/blueprint/earlyoom-gvisor-shed-order/plan-earlyoom-gvisor-shed-order.md`) no longer plans a release test of its own for the OOM drill; the drill's recurring run in a real workspace is the Imbue Studio smoke journey's step 3c.
+
+The npm workspace's lockfile adds `@panzoom/panzoom` 4.6.2 (MIT, no dependencies), which Files uses to zoom and move an image on its view page.
+
+### system/apps/chat
+
+A Claude browser sign-in no longer drops to the paste-a-code flow just because the port Claude's CLI drew for its callback is already in use on the user's machine, often by a Docker container's published SSH port. When Imbue Studio says the port is taken, the chooser starts the same sign-in again, which draws a fresh port, trying up to three ports in all before it falls back as before. ChatGPT's CLI listens on a fixed port, so a ChatGPT sign-in falls back to the one-time code as soon as a fresh start lands on the same taken port. Any other reason the desktop app cannot relay still falls back at once.
+
+### system/apps/files
+
+An image open in a Files window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, and drag to move around while zoomed. The picture always covers its window and never moves past its own edges.
+
+### system/apps/screen
+
+The Screen's acceptance test hands Imbue Studio its throwaway roots as `STUDIO_ROOTS_OVERRIDE` instead of the retired `MINDS_DATA_HOME`, which an mngr checkout from after the override's rename no longer honors, so the run's state stays under its own temporary directory.
+
+### system/services/oom_priority
+
+The OOM drill (`bin/oom_drill.py`) puts its sleepers at the shed policy's own scores unless `--bands` names others: an aged chat (1000), Chromium's tabs (960), its GPU and utility processes (943) and main process (910), an agent's commands (900), the Screen's stack (850), a worker agent (600), a fresh chat (560) and a user agent (300). It stops the Screen's desktop and its watcher before its sleepers start and starts the watcher again when it ends, so a run needs only the chats stopped, and it counts every built-in service, up to 86, as one that must not be shed while an agent's command or a browser process remains. Tests hold the bands, that limit and the two Screen programs to the template's own definitions. The README's "Changing the policy" has a policy change run the drill (`just dwt-oom-drill` from an mngr checkout), and `OOM_DRILL.md` covers that command, the drill's run in the Imbue Studio smoke journey, running it by hand in a local Docker workspace (`docker exec --privileged`), and checking Chromium's scores.
+
 ## 2026-11-18
 
 ### .agents

@@ -66,6 +66,11 @@ WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
 # shows only the words, so the block is stripped here and the rest travels as ``display_body``.
 SEED_CONTEXT_TAG = "chat-seed-context"
 
+# Cross-layer contract: the tag the chat app wraps the note in that starts a first-run workspace's first agent
+# (``chat_seed.first_run_kickoff_message``): the conversation the chat opened on and what to open with. Nobody
+# typed it, so the whole message is hidden and the agent's reply is the first thing the user reads from it.
+FIRST_RUN_KICKOFF_TAG = "first-run-kickoff"
+
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
@@ -100,6 +105,7 @@ _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
+_FIRST_RUN_KICKOFF_RE = re.compile(rf"^\s*<{FIRST_RUN_KICKOFF_TAG}>[\s\S]*</{FIRST_RUN_KICKOFF_TAG}>\s*$")
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
 
 # The slash command the chat app sends a retiring agent for its handoff summary (the
@@ -269,6 +275,13 @@ def _match_seed_context(content: str) -> MessageDisplay | None:
     if match is None:
         return None
     return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
+
+
+def _match_first_run_kickoff(content: str) -> MessageDisplay | None:
+    """The note that starts a first-run workspace's first agent: written by the chat app, read only by the agent."""
+    if _FIRST_RUN_KICKOFF_RE.match(content) is None:
+        return None
+    return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
 def _match_skill_expansion(content: str) -> MessageDisplay | None:
@@ -469,6 +482,7 @@ def _match_secret_resolution(content: str) -> MessageDisplay | None:
 
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
+    _match_first_run_kickoff,
     _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
