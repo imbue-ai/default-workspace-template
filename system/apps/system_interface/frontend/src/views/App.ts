@@ -399,7 +399,12 @@ export function App(): m.Component<AppAttrs> {
     pages = new LivePagesLayer(host, current, {
       host: attrs.host,
       protocol: attrs.protocol,
-      showCoachCard: (text, chromeAnchor) => attrs.tour.showCoachCard(text, chromeAnchor),
+      showCoachCard: (text, chromeAnchor) => {
+        // Only the desktop layout draws the tour's box. A card taken anywhere else would ring the chrome's control
+        // with no words beside it and no button to take the ring down.
+        if (current.isPhoneLayout() || current.getSoloWindowId() !== null) return;
+        attrs.tour.showCoachCard(text, chromeAnchor);
+      },
     });
     // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
     // window its layout shows, only for the next pass to destroy them.

@@ -2,4 +2,4 @@ The tour record (`GET` and `POST /api/tour`, `tour.json`) gains `is_finished`, f
 
 The shell's page records the tour as finished when Done on its last card or Exit walkthrough is pressed, and the owner's page does so for a tour that has run and has nothing to resume.
 
-A page can ask for a coach card with the new `shell:show-coach-card {text, chromeAnchor}`: its words and a Got it button under a control of the Imbue Studio chrome, which is ringed until the card goes. The card is shown only while the tour shows nothing, and gives way to a tour that starts. `shell:handshake` tells each page, with `showsCoachMarks`, whether the chrome draws coach marks on its own controls.
+A page can ask for a coach card with the new `shell:show-coach-card {text, chromeAnchor}`: its words and a Got it button under a control of the Imbue Studio chrome, which is ringed until the card goes. The card is shown only in the desktop layout and while the tour shows nothing, and gives way to a tour that starts. `shell:handshake` tells each page, with `showsCoachMarks`, whether the chrome draws coach marks on its own controls.

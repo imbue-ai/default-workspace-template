@@ -1374,9 +1374,11 @@ describe("a fullscreen window", () => {
 });
 
 describe("a page's coach card", () => {
+  recordResizeObservers();
   afterEach(resetEmbedderRelayForTesting);
 
-  it("is drawn over the desktop from the page's shell:show-coach-card, and goes on Got it", () => {
+  /** Post win-1's page's ``shell:show-coach-card`` to the shell, and draw what it made of it. */
+  function askForCoachCard(): void {
     initEmbedderRelay();
     const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
     window.dispatchEvent(
@@ -1387,6 +1389,10 @@ describe("a page's coach card", () => {
       }),
     );
     m.redraw.sync();
+  }
+
+  it("is drawn over the desktop from the page's shell:show-coach-card, and goes on Got it", () => {
+    askForCoachCard();
     const card = document.querySelector<HTMLElement>("[data-tour-coach]");
     expect(card?.getAttribute("data-tour-coach")).toBe("permissions");
     expect(card?.textContent).toContain("Your connections live here.");
@@ -1394,6 +1400,28 @@ describe("a page's coach card", () => {
     document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
     m.redraw.sync();
     expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is dropped by a solo shell, which draws no card: nothing is left up that no button could take down", async () => {
+    unmountViews();
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
+  });
+
+  it("is dropped by the phone layout, which draws no card either", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
   });
 });
 

@@ -133,7 +133,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   chromeAnchor}`): the page's words and a Got it button under the control of
   the Imbue Studio chrome it names, which the chrome rings until the card
   goes. It is drawn in the tour's box, only while the tour shows nothing and
-  no other coach card is up, and it gives way to a tour that starts. A text
+  no other coach card is up, and it gives way to a tour that starts. The
+  phone layout and a pulled-out window's own shell draw no such box, so a
+  request there is dropped. A text
   that is empty or longer than 500 characters, or an anchor that is not one
   of the chrome's, is dropped. The shell names no app here: the words come
   from the page.
