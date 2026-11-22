@@ -399,4 +399,4 @@ Each step leaves the tree green; the whole is one pull request per repository.
 - ~~The idempotency key for launch paths on linked windows (issue #646)~~: resolved by the post-launch-paths plan, which made every launch path that creates something a POST.
 - A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
 - Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" is offered from the right-click menu of the row of an app's desktop shortcut instead (section 4.2).
-- The chat shortcut opening a second chat list while a pinned one exists.
+- ~~The chat shortcut opening a second chat list while a pinned one exists~~: resolved by the window-bound-resources spec section 3.2, under which a shortcut to its app's pin path raises the pinned window in either mode.
