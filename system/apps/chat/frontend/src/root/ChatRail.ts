@@ -180,12 +180,14 @@ function commitRename(row: ChatRow, isLeaving: boolean): void {
 
 /** Reopen the field on ``title`` with ``error`` under it, for a chat still listed while no other name is being typed;
  *  false when that cannot be done. On a phone only the header draws a field once the drawer is closed, and only for
- *  the chat on screen, so the chat is shown first. */
-function reopenRename(row: ChatRow, title: string, error: string | null): boolean {
+ *  the chat on screen, so the chat is shown first, but only when ``mayShowChat``: the user asked for the field. */
+function reopenRename(row: ChatRow, title: string, error: string | null, mayShowChat: boolean): boolean {
   const context = latestMenuContext;
   if (rename !== null || context === null || !context.rows.some((listed) => listed.chatId === row.chatId))
     return false;
-  if (context.isInDrawer && context.selectedChatId !== row.chatId) context.onPick(row.chatId);
+  const mustShowChat = context.isInDrawer && context.selectedChatId !== row.chatId;
+  if (mustShowChat && !mayShowChat) return false;
+  if (mustShowChat) context.onPick(row.chatId);
   beginRename(row, title, error);
   return true;
 }
@@ -193,7 +195,7 @@ function reopenRename(row: ChatRow, title: string, error: string | null): boolea
 function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
   console.warn(`[chat-root] could not rename chat ${row.chatId}`, error);
-  if (error instanceof NameTakenError && reopenRename(row, title, takenNameSentence(title))) {
+  if (error instanceof NameTakenError && reopenRename(row, title, takenNameSentence(title), false)) {
     m.redraw();
     return;
   }
@@ -203,7 +205,7 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
       refused: `"${row.title}" was not renamed to "${title}".`,
       unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
     }),
-    retry: { label: "Rename again", run: () => void reopenRename(row, title, null) },
+    retry: { label: "Rename again", run: () => void reopenRename(row, title, null, true) },
   });
 }
 

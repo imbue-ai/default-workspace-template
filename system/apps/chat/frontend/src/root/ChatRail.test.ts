@@ -627,6 +627,21 @@ describe("ChatRail refused rename", () => {
     expect(onPick).toHaveBeenCalledWith(first.chatId);
   });
 
+  it("says a taken name in a notice on a phone rather than showing another chat to reopen its field", async () => {
+    const onPick = vi.fn<(chatId: string | null) => void>();
+    mount([first, second], { isInDrawer: true, selectedChatId: second.chatId, onPick });
+    verbs.renameChat.mockRejectedValueOnce(
+      new NameTakenError(409, "A chat named 'Second-chat' already exists; pick another name"),
+    );
+
+    renameInPlace(first.chatId, "Second-chat");
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+
+    expect(onPick).not.toHaveBeenCalled();
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
+    expect(noticeText()).toContain("A chat named 'Second-chat' already exists; pick another name");
+  });
+
   it("leaves the chat on screen when Rename again's chat is already shown", async () => {
     const onPick = vi.fn<(chatId: string | null) => void>();
     mount([first, second], { isInDrawer: true, selectedChatId: first.chatId, onPick });
