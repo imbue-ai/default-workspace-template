@@ -887,9 +887,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // that row is the agent's and ends the transcript; otherwise they follow it.
         ...liveEnd.nodes,
         // The latest turn's done mark once it has finished, and when the last message was; anything
-        // queued behind them follows, then
-        // the messages the chat app holds while the chat switches harness, then this page's own
-        // not-yet-delivered sends.
+        // queued behind them follows, then the messages the chat app holds while the chat switches
+        // harness, then this page's own not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
         m(LastMessageMark, { key: "last-message", chatId, events }),
         ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
