@@ -410,6 +410,14 @@ export interface ShortcutGesture {
   readonly isExportWatched: boolean;
 }
 
+/** An exportable app's shortcut in a drag the chrome may hand to the OS: which one, and where the press was, so the
+ *  same drag brought back over the desktop lifts it from where it was grabbed. */
+interface ExportDragShortcut {
+  readonly app: string;
+  readonly launch: string;
+  readonly press: PixelPoint;
+}
+
 /** A floating entry being dragged: its box's top-left corner follows the pointer less the grab offset. */
 export interface FloatingEntryGesture {
   readonly kind: "floating-entry";
@@ -503,6 +511,11 @@ export class DesktopStore {
   private readonly appExport: AppExportBridge;
   /** The apps whose Mac apps the embedder has ready to drag out; none until it says so (``minds:exportable-apps``). */
   private exportableApps: ReadonlySet<string> = new Set();
+  /** The exportable shortcut a drag holds until it ends here or the chrome hands it to the OS. Kept through a
+   *  cancel: the OS taking the pointer can cancel the gesture before the hand-off is reported. */
+  private exportDragInHand: ExportDragShortcut | null = null;
+  /** The shortcut whose drag the chrome handed to the OS, until that drag drops here or is seen to have ended. */
+  private handedOffShortcut: ExportDragShortcut | null = null;
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -598,12 +611,73 @@ export class DesktopStore {
   }
 
   /** The chrome handed a shortcut drag to the OS (``minds:app-drag-handed-off``): the shortcut goes back to its cell
-   *  and nothing is saved. A word about a drag this shell already ended is ignored. */
+   *  and nothing is saved, unless the same drag comes back and drops on the desktop. A word about a drag this shell
+   *  already ended is ignored. */
   handOffShortcutDrag(app: string): void {
-    const gesture = this.gesture;
-    if (gesture === null || gesture.kind !== "shortcut" || gesture.app !== app) return;
+    const inHand = this.exportDragInHand;
+    this.exportDragInHand = null;
+    if (inHand === null || inHand.app !== app) return;
+    this.handedOffShortcut = inHand;
+    if (this.isHandedOffShortcutLifted()) {
+      this.gesture = null;
+      this.notifyListeners();
+    }
+  }
+
+  /** The OS drag of a handed-off shortcut is over the desktop at ``pointer``: the shortcut is lifted and follows it
+   *  as in any shortcut drag. False when no handed-off drag is pending, so the drag is not this shell's to take. */
+  returnHandedOffShortcutDrag(pointer: PixelPoint): boolean {
+    const handedOff = this.handedOffShortcut;
+    if (handedOff === null) return false;
+    const lift = { x: pointer.x - handedOff.press.x, y: pointer.y - handedOff.press.y };
+    if (this.isHandedOffShortcutLifted()) {
+      this.updateShortcutDrag(pointer, lift);
+      return true;
+    }
+    if (this.gesture !== null) return false;
+    if (!this.liftShortcut(handedOff.app, handedOff.launch, pointer, lift, false)) {
+      this.handedOffShortcut = null;
+      return false;
+    }
+    this.notifyListeners();
+    return true;
+  }
+
+  /** The OS drag of a handed-off shortcut left the desktop: the shortcut goes back to its cell, and lifts again if
+   *  the drag comes back. */
+  leaveHandedOffShortcutDrag(): void {
+    if (!this.isHandedOffShortcutLifted()) return;
     this.gesture = null;
     this.notifyListeners();
+  }
+
+  /** The OS drag of a handed-off shortcut dropped on the desktop at ``pointer``: it lands there as any shortcut drag
+   *  does. Returns the shortcut, or null when no handed-off drag was over the desktop. */
+  dropHandedOffShortcutDrag(pointer: PixelPoint): { app: string; launch: string } | null {
+    const handedOff = this.handedOffShortcut;
+    if (handedOff === null || !this.isHandedOffShortcutLifted()) return null;
+    this.handedOffShortcut = null;
+    this.endShortcutDrag(pointer, { x: pointer.x - handedOff.press.x, y: pointer.y - handedOff.press.y });
+    return { app: handedOff.app, launch: handedOff.launch };
+  }
+
+  /** The pointer is back in this page with no drag in progress, so a handed-off drag ended elsewhere. */
+  forgetHandedOffShortcutDrag(): void {
+    if (this.handedOffShortcut === null) return;
+    this.leaveHandedOffShortcutDrag();
+    this.handedOffShortcut = null;
+  }
+
+  private isHandedOffShortcutLifted(): boolean {
+    const gesture = this.gesture;
+    const handedOff = this.handedOffShortcut;
+    return (
+      gesture !== null &&
+      gesture.kind === "shortcut" &&
+      handedOff !== null &&
+      gesture.app === handedOff.app &&
+      gesture.launch === handedOff.launch
+    );
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -2357,21 +2431,36 @@ export class DesktopStore {
 
   /** A shortcut's icon was lifted out of the cell it is drawn in. */
   beginShortcutDrag(app: string, launch: string, pointer: PixelPoint): void {
+    const isExportWatched = this.isAppExportable(app);
+    if (!this.liftShortcut(app, launch, pointer, { x: 0, y: 0 }, isExportWatched)) return;
+    if (isExportWatched) {
+      this.exportDragInHand = { app, launch, press: pointer };
+      this.appExport.beginAppDrag(app);
+    }
+    this.notifyListeners();
+  }
+
+  /** Hold the shortcut in a drag over ``pointer``; false when the desktop holds no such shortcut. */
+  private liftShortcut(
+    app: string,
+    launch: string,
+    pointer: PixelPoint,
+    lift: PixelPoint,
+    isExportWatched: boolean,
+  ): boolean {
     const key = shortcutKey(app, launch);
     const origin = this.placedShortcuts().find((entry) => placedShortcutKey(entry) === key);
-    if (origin === undefined) return;
-    const isExportWatched = this.isAppExportable(app);
+    if (origin === undefined) return false;
     this.gesture = {
       kind: "shortcut",
       app,
       launch,
       originCell: origin.cell,
-      lift: { x: 0, y: 0 },
+      lift,
       targetCell: cellAtPoint(pointer, this.metrics, this.gridDimensions()),
       isExportWatched,
     };
-    if (isExportWatched) this.appExport.beginAppDrag(app);
-    this.notifyListeners();
+    return true;
   }
 
   /** The pointer moved during a shortcut drag. Only a new cell under it redraws: the room made is the same
@@ -2382,6 +2471,10 @@ export class DesktopStore {
     const targetCell = cellAtPoint(pointer, this.metrics, this.gridDimensions());
     const isSameTarget = isSameCell(targetCell, gesture.targetCell);
     this.gesture = { ...gesture, lift, targetCell };
+    const inHand = this.exportDragInHand;
+    if (gesture.isExportWatched && inHand !== null) {
+      this.exportDragInHand = { ...inHand, press: { x: pointer.x - lift.x, y: pointer.y - lift.y } };
+    }
     if (!isSameTarget) this.notifyListeners();
   }
 
@@ -2394,7 +2487,10 @@ export class DesktopStore {
     // The arrangement goes in BEFORE the redraw: with the gesture gone and the shortcuts still recorded
     // in the cells they were in, a redraw here would put them both back for a frame.
     if (settled !== null && settled.kind === "shortcut") {
-      if (settled.isExportWatched) this.appExport.endAppDrag(settled.app, false);
+      if (settled.isExportWatched) {
+        this.exportDragInHand = null;
+        this.appExport.endAppDrag(settled.app, false);
+      }
       void this.dropShortcut(settled.app, settled.launch, settled.targetCell, this.shortcutArrangement(settled));
     }
     this.notifyListeners();

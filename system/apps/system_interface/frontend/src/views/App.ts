@@ -249,7 +249,67 @@ export function App(): m.Component<AppAttrs> {
     if (root === gestureRoot) return;
     detachGestures?.();
     gestureRoot = root;
-    detachGestures = gestures.attach(root, gestureListener(current, root));
+    const detachPointerGestures = gestures.attach(root, gestureListener(current, root));
+    const detachHandedOffDrags = attachHandedOffShortcutDrags(current, root);
+    detachGestures = () => {
+      detachPointerGestures();
+      detachHandedOffDrags();
+    };
+  }
+
+  /** A shortcut drag the chrome handed to the OS as the app's Mac app comes back as the OS's own drag: over the
+   *  desktop it carries the shortcut as the pointer drag did, and dropped there it lands like one. */
+  function attachHandedOffShortcutDrags(current: DesktopStore, root: HTMLElement): () => void {
+    const backdropPoint = (event: MouseEvent): PixelPoint => {
+      const origin = (backdropArea ?? root).getBoundingClientRect();
+      return { x: event.clientX - origin.left, y: event.clientY - origin.top };
+    };
+    const paintHeld = (): void => {
+      const gesture = current.getGesture();
+      if (gesture !== null && gesture.kind === "shortcut") paintShortcut(current, gesture.app, gesture.launch);
+    };
+    const onDragOver = (event: DragEvent): void => {
+      if (!current.returnHandedOffShortcutDrag(backdropPoint(event))) return;
+      event.preventDefault();
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = "move";
+      root.setAttribute(SHORTCUT_DRAGGING_ATTRIBUTE, "");
+      paintHeld();
+    };
+    const onDragLeave = (event: DragEvent): void => {
+      // Leaving one element for another inside the root also fires dragleave; only leaving the root counts.
+      const box = root.getBoundingClientRect();
+      const isInside =
+        event.clientX > box.left && event.clientX < box.right && event.clientY > box.top && event.clientY < box.bottom;
+      if (isInside) return;
+      root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+      current.leaveHandedOffShortcutDrag();
+    };
+    const onDrop = (event: DragEvent): void => {
+      const dropped = current.dropHandedOffShortcutDrag(backdropPoint(event));
+      if (dropped === null) return;
+      event.preventDefault();
+      root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+      paintShortcut(current, dropped.app, dropped.launch);
+    };
+    // Pointer events reach the page only once no OS drag holds the pointer: a handed-off drag ended elsewhere.
+    const onPointer = (event: PointerEvent): void => {
+      if (event.type === "pointermove" && event.buttons !== 0) return;
+      current.forgetHandedOffShortcutDrag();
+    };
+    root.addEventListener("dragenter", onDragOver);
+    root.addEventListener("dragover", onDragOver);
+    root.addEventListener("dragleave", onDragLeave);
+    root.addEventListener("drop", onDrop);
+    root.addEventListener("pointerdown", onPointer, true);
+    root.addEventListener("pointermove", onPointer, true);
+    return () => {
+      root.removeEventListener("dragenter", onDragOver);
+      root.removeEventListener("dragover", onDragOver);
+      root.removeEventListener("dragleave", onDragLeave);
+      root.removeEventListener("drop", onDrop);
+      root.removeEventListener("pointerdown", onPointer, true);
+      root.removeEventListener("pointermove", onPointer, true);
+    };
   }
 
   function closeLauncher(): void {
