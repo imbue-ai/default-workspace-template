@@ -162,6 +162,10 @@ A later split starts from the newest marker.
   Linking an app that is linked makes nothing.
 - `--refresh` makes a new marker at the current commit when a commit has touched the app since its newest marker, which keeps later splits fast as workspace commits accumulate.
   When the app has not changed since, there is no newer split to join and none is made: `git subtree` cannot read a history that holds two markers for one split.
+- A marker bounds a split only while every commit made since follows commits no older than the marker.
+  A merge that brings in older ones, which every update of the workspace does with the template's history, sends `git subtree` back through all of their ancestors, and the shell refuses that long before the root of a workspace's history.
+  The sync service then reports the app as `failed` and names `link --refresh`, which tries the split from the marker and, when that fails, makes it again with the markers ignored (`--ignore-joins`): every commit of the workspace is read once, which takes minutes, the same split commits come out, and the marker it leaves is past the merge.
+  An app that has not changed since its marker cannot be given a new one, so after such a merge its next change is not pushed until `link --refresh` is run for it.
 - An installed app needs no marker.
   The commits `install` and `update` leave are join markers already, so `link` only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
 - An app whose directory was removed and made again (an app uninstalled and built or installed again under the same name) is refused.

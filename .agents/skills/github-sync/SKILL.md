@@ -324,7 +324,7 @@ run at all.
 | `visibility_unknown` | The repository has not been confirmed private yet, so pushes wait. It clears by itself once GitHub answers. | If it stays, check the GitHub permissions are still granted, and that the repository still exists. |
 | `not_private` | The repository is public. Its pushes are stopped; the workspace's own sync and every other app carry on. | Tell the user it has become public and that anyone can read its whole history, and ask them to make it private again in its settings on GitHub. Pushes resume by themselves within about fifteen minutes. Never work around the stop. |
 | `push_refused` | The repository holds history this workspace's copy of the app does not continue, as when a second workspace (one restored from a backup, say) pushes the same app to it. Nothing was overwritten, and nothing will be. | Tell the user two workspaces are writing to one copy, and ask which one should keep it. In the other, the copy stays as it is; do not try to force it. |
-| `failed` | Anything else that stopped this app; `detail` has the reason. | Act on `detail`. The pass tries again each time. |
+| `failed` | Anything else that stopped this app; `detail` has the reason. | Act on `detail`. The pass tries again each time. When `detail` names `app-install link <name> --refresh`, run exactly that from the live workspace's root: an update of the workspace (or a background agent's work that began before the app was last linked) has landed since, and the app's history has to be read through once more, which can take minutes, before its changes are pushed again. |
 
 An app whose `failed` detail says its directory "was removed and made again"
 cannot have a dev repository: its history would carry the workspace's own

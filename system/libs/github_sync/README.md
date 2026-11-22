@@ -89,7 +89,15 @@ Which apps the pass pushes:
   directory, a commit whose message carries the trailer
   `git-subtree-dir: system/apps/<package>`. `app-install link` leaves one
   (`git subtree split --rejoin`), and a split then starts from the marker
-  instead of walking the whole workspace history, which takes minutes.
+  instead of walking the whole workspace history, which takes minutes. That
+  holds while every commit made since the marker follows commits no older
+  than it. A merge that brings in older ones (an update of the workspace
+  merges the template's history, and a worker's branch can have left before
+  the marker) sends `git subtree` back through all of their ancestors, which
+  the shell refuses long before the root of a workspace's history. The pass
+  does not read the whole history in their place: it reports the app as
+  `failed`, saying to run `app-install link <name> --refresh`, which does,
+  once, and leaves a marker past the merge.
   `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD`
   is the test, the same search `git subtree` makes, and `app-install link`
   and the pass both ask it through `github_sync.app_history.is_app_linked`.
