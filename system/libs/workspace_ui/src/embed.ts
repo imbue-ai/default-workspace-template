@@ -109,6 +109,23 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
+// Exporting a workspace app as a Mac app (contract v12; Imbue Studio's specs/studio-app-export). Workspace ->
+// embedder: an exportable app's desktop shortcut drag began ({ serviceName }), or ended before the embedder handed it
+// to the OS ({ serviceName, isCancelled }), and a menu action on an exportable app ({ serviceName, action }, action
+// "add-to-applications" or "reveal"). Embedder -> workspace: which apps are ready to drag out ({ serviceNames }), and
+// that it handed a shortcut drag to the OS ({ serviceName }). Sent only to and from an embedder that said
+// ``exportsApps`` with EMBEDDER_CAPABILITIES.
+export const APP_DRAG_STARTED: "minds:app-drag-started" =
+  "APP_DRAG_STARTED" in embedContract ? embedContract.APP_DRAG_STARTED : "minds:app-drag-started";
+export const APP_DRAG_ENDED: "minds:app-drag-ended" =
+  "APP_DRAG_ENDED" in embedContract ? embedContract.APP_DRAG_ENDED : "minds:app-drag-ended";
+export const EXPORT_APP_ACTION: "minds:export-app-action" =
+  "EXPORT_APP_ACTION" in embedContract ? embedContract.EXPORT_APP_ACTION : "minds:export-app-action";
+export const EXPORTABLE_APPS: "minds:exportable-apps" =
+  "EXPORTABLE_APPS" in embedContract ? embedContract.EXPORTABLE_APPS : "minds:exportable-apps";
+export const APP_DRAG_HANDED_OFF: "minds:app-drag-handed-off" =
+  "APP_DRAG_HANDED_OFF" in embedContract ? embedContract.APP_DRAG_HANDED_OFF : "minds:app-drag-handed-off";
+
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // Every embedder->workspace type the contract defines: the endpoint dispatches
@@ -127,6 +144,8 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   TEAR_OUT,
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
+  EXPORTABLE_APPS,
+  APP_DRAG_HANDED_OFF,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

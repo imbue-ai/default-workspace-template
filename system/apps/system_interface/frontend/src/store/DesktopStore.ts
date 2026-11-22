@@ -275,6 +275,24 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
+/** What a menu asks the chrome to do with an app's Mac app: copy it into Applications, or show it in Finder. */
+export type AppExportAction = "add-to-applications" | "reveal";
+
+/** The shell's side of exporting an app as a Mac app (Imbue Studio's specs/studio-app-export): a shortcut drag the
+ *  chrome watches, handing it to the OS once the cursor leaves its window, and the menu actions. Injectable so the
+ *  store is tested against a recorder; every call is a no-op without an embedder. */
+export interface AppExportBridge {
+  beginAppDrag(app: string): void;
+  endAppDrag(app: string, isCancelled: boolean): void;
+  runAction(app: string, action: AppExportAction): void;
+}
+
+const NULL_APP_EXPORT_BRIDGE: AppExportBridge = {
+  beginAppDrag: () => undefined,
+  endAppDrag: () => undefined,
+  runAction: () => undefined,
+};
+
 /** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
  *  (``minds:open-external``), or in the user's own browser when no chrome can, a custom-scheme link in the app of the
  *  user's system it belongs to. */
@@ -330,6 +348,8 @@ export interface StoreDependencies {
   readonly reloadInterface: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
+  /** Exporting apps as Mac apps through the embedder; absent means no embedder. */
+  readonly appExport?: AppExportBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -386,6 +406,8 @@ export interface ShortcutGesture {
   readonly lift: PixelPoint;
   /** The cell the pointer is over: where the icon would land, and what the shortcut in it steps aside from. */
   readonly targetCell: GridCell;
+  /** Whether the chrome watches this drag to hand it to the OS as the app's Mac app past its window's edge. */
+  readonly isExportWatched: boolean;
 }
 
 /** A floating entry being dragged: its box's top-left corner follows the pointer less the grab offset. */
@@ -478,6 +500,9 @@ export class DesktopStore {
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
+  private readonly appExport: AppExportBridge;
+  /** The apps whose Mac apps the embedder has ready to drag out; none until it says so (``minds:exportable-apps``). */
+  private exportableApps: ReadonlySet<string> = new Set();
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -507,6 +532,7 @@ export class DesktopStore {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
+    this.appExport = deps.appExport ?? NULL_APP_EXPORT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
@@ -553,6 +579,31 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether ``app`` can be dragged out of the chrome as a Mac app, and offers the menu items that copy or show it. */
+  isAppExportable(app: string): boolean {
+    return this.exportableApps.has(app);
+  }
+
+  /** The embedder said which apps' Mac apps are ready (``minds:exportable-apps``). */
+  setExportableApps(apps: readonly string[]): void {
+    this.exportableApps = new Set(apps);
+    this.notifyListeners();
+  }
+
+  /** Ask the embedder to copy an app's Mac app into Applications, or show it in Finder. */
+  runAppExportAction(app: string, action: AppExportAction): void {
+    if (this.isAppExportable(app)) this.appExport.runAction(app, action);
+  }
+
+  /** The chrome handed a shortcut drag to the OS (``minds:app-drag-handed-off``): the shortcut goes back to its cell
+   *  and nothing is saved. A word about a drag this shell already ended is ignored. */
+  handOffShortcutDrag(app: string): void {
+    const gesture = this.gesture;
+    if (gesture === null || gesture.kind !== "shortcut" || gesture.app !== app) return;
+    this.gesture = null;
+    this.notifyListeners();
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -2309,6 +2360,7 @@ export class DesktopStore {
     const key = shortcutKey(app, launch);
     const origin = this.placedShortcuts().find((entry) => placedShortcutKey(entry) === key);
     if (origin === undefined) return;
+    const isExportWatched = this.isAppExportable(app);
     this.gesture = {
       kind: "shortcut",
       app,
@@ -2316,7 +2368,9 @@ export class DesktopStore {
       originCell: origin.cell,
       lift: { x: 0, y: 0 },
       targetCell: cellAtPoint(pointer, this.metrics, this.gridDimensions()),
+      isExportWatched,
     };
+    if (isExportWatched) this.appExport.beginAppDrag(app);
     this.notifyListeners();
   }
 
@@ -2340,6 +2394,7 @@ export class DesktopStore {
     // The arrangement goes in BEFORE the redraw: with the gesture gone and the shortcuts still recorded
     // in the cells they were in, a redraw here would put them both back for a frame.
     if (settled !== null && settled.kind === "shortcut") {
+      if (settled.isExportWatched) this.appExport.endAppDrag(settled.app, false);
       void this.dropShortcut(settled.app, settled.launch, settled.targetCell, this.shortcutArrangement(settled));
     }
     this.notifyListeners();
@@ -2432,6 +2487,7 @@ export class DesktopStore {
       this.popOut.endWindowDrag(cancelled.windowId, false, true);
       if (cancelled.isTearingOut) this.bringBackDraggedWindow(cancelled.windowId);
     }
+    if (cancelled.kind === "shortcut" && cancelled.isExportWatched) this.appExport.endAppDrag(cancelled.app, true);
     this.notifyListeners();
   }
 

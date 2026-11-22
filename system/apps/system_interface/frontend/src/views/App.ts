@@ -686,10 +686,32 @@ export function App(): m.Component<AppAttrs> {
         label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
         onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
+      ...appExportRows(current, shortcut.target.app),
       { kind: "divider" },
       removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
     );
     return rows;
+  }
+
+  /** The app's Mac app (Imbue Studio's app export): copy it into Applications, or show it in Finder. None for an
+   *  app the chrome has not said is ready to export, which is every app outside the Imbue Studio desktop app. */
+  function appExportRows(current: DesktopStore, appName: string): MenuRow[] {
+    if (!current.isAppExportable(appName)) return [];
+    return [
+      { kind: "divider" },
+      {
+        kind: "action",
+        key: "add-to-applications",
+        label: "Add to Applications",
+        onSelect: () => current.runAppExportAction(appName, "add-to-applications"),
+      },
+      {
+        kind: "action",
+        key: "show-in-finder",
+        label: "Show in Finder",
+        onSelect: () => current.runAppExportAction(appName, "reveal"),
+      },
+    ];
   }
 
   function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
@@ -722,7 +744,9 @@ export function App(): m.Component<AppAttrs> {
 
   function rowsOfAppShortcutMenu(current: DesktopStore, appName: string): MenuRow[] | null {
     const row = desktopShortcutRow(current, appName);
-    return row === null ? null : [row];
+    const exportRows = appExportRows(current, appName);
+    if (row === null) return exportRows.length === 0 ? null : exportRows.slice(1);
+    return [row, ...exportRows];
   }
 
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {

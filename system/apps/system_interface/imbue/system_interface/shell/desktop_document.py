@@ -15,9 +15,11 @@ from datetime import datetime
 from typing import Final
 from typing import assert_never
 from urllib.parse import parse_qsl
+from urllib.parse import urlencode
 from urllib.parse import urlsplit
 
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
@@ -674,6 +676,20 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return None
     first = next((path for path in offered if not _takes_text(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
+
+
+@pure
+def default_shortcut_start_path(row: RegistryRow) -> str | None:
+    """The page an app's desktop shortcut opens, when that is a plain GET (its presets as the query); None when the
+    app has no shortcut or its shortcut posts. An app exported from Studio as a Mac app opens on this page."""
+    choice = _default_shortcut_choice(row)
+    if choice is None:
+        return None
+    launch_path = next((path for path in effective_launch_paths(row) if path.id == choice.launch), None)
+    if launch_path is None or launch_path.method != LaunchPathMethod.GET:
+        return None
+    query = urlencode(launch_path.presets)
+    return f"{launch_path.path}?{query}" if query else str(launch_path.path)
 
 
 @pure

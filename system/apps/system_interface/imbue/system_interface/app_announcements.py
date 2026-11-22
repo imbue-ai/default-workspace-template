@@ -39,6 +39,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import generate_rotation_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.desktop_document import default_shortcut_start_path
 
 # The agent state directory mngr hands every process of the workspace; the stream lives under it.
 ENV_AGENT_STATE_DIR: Final[str] = "MNGR_AGENT_STATE_DIR"
@@ -80,6 +81,11 @@ class AppRegisteredAnnouncement(EventEnvelope):
         serialization_alias="internal",
         description="Whether the app is internal plumbing, which the minds Share tab never lists",
     )
+    start_path: str = Field(
+        default="",
+        description="The page the app's desktop shortcut opens by GET, which an app exported from Studio opens on; "
+        "empty when the shortcut opens nothing by GET",
+    )
 
 
 class AppDeregisteredAnnouncement(EventEnvelope):
@@ -97,6 +103,7 @@ class AnnouncedRow(FrozenModel):
     display_name: str = Field(description="What users read for the app, empty when the row carries none")
     is_system: bool = Field(description="Whether the row declares the app part of the workspace itself")
     is_internal: bool = Field(description="Whether the row declares the app internal")
+    start_path: str = Field(description="The page the app's desktop shortcut opens by GET, empty when none")
 
 
 class AnnouncementDiff(FrozenModel):
@@ -115,6 +122,7 @@ def announced_row_of(row: RegistryRow) -> AnnouncedRow:
         display_name=str(row.display_name or ""),
         is_system=row.system,
         is_internal=row.internal,
+        start_path=default_shortcut_start_path(row) or "",
     )
 
 
@@ -228,6 +236,7 @@ class AppAnnouncementWriter(MutableModel):
                 display_name=current[name].display_name,
                 is_system=current[name].is_system,
                 is_internal=current[name].is_internal,
+                start_path=current[name].start_path,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [

@@ -88,7 +88,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "appExport" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -1179,6 +1179,74 @@ describe("gestures", () => {
     expect(redraws).toBe(afterBegin);
     store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     expect(redraws).toBeGreaterThan(afterBegin);
+  });
+
+  /** A shortcut store whose app-export asks are recorded, with ``exportable`` ready to drag out. */
+  async function exportingShortcutStore(exportable: readonly string[]): Promise<{
+    store: DesktopStore;
+    exportCalls: unknown[];
+  }> {
+    api.desktops = [
+      desktopRecord("home", {
+        shortcuts: [shortcutRecord("docs", { column: 0, row: 0 }), shortcutRecord("notes", { column: 1, row: 0 })],
+      }),
+    ];
+    const exportCalls: unknown[] = [];
+    const store = makeStore(() => undefined, {
+      appExport: {
+        beginAppDrag: (app) => exportCalls.push(["begin", app]),
+        endAppDrag: (app, isCancelled) => exportCalls.push(["end", app, isCancelled]),
+        runAction: (app, action) => exportCalls.push(["action", app, action]),
+      },
+    });
+    await store.start(NO_LINK);
+    store.setExportableApps(exportable);
+    return { store, exportCalls };
+  }
+
+  it("a ready app's shortcut drag is announced for export and ended on its release", async () => {
+    const { store, exportCalls } = await exportingShortcutStore(["docs"]);
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    store.beginShortcutDrag("notes", "new", { x: 130, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 0, y: 0 });
+    expect(exportCalls).toEqual([
+      ["begin", "docs"],
+      ["end", "docs", false],
+    ]);
+  });
+
+  it("a cancelled export-watched drag tells the chrome so", async () => {
+    const { store, exportCalls } = await exportingShortcutStore(["docs"]);
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.cancelGesture();
+    expect(exportCalls).toEqual([
+      ["begin", "docs"],
+      ["end", "docs", true],
+    ]);
+  });
+
+  it("a drag the chrome handed to the OS puts the shortcut back and saves nothing, whatever the release says", async () => {
+    const { store, exportCalls } = await exportingShortcutStore(["docs"]);
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    store.handOffShortcutDrag("docs");
+    expect(store.getGesture()).toBeNull();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    // The release the shell sees later (or the hover after it) finds no gesture.
+    store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
+    expect(exportCalls).toEqual([["begin", "docs"]]);
+  });
+
+  it("the menu actions go to the chrome only for a ready app", async () => {
+    const { store, exportCalls } = await exportingShortcutStore(["docs"]);
+    store.runAppExportAction("docs", "add-to-applications");
+    store.runAppExportAction("notes", "reveal");
+    expect(exportCalls).toEqual([["action", "docs", "add-to-applications"]]);
+    expect(store.isAppExportable("docs")).toBe(true);
+    expect(store.isAppExportable("notes")).toBe(false);
   });
 
   it("a drop back into the cell it came from asks the shell for nothing", async () => {

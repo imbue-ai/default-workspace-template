@@ -162,6 +162,30 @@ def test_an_app_that_became_a_system_or_internal_app_is_re_announced(
     ]
 
 
+def test_an_announcement_carries_the_page_the_apps_shortcut_opens(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """An app exported from Studio as a Mac app opens on this page, so only a plain GET shortcut announces one."""
+    announcement_writer.announce(
+        _rows(
+            tmp_path,
+            registry_row_toml("todo", "http://localhost:8400", default_shortcut=("open", "focus")),
+            registry_row_toml(
+                "chat",
+                "http://localhost:8010",
+                launch_paths=[("new", "New Chat", "/new")],
+                launch_methods={"new": "POST"},
+                default_shortcut=("new", "new"),
+            ),
+        )
+    )
+
+    assert {event["service"]: event["start_path"] for event in _events(announcement_writer.events_path)} == {
+        "todo": "/",
+        "chat": "",
+    }
+
+
 def test_an_announcement_carries_the_apps_display_name(
     announcement_writer: AppAnnouncementWriter, tmp_path: Path
 ) -> None:

@@ -2,8 +2,13 @@ import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
+  APP_DRAG_ENDED,
+  APP_DRAG_HANDED_OFF,
+  APP_DRAG_STARTED,
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  EXPORTABLE_APPS,
+  EXPORT_APP_ACTION,
   HIGHLIGHT_CHROME,
   OPEN_EXTERNAL,
   OPEN_LINK,
@@ -26,7 +31,7 @@ import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
-import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
+import type { AppExportBridge, OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { getOwnIdentity, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
@@ -86,6 +91,13 @@ const popOutBridge: PopOutBridge = {
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
+/** The shell's side of exporting an app as a Mac app: every ask goes to the embedding chrome. */
+const appExportBridge: AppExportBridge = {
+  beginAppDrag: (app) => sendToEmbedder(APP_DRAG_STARTED, { serviceName: app }),
+  endAppDrag: (app, isCancelled) => sendToEmbedder(APP_DRAG_ENDED, { serviceName: app, isCancelled }),
+  runAction: (app, action) => sendToEmbedder(EXPORT_APP_ACTION, { serviceName: app, action }),
+};
+
 /** Where an external link no app takes opens: through the chrome, or in a new tab of the browser this shell is in,
  *  or, for a custom-scheme link facing an older chrome, in its app of the user's system by navigating this page
  *  itself, which Electron hands to the app without leaving the page (the page's own ``frame-src`` admits no custom
@@ -118,6 +130,7 @@ function bootstrap(): void {
           redraw: () => m.redraw(),
           reloadInterface,
           popOut: popOutBridge,
+          appExport: appExportBridge,
           outsideLinks,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
@@ -179,6 +192,14 @@ function bootstrap(): void {
     const url = message.url;
     if (typeof url !== "string" || url === "") return;
     void desktopStore.openLink(url, window.location.host, null);
+  });
+  // Exporting apps as Mac apps: which are ready to drag out, and a shortcut drag the chrome handed to the OS.
+  setEmbedderMessageHandler(EXPORTABLE_APPS, (message) => {
+    const names = Array.isArray(message.serviceNames) ? message.serviceNames : [];
+    desktopStore.setExportableApps(names.filter((name): name is string => typeof name === "string"));
+  });
+  setEmbedderMessageHandler(APP_DRAG_HANDED_OFF, (message) => {
+    if (typeof message.serviceName === "string") desktopStore.handOffShortcutDrag(message.serviceName);
   });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;
