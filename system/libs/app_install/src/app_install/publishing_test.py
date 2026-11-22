@@ -41,6 +41,7 @@ from app_install.testing import point_url_at
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_manifest.records import load_record
+from github_sync.testing import install_fake_latchkey
 
 _PUBLISHED_URL = "https://github.com/octo/notes"
 _TEMPLATE_VERSION = "minds-v0.11.0"
@@ -522,11 +523,12 @@ def test_a_tag_the_repository_already_has_is_reported_and_never_moved(tmp_path: 
     assert run_git(published, ["rev-parse", "v0.2.0^{commit}"]) == first.commit
 
 
-def test_a_repository_that_was_not_closed_to_outside_contributions_is_a_problem_of_the_first_publish(
+def test_a_repository_that_was_not_closed_or_not_given_its_topic_is_a_problem_of_the_first_publish(
     tmp_path: Path,
 ) -> None:
     workspace, published, runtime = _publisher(tmp_path, is_python=False)
     runtime.lockdown_problem = "PATCH answered 403"
+    runtime.topic_problem = "the topic was not set"
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
 
@@ -536,6 +538,7 @@ def test_a_repository_that_was_not_closed_to_outside_contributions_is_a_problem_
     assert pushed.problems == (
         f"closing {_PUBLISHED_URL} to outside contributions (issues, wiki, projects, discussions, outside "
         "pull requests) did not take: PATCH answered 403",
+        f"{_PUBLISHED_URL} was not given the topic published apps are found by: the topic was not set",
     )
     assert run_git(published, ["rev-parse", "main"]) == pushed.commit
 
@@ -883,3 +886,53 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     }
     assert run("push", "notes")[1]["result"] == "not_assembled"
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
+
+
+def test_the_command_names_a_lock_that_does_not_hold_a_name_that_is_taken_and_a_push_that_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, published, runtime = _publisher(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    _install_scanners(workspace, tmp_path / "bin", None)
+    commit_all(workspace, "Add the workspace's secret scan")
+    arguments = ["--repo-root", str(workspace), "publish"]
+
+    def run(*step: str) -> tuple[int, dict[str, object]]:
+        result = CliRunner().invoke(main, [*arguments, *step])
+        return result.exit_code, json.loads(result.output)
+
+    # The stand-in relock writes a lock no project resolves to, so the real check, run on the assembled tree
+    # outside the workspace, does not hold.
+    _versioned(workspace, runtime, "0.1.0")
+    exit_code, unlocked = run("assemble", "notes")
+    assert (exit_code, unlocked["result"], unlocked["name"]) == (1, "lock_check_failed", "notes")
+    assert "uv.lock" in str(unlocked["detail"])
+    assert run("push", "notes")[1]["result"] == "not_assembled"
+
+    # Without its project the app has nothing to lock. The account already has a repository of its name.
+    (workspace / "system" / "apps" / "notes" / "pyproject.toml").unlink()
+    commit_all(workspace, "Drop the project")
+    assert run("assemble", "notes")[1]["result"] == "assembled"
+    install_fake_latchkey(
+        tmp_path / "bin", """echo '{"errors": [{"message": "name already exists on this account"}]}'"""
+    )
+    exit_code, taken = run("push", "notes", "--repo-name", "octo-notes")
+    assert (exit_code, taken["result"], taken["repo_name"]) == (1, "name_taken", "octo-notes")
+    assert load_record(workspace, "notes").published_repo_url == ""
+    assert _refs(published) == []
+
+    # Published once, then someone else's commit lands on the published main.
+    pushed = push_app(workspace, "notes", None, runtime)
+    record_publish(workspace, "notes", runtime)
+    other = tmp_path / "other"
+    run_git(tmp_path, ["clone", "--quiet", str(published), str(other)])
+    (other / "README.md").write_text("edited on GitHub\n")
+    theirs = commit_all(other, "Edit the README on GitHub")
+    run_git(other, ["push", "--quiet", "origin", "HEAD:main"])
+    _versioned(workspace, runtime, "0.2.0")
+    assert run("assemble", "notes")[1]["result"] == "assembled"
+    exit_code, refused = run("push", "notes")
+    assert (exit_code, refused["result"], refused["name"]) == (1, "push_refused", "notes")
+    assert "nothing is ever forced" in str(refused["detail"])
+    assert run_git(published, ["rev-parse", "main"]) == theirs
+    assert load_record(workspace, "notes").published_commit == pushed.commit

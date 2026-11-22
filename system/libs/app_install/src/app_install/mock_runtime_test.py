@@ -31,6 +31,7 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     github_account: str = Field(default="octo", description="The account a created repository lands under")
     repository_failure: str | None = Field(default=None, description="What creating a repository fails with")
     lockdown_problem: str = Field(default="", description="Why closing a created repository did not take")
+    topic_problem: str = Field(default="", description="Why a published repository was not given its topic")
     taken_repository_names: tuple[str, ...] = Field(default=(), description="The names the account already uses")
     secret_marker: str = Field(default="", description="Text the secret scan reports every file holding as a find")
     scan_failure: str = Field(default="", description="Why the secret scan cannot run, if it cannot")
@@ -101,7 +102,9 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
         if name in self.taken_repository_names:
             raise PublishedNameTakenError(f"the repo was not created: name already exists on this account ({name})")
         return CreatedRepository(
-            url=f"https://github.com/{self.github_account}/{name}", lockdown_problem=self.lockdown_problem
+            url=f"https://github.com/{self.github_account}/{name}",
+            lockdown_problem=self.lockdown_problem,
+            topic_problem=self.topic_problem,
         )
 
     def scan_secrets(self, directory: Path) -> SecretScan:
