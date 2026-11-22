@@ -871,15 +871,15 @@ app the report's follow-ups name (below):
 
   The first gives an app that was never linked its starting point and its
   private dev repository (the `github-sync` skill, "App dev repositories");
-  the second moves the starting point up to now, past what this update
-  merged in, which the sync service cannot read an app's changes across. It
-  can take minutes per app, since it reads the workspace's whole history
-  once. `linked`, `refreshed` and `already_linked` are all fine, and
-  `is_full_clone_used` only says the slow path was taken. An app that
-  answers `already_linked` has not changed since it was last linked, and
-  nothing can be moved for it yet: after its next change the service's
-  status asks for the same `link --refresh` (the `github-sync` skill, "What
-  the status says about each app"). Nothing here undoes or holds the update. A `refused`,
+  the second moves the starting point up to now, which keeps the sync
+  service quick: each time an app changes it reads everything that has
+  changed in the workspace since that app's starting point. A first link
+  can take minutes when it has to read the workspace's whole history
+  (`is_full_clone_used` on a `linked` result says it did). `linked`,
+  `refreshed` and `already_linked` are all fine. An app that answers
+  `already_linked` has not changed since it was last linked and needs
+  nothing: the service pushes its next change from the starting point it
+  has. Nothing here undoes or holds the update. A `refused`,
   or an entry under `problems`, is handled like anything else of the user's
   that is broken: one chat line and a repair worker with the command's JSON
   line, unless it is something only the user can settle (a repository named
