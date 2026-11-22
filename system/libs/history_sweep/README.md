@@ -24,7 +24,7 @@ by any chat record (`data/.apps/chat/chats/*/record.json`):
 
 | When | What |
 | --- | --- |
-| At once, if the archive holds a non-empty raw transcript | the agent's session files in every account folder |
+| At once, if the archive holds a non-empty raw transcript and its manifest records no failed final flush or copy of it | the agent's session files in every account folder |
 | 30 days after the archive was written (`preserved_at` in its manifest; the folder's modification time for an older archive with no manifest) | the archive, and any session files still left |
 
 It never removes a session that a present or listed agent's history also names, never reads

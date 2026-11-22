@@ -8,6 +8,8 @@ from imbue.mngr.api.preservation import (
     PRESERVATION_MANIFEST_FILENAME,
     PreservationManifest,
     PreservedAgentIdentity,
+    PreservedItemResult,
+    TranscriptFlushResult,
 )
 from imbue.mngr.primitives import (
     AgentId,
@@ -46,8 +48,13 @@ def write_archive(
     session_ids: list[str],
     preserved_at: datetime,
     has_raw_transcript: bool = True,
+    items: tuple[PreservedItemResult, ...] = (),
+    transcript_flush: tuple[TranscriptFlushResult, ...] = (),
 ) -> Path:
-    """A destroyed agent's preserved archive: its raw transcript, session-id history and manifest."""
+    """A destroyed agent's preserved archive: its raw transcript, session-id history and manifest.
+
+    ``items`` and ``transcript_flush`` are what the manifest says mngr's copies and final flushes did.
+    """
     archive = roots.host_dir / "preserved" / f"chat--{agent_id}"
     (archive / "logs" / "claude_transcript").mkdir(parents=True)
     (archive / "logs" / "claude_transcript" / "events.jsonl").write_text(
@@ -66,7 +73,8 @@ def write_archive(
             agent_name=AgentName("chat"),
             agent_type=AgentTypeName("claude"),
         ),
-        items=(),
+        items=items,
+        transcript_flush=transcript_flush,
     )
     (archive / PRESERVATION_MANIFEST_FILENAME).write_text(manifest.model_dump_json())
     return archive

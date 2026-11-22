@@ -2,10 +2,18 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Final
 from uuid import uuid4
 
 import pytest
-from imbue.mngr.api.preservation import PRESERVATION_MANIFEST_FILENAME
+from imbue.mngr.api.preservation import (
+    PRESERVATION_MANIFEST_FILENAME,
+    PreservationOutcome,
+    PreservedItemResult,
+    TranscriptFlushOutcome,
+    TranscriptFlushResult,
+)
+from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.primitives import AgentId
 
 from history_sweep.sweep import (
@@ -102,6 +110,43 @@ def test_session_copies_stay_while_the_archive_has_no_raw_transcript(
         [session_id],
         preserved_at=_NOW - timedelta(days=1),
         has_raw_transcript=False,
+    )
+
+    assert _planned(roots) == {}
+
+
+_FAILED_FLUSH: Final = TranscriptFlushResult(
+    script_name="stream_transcript.sh",
+    outcome=TranscriptFlushOutcome.ERROR,
+    error="timed out",
+)
+_FAILED_COPY: Final = PreservedItemResult(
+    rel_path="logs/claude_transcript",
+    kind=FileType.DIRECTORY,
+    outcome=PreservationOutcome.ERROR,
+    error="No space left on device",
+)
+
+
+@pytest.mark.parametrize(
+    ("transcript_flush", "items"),
+    [((_FAILED_FLUSH,), ()), ((), (_FAILED_COPY,))],
+    ids=["flush", "copy"],
+)
+def test_session_copies_stay_while_the_archive_transcript_may_be_short(
+    roots: SweepRoots,
+    transcript_flush: tuple[TranscriptFlushResult, ...],
+    items: tuple[PreservedItemResult, ...],
+) -> None:
+    session_id = str(uuid4())
+    write_session(roots, session_id)
+    write_archive(
+        roots,
+        _new_agent_id(),
+        [session_id],
+        preserved_at=_NOW - timedelta(days=1),
+        items=items,
+        transcript_flush=transcript_flush,
     )
 
     assert _planned(roots) == {}

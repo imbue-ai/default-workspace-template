@@ -9,7 +9,7 @@ The sweep removes, for an archive whose agent is neither present nor named by a 
 record:
 
 - at once, the agent's session files in the account folders, once the archive holds a
-  non-empty raw transcript (the same lines);
+  non-empty raw transcript (the same lines) whose final flush and copy mngr did not report failing;
 - after the retention window, the archive itself and any session files still left.
 
 A session id that a present or listed agent's history also names is never touched.
@@ -28,7 +28,9 @@ from typing import Final
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.preservation import (
+    PreservationOutcome,
     PreservedAgentArchive,
+    TranscriptFlushOutcome,
     discover_preserved_agent_archives,
 )
 from imbue.mngr.errors import MngrError
@@ -39,6 +41,8 @@ RETENTION: Final[timedelta] = timedelta(days=30)
 
 SESSION_ID_HISTORY_FILENAME: Final[str] = "claude_session_id_history"
 _PRESERVED_RAW_TRANSCRIPT: Final[Path] = Path("logs/claude_transcript/events.jsonl")
+# The producer whose final pass at destroy brings the raw transcript up to the session files' last line.
+_RAW_TRANSCRIPT_FLUSH_SCRIPT: Final[str] = "stream_transcript.sh"
 _CHAT_RECORD_FILENAME: Final[str] = "record.json"
 # Session ids are UUIDs; anything else in a history line is never joined into a path.
 _SESSION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
@@ -115,7 +119,7 @@ def plan_sweep(
             if path not in planned_copies
         ]
         is_expired = now - _preserved_at(archive) >= retention
-        if is_expired or _has_preserved_raw_transcript(archive.path):
+        if is_expired or _archive_holds_session_lines(archive):
             planned_copies.update(session_copies)
             removals.extend(
                 _removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id)
@@ -231,6 +235,29 @@ def _preserved_at(archive: PreservedAgentArchive) -> datetime:
     if archive.manifest is not None:
         return archive.manifest.preserved_at
     return datetime.fromtimestamp(archive.path.stat().st_mtime, tz=timezone.utc)
+
+
+def _archive_holds_session_lines(archive: PreservedAgentArchive) -> bool:
+    """Whether the archive's raw transcript holds what the session files do: it is non-empty, and the
+    manifest records no failed final flush of it and no failed copy of it."""
+    if not _has_preserved_raw_transcript(archive.path):
+        return False
+    if archive.manifest is None:
+        return True
+    is_flush_failed = any(
+        flush.script_name == _RAW_TRANSCRIPT_FLUSH_SCRIPT
+        and flush.outcome == TranscriptFlushOutcome.ERROR
+        for flush in archive.manifest.transcript_flush
+    )
+    is_copy_failed = any(
+        item.outcome == PreservationOutcome.ERROR
+        and (
+            Path(item.rel_path) == _PRESERVED_RAW_TRANSCRIPT
+            or Path(item.rel_path) in _PRESERVED_RAW_TRANSCRIPT.parents
+        )
+        for item in archive.manifest.items
+    )
+    return not (is_flush_failed or is_copy_failed)
 
 
 def _has_preserved_raw_transcript(archive_dir: Path) -> bool:
