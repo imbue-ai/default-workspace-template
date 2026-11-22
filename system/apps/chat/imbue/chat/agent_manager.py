@@ -4181,12 +4181,14 @@ class AgentManager:
         finally:
             self._end_connecting_send(agent_id, message_id)
 
+    def _waiting_message_ids_locked(self, agent_id: str) -> set[str]:
+        return self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids
+
     def _is_connecting_locked(self, agent_id: str) -> bool:
-        return bool(self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids)
+        return bool(self._waiting_message_ids_locked(agent_id))
 
     def _is_waking_up_locked(self, agent_id: str) -> bool:
-        connecting = self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids
-        return not connecting.isdisjoint(self._waking_message_ids)
+        return not self._waiting_message_ids_locked(agent_id).isdisjoint(self._waking_message_ids)
 
     def _set_send_connecting(self, agent_id: str, message_id: str, text: str, is_waking_up: bool) -> None:
         with self._lock:
