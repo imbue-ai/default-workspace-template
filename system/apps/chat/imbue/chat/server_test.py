@@ -167,6 +167,7 @@ from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
+from imbue.chat.testing import make_generated_suggestions
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
@@ -4838,14 +4839,6 @@ def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, 
     }
 
 
-def _reply_suggestions(reply_event_id: str, label: str) -> ChatSuggestions:
-    return ChatSuggestions(
-        after_event_id=reply_event_id,
-        source=SuggestionSource.GENERATED,
-        suggestions=(Suggestion(suggestion_id="generated-1", label=label),),
-    )
-
-
 def test_the_route_lists_every_set_stored_for_the_chat_since_the_app_started_oldest_first(
     app: Flask, client: FlaskClient
 ) -> None:
@@ -4854,9 +4847,9 @@ def test_the_route_lists_every_set_stored_for_the_chat_since_the_app_started_old
     _register_agent(app, "agent-suggested", "Chat-1", "RUNNING")
     _register_agent(app, "agent-elsewhere", "Chat-2", "RUNNING")
     store = state_of(app).agent_manager.suggestion_store
-    store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-1", "Yes, go ahead"))
-    store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-2", "Show me the app"))
-    store.write(ChatId("agent-elsewhere"), _reply_suggestions("evt-reply-9", "Not now"))
+    store.write(ChatId("agent-suggested"), make_generated_suggestions("evt-reply-1", "Yes, go ahead"))
+    store.write(ChatId("agent-suggested"), make_generated_suggestions("evt-reply-2", "Show me the app"))
+    store.write(ChatId("agent-elsewhere"), make_generated_suggestions("evt-reply-9", "Not now"))
 
     with_the_second_stored = client.get("/api/chats/agent-suggested/suggestions").get_json()
     store.remove(ChatId("agent-suggested"))
@@ -4889,7 +4882,9 @@ def test_a_destroyed_chats_sets_are_forgotten(tmp_path: Path) -> None:
     manager.note_agent_list_known()
     seed_agent_state(manager, "agent-suggested", name="Chat-1")
     client = create_application(build_test_state(agent_manager=manager)).test_client()
-    manager.suggestion_store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-1", "Yes, go ahead"))
+    manager.suggestion_store.write(
+        ChatId("agent-suggested"), make_generated_suggestions("evt-reply-1", "Yes, go ahead")
+    )
     remembered_while_listed = manager.get_remembered_suggestions(ChatId("agent-suggested"))
 
     destroyed = client.post("/api/chats/agent-suggested/destroy")

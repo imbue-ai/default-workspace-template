@@ -106,6 +106,9 @@ from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -610,6 +613,15 @@ def make_chat_agent_entry(
         ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
         archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
         final_event_count=final_event_count if is_archived else None,
+    )
+
+
+def make_generated_suggestions(reply_event_id: str, label: str = "Yes, go ahead") -> ChatSuggestions:
+    """The set a model worked out for the reply ``reply_event_id``: one suggestion, saying ``label``."""
+    return ChatSuggestions(
+        after_event_id=reply_event_id,
+        source=SuggestionSource.GENERATED,
+        suggestions=(Suggestion(suggestion_id="generated-1", label=label),),
     )
 
 
