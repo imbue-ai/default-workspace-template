@@ -79,7 +79,10 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `app_registration.forward_port`, the library `system/scripts/forward_port.py`
   runs, it upserts the app's row from its manifest (a re-registration updates
   the row in place), and raises `AppRegistrationError` when the manifest or the
-  registration is refused.
+  registration is refused. A disk too full to write the row is not a refusal: the
+  app starts and a background thread writes the row once there is room.
+  `register_app_now` is the same without that retry, for an entry point that
+  `exec`s into another program and so cannot keep the thread.
   `read_origin_label(path, name)` answers
   one app's origin label, or `""` when no such app is registered or the registry
   cannot be read (logged as a warning), for a page that derives another app's

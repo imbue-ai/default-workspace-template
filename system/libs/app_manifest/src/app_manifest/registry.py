@@ -254,10 +254,15 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
     of apps with no entry point run the script directly). A disk too full to write the row is not a
     refusal: the app starts with its row as it was, and a thread writes the row once there is room.
     """
-    register_or_retry_while_disk_full(lambda: _register_once(manifest_path, app_url), str(manifest_path))
+    register_or_retry_while_disk_full(lambda: register_app_now(manifest_path, app_url), str(manifest_path))
 
 
-def _register_once(manifest_path: Path, app_url: AppUrl) -> None:
+def register_app_now(manifest_path: Path, app_url: AppUrl) -> None:
+    """``register_app`` without the retry: a full disk raises AppRegistrationError like any refusal.
+
+    For an entry point that replaces itself with another program once registered (``os.exec*``), which
+    would discard a retry thread; its failed start is retried by supervisord instead.
+    """
     started_at = time.monotonic()
     try:
         forward_port.register_manifest(registry_path(), manifest_path, app_url)

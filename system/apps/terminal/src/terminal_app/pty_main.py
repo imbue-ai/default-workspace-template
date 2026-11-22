@@ -13,7 +13,7 @@ from typing import Final, NoReturn
 import click
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import AppUrl
-from app_manifest.registry import register_app
+from app_manifest.registry import register_app_now
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from loguru import logger
@@ -71,7 +71,7 @@ def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
     if arguments.is_registered:
         manifest = load_manifest(arguments.manifest_path)
         with log_span("Registering {} at {}", manifest.name, arguments.app_url):
-            register_app(arguments.manifest_path, arguments.app_url)
+            register_app_now(arguments.manifest_path, arguments.app_url)
     return build_ttyd_argv(
         ttyd_executable=arguments.ttyd_executable,
         port=app_url_port(arguments.app_url),
