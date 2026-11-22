@@ -58,6 +58,10 @@ import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import {
+  NO_SUGGESTIONS_ANSWER as NO_NEXT_STEPS,
+  storedSuggestionsAnswerFixture,
+} from "../models/suggestionsAnswerFixture";
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { hasUserMessage, isTurnDoneForActivity } from "./last-reply";
@@ -75,26 +79,19 @@ function userMessage(eventId: string): TranscriptEvent {
   return userMessageFixture(eventId, "Plan my week");
 }
 
-const NO_NEXT_STEPS: SuggestionsAnswer = {
-  status: "none",
-  after_event_id: null,
-  source: null,
-  suggestions: [],
-  sets: [],
-};
-
 /** A set stored for the reply ``afterEventId``: a model's, which waits behind its line, unless ``source`` says the
  *  chat app's own, which starts shown. */
 function nextSteps(afterEventId: string, source: "generated" | "fixed" = "generated"): SuggestionsAnswer {
-  const set = {
-    after_event_id: afterEventId,
-    source,
-    suggestions: [
-      { suggestion_id: "go", label: "Go ahead", is_recommended: false },
-      { suggestion_id: "change", label: "Change the plan", is_recommended: false },
-    ],
-  };
-  return { status: "ready", ...set, sets: [set] };
+  return storedSuggestionsAnswerFixture([
+    {
+      after_event_id: afterEventId,
+      source,
+      suggestions: [
+        { suggestion_id: "go", label: "Go ahead", is_recommended: false },
+        { suggestion_id: "change", label: "Change the plan", is_recommended: false },
+      ],
+    },
+  ]);
 }
 
 /** What the backend holds, which the page's requests read and write. */

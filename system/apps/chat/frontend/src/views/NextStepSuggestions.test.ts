@@ -54,6 +54,11 @@ import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import type { TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import {
+  NO_SUGGESTIONS_ANSWER,
+  pendingSuggestionsAnswerFixture,
+  storedSuggestionsAnswerFixture,
+} from "../models/suggestionsAnswerFixture";
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
 import { ChatSuggestions } from "./ChatSuggestions";
@@ -82,8 +87,7 @@ function storedSet(
   suggestions: SuggestionsAnswer["suggestions"] = START_SUGGESTIONS,
   afterEventId: string = SEED_END,
 ): SuggestionsAnswer {
-  const set = { after_event_id: afterEventId, source, suggestions };
-  return { status: "ready", ...set, sets: [set] };
+  return storedSuggestionsAnswerFixture([{ after_event_id: afterEventId, source, suggestions }]);
 }
 
 const START_SET: SuggestionsAnswer = storedSet("fixed");
@@ -371,7 +375,7 @@ describe("the next-step strip", () => {
   });
 
   it("draws a set the chat app says was stored after the page had read none, moving nothing", async () => {
-    stored.suggestions = { status: "pending", after_event_id: SEED_END, source: null, suggestions: [], sets: [] };
+    stored.suggestions = pendingSuggestionsAnswerFixture(SEED_END);
     await load();
     expect(pillLabels()).toEqual([]);
     expect(lineText()).toBe("");
@@ -478,7 +482,7 @@ describe("the next-step strip", () => {
 
 describe("the line above the composer", () => {
   it("keeps its height, empty, from the first draw: while the settings load and with no set", async () => {
-    stored.suggestions = { status: "none", after_event_id: null, source: null, suggestions: [], sets: [] };
+    stored.suggestions = NO_SUGGESTIONS_ANSWER;
 
     draw();
     expect(lineText()).toBe("");

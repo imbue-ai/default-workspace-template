@@ -40,7 +40,11 @@ import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { setParticipantsForTesting } from "../models/Participants";
 import type { TranscriptEvent } from "../models/Response";
-import { type AnsweredSuggestionSet, resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import {
+  storedSuggestionsAnswerFixture as remembering,
+  suggestionSetFixture,
+} from "../models/suggestionsAnswerFixture";
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { answeredReplySuggestions } from "./AnsweredReplySuggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
@@ -55,21 +59,8 @@ function userMessage(eventId: string): TranscriptEvent {
   return userMessageFixture(eventId, "Plan my week");
 }
 
-function setAfter(afterEventId: string, labels: string[], source: string = "generated"): AnsweredSuggestionSet {
-  return {
-    after_event_id: afterEventId,
-    source,
-    suggestions: labels.map((label) => ({ suggestion_id: label.toLowerCase(), label, is_recommended: false })),
-  };
-}
-
-/** What the chat app answers with ``sets`` remembered, the last of them the one stored. */
-function remembering(sets: AnsweredSuggestionSet[]): SuggestionsAnswer {
-  return { status: "ready", ...sets[sets.length - 1], sets };
-}
-
-const FIRST = setAfter("a-1", ["Go ahead", "Change the plan"]);
-const SECOND = setAfter("a-2", ["Thanks, that is all"]);
+const FIRST = suggestionSetFixture("a-1", ["Go ahead", "Change the plan"], "generated");
+const SECOND = suggestionSetFixture("a-2", ["Thanks, that is all"], "generated");
 
 /** What the backend holds, which the page's requests read. */
 let stored: { settings: ChatSettings; suggestions: SuggestionsAnswer };

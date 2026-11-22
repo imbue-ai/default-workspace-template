@@ -25,14 +25,14 @@ import {
   toggleAnsweredReplySuggestions,
   toggleNextStepSuggestions,
 } from "./Suggestions";
+import {
+  NO_SUGGESTIONS_ANSWER as NONE,
+  pendingSuggestionsAnswerFixture as pending,
+  storedSuggestionsAnswerFixture,
+  suggestionSetFixture,
+} from "./suggestionsAnswerFixture";
 
 const CHAT = "agent-1";
-const NONE: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [], sets: [] };
-
-/** What the route answers while a set for ``afterEventId`` is being worked out. */
-function pending(afterEventId: string): SuggestionsAnswer {
-  return { status: "pending", after_event_id: afterEventId, source: null, suggestions: [], sets: [] };
-}
 
 /** A set as the chat app remembers it for the reply ``afterEventId``. */
 function remembered(
@@ -40,11 +40,7 @@ function remembered(
   labels: string[] = ["Yes", "No"],
   source: string = "fixed",
 ): AnsweredSuggestionSet {
-  return {
-    after_event_id: afterEventId,
-    source,
-    suggestions: labels.map((label) => ({ suggestion_id: label.toLowerCase(), label, is_recommended: false })),
-  };
+  return suggestionSetFixture(afterEventId, labels, source);
 }
 
 /** What the route answers with a set stored for ``afterEventId``, which the chat app remembers after ``earlier``. */
@@ -54,8 +50,7 @@ function ready(
   source: string = "fixed",
   earlier: AnsweredSuggestionSet[] = [],
 ): SuggestionsAnswer {
-  const stored = remembered(afterEventId, labels, source);
-  return { status: "ready", ...stored, sets: [...earlier, stored] };
+  return storedSuggestionsAnswerFixture([...earlier, remembered(afterEventId, labels, source)]);
 }
 
 /** A reply's turn is done, next-step suggestions are on, and ``lastReplyEventId`` is the chat's last reply. */
