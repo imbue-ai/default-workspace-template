@@ -574,7 +574,7 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
     with open(e2e_server.session_file, "a") as handle:
         handle.write(json.dumps(_assistant_line("picker-a-1", "2026-01-01T00:02:00Z", asked, "end_turn")) + "\n")
     categories = chat.locator('[data-studio-picker="category"]')
-    expect(categories.locator(".studio-picker-pill")).to_have_count(21, timeout=15000)
+    expect(categories.locator(".studio-picker-pill")).to_have_count(24, timeout=15000)
     expect(categories.locator(".studio-picker-heading")).to_have_text(["Work", "Life", "Creative"])
     textarea = chat.locator(".message-input-textbox")
     send_button = chat.locator(".message-input-send-button")
@@ -607,7 +607,7 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
     with open(e2e_server.session_file, "a") as handle:
         handle.write(json.dumps(_assistant_line("picker-a-2", "2026-01-01T00:03:00Z", apps, "end_turn")) + "\n")
     connectors = chat.locator('[data-studio-picker="connector"]')
-    expect(connectors.locator(".studio-picker-pill")).to_have_count(15, timeout=15000)
+    expect(connectors.locator(".studio-picker-pill")).to_have_count(16, timeout=15000)
     expect(categories.get_by_role("button", name="Money", exact=True)).to_be_disabled()
     gmail = connectors.get_by_role("button", name="Gmail", exact=True)
     expect(gmail).to_be_enabled()

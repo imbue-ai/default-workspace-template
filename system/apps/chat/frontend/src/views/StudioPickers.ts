@@ -6,7 +6,8 @@
  * A picker is a set of pills, and a click on one edits the composer's draft: it adds the pill's label and a comma,
  * or takes them out again. The pill reads as pressed while the draft holds them, so the picker has no state of its
  * own and comes back as it was after a redraw or a reload. The user sends the draft themselves, with anything of
- * their own typed in.
+ * their own typed in, which is what each picker's last pill, "Other", says: it works as every pill does, but puts a
+ * prompt to write over in the draft in place of its own label.
  *
  * A picker takes clicks only in the reply the chat waits on its user to answer; in an earlier message it is drawn
  * disabled. It reads the same draft there, so what was picked from it no longer shows once that was sent.
@@ -53,9 +54,15 @@ export const PICKER_CATEGORY_COLUMNS: readonly CategoryColumn[] = [
   },
   {
     title: "Creative",
-    categories: ["Writing", "Art & design", "Film & video", "Game dev", "Books, movies & music"],
+    categories: ["Writing", "Art & design", "Film & video", "Game dev", "Books", "Movies", "Music"],
   },
 ];
+
+/** The label of the pill that ends each picker. It names no category and no app, so it is kept out of their lists. */
+export const PICKER_OTHER_LABEL = "Other";
+/** What "Other" puts in the draft from the category picker, and from the connector picker. */
+export const CATEGORY_PICKER_OTHER_PROMPT = "Write whatever you want!";
+export const CONNECTOR_PICKER_OTHER_PROMPT = "Write whatever data you want here!";
 
 interface Connector {
   name: string;
@@ -93,15 +100,17 @@ export interface StudioPickerAttrs {
 interface PillAttrs {
   chatId: string;
   label: string;
+  /** What a click puts in the draft: the label, for every pill but "Other". */
+  fragment: string;
   isLive: boolean;
   /** Drawn ahead of the label. */
   mark: m.Children;
-  /** Run when a click added the label to the draft. */
+  /** Run when a click added the fragment to the draft. */
   onAdded: (() => void) | null;
 }
 
 function pill(attrs: PillAttrs): m.Vnode {
-  const isPressed = isComposerFragmentInDraft(attrs.chatId, attrs.label);
+  const isPressed = isComposerFragmentInDraft(attrs.chatId, attrs.fragment);
   return m(
     "button",
     {
@@ -111,7 +120,7 @@ function pill(attrs: PillAttrs): m.Vnode {
       "aria-pressed": isPressed ? "true" : "false",
       disabled: !attrs.isLive,
       onclick: () => {
-        toggleComposerFragment(attrs.chatId, attrs.label);
+        toggleComposerFragment(attrs.chatId, attrs.fragment);
         if (!isPressed) attrs.onAdded?.();
       },
     },
@@ -128,12 +137,24 @@ function categoryPicker(chatId: string, isLive: boolean): m.Vnode {
       role: "group",
       "aria-label": "What do you want to use this Studio for?",
     },
-    PICKER_CATEGORY_COLUMNS.map((column) =>
+    PICKER_CATEGORY_COLUMNS.map((column, index) =>
       m("div", { key: column.title, class: "studio-picker-column flex min-w-0 flex-col items-start gap-1.5" }, [
         m("div", { key: "title", class: "studio-picker-heading" }, column.title),
         ...column.categories.map((category) =>
-          pill({ chatId, label: category, isLive, mark: null, onAdded: showPickerSendHintOnce }),
+          pill({ chatId, label: category, fragment: category, isLive, mark: null, onAdded: showPickerSendHintOnce }),
         ),
+        ...(index === PICKER_CATEGORY_COLUMNS.length - 1
+          ? [
+              pill({
+                chatId,
+                label: PICKER_OTHER_LABEL,
+                fragment: CATEGORY_PICKER_OTHER_PROMPT,
+                isLive,
+                mark: null,
+                onAdded: showPickerSendHintOnce,
+              }),
+            ]
+          : []),
       ]),
     ),
   );
@@ -153,9 +174,26 @@ function connectorPicker(chatId: string, isLive: boolean): m.Vnode {
       role: "group",
       "aria-label": "Which apps do you use most?",
     },
-    PICKER_CONNECTORS.map((connector) =>
-      pill({ chatId, label: connector.name, isLive, mark: connectorMark(connector), onAdded: null }),
-    ),
+    [
+      ...PICKER_CONNECTORS.map((connector) =>
+        pill({
+          chatId,
+          label: connector.name,
+          fragment: connector.name,
+          isLive,
+          mark: connectorMark(connector),
+          onAdded: null,
+        }),
+      ),
+      pill({
+        chatId,
+        label: PICKER_OTHER_LABEL,
+        fragment: CONNECTOR_PICKER_OTHER_PROMPT,
+        isLive,
+        mark: null,
+        onAdded: null,
+      }),
+    ],
   );
 }
 

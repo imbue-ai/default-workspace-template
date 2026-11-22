@@ -14,7 +14,14 @@ vi.mock("./service-marks", () => ({
 }));
 
 import { readComposerDraft } from "../models/ComposerDraft";
-import { PICKER_CATEGORY_COLUMNS, PICKER_CONNECTORS, StudioPicker } from "./StudioPickers";
+import {
+  CATEGORY_PICKER_OTHER_PROMPT,
+  CONNECTOR_PICKER_OTHER_PROMPT,
+  PICKER_CATEGORY_COLUMNS,
+  PICKER_CONNECTORS,
+  PICKER_OTHER_LABEL,
+  StudioPicker,
+} from "./StudioPickers";
 
 const CHAT = "agent-first-run";
 let root: HTMLElement;
@@ -47,7 +54,7 @@ beforeEach(() => {
 });
 
 describe("the category picker", () => {
-  it("draws the twenty-one categories in three titled columns", () => {
+  it("draws the twenty-three categories in three titled columns, and Other at the end of the last", () => {
     draw("category_picker");
 
     const columns = [...root.querySelectorAll(".studio-picker-column")];
@@ -56,9 +63,45 @@ describe("the category picker", () => {
       "Life",
       "Creative",
     ]);
-    expect(columns.map((column) => column.querySelectorAll(".studio-picker-pill").length)).toEqual([8, 8, 5]);
-    expect(PICKER_CATEGORY_COLUMNS.flatMap((column) => column.categories)).toHaveLength(21);
-    expect(pill("Books, movies & music").disabled).toBe(false);
+    expect(columns.map((column) => column.querySelectorAll(".studio-picker-pill").length)).toEqual([8, 8, 8]);
+    expect(PICKER_CATEGORY_COLUMNS.flatMap((column) => column.categories)).toHaveLength(23);
+    expect([...columns[2].querySelectorAll(".studio-picker-pill")].map((each) => each.textContent)).toEqual([
+      "Writing",
+      "Art & design",
+      "Film & video",
+      "Game dev",
+      "Books",
+      "Movies",
+      "Music",
+      PICKER_OTHER_LABEL,
+    ]);
+    expect(pill("Music").disabled).toBe(false);
+  });
+
+  it("puts a prompt to write over in the draft for Other, which toggles and reads as pressed like any pill", () => {
+    draw("category_picker");
+    pill("Money").click();
+    draw("category_picker");
+    pill(PICKER_OTHER_LABEL).click();
+    draw("category_picker");
+
+    expect(readComposerDraft(CHAT)).toBe(`Money, ${CATEGORY_PICKER_OTHER_PROMPT}, `);
+    expect(pressedLabels()).toEqual(["Money", PICKER_OTHER_LABEL]);
+    expect(mocks.showPickerSendHintOnce).toHaveBeenCalledTimes(2);
+
+    pill(PICKER_OTHER_LABEL).click();
+    draw("category_picker");
+
+    expect(readComposerDraft(CHAT)).toBe("Money, ");
+    expect(pressedLabels()).toEqual(["Money"]);
+  });
+
+  it("does not read Other as pressed from a draft that only says Other", () => {
+    localStorage.setItem(`message-text:${CHAT}`, `${PICKER_OTHER_LABEL}, `);
+
+    draw("category_picker");
+
+    expect(pressedLabels()).toEqual([]);
   });
 
   it("puts each category clicked into the draft in the order clicked, and takes one out on a second click", () => {
@@ -110,11 +153,15 @@ describe("the category picker", () => {
 });
 
 describe("the connector picker", () => {
-  it("draws the fifteen apps in order, each with its mark where one is bundled and by name alone otherwise", () => {
+  it("draws the fifteen apps in order, each with its mark where one is bundled and by name alone otherwise, then Other", () => {
     draw("connector_picker");
 
-    expect(pills().map((each) => each.textContent)).toEqual(PICKER_CONNECTORS.map((connector) => connector.name));
-    expect(pills()).toHaveLength(15);
+    expect(pills().map((each) => each.textContent)).toEqual([
+      ...PICKER_CONNECTORS.map((connector) => connector.name),
+      PICKER_OTHER_LABEL,
+    ]);
+    expect(PICKER_CONNECTORS).toHaveLength(15);
+    expect(pill(PICKER_OTHER_LABEL).querySelector("img")).toBeNull();
     expect(pill("Gmail").querySelector("img")?.getAttribute("src")).toBe("/assets/google-gmail.svg");
     expect(pill("Notion").querySelector("img")?.getAttribute("src")).toBe("/assets/notion-mcp.svg");
     for (const name of ["Instagram", "YouTube", "HubSpot"]) {
@@ -133,6 +180,23 @@ describe("the connector picker", () => {
     expect(pressedLabels()).toEqual(["Gmail", "Google Calendar"]);
     expect(mocks.showPickerSendHintOnce).not.toHaveBeenCalled();
   });
+
+  it("puts its own prompt in the draft for Other, and never asks for the send hint", () => {
+    draw("connector_picker");
+    pill("Gmail").click();
+    draw("connector_picker");
+    pill(PICKER_OTHER_LABEL).click();
+    draw("connector_picker");
+
+    expect(readComposerDraft(CHAT)).toBe(`Gmail, ${CONNECTOR_PICKER_OTHER_PROMPT}, `);
+    expect(pressedLabels()).toEqual(["Gmail", PICKER_OTHER_LABEL]);
+    expect(mocks.showPickerSendHintOnce).not.toHaveBeenCalled();
+
+    pill(PICKER_OTHER_LABEL).click();
+    draw("connector_picker");
+
+    expect(readComposerDraft(CHAT)).toBe("Gmail, ");
+  });
 });
 
 describe("the first-run skill", () => {
@@ -149,5 +213,21 @@ describe("the first-run skill", () => {
     }
     const names = PICKER_CONNECTORS.map((connector) => connector.name);
     expect(skill).toContain(`The picker offers ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}.`);
+  });
+
+  it("tells the agent what the Other pills put in a message, and lists Other as no category and no app", () => {
+    const skill = readFileSync(
+      join(__dirname, "../../../../../../.agents/skills/first-run-onboarding/SKILL.md"),
+      "utf8",
+    );
+
+    // Either prompt arriving unchanged has to read as nothing picked, so the skill quotes both word for word.
+    expect(skill).toContain(`"${CATEGORY_PICKER_OTHER_PROMPT}"`);
+    expect(skill).toContain(`"${CONNECTOR_PICKER_OTHER_PROMPT}"`);
+    const offered = [
+      ...PICKER_CATEGORY_COLUMNS.flatMap((column) => column.categories),
+      ...PICKER_CONNECTORS.map((connector) => connector.name),
+    ];
+    expect(offered).not.toContain(PICKER_OTHER_LABEL);
   });
 });

@@ -35,6 +35,8 @@ Below are some example apps for each category:
 | Art & design | Client and booking tracker; Commission tracker; Creative brief from a client email; Portfolio site |
 | Film & video | Shoot planner and shot list; YouTube video pipeline; Editing clients and invoices |
 | Game dev | Indie game production tracker; Living game design doc; Playtest feedback log |
-| Books, movies & music | Movie and TV watchlist; Reading tracker with goals; Song ideas bank; Game library |
+| Books | Reading tracker with goals; Book club picks and notes; Quotes and highlights library |
+| Movies | Movie and TV watchlist; Movie night picker; Watched log with ratings |
+| Music | Song ideas bank; Practice log and setlist builder; Concert tracker |
 
 When turning the above into suggestions for a category, try to make novel or interesting twists on them rather than just suggesting something basic like "a todo tracker"

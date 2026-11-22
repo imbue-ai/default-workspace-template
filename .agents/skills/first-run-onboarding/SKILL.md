@@ -71,7 +71,9 @@ The picker offers these categories, and the user's answer is the ones they picke
 
 - Work: Knowledge work, Team projects, Sales, Marketing, Operations, Recruiting, Fundraising, Small business
 - Life: Personal, Money, Health, Home & family, Travel & events, Job search, School, Notes & archives
-- Creative: Writing, Art & design, Film & video, Game dev, Books, movies & music
+- Creative: Writing, Art & design, Film & video, Game dev, Books, Movies, Music
+
+The pickers' "Other" pills put "Write whatever you want!" and "Write whatever data you want here!" in the message as prompts to write over, so either sentence arriving unchanged names no category and no app.
 
 ### B2: the apps they use
 
