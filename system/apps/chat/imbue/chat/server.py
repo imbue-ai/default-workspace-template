@@ -874,6 +874,13 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
         state.chat_namer.consider_message(chat_id, without_dictation_notes(message))
 
 
+def _advance_first_run_tree(state: ChatAppState, chat_id: ChatId, message: str) -> None:
+    """Move a first-run chat's first conversation on by a message its user sent that the chat took, delivered or
+    held for its agent (``first_run_tree.py``): the words alone, as the namer reads them. A send the chat refused
+    moves nothing, since the user sends it again."""
+    state.agent_manager.advance_first_run_tree(chat_id, without_dictation_notes(message))
+
+
 # The send-failure kind a chat whose account was signed out answers with. The composer already
 # offers "Choose a provider" in place of the input from the account list, so only a page whose
 # list has not caught up with the sign-out sends and meets this.
@@ -1287,6 +1294,7 @@ def _send_message(
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
         if held is not None:
+            _advance_first_run_tree(state, ChatId(chat_id), send_message_request.message)
             _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
             return held
         # The create may have landed between the lookup and the hold, which then refuses.
@@ -1306,6 +1314,8 @@ def _send_message(
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
+    if not accepted.is_withdrawn:
+        _advance_first_run_tree(state, ChatId(chat_id), send_message_request.message)
     _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
@@ -2239,6 +2249,8 @@ def _run_create_chat() -> CreatedChat | Response:
         state.authors.record(created.chat_id, attributed.annotation)
     if create_request.kind is not ChatKind.ROOM:
         _consider_naming_chat(state, created.chat_id, create_request.message)
+        if create_request.message:
+            _advance_first_run_tree(state, created.chat_id, create_request.message)
         _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
         return created
@@ -2499,6 +2511,8 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
+    if not accepted.is_withdrawn:
+        _advance_first_run_tree(state, chat_id, intake.message)
     _act_on_accepted_send(state, chat_id, message_id, intake.message, identity)
     return None
 

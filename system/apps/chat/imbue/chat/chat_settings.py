@@ -79,6 +79,11 @@ class ChatSettings(FrozenModel):
         default=True,
         description="Whether things to try in Studio are offered on a chat with no message yet",
     )
+    is_picker_send_hint_shown: bool = Field(
+        default=False,
+        description="Whether the one-time hint pointing at the send button, shown on the first pick from a "
+        "first-run picker, has been shown",
+    )
 
 
 class SuggestionSettingsUpdate(FrozenModel):

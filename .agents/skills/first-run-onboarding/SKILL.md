@@ -1,6 +1,6 @@
 ---
 name: first-run-onboarding
-description: Use only when the context block at the top of a chat's first message says this is the user's first conversation in a new workspace and tells you to read this skill. Holds the exact reply to each start suggestion offered under the welcome's "How do you want to start?" ("Describe what you want to make", "See what Studio can do"). Not for any other chat, and not for later messages in that one.
+description: Use only when the context block at the top of a chat's first message says this is the user's first conversation in a new workspace and tells you to read this skill. Holds the exact reply to each start suggestion offered under the welcome's "How do you want to start?" ("Describe what you want to make", "Get ideas for what to make", "See what Studio can do"), and the scripted questions and idea lists that follow "Get ideas for what to make". Not for any other chat, and not once the scripted conversation has ended.
 metadata:
   author: imbue
 ---
@@ -11,15 +11,18 @@ A new workspace opens on a chat that already shows a welcome ending in "**How do
 The user's first message answers that question, usually by clicking a suggestion, which sends the suggestion's words exactly.
 The reply to a suggestion is scripted: this file holds its text, and you send it word for word.
 
-This applies to one message only: the one that arrived with the context block that sent you here.
+The script starts at the message that arrived with the context block that sent you here.
+Paths A and C end with your first reply.
+Path B runs over the next few messages, and this file says where it ends.
 
 ## The start
 
-Compare that message, trimmed, with the suggestions:
+Compare that first message, trimmed, with the suggestions:
 
 | The message | What to do |
 |---|---|
 | `Describe what you want to make` | Path A |
+| `Get ideas for what to make` | Path B |
 | `See what Studio can do` | Path C |
 | Anything else | An ordinary request: answer it as you would in any chat, and stop following this skill. |
 
@@ -31,7 +34,7 @@ A message that holds more than the suggestion's words is "anything else".
 A scripted reply is conversation, not work:
 
 - Create no progress steps for it (no `tk create --step`) and send no notification.
-- Use no tools, except the one command path C names.
+- Use no tools, except the one command path C names and the one file read path B names.
 - Send the text as written here: the same words, headings, bold and list, with nothing before or after it.
 - Do not mention this skill, or that the reply was prepared.
 
@@ -48,6 +51,109 @@ Describe something your current apps don't quite do, a task that takes too long,
 ```
 
 Then stop following this skill: what the user says next is an ordinary request.
+
+## Path B: "Get ideas for what to make"
+
+Two questions, then a list of ideas that fits both answers.
+The chat draws a picker where a reply carries a picker tag, and offers suggestions under your replies on its own, so write no list of options yourself.
+
+### B1: what the workspace is for
+
+Reply with exactly this message, the tag on a line of its own:
+
+```
+**What do you want to use this Studio for?**
+
+<studio_category_picker/>
+```
+
+The picker offers these categories, and the user's answer is the ones they picked, in the order they picked them, or words of their own:
+
+- Work: Knowledge work, Team projects, Sales, Marketing, Operations, Recruiting, Fundraising, Small business
+- Life: Personal, Money, Health, Home & family, Travel & events, Job search, School, Notes & archives
+- Creative: Writing, Art & design, Film & video, Game dev, Books, movies & music
+
+### B2: the apps they use
+
+Whatever their answer to B1 names, reply with exactly this message, the tag on a line of its own:
+
+```
+**Which apps do you use most?**
+
+We'll suggest things to build around them.
+
+<studio_connector_picker/>
+```
+
+The picker offers Gmail, Google Calendar, GitHub, Slack, Notion, Google Drive, Google Sheets, Stripe, Instagram, YouTube, Strava, HubSpot, Asana, Todoist and Linear.
+Nothing is connected at this step: the answer only tells you what to suggest.
+
+### B3: the ideas
+
+Their answer to B2 is the apps they use, or `Show me some ideas` alone, which means no apps.
+An answer that names apps and ends with `Show me some ideas` names those apps.
+
+Read `references/app-ideas.md` (beside this file), then send one message.
+It opens with this line, their categories joined as a phrase in bold and their apps as a phrase:
+
+```
+Here are some ideas for what you might want to build for **<their categories>** with your <their apps>:
+```
+
+For example: "Here are some ideas for what you might want to build for **Sales and Money** with your Gmail, Google Calendar and Stripe:".
+With no apps, leave " with your <their apps>" out.
+
+Under it comes a bulleted list, one idea per item, each written exactly in this form:
+
+```
+- **<idea name>**: <one or two sentences on what it is and does> (<the apps of theirs it would use>).
+```
+
+The chat reads each idea's name from that form, the bold text that opens a list item, and offers it as a suggestion the user can click.
+So the idea name is short (a few words, well under 80 characters), has no punctuation, is bold, and opens its item; use bold nowhere else in the list.
+Leave the parentheses out for an idea that uses none of their apps.
+
+Which ideas:
+
+- One category: three ideas.
+  Two or more: four, taking turns between the categories so each is represented, leading with the category they named first.
+- A category of their own (not one of the listed ones): its first idea is made for exactly what they typed and named after it; the rest come from the closest listed category, or from Personal when none is close.
+- An app of their own (not one of the listed ones): name it in the opening line and in the reply to a picked idea; do not repeat it on every idea, and do not let it change which ideas are shown.
+- Prefer a clever, specific twist over a generic tracker, and vary the ideas.
+
+The chat offers one suggestion per idea under the list, then `More ideas` and `Something else`.
+What the user sends next decides the reply:
+
+| The message | What to do |
+|---|---|
+| `More ideas` | Send five more ideas, none repeated, in the same item form, opening with exactly `A few more:`. The same three kinds of message can follow it. |
+| The name of an idea you listed | Reply with the line below, then build it. |
+| `Something else` | Reply with the two paragraphs below. |
+| Anything else | An ordinary request: answer it, and stop following this skill. |
+
+An idea picked:
+
+```
+Great. I'll start with a quick sketch of **<idea>** using your real <their apps> data, so you can steer it before I build the real thing.
+```
+
+Leave " using your real <their apps> data" out when none of their apps apply to the idea.
+Then stop following this skill and build the idea as any app is built (the `build-app` skill), starting with its mock: from here it is work, with progress steps and a notification as usual.
+
+`Something else`:
+
+```
+Sure. Describe the problem you'd like to solve.
+
+Provide as much context as possible. Use the voice input button to just ramble!
+```
+
+Then stop following this skill: what the user says next is an ordinary request.
+
+### When the user leaves the script
+
+At B1 and B2 the answer is the user's own words, so go on to the next question even when it is not what you expected (a category of their own, an app you do not know, a shrug).
+Only a message that is plainly something else, such as a question for you or a request to build a particular thing, ends the script: answer it as an ordinary request and stop following this skill.
 
 ## Path C: "See what Studio can do"
 

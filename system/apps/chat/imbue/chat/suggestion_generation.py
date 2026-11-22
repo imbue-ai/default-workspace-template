@@ -9,6 +9,9 @@ are there when its user comes back to it.
 A turn's end always settles the stored set: it is replaced when the model suggests something, and
 removed when it suggests nothing, when the call fails, and when nothing is asked at all, so a set
 never outlives the reply it was made for. A reply is asked about once; a failed call is not retried.
+
+The scripted replies of a first-run chat's first conversation get their sets from the tree instead
+(``first_run_tree.py``), stored here at the same turn's end with no model asked.
 """
 
 import re
@@ -33,6 +36,8 @@ from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import tagged_turns
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.dictation_note import without_dictation_notes
+from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import fixed_suggestions
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.one_shot import OneShotCompletion
@@ -44,6 +49,8 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import MAX_SUGGESTION_COUNT
+from imbue.chat.suggestions import MAX_SUGGESTION_LABEL_LENGTH
 from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.suggestions import read_chat_suggestions
@@ -63,8 +70,6 @@ _MAX_PROMPT_CHARACTERS: Final[int] = 12_000
 _CUT_MARK: Final[str] = "[...]\n"
 # How far back the transcript is read for those turns: a turn of work is mostly tool calls and their results.
 _TAIL_EVENT_COUNT: Final[int] = 300
-_MAX_SUGGESTION_COUNT: Final[int] = 10
-_MAX_LABEL_LENGTH: Final[int] = 80
 # Room to draft, critique and redraft before answering, as the prompt asks.
 _THINKING_TOKEN_ALLOWANCE: Final[int] = 4000
 
@@ -103,6 +108,16 @@ Only one suggestion should ever be recommended (and it is the first one).
 
 Write each suggestion as the user would say it, in the user's voice, in the language the user writes in.
 Do all of your drafting and critiquing in your thinking. Your response should ONLY include "<suggestion>...</suggestion>" entries (one per line). Don't reply with anything else."""
+
+# Added to the prompt for a reply at the tree's ideas step whose ideas the chat app could not read for itself.
+FIXED_ONBOARDING_SUGGESTIONS_SECTION: Final[str] = """\
+# Fixed onboarding suggestions
+
+This is the user's first conversation in a new workspace, and the assistant is following a fixed script. Its last response should be a list of ideas for things to build.
+
+If it is, emit one suggestion per idea in that response, in order, each being that idea's name as short as the response gives it; then "More ideas"; then "Something else". Use only the ideas of the last response, not of earlier ones, mark none as recommended, and ignore the usual limit of 2 or 3.
+
+If the assistant's last response is not a list of ideas, ignore this section."""
 
 
 class ConversationEnd(FrozenModel):
@@ -220,16 +235,16 @@ def parse_generated_suggestions(answer: str) -> tuple[Suggestion, ...]:
     """The suggestions in a model's answer, in order; none is a valid answer.
 
     Only the ``<suggestion>`` elements are read, so whatever else the model wrote (a draft, a critique) is no part
-    of the set. A label is kept when it is one line of 1 to ``_MAX_LABEL_LENGTH`` characters and no earlier one says
-    the same, up to ``_MAX_SUGGESTION_COUNT`` of them; only the first one kept may be the recommended one.
+    of the set. A label is kept when it is one line of 1 to ``MAX_SUGGESTION_LABEL_LENGTH`` characters and no earlier one says
+    the same, up to ``MAX_SUGGESTION_COUNT`` of them; only the first one kept may be the recommended one.
     """
     suggestions: list[Suggestion] = []
     seen_labels: set[str] = set()
     for element in _SUGGESTION_PATTERN.finditer(answer):
-        if len(suggestions) == _MAX_SUGGESTION_COUNT:
+        if len(suggestions) == MAX_SUGGESTION_COUNT:
             break
         label = element.group("label").strip()
-        if not label or len(label) > _MAX_LABEL_LENGTH or "\n" in label or label.casefold() in seen_labels:
+        if not label or len(label) > MAX_SUGGESTION_LABEL_LENGTH or "\n" in label or label.casefold() in seen_labels:
             continue
         seen_labels.add(label.casefold())
         is_marked_recommended = _RECOMMENDED_PATTERN.search(element.group("attributes") or "") is not None
@@ -254,11 +269,9 @@ def reason_reply_gets_no_suggestions(end: ConversationEnd) -> str | None:
 
 
 @pure
-def reason_chat_gets_no_suggestions(snapshot: ChatSnapshot | None, settings: ChatSettings) -> str | None:
-    """Why no replies are suggested in the chat as it stands; None when it is an agent chat a person talks to,
-    waiting on that person, with next-step suggestions switched on."""
-    if not settings.is_next_step_suggestions_enabled:
-        return "next-step suggestions are switched off"
+def reason_chat_awaits_no_reply(snapshot: ChatSnapshot | None) -> str | None:
+    """Why the chat as it stands has nobody to suggest a reply to; None when it is an agent chat a person talks
+    to, waiting on that person."""
     if snapshot is None:
         return "it is not a chat the app lists"
     if snapshot.kind is ChatKind.ROOM:
@@ -271,6 +284,15 @@ def reason_chat_gets_no_suggestions(snapshot: ChatSnapshot | None, settings: Cha
     if agent.queued_messages or agent.is_connecting or agent.is_resending_after_sign_in:
         return "a message is on its way to its agent"
     return None
+
+
+@pure
+def reason_chat_gets_no_suggestions(snapshot: ChatSnapshot | None, settings: ChatSettings) -> str | None:
+    """Why no model is asked for replies in the chat as it stands; None when it awaits a reply from a person,
+    with next-step suggestions switched on."""
+    if not settings.is_next_step_suggestions_enabled:
+        return "next-step suggestions are switched off"
+    return reason_chat_awaits_no_reply(snapshot)
 
 
 def _log_generation_failure(chat_id: ChatId, future: Future[None]) -> None:
@@ -305,6 +327,10 @@ class SuggestionGenerator(MutableModel):
     )
     broadcast_suggestions_updated: Callable[[ChatId], None] = Field(
         frozen=True, description="Tells every page that a chat's stored set was replaced or removed"
+    )
+    get_first_run_tree_step: Callable[[ChatId], FirstRunTreeStep | None] = Field(
+        frozen=True,
+        description="Where a first-run chat's first conversation stands; None for a chat that is no first-run chat",
     )
     executor: Executor = Field(
         frozen=True, description="Where suggestions are worked out, off the thread that saw the turn end"
@@ -355,7 +381,9 @@ class SuggestionGenerator(MutableModel):
 
     def _settle_turn_end(self, chat_id: ChatId) -> None:
         stored = read_chat_suggestions(self.chat_files_root / chat_id)
-        if stored is None:
+        tree_step = self.get_first_run_tree_step(chat_id)
+        is_tree_in_progress = tree_step is not None and tree_step is not FirstRunTreeStep.DONE
+        if stored is None and not is_tree_in_progress:
             # Reading a chat's transcript starts following it, so a chat with nothing to ask about and no set to
             # remove is not read: a worker's, a room's, and every chat's while the switch is off.
             reason = reason_chat_gets_no_suggestions(self.get_chat_snapshot(chat_id), self.read_chat_settings())
@@ -369,8 +397,21 @@ class SuggestionGenerator(MutableModel):
         end = read_conversation_end(events)
         if end is not None and stored is not None and stored.after_event_id == end.reply_event_id:
             return
-        ask = None if end is None else self._question_about(chat_id, end)
-        if end is None or ask is None:
+        if end is None:
+            self._store(chat_id, None)
+            return
+        fixed = None if tree_step is None else fixed_suggestions(tree_step, end.reply_text)
+        if fixed is not None:
+            self._store(chat_id, self._fixed_set_under(chat_id, end, fixed))
+            return
+        # Only a reply at the ideas step reaches here with the tree in progress: one whose ideas were not read.
+        system_prompt = (
+            f"{SUGGESTION_GENERATION_SYSTEM_PROMPT}\n\n{FIXED_ONBOARDING_SUGGESTIONS_SECTION}"
+            if tree_step is FirstRunTreeStep.IDEAS
+            else SUGGESTION_GENERATION_SYSTEM_PROMPT
+        )
+        ask = self._question_about(chat_id, end, system_prompt)
+        if ask is None:
             self._store(chat_id, None)
             return
         # The mark covers the call alone: a page reads the route on the push the store sends, and the route answers
@@ -393,7 +434,23 @@ class SuggestionGenerator(MutableModel):
         )
         self._store(chat_id, generated)
 
-    def _question_about(self, chat_id: ChatId, end: ConversationEnd) -> Callable[[], str] | None:
+    def _fixed_set_under(
+        self, chat_id: ChatId, end: ConversationEnd, suggestions: tuple[Suggestion, ...]
+    ) -> ChatSuggestions | None:
+        """The tree's suggestions as the set stored under the chat's last reply; None when it offers none there, or
+        the chat is not waiting on its user under a reply the agent wrote. The switch plays no part: the page hides
+        a set while it is off, and the set is there should it come back on."""
+        reason = reason_reply_gets_no_suggestions(end) or reason_chat_awaits_no_reply(self.get_chat_snapshot(chat_id))
+        if reason is not None:
+            logger.debug("Offered none of the first conversation's replies in chat {}: {}", chat_id, reason)
+            return None
+        if not suggestions:
+            return None
+        return ChatSuggestions(
+            after_event_id=end.reply_event_id, source=SuggestionSource.FIXED, suggestions=suggestions
+        )
+
+    def _question_about(self, chat_id: ChatId, end: ConversationEnd, system_prompt: str) -> Callable[[], str] | None:
         """The call that asks a model for replies to the chat's last reply; None, with the reason logged, when
         none is to be asked."""
         reason = reason_reply_gets_no_suggestions(end) or reason_chat_gets_no_suggestions(
@@ -416,7 +473,7 @@ class SuggestionGenerator(MutableModel):
         prompt = suggestion_generation_prompt(end)
         return lambda: completion.complete(
             account_dir,
-            SUGGESTION_GENERATION_SYSTEM_PROMPT,
+            system_prompt,
             prompt,
             model_tier=OneShotModelTier.MEDIUM,
             thinking_token_allowance=_THINKING_TOKEN_ALLOWANCE,

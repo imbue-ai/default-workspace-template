@@ -28,6 +28,9 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.first_run_tree import START_DESCRIBE_LABEL
+from imbue.chat.first_run_tree import START_FEATURES_LABEL
+from imbue.chat.first_run_tree import START_IDEAS_LABEL
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.primitives import ChatId
@@ -53,12 +56,8 @@ INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
 # The file that marks a chat as the one a first-run workspace opened on. It holds what the user told Imbue
 # Studio's first run about themselves (nothing, from an app that does not ask), read only into the first send.
 FIRST_RUN_CONTEXT_FILENAME: Final[str] = "first_run_context.txt"
-# The skill a first-run chat's first agent is told to follow: it holds the reply to each start suggestion.
+# The skill a first-run chat's first agent is told to follow: it holds the reply to each suggestion of the tree.
 FIRST_RUN_SKILL_PATH: Final[str] = ".agents/skills/first-run-onboarding/SKILL.md"
-# The replies offered under the first-run welcome. The skill names the same words, so a click and its reply
-# stay matched only while the two are edited together.
-START_DESCRIBE_LABEL: Final[str] = "Describe what you want to make"
-START_FEATURES_LABEL: Final[str] = "See what Studio can do"
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -96,6 +95,7 @@ def first_run_start_suggestions(chat_id: ChatId, turns: tuple[SeedTurn, ...]) ->
         source=SuggestionSource.FIXED,
         suggestions=(
             Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL),
+            Suggestion(suggestion_id="start-ideas", label=START_IDEAS_LABEL),
             Suggestion(suggestion_id="start-features", label=START_FEATURES_LABEL),
         ),
     )

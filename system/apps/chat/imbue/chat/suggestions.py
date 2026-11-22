@@ -21,6 +21,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 
 SUGGESTIONS_FILENAME: Final[str] = "suggestions.json"
 SUGGESTIONS_FILE_VERSION: Final[int] = 1
+# What a set worked out from a reply may hold: a label is one line of at most this many characters, and a set at
+# most this many suggestions.
+MAX_SUGGESTION_LABEL_LENGTH: Final[int] = 80
+MAX_SUGGESTION_COUNT: Final[int] = 10
 
 
 class SuggestionSource(LowerCaseStrEnum):

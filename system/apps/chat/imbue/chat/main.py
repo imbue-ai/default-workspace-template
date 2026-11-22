@@ -258,6 +258,7 @@ def install_suggestion_generator(
         resolve_chat_account_binding=agent_manager.resolve_chat_account_binding,
         build_one_shot_completion=build_completion,
         broadcast_suggestions_updated=state.broadcaster.broadcast_suggestions_updated,
+        get_first_run_tree_step=agent_manager.get_first_run_tree_step,
         executor=executor,
     )
     state.suggestion_generator = suggestion_generator

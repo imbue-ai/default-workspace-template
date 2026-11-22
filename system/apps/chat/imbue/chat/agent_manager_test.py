@@ -94,8 +94,6 @@ from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
-from imbue.chat.chat_seed import START_DESCRIBE_LABEL
-from imbue.chat.chat_seed import START_FEATURES_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -107,6 +105,11 @@ from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
 from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.first_run_tree import FIRST_RUN_TREE_FILENAME
+from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import START_DESCRIBE_LABEL
+from imbue.chat.first_run_tree import START_FEATURES_LABEL
+from imbue.chat.first_run_tree import START_IDEAS_LABEL
 from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
@@ -1028,10 +1031,88 @@ def test_a_first_run_seed_offers_the_start_suggestions_under_the_welcomes_last_t
             source=SuggestionSource.FIXED,
             suggestions=(
                 Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL, is_recommended=False),
+                Suggestion(suggestion_id="start-ideas", label=START_IDEAS_LABEL, is_recommended=False),
                 Suggestion(suggestion_id="start-features", label=START_FEATURES_LABEL, is_recommended=False),
             ),
         )
         assert manager.get_chat_suggestions(ChatId(ordinary.chat_id)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_chats_tree_starts_at_the_welcome_and_moves_with_each_message_its_user_sends(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        chat_id = ChatId(manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id)
+        steps = [manager.get_first_run_tree_step(chat_id)]
+
+        for message in (START_IDEAS_LABEL, "Sales, Money, ", "Show me some ideas", "More ideas", "Something else"):
+            manager.advance_first_run_tree(chat_id, message)
+            steps.append(manager.get_first_run_tree_step(chat_id))
+
+        assert steps == [
+            FirstRunTreeStep.START,
+            FirstRunTreeStep.CATEGORIES,
+            FirstRunTreeStep.CONNECTORS,
+            FirstRunTreeStep.IDEAS,
+            FirstRunTreeStep.IDEAS,
+            FirstRunTreeStep.DONE,
+        ]
+    finally:
+        manager.stop()
+
+
+def test_a_slash_command_leaves_a_first_run_chats_tree_where_it_stands(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A command is a word to the harness, not an answer to the welcome, so the start suggestions still apply."""
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        chat_id = ChatId(manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id)
+
+        manager.advance_first_run_tree(chat_id, "/model")
+
+        assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.START
+    finally:
+        manager.stop()
+
+
+def test_a_chat_that_is_no_first_run_chat_has_no_tree(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        chat_id = ChatId(manager.seed_chat("Getting started", _seed_turns()).chat_id)
+
+        manager.advance_first_run_tree(chat_id, START_IDEAS_LABEL)
+
+        assert manager.get_first_run_tree_step(chat_id) is None
+        assert not (_seed_files_root(tmp_path) / chat_id / FIRST_RUN_TREE_FILENAME).exists()
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_chat_seeded_before_the_tree_was_recorded_is_at_the_start_until_its_agent_joins(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace updated across the change keeps a first conversation already under way out of the tree."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True)
+        chat_id = ChatId(seeded.chat_id)
+        (_seed_files_root(tmp_path) / chat_id / FIRST_RUN_TREE_FILENAME).unlink()
+        step_before_any_agent = manager.get_first_run_tree_step(chat_id)
+
+        manager.finish_first_run_provider_step()
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
+
+        assert step_before_any_agent is FirstRunTreeStep.START
+        assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.DONE
     finally:
         manager.stop()
 

@@ -11,6 +11,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
@@ -27,6 +28,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.suggestion_generation import ConversationEnd
+from imbue.chat.suggestion_generation import FIXED_ONBOARDING_SUGGESTIONS_SECTION
 from imbue.chat.suggestion_generation import SUGGESTION_GENERATION_SYSTEM_PROMPT
 from imbue.chat.suggestion_generation import SuggestionGenerator
 from imbue.chat.suggestion_generation import conversation_turns
@@ -371,6 +373,8 @@ class _GenerationHarness:
         )
         self.completion = ScriptedOneShotCompletion(answers)
         self.is_harness_answering_questions = True
+        # Where the chat's first conversation stands; None for a chat that is no first-run chat.
+        self.tree_step: FirstRunTreeStep | None = None
         self.transcript_read_count = 0
         self.pushed_chat_ids: list[ChatId] = []
         # The reply the generator held as pending at each push, which is what a page's read on that push is answered.
@@ -383,6 +387,7 @@ class _GenerationHarness:
             resolve_chat_account_binding=lambda _chat_id: self.binding,
             build_one_shot_completion=self._build_completion,
             broadcast_suggestions_updated=self._push,
+            get_first_run_tree_step=lambda _chat_id: self.tree_step,
             executor=InlineExecutor(),
         )
 
@@ -694,3 +699,132 @@ def test_an_answer_arriving_after_the_generator_stopped_is_not_stored(tmp_path: 
 
     assert harness.stored() is None
     assert harness.pushed_chat_ids == []
+
+
+_IDEAS_REPLY = (
+    "Here are some ideas for what you might want to build for **Money** with your Stripe:\n\n"
+    "- **Subscription tracker**: every recurring charge in one place (Stripe).\n"
+    "- **Savings goals**: what you are saving for and how far along you are.\n"
+)
+
+
+def _at_the_tree_step(tmp_path: Path, step: FirstRunTreeStep, reply_text: str) -> _GenerationHarness:
+    """A first-run chat whose turn just ended on ``reply_text`` with its tree at ``step``, and a model that would
+    answer if asked."""
+    harness = _GenerationHarness(tmp_path, [_TWO_SUGGESTIONS])
+    harness.tree_step = step
+    harness.events = [_user("u1", "Get ideas for what to make"), _assistant("a1", reply_text)]
+    return harness
+
+
+def test_the_question_about_apps_gets_its_fixed_reply_with_no_model_asked(tmp_path: Path) -> None:
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.CONNECTORS, "**Which apps do you use most?**")
+
+    harness.end_turn()
+
+    assert harness.stored() == ChatSuggestions(
+        after_event_id="a1",
+        source=SuggestionSource.FIXED,
+        suggestions=(Suggestion(suggestion_id="show-ideas", label="Show me some ideas"),),
+    )
+    assert harness.pushed_chat_ids == [_CHAT_ID]
+    assert harness.completion.prompts == []
+
+
+def test_a_list_of_ideas_gets_one_fixed_reply_per_idea_with_no_model_asked(tmp_path: Path) -> None:
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.IDEAS, _IDEAS_REPLY)
+
+    harness.end_turn()
+
+    stored = harness.stored()
+    assert stored is not None and stored.source is SuggestionSource.FIXED and stored.after_event_id == "a1"
+    assert [suggestion.label for suggestion in stored.suggestions] == [
+        "Subscription tracker",
+        "Savings goals",
+        "More ideas",
+        "Something else",
+    ]
+    assert harness.completion.prompts == []
+
+
+def test_the_question_about_what_the_workspace_is_for_removes_the_start_set_and_offers_nothing(
+    tmp_path: Path,
+) -> None:
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.CATEGORIES, "**What do you want to use this Studio for?**")
+    harness.store_a_set_after("seed-3")
+
+    harness.end_turn()
+
+    assert harness.stored() is None
+    assert harness.pushed_chat_ids == [_CHAT_ID]
+    assert harness.completion.prompts == []
+
+
+@pytest.mark.parametrize("arrange", [_switch_off, _run_on_a_harness_with_no_one_shot_call, _lose_its_account])
+def test_the_trees_fixed_replies_need_neither_the_switch_nor_a_model(tmp_path: Path, arrange: Any) -> None:
+    """The page hides a set while the switch is off, and the tree works on a harness that answers no questions."""
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.IDEAS, _IDEAS_REPLY)
+    arrange(harness)
+
+    harness.end_turn()
+
+    stored = harness.stored()
+    assert stored is not None and stored.source is SuggestionSource.FIXED
+    assert len(stored.suggestions) == 4
+
+
+@pytest.mark.parametrize("arrange", [_end_on_a_provider_failure, _leave_it_waiting_on_a_background_task])
+def test_the_trees_fixed_replies_are_not_offered_where_no_reply_is_awaited(tmp_path: Path, arrange: Any) -> None:
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.CONNECTORS, "**Which apps do you use most?**")
+    harness.store_a_set_after("a0")
+    arrange(harness)
+
+    harness.end_turn()
+
+    assert harness.stored() is None
+    assert harness.completion.prompts == []
+
+
+def test_a_list_of_ideas_the_app_cannot_read_is_asked_about_with_the_onboarding_section(tmp_path: Path) -> None:
+    """The one case a model is asked while the tree is in progress: the ideas are there, in a form of the agent's
+    own, so the model is told what the fixed replies would have been."""
+    harness = _at_the_tree_step(
+        tmp_path, FirstRunTreeStep.IDEAS, "Some ideas: a subscription tracker, or a savings goals board."
+    )
+
+    harness.end_turn()
+
+    assert harness.completion.system_prompts == [
+        f"{SUGGESTION_GENERATION_SYSTEM_PROMPT}\n\n{FIXED_ONBOARDING_SUGGESTIONS_SECTION}"
+    ]
+    stored = harness.stored()
+    assert stored is not None and stored.source is SuggestionSource.GENERATED
+    assert [suggestion.label for suggestion in stored.suggestions] == ["Yes, add reminders", "Show me the app"]
+
+
+@pytest.mark.parametrize("step", [FirstRunTreeStep.START, FirstRunTreeStep.DONE])
+def test_a_reply_outside_the_trees_scripted_steps_is_asked_about_as_in_any_chat(
+    tmp_path: Path, step: FirstRunTreeStep
+) -> None:
+    harness = _at_the_tree_step(tmp_path, step, _IDEAS_REPLY)
+
+    harness.end_turn()
+
+    assert harness.completion.system_prompts == [SUGGESTION_GENERATION_SYSTEM_PROMPT]
+    stored = harness.stored()
+    assert stored is not None and stored.source is SuggestionSource.GENERATED
+
+
+def test_a_first_run_chat_whose_tree_is_done_is_left_unread_while_the_switch_is_off(tmp_path: Path) -> None:
+    harness = _at_the_tree_step(tmp_path, FirstRunTreeStep.DONE, "Built. Want reminders?")
+    _switch_off(harness)
+
+    harness.end_turn()
+
+    assert harness.transcript_read_count == 0
+    assert harness.stored() is None
+
+
+def test_the_onboarding_section_is_the_one_the_prompt_points_at() -> None:
+    assert FIXED_ONBOARDING_SUGGESTIONS_SECTION.startswith("# Fixed onboarding suggestions\n")
+    assert '"Fixed onboarding suggestions" section below' in SUGGESTION_GENERATION_SYSTEM_PROMPT

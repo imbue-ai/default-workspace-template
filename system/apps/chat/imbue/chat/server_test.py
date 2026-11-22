@@ -90,6 +90,7 @@ from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
@@ -4142,6 +4143,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
             "is_next_step_suggestions_enabled": True,
             "is_activity_suggestions_enabled": True,
             "is_new_chat_suggestions_enabled": True,
+            "is_picker_send_hint_shown": False,
         }
     }
 
@@ -4154,6 +4156,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "is_next_step_suggestions_enabled": False,
         "is_activity_suggestions_enabled": True,
         "is_new_chat_suggestions_enabled": False,
+        "is_picker_send_hint_shown": True,
     }
     response = client.put("/api/settings", json=replacement)
 
@@ -4185,6 +4188,7 @@ def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setti
         "is_next_step_suggestions_enabled": True,
         "is_activity_suggestions_enabled": False,
         "is_new_chat_suggestions_enabled": True,
+        "is_picker_send_hint_shown": False,
     }
     assert response.status_code == 200
     assert response.get_json() == {"settings": expected}
@@ -4255,9 +4259,56 @@ def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions
         "source": "fixed",
         "suggestions": [
             {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
+            {"suggestion_id": "start-ideas", "label": "Get ideas for what to make", "is_recommended": False},
             {"suggestion_id": "start-features", "label": "See what Studio can do", "is_recommended": False},
         ],
     }
+
+
+def test_a_first_message_that_launches_the_first_run_chat_moves_its_tree(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """With no agent yet, the first pick rides the create; the tree moves by it as it would by a send."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.START
+
+    response = client.post("/api/chats/create", json={"chat_id": chat_id, "message": "Get ideas for what to make"})
+    wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+
+    assert response.status_code == 201
+    assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.CATEGORIES
+
+
+def test_a_send_held_for_the_first_run_chats_agent_moves_its_tree_and_a_refused_one_does_not(
+    tmp_path: Path,
+) -> None:
+    """The step follows what the chat took: a send kept for the agent being created counts, since it is delivered
+    as that agent lands, and one the chat refused does not, since its user sends it again."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    chat_id = ChatId(client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"])
+
+    # Awaiting its first send, the chat has no agent to take a message through this route.
+    refused = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+    step_after_the_refusal = manager.get_first_run_tree_step(chat_id)
+    with manager._lock:
+        manager._provisional_chats[chat_id] = manager._provisional_chats[chat_id].model_copy_update(
+            to_update(manager._provisional_chats[chat_id].field_ref().phase, ProvisionalChatPhase.CREATING)
+        )
+    held = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+
+    assert refused.status_code == 404
+    assert step_after_the_refusal is FirstRunTreeStep.START
+    assert held.status_code == 202
+    assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.CATEGORIES
 
 
 def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:

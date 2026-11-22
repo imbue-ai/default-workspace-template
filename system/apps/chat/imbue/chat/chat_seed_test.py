@@ -10,7 +10,6 @@ from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
-from imbue.chat.chat_seed import START_FEATURES_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import first_run_start_suggestions
@@ -23,6 +22,11 @@ from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.first_run_tree import MORE_IDEAS_LABEL
+from imbue.chat.first_run_tree import SHOW_IDEAS_LABEL
+from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
+from imbue.chat.first_run_tree import START_FEATURES_LABEL
+from imbue.chat.first_run_tree import idea_names
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
@@ -209,7 +213,7 @@ def test_the_first_run_welcome_is_the_agents_introduction_ending_on_how_to_start
     ]
 
 
-def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_neither() -> None:
+def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_none() -> None:
     """The page shows a set only under the message it names, so the set names the seed's last event."""
     suggestions = first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME)
 
@@ -218,6 +222,7 @@ def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_neith
     assert suggestions.after_event_id == seed_events(_CHAT_ID, FIRST_RUN_WELCOME, _CREATED_AT)[-1]["event_id"]
     assert [(each.suggestion_id, each.label, each.is_recommended) for each in suggestions.suggestions] == [
         ("start-describe", "Describe what you want to make", False),
+        ("start-ideas", "Get ideas for what to make", False),
         ("start-features", "See what Studio can do", False),
     ]
 
@@ -257,3 +262,15 @@ def test_the_onboarding_skill_answers_every_start_suggestion_by_its_exact_words(
     for suggestion in first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME).suggestions:
         assert f"| `{suggestion.label}` |" in skill
     assert FIRST_RUN_WELCOME[-1].text in skill
+
+
+def test_the_onboarding_skill_and_the_tree_agree_on_the_replies_offered_under_the_ideas() -> None:
+    """The chat app reads each idea's name from the form the skill has the agent write, and offers the two fixed
+    replies the skill answers: one contract kept in two files."""
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+
+    (item_form,) = [line for line in skill.splitlines() if line.startswith("- **<idea name>**")]
+    assert idea_names(item_form) == ("<idea name>",)
+    for label in (SHOW_IDEAS_LABEL, MORE_IDEAS_LABEL, SOMETHING_ELSE_LABEL):
+        assert f"`{label}`" in skill
+    assert (_REPO_ROOT / FIRST_RUN_SKILL_PATH).with_name("references").joinpath("app-ideas.md").is_file()

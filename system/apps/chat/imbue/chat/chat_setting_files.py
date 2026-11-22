@@ -2,7 +2,8 @@
 
 Such a setting travels with the chat across handoffs and rebinds and survives restarts, since the
 folder is the chat's rather than any one agent's. ``chat_fast_mode.py`` and ``chat_autocompact.py``
-each keep one this way, and ``suggestions.py`` keeps a chat's next-step suggestions the same way.
+each keep one this way, as ``suggestions.py`` keeps a chat's next-step suggestions and ``first_run_tree.py``
+the step a first-run chat's first conversation stands at.
 """
 
 import json

@@ -21,6 +21,7 @@ def test_an_absent_settings_file_reads_as_the_defaults(tmp_path: Path) -> None:
         is_next_step_suggestions_enabled=True,
         is_activity_suggestions_enabled=True,
         is_new_chat_suggestions_enabled=True,
+        is_picker_send_hint_shown=False,
     )
 
 

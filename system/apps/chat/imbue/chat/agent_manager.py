@@ -129,6 +129,10 @@ from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.first_run import finish_provider_step
 from imbue.chat.first_run import is_provider_step_pending
 from imbue.chat.first_run import mark_provider_step_pending
+from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import next_first_run_tree_step
+from imbue.chat.first_run_tree import read_first_run_tree_step
+from imbue.chat.first_run_tree import write_first_run_tree_step
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
@@ -4760,8 +4764,9 @@ class AgentManager:
 
         ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
         seed and is never shown. ``is_first_run`` owes the owner the first run's provider page, marked before the
-        chat is published so the first page to load already knows, and offers the start suggestions under the
-        seeded turns (``chat_seed.first_run_start_suggestions``).
+        chat is published so the first page to load already knows, and opens the chat's first conversation as a
+        tree (``first_run_tree.py``), at its start, with the start suggestions under the seeded turns
+        (``chat_seed.first_run_start_suggestions``).
         """
         explicit_title = explicit_chat_name(title)
         if is_first_run:
@@ -4773,6 +4778,7 @@ class AgentManager:
             if is_first_run:
                 chat_dir = self._chat_files_root / provisional.chat_id
                 write_first_run_context(chat_dir, first_run_context)
+                write_first_run_tree_step(chat_dir, FirstRunTreeStep.START)
                 write_chat_suggestions(chat_dir, first_run_start_suggestions(provisional.chat_id, turns))
         self._publish_seeded_chat(provisional)
         if is_first_run:
@@ -4908,6 +4914,33 @@ class AgentManager:
     def get_chat_suggestions(self, chat_id: ChatId) -> ChatSuggestions | None:
         """The next-step suggestions stored for the chat (``suggestions.py``), or None when it has none."""
         return read_chat_suggestions(self._chat_files_root / chat_id)
+
+    def get_first_run_tree_step(self, chat_id: ChatId) -> FirstRunTreeStep | None:
+        """Where the chat's first conversation stands in its tree (``first_run_tree.py``); None for any chat but
+        the one a first-run workspace opened on."""
+        with self._lock:
+            return self._first_run_tree_step_locked(chat_id)
+
+    def advance_first_run_tree(self, chat_id: ChatId, message: str) -> None:
+        """Move a first-run chat's tree on by a message the chat took from its user, given as the user's own
+        words; any other chat has no tree to move. A slash command is a word to the harness rather than a turn of
+        the conversation, and moves nothing."""
+        if is_slash_command(message):
+            return
+        with self._lock:
+            step = self._first_run_tree_step_locked(chat_id)
+            if step is None:
+                return
+            next_step = next_first_run_tree_step(step, message)
+            if next_step is not step:
+                write_first_run_tree_step(self._chat_files_root / chat_id, next_step)
+
+    def _first_run_tree_step_locked(self, chat_id: ChatId) -> FirstRunTreeStep | None:
+        chat_dir = self._chat_files_root / chat_id
+        if not is_first_run_seed(chat_dir):
+            return None
+        record = self._chat_record_by_id.get(chat_id)
+        return read_first_run_tree_step(chat_dir, is_awaiting_first_agent=record is not None and record.is_seed_only)
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
