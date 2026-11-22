@@ -31,6 +31,7 @@ from imbue.mngr.api.preservation import (
     PreservedAgentArchive,
     discover_preserved_agent_archives,
 )
+from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from pydantic import Field
 
@@ -79,7 +80,10 @@ def plan_sweep(
     protected_agent_ids = {
         path.name for path in present_agent_dirs
     } | _listed_agent_ids(roots.chats_root)
-    archives = discover_preserved_agent_archives(roots.host_dir)
+    try:
+        archives = discover_preserved_agent_archives(roots.host_dir)
+    except MngrError as e:
+        raise SweepRefusedError(f"cannot read the preserved archives: {e}") from e
     unprotected_archives = [
         archive
         for archive in archives

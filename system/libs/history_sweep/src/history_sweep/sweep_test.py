@@ -210,6 +210,19 @@ def test_unreadable_chat_record_refuses_the_whole_sweep(roots: SweepRoots) -> No
         plan_sweep(roots, now=_NOW)
 
 
+def test_unreadable_archive_manifest_refuses_the_whole_sweep(roots: SweepRoots) -> None:
+    session_id = str(uuid4())
+    write_session(roots, session_id)
+    archive = write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=90)
+    )
+    (archive / PRESERVATION_MANIFEST_FILENAME).unlink()
+    (archive / PRESERVATION_MANIFEST_FILENAME).mkdir()
+
+    with pytest.raises(SweepRefusedError, match="preserved archives"):
+        plan_sweep(roots, now=_NOW)
+
+
 def test_nothing_to_sweep_on_an_empty_host(roots: SweepRoots) -> None:
     assert plan_sweep(roots, now=_NOW) == ()
 
