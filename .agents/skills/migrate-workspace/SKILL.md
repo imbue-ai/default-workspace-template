@@ -89,7 +89,7 @@ one over (Step 9 asks for it then, if they choose to remove the old one).
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-lifecycle",
                                    "minds-workspaces-backups-export"],
@@ -451,7 +451,8 @@ user skill with scripts" in the same reference; until it does,
 `validate_skill.py` rejects it.
 
 **Template-file edits.** Port them *semantically* into their new counterparts and
-report each port: `CLAUDE.md` additions appended to this `CLAUDE.md`, settings
+report each port: additions to the old `AGENTS.md` or `CLAUDE.md` appended to
+this `AGENTS.md` (only Claude-specific notes go in this `CLAUDE.md`), settings
 keys set in the new settings file, supervisord program blocks re-added. Never
 overwrite a template file with the old one wholesale.
 

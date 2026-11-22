@@ -156,8 +156,11 @@ The library is `system/libs/routines`, a uv workspace member in the root venv, w
 The bootstrap writes one code-owned entry into `/etc/cron.d/routines` at every boot, beside the recovery guard (the `data/.state/cron.d` install keeps running for whatever the migration of section 12 leaves there):
 
 ```
+MNGR_HOST_DIR=/home/user/.mngr
 * * * * *   root   /home/user/workspace/system/libs/routines/with_agent_env.sh uv run --no-sync routines tick >> /var/log/supervisor/routines-tick.log 2>&1
 ```
+
+The first line is the boot's own `MNGR_HOST_DIR`, which cron would otherwise scrub: the wrapper reads the agent environment from files inside that directory, and a host need not keep it at the container's `/home/user/.mngr`.
 
 `routines tick`:
 
@@ -185,7 +188,7 @@ The tick's own output is a line per spawned run and a line per reaped run, nothi
 5. Writes `run_finished` with the outcome, updates the state, and applies the notification rules (section 8).
 6. Exits with 0 for a success and 1 otherwise, so a caller with `--wait` can read it.
 
-The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID` and `ROUTINES_RUN_ID` beside it.
+The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_TRIGGER` (`scheduled` or `manual`) beside it.
 
 ### 6.3 A command run
 
@@ -197,6 +200,7 @@ Exit 0 is `succeeded`; anything else is `failed`.
 
 `skill = "<name>"` runs the wake below in the runner's own process; `routines wake <name>` is the same wake as a command, which is what the Caretaker's check calls.
 Inside a run (`ROUTINES_RUN_ID` set) the wake attaches the chat to that run and records an agent that waits on the user on it exactly as a skill run does (`run_blocked`, the state, the notification); outside one it is a plain wake that only keeps the chat, with its own exit code.
+The agent in the chat is handed none of the run's environment, so a skill that behaves differently for a run started by hand reads the trigger from the ledger: the newest record of `routines runs <id> --limit 1 --format json` is the run in flight (`outcome` null, `trigger` `SCHEDULED` or `MANUAL`).
 
 1. **Find the chat.** The routine's chat id is in its state.
    With none, or one the chat app no longer knows, take up an agent that still carries the routine (`mngr list --include 'labels.routine == "<id>" || labels.automation == "<id>"'`, the second being the retired runner's label) when the chat app lists it: a migrated automation's agent, or the chat of a routine removed and added again, is named after the routine, and `mngr create` refuses a name an agent already has.
@@ -329,7 +333,7 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 
 ### 10.1 Manifest and program
 
-`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = false`, `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
+`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = true` (part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps), `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
 The program registers on port 8050 (no built-in uses it) and runs the `routines-app` entry point, like System Monitor.
 The app depends on the library and imports nothing from mngr.
 

@@ -6,7 +6,7 @@ Row 2 is a hosted MCP server the service itself publishes (its docs link to
 it, or it lives in the service's own GitHub organization) whose authorization
 server registers clients itself: its metadata has a `registration_endpoint`.
 That is what makes the row frictionless, and why it comes before a key: the
-user signs in once, in a window Imbue Studio opens, and copies nothing. A
+user signs in, in a window Imbue Studio opens, and copies nothing. A
 server without that endpoint wants a client someone registers by hand, which
 no flow here can do, so it is not this row however official it is; neither is
 a server that takes a key in a header (see "A server with a key"). A listing
@@ -22,13 +22,14 @@ calls the service's API with a key, and nothing it adds is worth running a
 stranger's code with this workspace's access: use that API through row 3 or
 row 5 instead, and read the package's source for the endpoints it calls.
 
-MCP is allowed for a service latchkey has no builtin for. The workspace disables
-claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
-`.mngr/settings.toml`) because that is an OAuth side channel around the latchkey
-gateway for services latchkey *does* support; a server for a service it does not
-support bypasses nothing. Many of latchkey's builtins are themselves remote MCP
-servers (`notion-mcp`, `atlassian-mcp`, `airtable-mcp`, ...): those are row 1,
-called as "Calling the server" below says.
+MCP is allowed for a service latchkey does not already know. The
+workspace disables claude.ai's own connector sync
+(`ENABLE_CLAUDEAI_MCP_SERVERS=false` in `.mngr/settings.toml`) because that is
+an OAuth side channel around the latchkey gateway for services latchkey *does*
+support; a server for a service it does not support bypasses nothing. Many of
+the services latchkey supports out of the box are themselves remote MCP servers
+(`notion-mcp`, `atlassian-mcp`, `airtable-mcp`, ...): those are row 1, called
+as "Calling the server" below says.
 
 ## The connection is a latchkey custom service
 
@@ -84,23 +85,26 @@ services") whose `domain` is the MCP endpoint's host and whose `login` is the
 flow. `login.url` is the OAuth authorization endpoint; `login.flow_params`
 carries the MCP endpoint, the token and registration endpoints, the `scopes`,
 and `issuesRefreshTokens: false` only when the server's docs say it issues
-access tokens alone. The URLs in the parameters have to be on `domain` or a
-subdomain of it, as for the other flows.
+access tokens alone. The `mcpEndpoint` must be on `scheme://domain` itself:
+same scheme, exactly that host, no port. The three OAuth endpoints
+(`login.url`, `tokenEndpoint`, `registrationEndpoint`) may be on any domain,
+but copy them exactly as the authorization server metadata gives them, all
+three from the same server.
 
 Err on the side of too many scopes. A connection's scopes are fixed when
 the user signs in, and there is no request that adds one: a scope that turns
 out to be missing later means asking the user to disconnect the service in
-Imbue Studio (the Permissions tab of this machine's options) and then setting
+Imbue Studio (the Permissions tab of this workspace's options) and then setting
 it up again from scratch, sign-in included.
 
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read", "write"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
 ```
 
-Approving opens latchkey's own browser on the user's computer at the server's
+Approving opens a browser on the user's computer at the server's
 consent page, where the app asking may be named after latchkey or Imbue Studio
 rather than after you; say so if the user asks. The sign-in and the OAuth
 client it registered stay in Imbue Studio's credential store, and the gateway
@@ -110,12 +114,13 @@ expires for good, and the user signs in again then.
 
 After approval the service is one `latchkey services list` names, and a later
 `No credentials found` or `Request not permitted by the user` is handled as for
-a builtin (`references/latchkey.md`, "Interpreting latchkey permission
-errors"). A `401` from the server after that means the sign-in is gone; re-send
-the request. A `403` or an `insufficient_scope` error means the connection's
-scopes do not cover the call: tell the user plainly that the connection has to
-be set up again with wider access, ask them to disconnect the service in Imbue
-Studio, and once they have, send the request again with the scopes it needs.
+any service latchkey already knows (`references/latchkey.md`, "Interpreting
+latchkey permission errors"). A `401` from the server after that means the sign-in is
+gone; re-send the request. A `403` or an `insufficient_scope` error means the
+connection's scopes do not cover the call: tell the user plainly that the
+connection has to be set up again with wider access, ask them to disconnect the
+service in Imbue Studio, and once they have, send the request again with the
+scopes it needs.
 
 ## A server with a key
 

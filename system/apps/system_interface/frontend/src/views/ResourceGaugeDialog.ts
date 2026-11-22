@@ -45,7 +45,7 @@ const DIALOG_RESOURCES: readonly GaugeResource[] = ["disk", "memory", "cpu"];
 const WARNING_SENTENCES: Readonly<Record<GaugeResource, string>> = {
   disk: "Warn when disk space left falls to",
   memory: "Warn when memory in use reaches",
-  cpu: "Warn when CPU use (over two minutes) reaches",
+  cpu: "Warn when CPU use (over five minutes) reaches",
 };
 
 const UNITS: Readonly<Record<GaugeResource, string>> = { disk: "GB", memory: "%", cpu: "%" };
@@ -207,8 +207,8 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
           m(
             "p",
             { class: MODAL_MESSAGE_CLASS },
-            "The gauge in the taskbar shows how much disk, memory and CPU the workspace has left. A warning always " +
-              "shows there, in words.",
+            "The gauge in the taskbar shows how much disk, memory and CPU the workspace has left. A disk or memory " +
+              "warning always shows there in words; a CPU warning shows as the CPU bar.",
           ),
           m("span", { class: MODAL_LABEL_CLASS }, "Show the bars"),
           m("div", { class: "mb-4 flex" }, [
@@ -229,8 +229,8 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
           m(
             "p",
             { class: "mt-2 mb-0 text-secondary type-body" },
-            "A warning sends one notification to Imbue Studio and tells the agents working here. The disk also " +
-              "warns when it is on course to fill within 15 minutes.",
+            "A disk or memory warning sends one notification to Imbue Studio; every warning tells the agents " +
+              "working here. The disk also warns when it is on course to fill within 15 minutes.",
           ),
           error === null ? null : m("p", { class: "mt-2 mb-0 text-danger type-body", "data-gauge-error": "" }, error),
         ],

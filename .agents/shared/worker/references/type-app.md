@@ -122,11 +122,13 @@ phone sizes and at the desktop size the user confirmed, as
 `browser` test in that phone context (393x852, `has_touch=True`,
 `is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
 scroll and runs the app's main action by tapping it. The repo-root
-`conftest.py` does not reach a user-built app's suite and its dev group has
-no Playwright, so add `playwright` to that group (`uv add --dev playwright` in
-its directory), register the `browser` marker in its
-`[tool.pytest.ini_options]`, and launch Fortress by its path inside the test,
-as `AGENTS.md` says.
+`conftest.py` does not reach a user-built app's suite, so the scaffold gives the
+app's own dev group `playwright` and `pytest-timeout` and registers the `browser`
+and `frontend` marks in its `[tool.pytest.ini_options]`; launch Fortress by its
+path inside the test, as `AGENTS.md` says. An app scaffolded before that lacks
+them: check its `pyproject.toml`, and add what is missing in its directory
+(`uv add --dev playwright pytest-timeout`, which also syncs its venv) and the
+marks to its `[tool.pytest.ini_options]` before writing the test.
 
 ### When it is shared
 
@@ -232,9 +234,14 @@ What differs for you:
 - **Never drive `networkidle`** against a shell or chat instance in Playwright:
   both hold sockets open for as long as they run, so the wait never returns.
   Wait for the element you are about to read instead.
-- **Verify against your own instance.** Boot it with `preview_app.py`
+- **Verify against your own instance.** Boot it from your work_dir with
+  `preview_app.py`
   (`.agents/skills/update-app/python/update_app_skill/preview_app.py up --app <name> --worktree
-  <your work_dir>`) or the raw isolated-instance script; the live app and its
+  <your work_dir> --private`) or the raw isolated-instance script, and reach it
+  on its loopback port. `--private` registers no window (from a worktree the
+  script refuses without it, since a window registered there is one nobody can
+  open), and the instance still runs over copies of the user's live data. It
+  boots the app alone, taking no `--with` siblings. The live app and its
   windows are the user's.
 - The go-live is the lead's: the atomic update apply, after your `done`. You
   neither merge nor restart anything in the served tree.

@@ -2,9 +2,10 @@
 
 The launch wrapper tags every agent's ``oom_score_adj`` once at startup (see
 ``system/services/oom_priority``). This engine keeps *chat* agents' scores current: a chat
-the user is engaged with is protected from an out-of-memory shed, and a chat left
-untouched long enough climbs past the worker band so a stale chat is shed before
-the worker a live chat just spawned.
+the user is engaged with is protected from an out-of-memory shed, a chat left
+untouched long enough climbs past the worker band so that it is shed before
+the worker a live chat just spawned, and one left for hours more climbs on to
+the top of the scale.
 
 Signals, and where each comes from:
 
@@ -224,7 +225,7 @@ class ChatOomPrioritizer:
         the only evidence it is still in use), and leaving one means it was active up
         to that moment -- without the second stamp a chat that ran for three days would
         read as three days idle the instant its turn ended, and jump straight to the
-        stale ceiling. Between the two edges the chat is exempt from the climb entirely.
+        top of the scale. Between the two edges the chat is exempt from the climb entirely.
 
         The ids may include workers and the primary agent (own chats under the own-chat
         rule); they are ignored by the pass, which only iterates the managed chats.

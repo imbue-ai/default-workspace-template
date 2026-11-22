@@ -15,8 +15,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource/besley": "^5.3.0",
     "@imbue/workspace-ui": "0.1.0",
     "@imbue/workspace-voice": "0.1.0",
+    "@tanstack/query-core": "^5.107.1",
     "dompurify": "^3.3.3",
     "marked": "^17.0.4",
     "mithril": "^2.2.7"

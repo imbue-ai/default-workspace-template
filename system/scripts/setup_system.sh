@@ -221,10 +221,13 @@ if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
 fi
 printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/default_workspace_template_path.sh
 
-# Source /home/user/.mngr/env (when present) for interactive bash sessions so terminals can
-# run mngr commands without manual setup.
-if ! grep -q '/home/user/.mngr/env' /root/.bashrc 2>/dev/null; then
-    printf '%s\n' 'if [ -f /home/user/.mngr/env ]; then set -a; . /home/user/.mngr/env; set +a; fi' >> /root/.bashrc
+# Source mngr's host env (when present) for interactive bash sessions so terminals can
+# run mngr commands without manual setup. The host dir is not the same path on every
+# host; a provisioning run has it in MNGR_HOST_DIR, and an image build (which has no
+# host yet) gets the container's.
+mngr_host_env="${MNGR_HOST_DIR:-/home/user/.mngr}/env"
+if ! grep -qF "$mngr_host_env" /root/.bashrc 2>/dev/null; then
+    printf 'if [ -f %s ]; then set -a; . %s; set +a; fi\n' "$mngr_host_env" "$mngr_host_env" >> /root/.bashrc
 fi
 
 # Claude Code CLI (pinned; the provisioning-time version check expects this exact version).
@@ -355,11 +358,12 @@ test -d /opt/pi-extensions/npm/node_modules
 cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
-[ -d /home/user/.mngr ] || exit 0
+export MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}"
+[ -d "$MNGR_HOST_DIR" ] || exit 0
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
+timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \
