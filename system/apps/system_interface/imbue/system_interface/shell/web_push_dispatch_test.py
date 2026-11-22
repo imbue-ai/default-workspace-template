@@ -32,6 +32,7 @@ _NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 _CHAT = "agent-research"
 _PREVIEW_SAFE = NotificationSettings(is_full_text=False)
 _FULL_TEXT = NotificationSettings(is_full_text=True)
+_CHAT_LINK = "/?open=chat%3A%2F%3Fchat%3Dagent-research"
 
 
 class _Clock:
@@ -66,16 +67,20 @@ def _dispatcher(
 
 
 def _send(message: str, chat_id: str = _CHAT, title: str | None = None) -> PushSendRequest:
-    return PushSendRequest(chat_id=chat_id, chat_title="Research", title=title, message=message)
+    return PushSendRequest(
+        chat_id=chat_id, chat_title="Research", title=title, message=message, app="chat", app_path=f"/?chat={chat_id}"
+    )
 
 
 def test_a_notification_names_the_chat_and_says_nothing_the_agent_said_by_default() -> None:
-    notification = compose_notification(_CHAT, "Research", ("Your code is 123456",), "Studio", _PREVIEW_SAFE)
+    notification = compose_notification(
+        _CHAT, "Research", _CHAT_LINK, ("Your code is 123456",), "Studio", _PREVIEW_SAFE
+    )
 
     assert notification.title == "Research"
     assert notification.body == "Has something for you in Studio."
     assert "123456" not in notification.body
-    assert notification.path == "/?open=chat%3A%2F%3Fchat%3Dagent-research"
+    assert notification.path == _CHAT_LINK
     assert notification.tag == "chat-agent-research"
 
 
@@ -83,22 +88,24 @@ def test_the_longest_chat_id_a_send_takes_composes_a_notification() -> None:
     chat_id = "agent-" + "a" * 120
     request = _send("Report ready", chat_id=chat_id)
 
-    notification = compose_notification(request.chat_id, "Research", ("Report ready",), "Studio", _PREVIEW_SAFE)
+    notification = compose_notification(
+        request.chat_id, "Research", _CHAT_LINK, ("Report ready",), "Studio", _PREVIEW_SAFE
+    )
 
     assert notification.tag == f"chat-{chat_id}"
 
 
 def test_full_text_shows_the_agents_words_cut_short_for_a_lock_screen() -> None:
-    short = compose_notification(_CHAT, "Research", ("Report ready",), "Studio", _FULL_TEXT)
-    long = compose_notification(_CHAT, "Research", ("x" * 1000,), "Studio", _FULL_TEXT)
+    short = compose_notification(_CHAT, "Research", _CHAT_LINK, ("Report ready",), "Studio", _FULL_TEXT)
+    long = compose_notification(_CHAT, "Research", _CHAT_LINK, ("x" * 1000,), "Studio", _FULL_TEXT)
 
     assert short.body == "Report ready"
     assert len(long.body) == FULL_TEXT_MAX_LENGTH and long.body.endswith("...")
 
 
 def test_a_burst_says_how_many_updates_it_folds() -> None:
-    safe = compose_notification(_CHAT, "Research", ("one", "two", "three"), "Studio", _PREVIEW_SAFE)
-    full = compose_notification(_CHAT, "Research", ("one", "two", "three"), "Studio", _FULL_TEXT)
+    safe = compose_notification(_CHAT, "Research", _CHAT_LINK, ("one", "two", "three"), "Studio", _PREVIEW_SAFE)
+    full = compose_notification(_CHAT, "Research", _CHAT_LINK, ("one", "two", "three"), "Studio", _FULL_TEXT)
 
     assert safe.body == "3 updates for you in Studio."
     assert full.body == "3 updates. Latest: three"
@@ -114,6 +121,7 @@ def test_a_chats_first_notification_goes_out_at_once_on_the_worker(tmp_path: Pat
     dispatcher.flush_due()
     ((posted,),) = [transport.posted]
     assert json.loads(posted.payload)["title"] == "Research"
+    assert json.loads(posted.payload)["path"] == "/?open=chat%3A%2F%3Fchat%3Dagent-research"
     (entry,) = dispatcher.log.entries()
     assert (entry.status, entry.requested_text, entry.shown_title) == (SendStatus.SENT, "Q4: Report ready", "Research")
     assert [delivery.status_code for delivery in entry.deliveries] == [201]

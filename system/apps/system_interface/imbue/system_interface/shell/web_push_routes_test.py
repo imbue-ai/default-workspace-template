@@ -167,7 +167,14 @@ def _token(app: Flask) -> dict[str, str]:
     return {"X-Web-Push-Token": state_of(app).shell.web_push.send_token()}
 
 
-_SEND = {"chat_id": "agent-research", "chat_title": "Research", "title": "Q4", "message": "The numbers are in."}
+_SEND = {
+    "chat_id": "agent-research",
+    "chat_title": "Research",
+    "title": "Q4",
+    "message": "The numbers are in.",
+    "app": "chat",
+    "app_path": "/?chat=agent-research",
+}
 
 
 def test_a_send_with_the_token_is_queued_and_the_worker_posts_it_naming_the_chat(
@@ -261,7 +268,13 @@ def test_the_send_route_refuses_a_remote_caller_and_anything_that_came_through_a
 
 
 def test_a_send_must_name_a_chat(client: FlaskClient, app: Flask) -> None:
-    for body in ({**_SEND, "chat_id": "../evil"}, {**_SEND, "chat_title": ""}, {**_SEND, "message": ""}):
+    for body in (
+        {**_SEND, "chat_id": "../evil"},
+        {**_SEND, "chat_title": ""},
+        {**_SEND, "message": ""},
+        {**_SEND, "app": "Not An App"},
+        {**_SEND, "app_path": "//elsewhere.example"},
+    ):
         assert client.post("/api/web-push/send", json=body, headers=_token(app)).status_code == 400
 
 

@@ -80,6 +80,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -353,10 +354,13 @@ def _utf8_text(text: str) -> str:
 def push_request(
     message: str, title: str | None, watch: ChatWatch, chat_id: str
 ) -> dict[str, str]:
-    """What the shell's send route takes for this notification: the chat, its title, and the agent's words, each cut
-    to the route's bounds. The shell decides what the device shows."""
+    """What the shell's send route takes for this notification: the chat, its title, the agent's words, each cut to
+    the route's bounds, and the chat's page in the chat app, which a tap opens. The shell decides what the device
+    shows."""
     request = {
         "chat_id": chat_id,
+        "app": message_chat.CHAT_APP_NAME,
+        "app_path": "/?" + urllib.parse.urlencode({"chat": chat_id}),
         "chat_title": _cut(
             _utf8_text((watch.chat_title or "").strip()) or _UNKNOWN_CHAT_TITLE,
             _CHAT_TITLE_MAX_LENGTH,

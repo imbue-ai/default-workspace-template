@@ -721,7 +721,9 @@ owner's settings (`web_push/settings.json`) and the log of the latest 100 sends
   reset (`POST /api/web-push/reset`), which makes a new signing key and send
   token and forgets every device and every queued send.
 - **Sending.** `POST /api/web-push/send` takes `{"chat_id", "chat_title",
-  "title", "message"}` from a chat's `notify-user`. It is loopback-only,
+  "title", "message", "app", "app_path"}` from a chat's `notify-user`, the
+  last two naming the app and the page of it a tap opens (the shell knows no
+  app by name). It is loopback-only,
   refuses a request a share's proxy stamped, and refuses one without the send
   token in `X-Web-Push-Token`, which `notify-user` reads from the shell's state
   and app code is never given, so an app's backend cannot reach the owner's

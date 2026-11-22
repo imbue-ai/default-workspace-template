@@ -24,15 +24,18 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlencode
 
+from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from pydantic import field_validator
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
@@ -63,7 +66,6 @@ FULL_TEXT_MAX_LENGTH: Final[int] = 200
 _CHAT_TITLE_MAX_LENGTH: Final[int] = 80
 _CHAT_ID_PATTERN: Final[str] = r"^agent-[A-Za-z0-9_-]{1,120}$"
 _SEND_ID_BYTES: Final[int] = 8
-CHAT_APP_NAME: Final[str] = "chat"
 
 
 class PushCaller(LowerCaseStrEnum):
@@ -99,6 +101,17 @@ class PushSendRequest(FrozenModel):
     chat_title: str = Field(min_length=1, max_length=200, description="The chat's title, which the notification shows")
     title: str | None = Field(default=None, max_length=200, description="The agent's optional heading")
     message: str = Field(min_length=1, max_length=4000, description="What the agent said")
+    app: AppName = Field(description="The app the chat runs in, whose page a tap opens")
+    app_path: str = Field(
+        min_length=1, max_length=1000, description="The path under the app's origin that shows the chat"
+    )
+
+    @field_validator("app_path")
+    @classmethod
+    def _app_path_is_a_path(cls, value: str) -> str:
+        if not value.startswith("/") or value.startswith("//") or "\\" in value:
+            raise InvalidShellValueError("the app path is a path under the app's origin, starting with a single '/'")
+        return value
 
 
 class PushSendReceipt(FrozenModel):
@@ -164,12 +177,6 @@ def deep_link_path(app_name: str, path: str) -> str:
 
 
 @pure
-def chat_path(chat_id: str) -> str:
-    """The page a tap opens: the chat, in the workspace's chat app."""
-    return deep_link_path(CHAT_APP_NAME, "/?" + urlencode({"chat": chat_id}))
-
-
-@pure
 def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
@@ -186,12 +193,14 @@ def requested_text_of(request: PushSendRequest) -> str:
 def compose_notification(
     chat_id: str,
     chat_title: str,
+    path: str,
     texts: tuple[str, ...],
     workspace_name: str,
     settings: NotificationSettings,
 ) -> PushNotification:
-    """The notification for one or more sends from one chat: titled with the chat, saying what the agent said only
-    in full-text mode, and replacing the chat's earlier notification on the device."""
+    """The notification for one or more sends from one chat: titled with the chat, opening ``path`` (the shell's
+    deep link to the chat) on a tap, saying what the agent said only in full-text mode, and replacing the chat's
+    earlier notification on the device."""
     count = len(texts)
     if settings.is_full_text:
         latest = texts[-1]
@@ -205,7 +214,7 @@ def compose_notification(
     return PushNotification(
         title=_cut(chat_title, _CHAT_TITLE_MAX_LENGTH),
         body=_cut(body, FULL_TEXT_MAX_LENGTH),
-        path=chat_path(chat_id),
+        path=path,
         tag=f"chat-{chat_id}",
     )
 
@@ -219,6 +228,7 @@ class _PendingBatch(FrozenModel):
 
     chat_id: str = Field(description="The chat")
     chat_title: str = Field(description="The chat's title, as its latest send gave it")
+    path: str = Field(description="The shell's deep link a tap opens, as the latest send gave it")
     workspace_name: str = Field(description="The workspace's name when the latest send arrived")
     send_ids: tuple[str, ...] = Field(description="The sends, oldest first")
     texts: tuple[str, ...] = Field(description="What each send asked to show, oldest first")
@@ -287,6 +297,7 @@ class PushDispatcher(MutableModel):
             if pending is not None:
                 self._pending_by_chat[request.chat_id] = pending.model_copy_update(
                     to_update(pending.field_ref().chat_title, request.chat_title),
+                    to_update(pending.field_ref().path, deep_link_path(request.app, request.app_path)),
                     to_update(pending.field_ref().workspace_name, workspace_name),
                     to_update(pending.field_ref().send_ids, (*pending.send_ids, send_id)),
                     to_update(pending.field_ref().texts, (*pending.texts, text)),
@@ -304,6 +315,7 @@ class PushDispatcher(MutableModel):
                     self._pending_by_chat[request.chat_id] = _PendingBatch(
                         chat_id=request.chat_id,
                         chat_title=request.chat_title,
+                        path=deep_link_path(request.app, request.app_path),
                         workspace_name=workspace_name,
                         send_ids=(send_id,),
                         texts=(text,),
@@ -354,7 +366,7 @@ class PushDispatcher(MutableModel):
 
     def _post(self, batch: _PendingBatch) -> None:
         notification = compose_notification(
-            batch.chat_id, batch.chat_title, batch.texts, batch.workspace_name, self.notifier.settings()
+            batch.chat_id, batch.chat_title, batch.path, batch.texts, batch.workspace_name, self.notifier.settings()
         )
         outcome = self.notifier.send(notification, None, _utc(self.clock()))
         carrier_id = batch.send_ids[-1]

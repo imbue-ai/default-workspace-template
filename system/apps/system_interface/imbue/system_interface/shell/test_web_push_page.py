@@ -49,7 +49,14 @@ def served_shell(app: Flask) -> Generator[ServedApp, None, None]:
     shell = state_of(app).shell
     shell.web_push.send(PushNotification(title="Warm-up"), None, _NOW)
     shell.web_push_dispatch.submit(
-        PushSendRequest(chat_id="agent-research", chat_title="Research", message="Report ready: 12 pages"), "Studio"
+        PushSendRequest(
+            chat_id="agent-research",
+            chat_title="Research",
+            message="Report ready: 12 pages",
+            app="chat",
+            app_path="/?chat=agent-research",
+        ),
+        "Studio",
     )
     shell.web_push_dispatch.flush_due()
     with serve_app(app) as served:

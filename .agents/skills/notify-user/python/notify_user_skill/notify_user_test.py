@@ -471,6 +471,8 @@ def test_asks_the_shell_to_push_naming_the_chat_with_the_send_token(
     assert url == "http://127.0.0.1:8000/api/web-push/send"
     assert payload == {
         "chat_id": "agent-chat",
+        "app": "chat",
+        "app_path": "/?chat=agent-chat",
         "chat_title": "Research",
         "title": "CI",
         "message": "The build is green.",
