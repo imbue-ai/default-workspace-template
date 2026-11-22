@@ -124,7 +124,7 @@ describe("the launcher menu", () => {
     (root.querySelector("[data-tour-row]") as HTMLElement).click();
     expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ kind: "tour" }));
     unmountViews();
-    const offered = render(launcherRowsOf(stateWithWindows(), "", { isNotificationsOffered: true }));
+    const offered = render(launcherRowsOf(stateWithWindows(), "", { notificationsOffer: "shown" }));
     const notificationsRow = offered.root.querySelector("[data-notifications-row]") as HTMLElement;
     expect(notificationsRow.textContent).toContain("Notifications on this device");
     notificationsRow.click();

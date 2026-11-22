@@ -121,7 +121,7 @@ import { PersonCard } from "./tray/PersonCard";
 import { createTrayCardHover } from "./tray/TrayCard";
 import type { OpenCard } from "./tray/TrayCard";
 import type { ViewingChipAttrs } from "./tray/ViewingChip";
-import { isNotificationsPageOffered, openNotificationsPage } from "../model/notificationsPage";
+import { currentNotificationsOffer, openNotificationsPage } from "../model/notificationsPage";
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
@@ -1247,7 +1247,7 @@ export function App(): m.Component<AppAttrs> {
     return launcherRowsOf(current.getState(), launcherQuery, {
       ownership: { roster: getRoster(), identity: getOwnIdentity() },
       isViewing: current.viewedDesktop() !== null,
-      isNotificationsOffered: isNotificationsPageOffered(),
+      notificationsOffer: currentNotificationsOffer(getOwnIdentity()),
     });
   }
 

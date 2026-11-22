@@ -24,6 +24,7 @@ import {
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import { TOUR_LAUNCHER_LABEL, TOUR_LAUNCHER_SEARCH_WORDS } from "../model/tourCards";
 import { NOTIFICATIONS_LAUNCHER_LABEL, NOTIFICATIONS_LAUNCHER_SEARCH_WORDS } from "../model/notificationsPage";
+import type { NotificationsOffer } from "../model/notificationsPage";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -71,7 +72,7 @@ export interface TourRow {
 export const TOUR_ROW_KEY = "tour";
 
 /** The row that goes to the page turning notifications on for this device (``model/notificationsPage``): after the
- *  tour's row, offered with no query and for a query matching its words, where the window offers the page. */
+ *  tour's row, for a query matching its words where the page is offered, and with no query too where it is shown. */
 export interface NotificationsRow {
   readonly kind: "notifications";
   readonly key: typeof NOTIFICATIONS_ROW_KEY;
@@ -142,7 +143,8 @@ function tourRowsOf(apps: readonly AppRecord[], query: string): TourRow[] {
   return [{ kind: "tour", key: TOUR_ROW_KEY, label: TOUR_LAUNCHER_LABEL }];
 }
 
-function notificationsRowsOf(query: string): NotificationsRow[] {
+function notificationsRowsOf(query: string, offer: NotificationsOffer): NotificationsRow[] {
+  if (offer === "hidden" || (offer === "on-search" && query === "")) return [];
   if (!matchesQuery(query, NOTIFICATIONS_LAUNCHER_LABEL, ...NOTIFICATIONS_LAUNCHER_SEARCH_WORDS)) return [];
   return [{ kind: "notifications", key: NOTIFICATIONS_ROW_KEY, label: NOTIFICATIONS_LAUNCHER_LABEL }];
 }
@@ -233,9 +235,8 @@ export interface LauncherRowsOptions {
   /** Whether the tour's row is offered (true unless said otherwise); the phone layout, where the tour never draws,
    *  leaves it out. */
   readonly isTourOffered?: boolean;
-  /** Whether the notifications page's row is offered (false unless said otherwise): only a window that is not
-   *  framed by another page offers it. */
-  readonly isNotificationsOffered?: boolean;
+  /** How the notifications page's row is offered ("hidden" unless said otherwise; ``notificationsOfferOf``). */
+  readonly notificationsOffer?: NotificationsOffer;
   /** Who the viewer is and who may be here (NO_OWNERSHIP unless said otherwise), which say whose desktop each
    *  window row is on. */
   readonly ownership?: DesktopOwnership;
@@ -258,7 +259,7 @@ export function launcherRowsOf(
   const viewingReason = options.isViewing === true ? VIEWING_ROW_DISABLED_REASON : null;
   const launchRows = isMessage ? [] : launchRowsOf(apps, text, viewingReason);
   const tourRows = isMessage || options.isTourOffered === false ? [] : tourRowsOf(apps, text);
-  const notificationsRows = isMessage || options.isNotificationsOffered !== true ? [] : notificationsRowsOf(text);
+  const notificationsRows = isMessage ? [] : notificationsRowsOf(text, options.notificationsOffer ?? "hidden");
   const windowRows =
     text === "" || isMessage ? [] : windowRowsOf(state, text, options.ownership ?? NO_OWNERSHIP, viewingReason);
   const textRows = textRowsOf(apps, text, viewingReason);

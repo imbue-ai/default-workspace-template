@@ -184,10 +184,10 @@ describe("the start sheet", () => {
   });
 
   it("offers the notifications page's row after the launch-path rows where the window offers the page", () => {
-    const menu = startSheetRows(phoneState(), "", true);
+    const menu = startSheetRows(phoneState(), "", "shown");
     expect(menu.notificationsRows.map((row) => row.key)).toEqual(["notifications"]);
     expect(menu.rows).toEqual([...menu.launchRows, ...menu.notificationsRows, ...menu.windowRows, ...menu.textRows]);
-    expect(startSheetRows(phoneState(), "notifications", true).isNoMatch).toBe(false);
+    expect(startSheetRows(phoneState(), "notifications", "shown").isNoMatch).toBe(false);
     expect(startSheetRows(phoneState(), "").notificationsRows).toEqual([]);
   });
 });
