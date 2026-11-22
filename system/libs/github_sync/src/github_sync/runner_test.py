@@ -345,6 +345,33 @@ def test_do_tick_runs_the_app_pass_and_an_app_that_fails_stops_nothing_else(
     }
 
 
+@pytest.mark.parametrize("is_sync_configured", [False, True])
+def test_do_tick_pushes_no_app_while_the_workspace_is_not_synced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_git_and_gateway_env: Path,
+    is_sync_configured: bool,
+) -> None:
+    """The app pass belongs to a workspace whose sync is on and wired: with no
+    sync config, or with one and no gateway to push through, a linked app that
+    could be pushed is left alone and the status lists no apps."""
+    workspace = init_workspace(tmp_path / "workspace")
+    dev_repository = init_bare_repo(tmp_path / "notes-dev.git")
+    link_app(
+        workspace, add_owned_app(workspace, "notes", dev_repo_url=str(dev_repository))
+    )
+    monkeypatch.chdir(workspace)
+    if is_sync_configured:
+        _write_sync_config(workspace)
+
+    _do_tick(_SyncState())
+
+    assert git_output(dev_repository, "for-each-ref") == ""
+    status = json.loads(status_file_path().read_text())
+    assert status["apps"] == []
+    assert status["is_push_allowed"] is False
+
+
 def test_do_tick_says_why_the_app_pass_did_not_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

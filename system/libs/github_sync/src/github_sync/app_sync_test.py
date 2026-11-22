@@ -156,6 +156,29 @@ def test_a_lost_state_file_costs_a_split_and_a_push_that_changes_nothing(
     assert load_pushed_state(workspace, "notes") == state_before
 
 
+def test_what_was_pushed_to_one_dev_repository_says_nothing_of_another(
+    tmp_path: Path,
+) -> None:
+    workspace = init_workspace(tmp_path / "workspace")
+    first_repository = init_bare_repo(tmp_path / "notes-dev.git")
+    second_repository = init_bare_repo(tmp_path / "notes-dev-again.git")
+    record = _linked_app(workspace, first_repository)
+    assert _states(workspace) == {"notes": AppSyncState.PUSHED}
+    # The record now names another repository; the app itself has not changed.
+    write_record(
+        workspace,
+        record.model_copy_update(
+            to_update(record.field_ref().dev_repo_url, str(second_repository))
+        ),
+    )
+    commit_all(workspace, "Name another dev repository")
+
+    assert _states(workspace) == {"notes": AppSyncState.PUSHED}
+    assert _dev_main(second_repository) == _dev_main(first_repository)
+    pushed = load_pushed_state(workspace, "notes")
+    assert pushed is not None and pushed.dev_repo_url == str(second_repository)
+
+
 def test_an_unreadable_state_file_is_treated_as_lost(tmp_path: Path) -> None:
     workspace = init_workspace(tmp_path / "workspace")
     dev_repository = init_bare_repo(tmp_path / "notes-dev.git")
