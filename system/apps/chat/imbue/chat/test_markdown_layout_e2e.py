@@ -96,6 +96,8 @@ Inline code with nowhere to break: `{_LONG_TOKEN}`
 
 <video width="1200" height="200"></video>
 
+<audio controls></audio>
+
 <svg width="1200" height="40"><rect width="1200" height="40"></rect></svg>
 """
 
@@ -279,6 +281,14 @@ _WORDS_BROKEN_IN_TABLE_CELLS_JS: Final[str] = """
 }
 """
 
+# The live narration's table cells whose text fill is transparent, which leaves their text to the narration's clipped
+# gradient: it never reaches inside the table's scroller in WebKit, so the text there draws as nothing on an iPhone.
+_UNPAINTED_NARRATION_TABLE_CELLS_JS: Final[str] = """
+() => Array.from(document.querySelectorAll(".pv-tl-narration td, .pv-tl-narration th"))
+  .filter((cell) => cell.textContent.trim() && getComputedStyle(cell).webkitTextFillColor === "rgba(0, 0, 0, 0)")
+  .map((cell) => cell.textContent.trim().slice(0, 40))
+"""
+
 _VIEWPORTS: Final[list[Any]] = [
     pytest.param(_PHONE_VIEWPORT, id="phone"),
     pytest.param(_DESKTOP_VIEWPORT, id="desktop"),
@@ -304,7 +314,7 @@ def test_a_reply_and_a_persons_message_keep_every_markdown_element_inside_their_
     session = _reply_session(_kitchen_sink(_write_wide_picture(tmp_path)))
     with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session) as server:
         chat, frame = _open_chat(page, server.chat_url, viewport)
-        expect(chat.locator(".message-user-bubble")).to_contain_text(_LONG_TOKEN, timeout=15000)
+        expect(chat.locator(".message-user-bubble").last).to_contain_text(_LONG_TOKEN, timeout=15000)
         page.screenshot(path=str(tmp_path / "markdown-reply-end.png"))
         _assert_every_piece_is_inside_its_box(frame, "the reply's end and the person's message")
 
@@ -330,13 +340,16 @@ def test_a_running_steps_narration_and_opened_work_keep_every_markdown_element_i
     tmp_path: Path, page: Page, viewport: ViewportSize
 ) -> None:
     """The live step's narration holds the kitchen sink, and so does its work once opened, without any piece of it
-    crossing the transcript's column and without the transcript scrolling sideways."""
+    crossing the transcript's column and without the transcript scrolling sideways. The narration's tables paint
+    their own text, since its shimmer's clipped gradient does not reach into them."""
     session = _running_step_session(_kitchen_sink(_write_wide_picture(tmp_path)))
     with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session) as server:
         chat, frame = _open_chat(page, server.chat_url, viewport)
         expect(chat.locator(".pv-tl-narration .markdown-table-scroll table")).to_have_count(2, timeout=15000)
         page.screenshot(path=str(tmp_path / "markdown-narration.png"))
         _assert_every_piece_is_inside_its_box(frame, "the step's narration")
+        unpainted_cells = frame.evaluate(_UNPAINTED_NARRATION_TABLE_CELLS_JS)
+        assert unpainted_cells == [], f"the narration's table cells with no paint of their own: {unpainted_cells}"
 
         chat.get_by_text(_STEP_TITLE, exact=True).click()
         expect(chat.locator(".pv-expanded .markdown-table-scroll table")).to_have_count(2, timeout=15000)

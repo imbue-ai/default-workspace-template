@@ -67,6 +67,32 @@ describe("renderMarkdown embeds", () => {
   });
 });
 
+describe("renderMarkdown tables", () => {
+  function renderedTables(source: string): HTMLTableElement[] {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(source);
+    return Array.from(container.querySelectorAll("table"));
+  }
+
+  it("puts each table in a box of its own that scrolls, carrying its column count", () => {
+    const [first, second] = renderedTables(
+      "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n\ntext\n\n| key | value |\n|---|---|\n| k | v |",
+    );
+    expect(first.parentElement?.className).toBe("markdown-table-scroll");
+    expect(first.style.getPropertyValue("--markdown-table-columns")).toBe("3");
+    expect(second.parentElement?.className).toBe("markdown-table-scroll");
+    expect(second.style.getPropertyValue("--markdown-table-columns")).toBe("2");
+  });
+
+  it("counts a raw HTML table's columns through the cells' spans", () => {
+    const [table] = renderedTables(
+      '<table><tr><th colspan="2">wide</th><th>narrow</th></tr><tr><td>1</td><td>2</td><td>3</td></tr></table>',
+    );
+    expect(table.parentElement?.className).toBe("markdown-table-scroll");
+    expect(table.style.getPropertyValue("--markdown-table-columns")).toBe("3");
+  });
+});
+
 describe("renderMarkdown links", () => {
   function render(source: string): HTMLElement {
     const container = document.createElement("div");

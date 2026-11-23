@@ -247,6 +247,7 @@
 
 /* Media a message carries as raw HTML fits the column the same way, whatever width it asks for. */
 .markdown-content video,
+.markdown-content audio,
 .markdown-content svg {
   max-width: 100%;
 }
@@ -376,7 +377,8 @@
 
 /* A table scrolls sideways inside its own box (markdown.ts wraps it in one) when its columns need more than the
    bubble's width. It fills the box when it fits, and is at least 7em wide for each of its columns, so a phone
-   scrolls a wide table rather than squeezing its words a few letters to a line. */
+   scrolls a wide table rather than squeezing its words a few letters to a line. The floor is on the table, not
+   each cell, since a cell's min-width is undefined in CSS 2.1 tables and not reliably honoured. */
 .markdown-content .markdown-table-scroll {
   overflow-x: auto;
   margin-top: 0.75em;
@@ -744,6 +746,11 @@
 .pv-tl-narration--static pre code {
   padding: 0;
   background: none;
+}
+/* A table in the live narration paints its own text, as a block of code does: the shimmer's gradient-clipped text
+   does not reach into the table's scroller in WebKit, and its header cells' fill covers it everywhere. */
+.pv-tl-narration .markdown-table-scroll {
+  -webkit-text-fill-color: var(--c-text-secondary);
 }
 .pv-tl-narration a,
 .pv-tl-narration--static a {
