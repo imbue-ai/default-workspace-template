@@ -962,7 +962,7 @@ too:
 |---|---|---|
 | `new_chat_coach` | the chat list | calls `showNewChatCoachMark()` on the chat root that frames it (`window.parent.chatRootEmbed`); the root points a coach mark at its New chat button, which pulses, and in the phone layout opens the list's drawer first (`root/newChatCoachMark.ts`) |
 | `build_app_coach` | the chat page | points a coach mark at the composer's text area, and focuses it |
-| `connect_data_coach` | the shell | posts `shell:show-coach-card {text, chromeAnchor: "permissions"}`, which the chat root forwards; the shell shows the words as a card under the Imbue Studio app's permissions button and rings the button |
+| `connect_data_coach` | the shell | posts `shell:show-coach-card {text, chromeAnchor: "permissions"}`, which the chat root forwards; the shell shows the words as a card under the right end of the Imbue Studio app's title bar and rings the Settings button there, which holds a workspace's permissions |
 | `phone_access` | the Imbue Studio app | posts `minds:open-share-settings {coachMark: "mobile-access"}`, naming no app; the Imbue Studio app opens its share panel on the workspace with a bubble at its phone-access control |
 
 Before it takes the first three, the page drops the suggestions whose click needs a layer it
