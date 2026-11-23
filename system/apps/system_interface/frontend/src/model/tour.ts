@@ -4,21 +4,36 @@
  * the user learns the product while they wait for a reply (after ``startAfterWorkingMs`` of work, for a start on
  * the first message or only on a task that is taking a while); the agent answering interrupts it, so that Next
  * then shows a pause notice and the tour resumes from the card that would have come next the next time the agent
- * works. The controller reads and writes the workspace's tour record through ``/api/tour``, runs the tour again
- * from the launcher's "Show me around" row, does a card's action as its Next is pressed, and tells the Imbue Studio
- * chrome which of its controls to ring while a card is about one.
+ * works. It neither begins nor resumes by itself while a page says the workspace's first conversation is still
+ * following its script (``shell:first-conversation-step``). The controller reads and writes the workspace's tour
+ * record through ``/api/tour``, runs the tour again from the launcher's "Show me around" row, does a card's action
+ * as its Next is pressed, and tells the Imbue Studio chrome which of its controls to ring while a card is about one.
+ *
+ * The record also says whether the tour is finished, which the rest of the workspace reads as "nothing of the tour is
+ * left to show": written when the last card's Done or Exit is pressed, and on the owner's page for a record that is
+ * seen with nothing to resume (a tour a reload cut off, or a workspace the tour was never offered in). A tour that
+ * waits to resume is not finished.
+ *
+ * As the last card shows, and when the tour is left early from any card before it, the controller has the
+ * onboarding checklist put on screen (``show-onboarding-checklist``); the pause notice opens nothing.
+ *
+ * The same box shows a coach card for a page that asks (``shell:show-coach-card``): the page's own words under a
+ * control of the chrome, ringed while the card is up, or popping out of the agent's avatar. It is shown while the
+ * tour is idle, in place of another coach card, and in place of the tour's end (its last card, or the badge it
+ * leaves when exited), which it closes as that card's own button would; it gives way to a tour that starts.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson, requestJson } from "@imbue/workspace-ui/src/models/http";
-import type { ChromeAnchor, TourAction, TourCard } from "./tourCards";
+import type { ChromeAnchor, CoachPlace, TourAction, TourCard } from "./tourCards";
 import { TOUR_CARDS } from "./tourCards";
 
 export type TourState =
   | { readonly phase: "idle" }
   | { readonly phase: "card"; readonly index: number; readonly isInterrupted: boolean }
   | { readonly phase: "paused"; readonly resumeIndex: number }
-  | { readonly phase: "exit-badge" };
+  | { readonly phase: "exit-badge" }
+  | { readonly phase: "coach"; readonly text: string; readonly place: CoachPlace };
 
 export const IDLE_TOUR: TourState = { phase: "idle" };
 
@@ -72,22 +87,46 @@ export function dismissPause(state: TourState): TourState {
   return state.phase === "paused" ? IDLE_TOUR : state;
 }
 
+/** A page's coach card, which an idle tour makes room for and another coach card gives way to; any other state is
+ *  kept. */
+export function showCoach(state: TourState, text: string, place: CoachPlace): TourState {
+  return isOpenToTour(state) ? { phase: "coach", text, place } : state;
+}
+
+export function dismissCoach(state: TourState): TourState {
+  return state.phase === "coach" ? IDLE_TOUR : state;
+}
+
+/** Whether nothing of the tour itself is on screen, so one may begin: idle, or a coach card, which gives way. */
+function isOpenToTour(state: TourState): boolean {
+  return state.phase === "idle" || state.phase === "coach";
+}
+
+/** Whether the last card is the one shown: the tour's end, which tells the user to click the checklist. */
+export function isLastCardShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): boolean {
+  return state.phase === "card" && state.index === cards.length - 1;
+}
+
 export function cardShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): TourCard | null {
   return state.phase === "card" ? cards[state.index] : null;
 }
 
-/** The chrome control the shown card is about, or null (no card, or a card about the shell's own things). */
+/** The chrome control the shown card is about, a coach card's included, or null (no card, or a card about the
+ *  shell's own things). */
 export function chromeAnchorShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): ChromeAnchor | null {
+  if (state.phase === "coach") return "chromeAnchor" in state.place ? state.place.chromeAnchor : null;
   return cardShown(state, cards)?.chromeAnchor ?? null;
 }
 
-/** What the workspace remembers of the tour (``tour.json``): whether it has started, and the card it resumes at. */
+/** What the workspace remembers of the tour (``tour.json``): whether it has started, the card it resumes at, and
+ *  whether it has nothing left to show. */
 export interface TourRecord {
   readonly isSeen: boolean;
   readonly resumeIndex: number | null;
+  readonly isFinished: boolean;
 }
 
-export const UNSEEN_TOUR: TourRecord = { isSeen: false, resumeIndex: null };
+export const UNSEEN_TOUR: TourRecord = { isSeen: false, resumeIndex: null, isFinished: false };
 
 /** The routes the controller calls, injectable so it is tested against a fake. */
 export interface TourApi {
@@ -98,6 +137,7 @@ export interface TourApi {
 interface TourRecordWire {
   readonly is_seen?: unknown;
   readonly resume_index?: unknown;
+  readonly is_finished?: unknown;
 }
 
 export function parseTourRecord(body: TourRecordWire): TourRecord {
@@ -106,6 +146,7 @@ export function parseTourRecord(body: TourRecordWire): TourRecord {
     isSeen: body.is_seen === true,
     resumeIndex:
       typeof resumeIndex === "number" && Number.isInteger(resumeIndex) && resumeIndex >= 0 ? resumeIndex : null,
+    isFinished: body.is_finished === true,
   };
 }
 
@@ -114,7 +155,11 @@ export async function fetchTourRecord(): Promise<TourRecord> {
 }
 
 export async function writeTourRecord(record: TourRecord): Promise<void> {
-  await postJson<unknown>(apiUrl("/api/tour"), { is_seen: record.isSeen, resume_index: record.resumeIndex });
+  await postJson<unknown>(apiUrl("/api/tour"), {
+    is_seen: record.isSeen,
+    resume_index: record.resumeIndex,
+    is_finished: record.isFinished,
+  });
 }
 
 export const TOUR_API: TourApi = { fetch: fetchTourRecord, write: writeTourRecord };
@@ -125,8 +170,13 @@ export interface TourControllerDependencies {
   readonly highlightChrome: (anchor: ChromeAnchor | null) => void;
   /** Whether the tour may begin by itself right now: the desktop layout, no solo window, the owner looking. */
   readonly isAutoStartAllowed: () => boolean;
+  /** Whether the person looking at this page is known to be the workspace's owner, whose page alone settles a
+   *  record nobody finished. */
+  readonly isViewerOwner: () => boolean;
   readonly redraw: () => void;
-  /** Do what a card's Next does in the shell (snap the chat); a controller without one skips the actions. */
+  /** Do in the shell what the tour asks for (``TourAction``): snap the avatar's window as a card's Next is pressed,
+   *  show it as a coach card pops out of the avatar, put the onboarding checklist on screen as the tour ends. A
+   *  controller without one skips the actions. */
   readonly performAction?: (action: TourAction) => void;
   readonly schedule?: (callback: () => void, delayMs: number) => void;
   readonly cards?: readonly TourCard[];
@@ -139,6 +189,7 @@ export class TourController {
   /** The workspace's record once read; null until then, so nothing starts by itself before it is known. */
   private record: TourRecord | null = null;
   private isAgentWorking = false;
+  private isFirstConversationPending = false;
   /** Bumped whenever a scheduled start is no longer wanted, so a stale callback does nothing. */
   private startGeneration = 0;
   private readonly cards: readonly TourCard[];
@@ -176,11 +227,29 @@ export class TourController {
     }
     // A record written while the read was out (the launcher's start) is newer than what the read answers.
     if (this.record === null) this.record = fetched;
+    this.settleFinished();
     if (this.isAgentWorking) this.considerStart();
   }
 
-  /** What the avatar says: the agent went to work (the tour may begin or resume) or stopped (a card on screen is
-   *  interrupted, and a start not yet begun is dropped). */
+  /** Who is looking became known, or changed: the owner's page settles a record nobody finished. */
+  noteViewerChanged(): void {
+    this.settleFinished();
+  }
+
+  /** Record as finished a tour that is seen, waits to resume nowhere, and is not on screen: one a reload cut off,
+   *  or one this workspace never offered. Only the owner's page does, so a visitor's never ends the owner's tour,
+   *  and only a page the tour could begin on: a pulled-out window or a phone loading beside a desktop whose tour
+   *  is on screen reads the same record, and would end that tour under its cards. */
+  private settleFinished(): void {
+    const record = this.record;
+    if (record === null || !record.isSeen || record.resumeIndex !== null || record.isFinished) return;
+    if (this.state.phase === "card" || !this.deps.isViewerOwner() || !this.deps.isAutoStartAllowed()) return;
+    this.persist({ ...record, isFinished: true });
+  }
+
+  /** Whether an agent is at work, as the shell hears it from the avatar's status or a page it frames
+   *  (``model/agentWorking.ts``): one went to work (the tour may begin or resume) or none is working any more (a
+   *  card on screen is interrupted, and a start not yet begun is dropped). */
   noteAgentWorking(isWorking: boolean): void {
     if (isWorking === this.isAgentWorking) return;
     this.isAgentWorking = isWorking;
@@ -192,17 +261,31 @@ export class TourController {
     if (this.state.phase === "card") this.apply(interruptTour(this.state));
   }
 
+  /** Whether a page the shell frames says the workspace's first conversation is still following its script
+   *  (``shell:first-conversation-step``). While one does, the tour neither begins nor resumes by itself, so it never
+   *  runs on top of that conversation; the launcher's row starts it all the same. ``isSaidByPage`` tells a page's
+   *  own word from one dropped with its page (it went away, or loaded again). A page saying the conversation is
+   *  over lets the tour begin right then when an agent is already at work, since the reply to the message that
+   *  ended it is the first the tour may run beside. A dropped word only stops holding, so a page that loads again
+   *  in the middle of that conversation, and says so again, starts nothing in between. */
+  noteFirstConversationPending(isPending: boolean, isSaidByPage: boolean): void {
+    const wasPending = this.isFirstConversationPending;
+    this.isFirstConversationPending = isPending;
+    if (wasPending && !isPending && isSaidByPage && this.isAgentWorking) this.considerStart();
+  }
+
   /** Begin after the configured stretch of work, from the card that waits to resume, or the first on a workspace
-   *  where the tour has never run; nothing when the record is unknown or says there is nothing to start, or when
-   *  the card to resume at is past the list (a record from a build with more cards). */
+   *  where the tour has never run; nothing when the record is unknown or says there is nothing to start, when
+   *  the card to resume at is past the list (a record from a build with more cards), or while the workspace's first
+   *  conversation is still following its script. */
   private considerStart(): void {
-    if (this.record === null || this.state.phase !== "idle") return;
+    if (this.record === null || !isOpenToTour(this.state)) return;
     const index = this.record.resumeIndex ?? (this.record.isSeen ? null : 0);
     if (index === null || index >= this.cards.length) return;
     const generation = (this.startGeneration += 1);
     this.schedule(() => {
-      if (generation !== this.startGeneration || !this.isAgentWorking || this.state.phase !== "idle") return;
-      if (!this.deps.isAutoStartAllowed()) return;
+      if (generation !== this.startGeneration || !this.isAgentWorking || !isOpenToTour(this.state)) return;
+      if (this.isFirstConversationPending || !this.deps.isAutoStartAllowed()) return;
       this.begin(index);
     }, this.startAfterWorkingMs);
   }
@@ -215,15 +298,26 @@ export class TourController {
 
   private begin(index: number): void {
     this.apply(startTour(index));
-    this.persist({ isSeen: true, resumeIndex: null });
+    this.persist({ isSeen: true, resumeIndex: null, isFinished: this.isRecordedFinished() });
+  }
+
+  /** Whether the record already says finished, which no later write takes back: the tour run again is still one
+   *  the workspace has been through. */
+  private isRecordedFinished(): boolean {
+    return this.record?.isFinished ?? false;
   }
 
   next(): void {
+    const isCardShown = this.state.phase === "card";
     const action = this.shownCard()?.action ?? null;
     if (action !== null) this.deps.performAction?.(action);
     const next = nextCard(this.state, this.cards);
     this.apply(next);
-    if (next.phase === "paused") this.persist({ isSeen: true, resumeIndex: next.resumeIndex });
+    if (next.phase === "paused") {
+      this.persist({ isSeen: true, resumeIndex: next.resumeIndex, isFinished: this.isRecordedFinished() });
+    } else if (isCardShown && next.phase === "idle") {
+      this.persist({ isSeen: true, resumeIndex: null, isFinished: true });
+    }
   }
 
   back(): void {
@@ -231,7 +325,29 @@ export class TourController {
   }
 
   exit(): void {
+    const isCardShown = this.state.phase === "card";
+    // The last card put the checklist on screen as it showed; where the user has it since is theirs.
+    const isChecklistOwed = isCardShown && !isLastCardShown(this.state, this.cards);
     this.apply(exitTour(this.state));
+    if (isCardShown) this.persist({ isSeen: true, resumeIndex: null, isFinished: true });
+    if (isChecklistOwed) this.deps.performAction?.("show-onboarding-checklist");
+  }
+
+  /** A page asked for a coach card (``shell:show-coach-card``). It is shown while the tour is idle, in place of a
+   *  coach card that is up, and in place of the tour's end, closed as its own button would close it: the last
+   *  card as Done does, which finishes the tour, and the exit badge as Got it does. During any other card, or the
+   *  pause notice, it is dropped. A card at the avatar has the avatar's window put on screen. */
+  showCoachCard(text: string, place: CoachPlace): void {
+    if (isLastCardShown(this.state, this.cards)) this.next();
+    else if (this.state.phase === "exit-badge") this.dismissBadge();
+    const shown = showCoach(this.state, text, place);
+    if (shown === this.state) return;
+    this.apply(shown);
+    if ("target" in place) this.deps.performAction?.("show-avatar-window");
+  }
+
+  dismissCoach(): void {
+    this.apply(dismissCoach(this.state));
   }
 
   dismissBadge(): void {
@@ -248,7 +364,8 @@ export class TourController {
     if (
       this.record !== null &&
       this.record.isSeen === record.isSeen &&
-      this.record.resumeIndex === record.resumeIndex
+      this.record.resumeIndex === record.resumeIndex &&
+      this.record.isFinished === record.isFinished
     ) {
       return;
     }
@@ -259,6 +376,7 @@ export class TourController {
   }
 
   private apply(next: TourState): void {
+    const isLastCardArriving = !isLastCardShown(this.state, this.cards) && isLastCardShown(next, this.cards);
     this.state = next;
     const anchor = chromeAnchorShown(next, this.cards);
     if (anchor !== this.lastAnchor) {
@@ -266,5 +384,6 @@ export class TourController {
       this.deps.highlightChrome(anchor);
     }
     this.deps.redraw();
+    if (isLastCardArriving) this.deps.performAction?.("show-onboarding-checklist");
   }
 }

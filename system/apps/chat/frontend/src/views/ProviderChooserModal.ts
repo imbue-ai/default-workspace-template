@@ -63,6 +63,7 @@ import {
   loadLanesAndAccountsWithRetry,
   pickAccount,
   takeChooserAccountId,
+  takeChooserLaneId,
   startFlow,
   submitCode,
   submitKey,
@@ -931,9 +932,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
-      if (accountId === null) return;
-      const account = getAccounts().find((candidate) => candidate.id === accountId);
-      if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+      const laneId = takeChooserLaneId();
+      if (accountId !== null) {
+        const account = getAccounts().find((candidate) => candidate.id === accountId);
+        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+        return;
+      }
+      const requested = laneId === null ? undefined : getLanes().find((candidate) => candidate.id === laneId);
+      if (requested !== undefined) await begin(requested, requested.methods[0], { fromChooser: true });
     },
 
     onremove() {
