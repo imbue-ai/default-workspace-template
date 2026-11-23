@@ -138,9 +138,10 @@ describe("TourCard", () => {
     expect(document.querySelector("[data-tour-next]")?.textContent).toBe("Got it");
     expect(document.querySelector("[data-tour-exit]")).toBeNull();
     expect(document.querySelector("[data-tour-back]")).toBeNull();
-    // Under the title bar, on the side its control is on, arrow up.
+    // Under the title bar, at the end its control is at (the right, where Settings holds a workspace's
+    // permissions), arrow up.
     expect(card()?.style.top).toBe("12px");
-    expect(card()?.style.left).toBe("160px");
+    expect(card()?.style.left).toBe("828px");
     expect(card()?.querySelector(".tour-arrow")).not.toBeNull();
     expect(highlights).toEqual(["permissions"]);
 
@@ -194,22 +195,23 @@ describe("placeCard", () => {
     const size = { width: 360, height: 120 };
 
     expect(placeCard(CARDS[2], size, root, viewport).arrow?.side).toBe("bottom");
+    // The fake tour's chrome card is about Share, at the bar's right end.
     expect(placeCard(CARDS[1], size, root, viewport)).toEqual({
-      left: 160,
+      left: 1200 - 360 - 12,
       top: 12,
-      arrow: { side: "top", offset: 40 },
+      arrow: { side: "top", offset: 320 },
     });
     expect(placeCard(CARDS[0], size, root, viewport)).toEqual({ left: 24 + 72 + 12, top: 680 - 120, arrow: null });
     // The badge points at the launcher; the pause notice pops out of the avatar.
     expect(placeCard("badge", size, root, viewport).arrow?.side).toBe("bottom");
     expect(placeCard("paused", size, root, viewport)).toEqual({ left: 24 + 72 + 12, top: 680 - 120, arrow: null });
-    // A coach card sits under the side of the title bar its control is on, wherever the shell's own markers are.
-    expect(placeCard({ coachPlace: { chromeAnchor: "permissions" } }, size, root, viewport)).toEqual({
+    // A coach card sits under the end of the title bar its control is at, wherever the shell's own markers are.
+    expect(placeCard({ coachPlace: { chromeAnchor: "workspace-switcher" } }, size, root, viewport)).toEqual({
       left: 160,
       top: 12,
       arrow: { side: "top", offset: 40 },
     });
-    expect(placeCard({ coachPlace: { chromeAnchor: "help" } }, size, root, viewport)).toEqual({
+    expect(placeCard({ coachPlace: { chromeAnchor: "permissions" } }, size, root, viewport)).toEqual({
       left: 1200 - 360 - 12,
       top: 12,
       arrow: { side: "top", offset: 320 },
@@ -218,7 +220,10 @@ describe("placeCard", () => {
     expect(placeCard({ coachPlace: { target: "avatar" } }, size, root, viewport)).toEqual(
       placeCard(CARDS[0], size, root, viewport),
     );
-    expect(chromeSideOf("help")).toBe("right");
-    expect(chromeSideOf("share")).toBe("left");
+    // Only the workspace's name is at the bar's left end; every other control a card names is at its right end.
+    expect(chromeSideOf("workspace-switcher")).toBe("left");
+    for (const anchor of ["permissions", "settings", "share", "help"] as const) {
+      expect(chromeSideOf(anchor), anchor).toBe("right");
+    }
   });
 });

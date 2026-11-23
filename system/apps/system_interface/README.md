@@ -154,8 +154,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - A coach card for a page that asks (`shell:show-coach-card`, with exactly one
   place): the page's words (a paragraph per blank line, bold between a pair
   of `**`) and a Got it button, under the control of the Imbue
-  Studio chrome it names (`chromeAnchor`), which the chrome rings until the
-  card goes, or popping out of the agent's avatar (`target: "avatar"`), whose
+  Studio chrome it names (`chromeAnchor`: at the left end of the title bar
+  for the workspace's name, at the right end for every other control), which
+  the chrome rings until the card goes, or popping out of the agent's avatar (`target: "avatar"`), whose
   window the shell first brings forward. It is drawn in the tour's box: while
   the tour shows nothing, in place of a coach card that is up, and in place of
   the tour's last card or its exit badge, which it closes as that card's own
