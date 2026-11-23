@@ -345,9 +345,11 @@ def test_the_sampler_writes_the_recent_file_from_its_second_sample_and_continues
 def test_memory_rolls_up_to_the_chat_or_program_a_process_runs_under_largest_first() -> (
     None
 ):
-    chat_root, program_root = 100, 200
+    chat_root, chat_daemon_root, program_root = 100, 110, 200
+    # The chat registered two main processes (a TUI and its daemon): one holder.
     roots = {
         chat_root: {"kind": "chat", "agent_id": "agent-m"},
+        chat_daemon_root: {"kind": "chat", "agent_id": "agent-m"},
         program_root: {"kind": "program", "program": "recipe-box"},
     }
     # 101 and 102 run under the chat (102 through 101); 201 under the program; 300 under neither.
@@ -357,21 +359,30 @@ def test_memory_rolls_up_to_the_chat_or_program_a_process_runs_under_largest_fir
             chat_root: (1, 0, 0),
             101: (chat_root, 0, 0),
             102: (101, 0, 0),
+            chat_daemon_root: (1, 0, 0),
             program_root: (1, 0, 0),
             201: (program_root, 0, 0),
             300: (1, 0, 0),
         }
     )
-    sizes = {chat_root: 50, 101: 300, 102: 150, program_root: 40, 201: 60, 300: 70}
+    sizes = {
+        chat_root: 50,
+        101: 300,
+        102: 150,
+        chat_daemon_root: 80,
+        program_root: 40,
+        201: 60,
+        300: 70,
+    }
 
     holders = rs.memory_holders(sizes, ticks, roots, top_count=5)
 
     assert holders.top == [
-        {"kind": "chat", "agent_id": "agent-m", "bytes": 500},
+        {"kind": "chat", "agent_id": "agent-m", "bytes": 580},
         {"kind": "program", "program": "recipe-box", "bytes": 100},
     ]
     assert holders.other_bytes == 70
-    assert holders.held_bytes == 670
+    assert holders.held_bytes == 750
     assert rs.memory_holders(sizes, ticks, roots, top_count=1).top == holders.top[:1]
 
 

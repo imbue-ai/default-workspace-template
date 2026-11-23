@@ -545,21 +545,28 @@ def memory_holders(
     roots: Mapping[int, Root],
     top_count: int,
 ) -> MemoryHolders:
-    """The memory each root's processes hold, rolled up through their parents, largest first."""
+    """The memory each chat's or program's processes hold, rolled up through their parents, largest first.
+
+    An agent can register more than one root pid (codex's TUI and its app-server daemon); roots
+    with the same label are one holder.
+    """
     held_by_key: dict[int | str, int] = collections.defaultdict(int)
     for pid, size in anonymous_bytes_by_pid.items():
         held_by_key[_root_key(pid, ticks, ticks, roots)] += size
+    held_by_label: dict[tuple[tuple[str, str], ...], int] = collections.defaultdict(int)
+    root_by_label: dict[tuple[tuple[str, str], ...], Root] = {}
+    for key, size in held_by_key.items():
+        if isinstance(key, int):
+            label = tuple(sorted(roots[key].items()))
+            held_by_label[label] += size
+            root_by_label.setdefault(label, roots[key])
     ranked = sorted(
-        (
-            (key, size)
-            for key, size in held_by_key.items()
-            if isinstance(key, int) and size > 0
-        ),
+        ((label, size) for label, size in held_by_label.items() if size > 0),
         key=lambda pair: pair[1],
         reverse=True,
     )
     top: list[dict[str, object]] = [
-        {**roots[key], "bytes": size} for key, size in ranked[:top_count]
+        {**root_by_label[label], "bytes": size} for label, size in ranked[:top_count]
     ]
     return MemoryHolders(top, held_by_key.get(OTHER_ROOT, 0), sum(held_by_key.values()))
 
