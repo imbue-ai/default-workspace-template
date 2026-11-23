@@ -19,10 +19,10 @@ launcher stamps this task file's own path there before sending it, so you always
 hold an exact path, and `TASK_FILE` is that path. `LEAD_AGENT` is the `mngr`
 agent id of the agent that dispatched you (an `agent-<hex>` value; older
 launchers stamped its name, which a rename of the lead's chat invalidates
-mid-task, so never resolve or copy it as a name). It is the agent whose
-transcript you read (`mngr transcript $LEAD_AGENT`): mngr knows agents, not
-chats, so it names the agent even though the lead's chat may have run on others
-before it. `LEAD_WORK_DIR` is the lead's own checkout, where your report must
+mid-task, so never resolve or copy it as a name). If you need the lead's
+transcript, read this agent's (`mngr transcript $LEAD_AGENT`): mngr knows
+agents, not chats, so it names the agent even though the lead's chat may have
+run on others before it. `LEAD_WORK_DIR` is the lead's own checkout, where your report must
 land, and `FINISH_REPORT_PATH` is the report's path relative to it -- the lead
 polls for exactly this file. Any additional string fields the lead set in the
 frontmatter also become shell variables -- see your worker SKILL.md for which
@@ -41,7 +41,8 @@ At each gate or terminal status:
 
 1. Write the report **body** to a file in your worktree (the body only, no
    frontmatter): the message the user needs to see, addressing the user
-   directly.
+   directly. It reaches the user through your lead, who reads it first and
+   passes on what the user needs.
 
 2. Hand that file to the launcher, which builds the report, delivers it, and
    prints where it landed:
@@ -103,6 +104,19 @@ may stop mid-flight and ask its lead, on every operation. Use it when the
 answer is not in your task file or the repo. Your lead answers what it can
 itself; a lead that is itself a worker re-raises the question to its own lead
 and forwards the answer back down.
+
+## Never sleep
+
+Never run `sleep` to wait for something you started, such as a test run, a
+server or an app's own model call. A fixed sleep guesses how long the work
+takes, and every second past the real finish is time your lead and the user
+wait for nothing. Wait on the work itself instead:
+
+- Run it in the foreground when the command ends when the work does.
+- Otherwise start it with `system/scripts/workspace_bare_scripts/run_in_background.py`
+  and carry on with other work; its report wakes you when it ends.
+- When neither applies, check its status (a status endpoint, a file, a log
+  line) between other pieces of work, and act as soon as it shows done.
 
 ## Milestone reports (non-blocking)
 
@@ -227,7 +241,7 @@ I could not <do-the-task> because: <reason>. <optional: where work is, recommend
 The flow-specific guidance for *when* to give up lives in each worker's
 SKILL.md.
 
-### `name: no-update-needed`
+### `name: no-update-needed` (harden update passes only)
 
 ```
 No update needed. Reason: <one-sentence>.

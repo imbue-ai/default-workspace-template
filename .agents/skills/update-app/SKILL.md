@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code and before planning your changes. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it sizes each request and decides which ones you build yourself and which go to a background worker, it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
 metadata:
   author: imbue
 ---
@@ -46,53 +46,147 @@ as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
-Not every change is a quick edit. Before you start, decide which of these
-the request is -- it changes what you do *before* touching code:
+### Size each change before touching code
 
-- **Small / contained change** -- a bug fix, a copy tweak, a new field, a
-  backend logic fix, a config or `command` change, a restart. Go straight
-  to the live change loop below: edit, apply, refresh, verify.
+A message can ask for several changes, a change can arrive on its own later in
+the conversation, or it can come mixed in with feedback on one already in
+progress. Split what the user asked for into separate changes and size each one
+on its own, as if it had arrived alone. A change that would not have been
+mocked on its own is not added to another change's mock or held back until that
+mock is approved.
 
-- **Larger-scope change** -- a redesign, a new page or view, a meaningful
-  shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
-  `.agents/shared/references/interactive-delivery.md`**, put a cheap,
-  throwaway version of the *proposed* change in front of the user, loop until
-  they **explicitly confirm** the shape, and only then build the real thing
-  to a usable state. Never build heavy against an unconfirmed shape.
+Size each change by two questions. Each answer is a point on a range, and the
+question draws one line through it:
 
-  This is the demonstrative-prototype choice from
-  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
-  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
-  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
-  a redesign, or a data-touching change -- boot the *actually changed* app as a
-  labeled preview window beside the live one (Type 1 -- the real edit shown
-  through the real surface) with `preview_app.py` (invocation under "Protect
-  the user's data while you verify"; the same preview mechanism the careful
-  flow uses). Either way, *reading* the live store to render a preview is
-  fine; never let a preview or verification *write* to it.
+1. How much does it change what the user sees? If substantially, or you can't
+   tell, confirm its shape with the user first.
+2. How long will it take to build? If more than a few minutes, hand it to
+   the background worker.
 
-  **Does this change warrant a preview at all?** For an ordinary app a
-  preview is the exception, not the default. If the change *works*, a taste
-  mismatch is cheap to fix next round, so most changes can just go live and
-  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
-  a data-touching change, a substantial visual shift. A routine tweak, a copy
-  change, or a behavior-only change behind an unchanged surface doesn't need one.
-  (A critical app leans the other way -- the careful flow previews by default,
-  because the live app is off-limits. It still asks this same question before
-  the *final* pre-merge preview: a change the user cannot observe gives them
-  nothing to judge.)
+| | Builds in a few minutes or less | Takes longer |
+|---|---|---|
+| **Shape clear enough to build** | Build it yourself through the live change loop below | Hand it to the background worker |
+| **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
 
-  A new view or capability bolted onto an existing service is its own
-  delivery with its own feedback gate (interactive-delivery phase 8):
-  confirm and ship it on its own rather than bundling it with unrelated
-  changes.
+- **Small / contained changes** usually have a clear shape: a bug fix, a copy
+  tweak, a new field, a backend logic fix, a config or `command` change, a
+  restart.
+- **Larger-scope changes** usually need confirming: a redesign, a new page or
+  view, a meaningful shift in look-and-feel, or a new user-facing capability.
+- Many fall in between, for example a new control on an existing page; decide
+  by how much it changes what the user sees.
+- For build time, "Hand large work to a background worker" below lists the
+  typical cases that take longer.
 
-When in doubt about which bucket you're in, treat a change that alters what
-the user *sees or perceives* as larger-scope (confirm the shape first) and a
-change that only alters behavior behind an unchanged surface as contained.
-Either way, the mechanics of surfacing the change to the user are the same
-live loop:
+Either way, the user sees every change through the same live loop. Before you
+touch code, write one line per change in your reply or your plan: the change,
+whether it needs its shape confirmed first, and whether you build it here or
+hand it to the background worker. Then act on those lines.
+
+### Confirming the shape first
+
+For a larger-scope change, run the *same* mock-confirm flow `build-app` used to
+create the service: **read `.agents/shared/references/interactive-delivery.md`**,
+put a cheap, throwaway version of the *proposed* change in front of the user,
+loop until they **explicitly confirm** the shape, and only then build the real
+thing to a usable state. Never build heavy against an unconfirmed shape
+yourself; a background worker may start while its first milestone serves as
+the mock.
+
+This is the demonstrative-prototype choice from
+[`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+a redesign, or a data-touching change -- boot the *actually changed* app as a
+labeled preview window beside the live one (Type 1 -- the real edit shown
+through the real surface) with `preview_app.py` (invocation under "Protect
+the user's data while you verify"; the same preview mechanism the careful
+flow uses). Either way, *reading* the live store to render a preview is
+fine; never let a preview or verification *write* to it.
+
+**Does this change warrant a preview at all?** For an ordinary app a
+preview is the exception, not the default. If the change *works*, a taste
+mismatch is cheap to fix next round, so most changes can just go live and
+iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+a data-touching change, a substantial visual shift. A routine tweak, a copy
+change, or a behavior-only change behind an unchanged surface doesn't need one.
+(A critical app leans the other way -- the careful flow previews by default,
+because the live app is off-limits. It still asks this same question before
+the *final* pre-merge preview: a change the user cannot observe gives them
+nothing to judge.)
+
+A new view or capability bolted onto an existing service is its own
+delivery with its own feedback gate (interactive-delivery phase 8):
+confirm and ship it on its own rather than bundling it with unrelated
+changes.
+
+## Hand large work to a background worker
+
+The goal is to keep you available and responsive to the user, and to deliver
+short changes fast while long ones are built at the same time. So do short work
+yourself and give long work to a background worker through the `launch-task`
+skill. While you work on something yourself, the user's new messages wait until
+you stop, so hand off any change that takes more than a few minutes, including
+long planning or thinking, whatever its size on screen. One message often asks
+for changes of different lengths; don't treat them as one large request.
+Typical long changes:
+
+- a feature or change that spans several files or many parts of the app;
+- exploration that needs web searches or reading several sources;
+- reading or writing several pieces of data;
+- processing a medium or large amount of data, or applying a change across
+  many records;
+- a long command, such as a build, a test suite or a big install;
+- debugging a problem whose cause is unknown.
+
+Use one worker for all such changes: hand it the first, and send
+each later one to the same worker with `create_worker.py reply`. The worker
+may combine its changes and build them together, in whatever order gets
+the work done fastest, without finishing one before starting the next. Build the rest yourself
+through the live loop while it runs, so they reach the user without waiting
+on the large ones. You stay available to answer the user's next messages and
+bring the worker's result in when it lands.
+
+To hand work off:
+
+1. If a change you hand off needs its shape confirmed (a larger-scope change
+   above), hand it off right away and ask the worker for an early milestone
+   that shows that change's shape. Treat that milestone as the mock: show it
+   to the user and pass their changes to the worker. The short changes you
+   build yourself go live without waiting for it.
+2. Commit your pending edits and launch the worker as `launch-task` describes.
+   The brief names the app, the changes handed to the worker, in the user's
+   words, the changes you are building yourself so the worker does not build
+   them too (it may still edit the same files), the files and decisions you
+   already know about, and what done looks like. It names the
+   build-worker guide (`.agents/shared/build-worker/SKILL.md`), which carries
+   the standing rules for how the worker builds, checks and reports; do not
+   restate them in the brief. Hardening still happens at turn-end, as
+   described below.
+   Handing work to a worker does not change its scope. Decide the scope
+   yourself, as you would if you were building it in the chat, and state it in
+   the brief: what to build, no more and no less, with the context the worker
+   needs to build it (the user's words, how the app works now, decisions
+   already made). Do not add targets you would not have built yourself;
+   writing out a detailed plan tends to add work nobody asked for. Checks
+   that the user's existing data survives the change still happen before it
+   goes live.
+3. Tell the user in one line that the change is being built and that they can
+   keep sending requests.
+4. While the worker runs, keep handling new messages. Build a change
+   yourself, through the live loop below, unless it needs more than a few
+   minutes of building; send that one to the worker with
+   `create_worker.py reply`. You and the worker may edit the same files;
+   any conflicts are resolved when you merge its work.
+5. When a milestone or the final report arrives, merge it as
+   `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
+   through steps 2 and 3 of the live loop, and tell the user what is now there.
+
+Take the service lease as usual (next section) before you merge the worker's
+work into the live app.
+
+If you are that worker, the build-worker guide
+(`.agents/shared/build-worker/SKILL.md`) and your brief override this skill.
 
 ## One editor at a time: the service lease
 
@@ -101,6 +195,11 @@ agents editing the same service at the same time interleave destructively --
 there is no merge step where that could be reconciled. Concurrent edits must
 be *serialized*, and the serialization token is an advisory lease held as a
 regular `tk` ticket (regular tickets are visible across agents).
+
+The exception is a background worker you launched: it is not a second editor
+here. It works in its own worktree, so you can keep editing the same files
+while it runs; its changes reach the live app only when you merge them, and
+any conflicts are resolved in that merge.
 
 **Pre-flight, before touching the service's code or config:**
 

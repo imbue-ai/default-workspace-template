@@ -22,7 +22,7 @@ parameter sweeps) still hold during hardening.
 
 ## Isolation
 
-Do all of this on an **isolated branch / worktree**. Nothing should the
+Do all of this on an **isolated branch / worktree**. Nothing should touch the
 live, user-facing state until the branch is merged. If the worktree has
 no `.venv`, sync once before any `uv run`. If a fix needs a new dependency, add
 it the normal way and commit the manifest changes so they appear in the merge.
