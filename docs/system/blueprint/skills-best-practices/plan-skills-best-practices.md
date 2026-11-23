@@ -17,10 +17,10 @@ The first release is given in file-level detail; later areas are outlined and ge
 - **First release.** Foundations, the cheap cross-cutting PR, the staging change, `update-self`, `build-app` with `update-app`, and the lifecycle trio with the shared-layer tiering.
 - **Deferred.** The template family, `migrate-workspace`, the medium skills, `imbue-studio`, the remaining scripts, and a pass that cuts the model round trips a skill asks for. Tracked in the Linear MIND backlog.
 - **The verification measures round trips.** Every tool call a skill asks for costs a model turn. The runs that verify this release record what each skill costs in turns, as a regression check now and as the baseline for that later pass.
+- **Descriptions are rewritten where they can be evaluated.** A restructure carries its own skills' descriptions, and the rest go in one PR of their own. A rewrite keeps every trigger its old text carried: cutting the steps from `build-app`'s description stopped it loading for a mockup request in 9 of 15 trials.
 - **Decided against**, so nobody re-opens them by accident:
   - A size limit on reference files. The contents-list rule and the review category cover them.
   - A length cap on descriptions beyond the spec's 1,024 characters. Today's listing fits its budget.
-  - A triggering check for the description rewrite. It adds no trigger vocabulary and triggering is not a problem today.
   - A numeric target for the load reports. The reviewer judges.
   - A separate terminology sweep. Each restructure applies the glossary to the files it touches.
   - An alias for the renamed browser command.
@@ -150,7 +150,6 @@ Paths are in dwt unless marked (mngr).
 
 ### The cheap PR
 
-- **Descriptions.** All 41 to the house shape. Minimal wording edits, no new trigger vocabulary. `file-sharing`'s false promise is corrected.
 - **Deletions.**
   - `.agents/skills/dealing-with-the-unexpected/`; AGENTS.md's section of that name points at `check-app-errors` and `assist`.
   - `.agents/shared/worker/references/verification.md` and the stale review-gates line in `lead-proxy.md`.
@@ -167,6 +166,12 @@ Paths are in dwt unless marked (mngr).
   - `.mngr/settings.toml` comment and `system/test_mngr_template_stacking.py`: the worker is a tracked skill, still never an installed copy.
   - Every other mention: `update-self`, `build-app`, `migrate-workspace`, `AGENTS.md`, `docs/system/workspace-internals.md`, `system/services/host_backup/README.md`.
 - **Constraint.** This PR and the staging change must ship in the same release. Between them, the staged `update-self` names worker files an older tree does not have.
+
+### The descriptions PR
+
+- The descriptions of the skills no area restructures, to the house shape. Minimal wording edits; `file-sharing`'s false promise is corrected.
+- Each area's PR rewrites the descriptions of the skills it restructures.
+- Every rewrite is read against its old text for a trigger it dropped.
 
 ### The staging change (built in this workspace)
 
@@ -247,6 +252,7 @@ Paths are in dwt unless marked (mngr).
 2. **Foundations.** One PR. After it, the tree-wide test is green, every failing built-in is stamped, and the guide and category exist in both repos.
 3. **The cheap PR.** Built here, on the foundations.
 4. **The staging change.** Built here, on the cheap PR. After it, the three areas are independent of each other.
+   - **The descriptions PR.** Built on the foundations, beside the rest; nothing depends on it.
 5. **The three first-release areas, in parallel.** Each agent works in its own dwt worktree checked out in this workspace, branching from phase 4. Each stops at a pushed PR with green CI.
 6. **Review and verification.** The user looks at each PR. The round-trip script is written. Then the manual exercises and the eval run happen, possibly in parallel.
 7. **The rename PR.** Stacked on the `update-self` area, merged with it.
