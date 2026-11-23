@@ -29,7 +29,7 @@ export interface TourPlacement {
 /** Space between the card and what it points at, and between the card and the viewport's edge. */
 export const TOUR_GAP = 12;
 export const TOUR_EDGE = 12;
-/** How far in from the left a card about a left-hand chrome control sits (under the workspace name and its tabs). */
+/** How far in from the left a card about a left-hand chrome control sits (under the workspace's name). */
 const CHROME_LEFT_INSET = 160;
 
 function clamp(value: number, min: number, max: number): number {

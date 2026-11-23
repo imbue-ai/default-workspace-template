@@ -1,1 +1,0 @@
-The new files service (the dufs file viewer behind the rail's File Viewer row) gets its own shedding band: the most expendable built-in service of all, below the browser coordinator -- it is a tiny static file server holding almost no memory, and supervisord restarts it if shed.

@@ -1,1 +1,0 @@
-The avatar chooser's "Original SVG" link downloads inside Imbue Studio. It went through a `download` link, whose request went without the workspace's session; it now uses the shared `startDownload` helper and shows a toast if the download fails.

@@ -34,8 +34,10 @@ vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: vi.fn() }));
 
 import m from "mithril";
 
+import { appendEvents } from "../models/Response";
 import type { AssistantMessageEvent, ToolResultEvent } from "../models/Response";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { toggleComposerFragment } from "../models/ComposerDraft";
 import { closeProviderChooser, getUnpickableAccount } from "../models/Providers";
 import { setParticipantsForTesting } from "../models/Participants";
 import { StableAssistantMessage, renderAssistantMessage } from "./message-renderers";
@@ -213,5 +215,46 @@ describe("the agent's header without a hand-cranked render", () => {
 
     expect(header()?.textContent).toBe("Atlas");
     expect(face()?.querySelector("img")?.getAttribute("src")).toBe("/api/participants/workspace-agent/picture");
+  });
+});
+
+describe("a picker in a message without a hand-cranked render", () => {
+  const CHAT = "chat-picker";
+  const pill = (label: string): HTMLButtonElement | undefined =>
+    [...document.querySelectorAll<HTMLButtonElement>(".studio-picker-pill")].find(
+      (each) => each.textContent === label,
+    );
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("presses a pill when the draft takes its label, and goes dead once the chat is no longer waiting on it", async () => {
+    // The same event object on every redraw, as the store hands it back for an untouched message: the draft
+    // and the chat's state are what move, and the memo has to see both.
+    const event: AssistantMessageEvent = {
+      ...authErrorEvent(),
+      event_id: "ask-1",
+      is_auth_error: false,
+      is_api_error: false,
+      text: "**What do you want to use this Studio for?**\n\n<studio_category_picker/>",
+    };
+    appendEvents(CHAT, [event]);
+    store.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "IDLE" } });
+    const toolResults = new Map<string, ToolResultEvent>();
+    m.mount(document.getElementById("root") as HTMLElement, {
+      view: () => m(StableAssistantMessage, { event, toolResults, chatId: CHAT, isStretchHead: false }),
+    });
+    expect(pill("Sales")?.disabled).toBe(false);
+    expect(pill("Sales")?.getAttribute("aria-pressed")).toBe("false");
+
+    toggleComposerFragment(CHAT, "Sales");
+    await settle();
+    expect(pill("Sales")?.getAttribute("aria-pressed")).toBe("true");
+
+    store.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "THINKING" } });
+    m.redraw();
+    await settle();
+    expect(pill("Sales")?.disabled).toBe(true);
   });
 });
