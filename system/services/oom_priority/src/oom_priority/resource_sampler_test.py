@@ -472,6 +472,20 @@ def test_a_memory_stretch_holds_through_hysteresis_and_closes_with_the_holders_a
     assert 0.86 < float(str(closed["average"])) < 0.95
 
 
+def test_a_memory_stretch_whose_peak_came_before_it_opened_reports_that_peak_in_bytes_too() -> (
+    None
+):
+    tracker = rs.MemoryStretchTracker()
+    holders = _CountingHolders()
+
+    now, _ = _drive_memory(tracker, holders, 0.0, 20.0, 0.97)
+    now, (_opened,) = _drive_memory(tracker, holders, now, 45.0, 0.86)
+    now, (closed,) = _drive_memory(tracker, holders, now, 65.0, 0.5)
+
+    assert closed["peak"] == 0.97
+    assert closed["peak_used_bytes"] == 970_000
+
+
 def _write_smaps_rollup(proc: Path, anonymous_kib_by_pid: dict[int, int]) -> None:
     for pid, kib in anonymous_kib_by_pid.items():
         (proc / str(pid) / "smaps_rollup").write_text(

@@ -600,9 +600,8 @@ class MemoryStretchTracker:
         self._below_since: float | None = None
         self._stretch_id: str | None = None
         self._opened_at: float = 0.0
-        # Each sample's time and usage since the first one at or above the open threshold.
-        self._usages: list[tuple[float, float]] = []
-        self._peak_used_bytes: int = 0
+        # Each sample's time, usage and bytes in use since the first one at or above the open threshold.
+        self._usages: list[tuple[float, float, int]] = []
         # The holders at the highest reading a snapshot was taken at, and that reading.
         self._peak_holders: MemoryHolders | None = None
         self._snapshot_used_bytes: int = 0
@@ -624,9 +623,8 @@ class MemoryStretchTracker:
         if stretch_id is None:
             opened = self._track_opening(now, usage, memory, read_holders)
             return [opened] if opened is not None else []
-        self._usages.append((now, usage))
         used = memory["used"]
-        self._peak_used_bytes = max(self._peak_used_bytes, used)
+        self._usages.append((now, usage, used))
         if (
             used > self._snapshot_used_bytes
             and now - self._last_snapshot_at >= MEMORY_PEAK_SNAPSHOT_INTERVAL_SECONDS
@@ -663,7 +661,7 @@ class MemoryStretchTracker:
             return None
         if self._above_since is None:
             self._above_since = now
-        self._usages.append((now, usage))
+        self._usages.append((now, usage, memory["used"]))
         if now - self._above_since < MEMORY_STRETCH_OPEN_SECONDS:
             return None
         stretch_id = uuid.uuid4().hex
@@ -671,7 +669,6 @@ class MemoryStretchTracker:
         self._opened_at = self._above_since
         self._above_since = None
         self._below_since = None
-        self._peak_used_bytes = memory["used"]
         holders = self._take_snapshot(now, memory["used"], read_holders)
         return {
             "timestamp": _iso_nanoseconds(datetime.fromtimestamp(now, timezone.utc)),
@@ -697,7 +694,8 @@ class MemoryStretchTracker:
         ended_at: float,
     ) -> dict[str, object]:
         # The stretch's own samples: from its first high one up to the one that began its closing minute.
-        usages = [usage for at, usage in self._usages if at < ended_at]
+        samples = [(usage, used) for at, usage, used in self._usages if at < ended_at]
+        usages = [usage for usage, _used in samples]
         peak_holders = self._peak_holders
         event: dict[str, object] = {
             "timestamp": _iso_nanoseconds(datetime.fromtimestamp(now, timezone.utc)),
@@ -714,7 +712,7 @@ class MemoryStretchTracker:
             "duration_seconds": round(ended_at - self._opened_at),
             "peak": round(max(usages), 4),
             "average": round(sum(usages) / len(usages), 4),
-            "peak_used_bytes": self._peak_used_bytes,
+            "peak_used_bytes": max(used for _usage, used in samples),
             "total_bytes": memory["total"],
             "top": peak_holders.top[:MEMORY_STRETCH_TOP_COUNT]
             if peak_holders is not None
@@ -724,7 +722,6 @@ class MemoryStretchTracker:
         self._stretch_id = None
         self._below_since = None
         self._usages = []
-        self._peak_used_bytes = 0
         self._snapshot_used_bytes = 0
         self._peak_holders = None
         return event
