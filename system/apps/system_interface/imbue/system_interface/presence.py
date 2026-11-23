@@ -414,9 +414,10 @@ class PresenceSweep(MutableModel):
     def record_heartbeat(
         self, identity: RequestIdentity, now: datetime, last_input_at: datetime | None = None
     ) -> PresenceOutcome:
-        """Record one heartbeat (``PresenceStore.heartbeat``), announcing the connected set when it brought someone
-        in and the roster when it changed who is here or the requester's newest input time (the multiplayer spec,
-        section 4.3), since every other window reads "Active" or "Idle" off the roster it was last pushed."""
+        """Record one heartbeat (``PresenceStore.heartbeat``), announcing the connected set when who is connected
+        changed since the last announcement (someone came, or went without the sweep having noticed yet) and the
+        roster when that or the requester's newest input time changed (the multiplayer spec, section 4.3), since
+        every other window reads "Active" or "Idle" off the roster it was last pushed."""
         with self._announce_lock:
             outcome = self.store.heartbeat(identity, now, last_input_at)
             if outcome.is_membership_changed:
