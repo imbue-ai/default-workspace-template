@@ -14,6 +14,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from loguru import logger as loguru_logger
+from onboarding_activity.markers import MARKER_DIR_ENV
 from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
@@ -56,8 +57,11 @@ def _isolate_system_interface_tests(
     ``refresh_workspace_view.py``) post to the shell ``MINDS_WORKSPACE_SERVER_URL`` names, which
     would be the workspace's real one. A port nothing listens on refuses them at once; the
     pipeline and e2e tests serve a shell of their own and point at it.
+
+    The onboarding markers the shell sets go to the checkout's own ``data/`` otherwise.
     """
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
+    monkeypatch.setenv(MARKER_DIR_ENV, str(tmp_path_factory.mktemp("onboarding-activity")))
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
 

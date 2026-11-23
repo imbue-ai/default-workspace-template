@@ -78,7 +78,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), what a client's phone shows
-  (`/api/clients/<client>/shown`), the backdrop size a client's desktop layout
+  (`/api/clients/<client>/shown`, which only the phone layout posts, so the
+  owner's report also sets the `phone_layout_used` marker), the backdrop size a client's desktop layout
   draws in (`/api/clients/<client>/viewport`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg|icon.png`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), the embedder-message
@@ -113,25 +114,68 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/api/roster`): who is connected right now, with their identity and
   profile, and everyone who may be here (see "Who is here").
 - The show-around tour's record (`GET` and `POST /api/tour`, `{"is_seen",
-  "resume_index"}`): whether the tour of the desktop
-  (`frontend/src/model/tourCards.ts`) has run in this workspace, and the card it
-  resumes at. A new workspace (one the bootstrap marked with `offer_tour` on its
+  "resume_index", "is_finished"}`): whether the tour of the desktop
+  (`frontend/src/model/tourCards.ts`) has run in this workspace, the card it
+  resumes at, and whether it has nothing left to show. A tour that waits to
+  resume is not finished. A record written with `is_finished` true also sets
+  the `tour_finished` marker (see the state paragraph below), which outlives
+  a later record that asks for the tour again. A new workspace (one the bootstrap marked with `offer_tour` on its
   first boot) runs it by itself the first time its agent goes to work (so the
   owner learns the product while waiting for a reply; the page's
   `tour_start_ms` query parameter makes it wait for a task that is taking a
   while instead); the agent answering interrupts it, and the next time the
-  agent works it resumes from the card that would have come next. The
+  agent works it resumes from the card that would have come next. An agent
+  is at work while the avatar's status says so or a page the shell frames
+  does (`frontend/src/model/agentWorking.ts`): the status follows mngr's
+  agent events, which are prompt only for an agent that reports its activity
+  there, and a page says `shell:agent-working {isWorking}` when an agent
+  starts or stops working in what it shows. The shell keeps each page's last
+  word, and drops it when the page's frame loads again or its window goes;
+  a message with no boolean is dropped. The tour neither begins nor resumes
+  by itself while a page says the workspace's first conversation is still
+  following its script (`shell:first-conversation-step {isPending}`, kept and
+  dropped per page the same way): when a page says that conversation is over
+  the tour begins right then if an agent is already at work, and with the
+  next work otherwise, while a word dropped with its page only stops holding
+  it. The
   launcher's "Show me around" row runs it again from the first card any time.
   A card about a control of the Imbue Studio chrome asks the chrome to ring it
   (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the
-  right half of the desktop, revealing the shortcuts.
+  right half of the desktop, revealing the shortcuts. The page records the
+  tour as finished when Done on the last card or Exit walkthrough is pressed,
+  and the owner's page does so for a record that reads seen with nothing to
+  resume, when it is a page the tour could begin on (the desktop layout, not a
+  pulled-out window). The last card tells the user to click the entries of
+  the onboarding checklist. As that card shows, and when Exit walkthrough is
+  pressed on a card before it, the page relays `onboarding:show-checklist` to
+  whichever app registered it and puts the window that opens down the left of
+  the desktop (30% of its width, 85% of its height), in front, with no other
+  window moved (`frontend/src/store/tourActions.ts`, and the store's
+  `showRegisteredPageAt`); the shell holds the message's type, never an app's
+  name, nothing happens when no app registered it, and a relay that fails is
+  logged to the console with no notice.
+- A coach card for a page that asks (`shell:show-coach-card`, with exactly one
+  place): the page's words (a paragraph per blank line, bold between a pair
+  of `**`) and a Got it button, under the control of the Imbue
+  Studio chrome it names (`chromeAnchor`: at the left end of the title bar
+  for the workspace's name, at the right end for every other control), which
+  the chrome rings until the card goes, or popping out of the agent's avatar (`target: "avatar"`), whose
+  window the shell first brings forward. It is drawn in the tour's box: while
+  the tour shows nothing, in place of a coach card that is up, and in place of
+  the tour's last card or its exit badge, which it closes as that card's own
+  button would. During any other tour card, or the pause notice, it is
+  dropped, and it gives way to a tour that starts. The phone layout and a
+  pulled-out window's own shell draw no such box, so a request there is
+  dropped. A text that is empty or longer than 500 characters, or a place
+  that is not exactly one the shell knows, is dropped. The shell names no app
+  here: the words come from the page.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
   `themes_changed`, `keybindings_changed`, and `layout_op` (contracts section
   6); it accepts each client's `client_state` report.
 
-Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
+Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, where it resumes, and whether it is finished), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the default shortcuts the shell has
 offered), `shortcut_names.json` (what each shortcut's app and launch path were
@@ -147,6 +191,14 @@ an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
 beside the seven bundled ones (`docs/system/avatar-designs.md`). Presence lives
 beside it under `data/.state/presence/` (`--presence-dir`): the per-user files
 and the profile cache.
+
+The shell also sets two of the workspace's onboarding markers, the one-way
+records under `data/.state/onboarding_activity/` of what the owner has already
+done (`system/libs/onboarding_activity`): `tour_finished`, whenever the tour
+record is written finished, and `phone_layout_used`, whenever the owner's
+client reports what its phone layout shows. A visitor's report sets nothing.
+A marker that cannot be written is logged and does not fail the request. The
+shell only writes them; what reads them is each reader's own business.
 
 ### The desktop model
 
@@ -173,8 +225,9 @@ and the profile cache.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcuts (each `default_shortcut` it
   declares, else, for an app a program runs, its first launch path taking no
-  text and no mention, or its first when every one takes one) on the first
-  read after the registry has been read.
+  text and no mention, or its first when every one takes one; none for an app
+  whose manifest says `seeds_shortcuts = false`, which is in the launcher
+  only) on the first read after the registry has been read.
   A default shortcut not yet offered (an app that registers later, or a
   further one an app comes to declare) is added to every desktop once, on the
   registry change and on every read; `default_shortcuts_offered.json` lists
@@ -246,13 +299,23 @@ through `relay.ts`). A solo page hands on its apps' messages but never the
 chrome's, which the main window's page already relays. A `path` handler has the
 message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
-route's `show` below, in-process. A message some app did not take becomes a
-notice carrying that app's reason, and a page shown while the client has only
-pop-outs open becomes a notice to reopen the main window. The shell's page
+route's `show` below, in-process; when the handler sets `reload_when_raised`
+and the show raised a window already at that page, the shell then refreshes
+that window. The page saves a layout change still waiting to be saved (the
+raise of the window whose page was clicked) before it hands a message on, so a
+window a handler brings forward ends in front of it. A message some app did
+not take becomes a notice carrying that app's reason, and a page shown while
+the client has only pop-outs open becomes a notice to reopen the main window. The shell's page
 announces `reportsChatOnScreen` to the chrome, promising the
 `minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
-a window on screen, which the relay forwards up with the other `minds:`
-messages. The shell's page
+a window on screen, and `reportsProviderChooserOnScreen`, promising the
+`minds:provider-chooser-on-screen` the chat root sends once its provider
+chooser is drawn there (and that a `minds:focus-chat` with no `chatId` brings
+the chat root up, so the chooser can open on a workspace with nothing signed
+in before any chat exists), both of which the relay forwards up with the
+other `minds:` messages. The second is `true` only when the vendored embed
+contract is v16 or later, since an older one drops a `minds:focus-chat` with
+no `chatId` before the shell sees it. The shell's page
 also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
 to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
 into the workspace) or a

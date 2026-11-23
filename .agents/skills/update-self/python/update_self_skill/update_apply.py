@@ -55,6 +55,7 @@ from update_self_skill.update_apply_contract import (
     provision_incomplete_path,
     read_last_good,
     read_marker,
+    read_run_status,
     rollback_lock_path,
     snapshots_root,
     write_emergency,
@@ -67,6 +68,7 @@ from update_self_skill.update_banding import (
     as_expendable,
     keep_protected,
 )
+from update_self_skill.update_chat_pause import MNGR_STOP_START_TIMEOUT_SECONDS
 from update_self_skill.update_classification import (
     CLASS_DOCKERFILE,
     ApplyPlan,
@@ -969,6 +971,48 @@ def _report_emergency(
             )
 
 
+def _stop_update_worker(repo_root: Path, runner: Runner, dri_agent: str) -> None:
+    """Stop the worker the run record names, keeping it, so its idle session's memory is free
+    for the apply's boots and build.
+
+    Only when ``dri_agent`` is the run's lead: a critical-app pass lands through this same
+    apply from another chat, possibly while the update's worker is still mid-work. By the
+    lead's apply the worker's ``done`` is in hand, and a retry's catch-up message starts it
+    again with its branch and conversation intact. A stop that fails holds the apply back no
+    more than a worker left running would.
+    """
+    status = read_run_status(repo_root)
+    if status is None or not dri_agent or status.chat_agent_name != dri_agent:
+        return
+    worker = status.worker_agent_name
+    if not worker:
+        return
+    try:
+        completed = runner.run(
+            ["mngr", "stop", worker],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=MNGR_STOP_START_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        sys.stderr.write(
+            f"warning: could not stop the update worker {worker} ({type(exc).__name__}: {exc}); "
+            "applying with it running.\n"
+        )
+        return
+    if completed.returncode != 0:
+        sys.stderr.write(
+            f"warning: could not stop the update worker {worker}: `mngr stop` exited "
+            f"{completed.returncode}: {(completed.stderr or '').strip()}; applying with it running.\n"
+        )
+        return
+    sys.stderr.write(
+        f"stopped the update worker {worker} to free its memory for the apply.\n"
+    )
+
+
 def apply_update(
     merge_ref: str,
     repo_root: Path,
@@ -1107,6 +1151,9 @@ def apply_update(
             )
             return 1
     write_marker(marker, repo_root, now)
+    # Before the refresh, which may replace the mngr this calls.
+    if marker.phase == PHASE_STARTED:
+        _stop_update_worker(repo_root, runner, marker.dri_agent)
 
     def _advance(phase: str) -> None:
         marker.phase = phase
@@ -1317,28 +1364,29 @@ def apply_update(
         # backend that cannot boot is then rejected while the live bundle
         # is still the one that was serving, instead of after ``static/``
         # has been rewritten and must be restored from its snapshot.
-        preflight_output = preflight(
+        preflight_failure = preflight(
             repo_root, http, spawner, sleeper, expend, venv=fresh_venv
         )
-        if preflight_output is not None:
+        if preflight_failure is not None:
             raise ApplyFailed(
-                "merged backend failed to boot in a pre-flight check; live "
-                "service not restarted",
-                detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
+                f"merged backend failed to boot in a pre-flight check{preflight_failure.cause}; "
+                "live service not restarted",
+                detail=preflight_failure.output
+                or "(the pre-flight boot wrote nothing at all)",
                 detail_heading="pre-flight boot output",
             )
         # The chat is pre-flighted beside the shell, only where the merged tree runs it
         # as its own program: it is the process that imports mngr and the harness
         # plugins, so it is where a bad plugin table or a missing dependency fails.
         if has_chat_program(repo_root):
-            chat_preflight_output = preflight_chat(
+            chat_preflight_failure = preflight_chat(
                 repo_root, http, spawner, sleeper, expend, venv=fresh_venv
             )
-            if chat_preflight_output is not None:
+            if chat_preflight_failure is not None:
                 raise ApplyFailed(
-                    "merged chat app failed to boot in a pre-flight check; live "
-                    "service not restarted",
-                    detail=chat_preflight_output
+                    f"merged chat app failed to boot in a pre-flight check{chat_preflight_failure.cause}; "
+                    "live service not restarted",
+                    detail=chat_preflight_failure.output
                     or "(the pre-flight boot wrote nothing at all)",
                     detail_heading="chat pre-flight boot output",
                 )

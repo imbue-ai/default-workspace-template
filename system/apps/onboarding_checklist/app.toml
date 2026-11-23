@@ -1,0 +1,42 @@
+# The Onboarding checklist app: the four things worth trying in a new workspace, on one page, the done ones
+# checked. A click on an entry shows where that thing is, whether or not it is done. It declares no launch path,
+# so the desktop offers the synthesized ``open`` at its root. It stores nothing.
+name = "onboarding-checklist"
+display_name = "Onboarding checklist"
+description = "The four things worth trying in a new workspace, the done ones checked; a click on one shows where it is."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# One small page: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+# Its own band between Getting Started's and the Style Guide's: a shed costs one reload of a page that holds
+# nothing of the user's.
+priority = "onboarding-checklist"
+# Right after Getting Started (15), before Files (20).
+launcher_rank = 16
+# Reached from the launcher, and opened by the desktop's tour as it ends: no desktop is given a shortcut of it.
+seeds_shortcuts = false
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
+system = true
+
+# One window is what it is for: the launcher's row, and a shortcut the user adds there, focus it.
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# The desktop's tour opens the checklist as it ends, by this message's type rather than by the app's name.
+[[message_handlers]]
+type = "onboarding:show-checklist"
+show = "/"
+
+# Built only from the shared components and the design tokens, so every theme styles it with no work of its own
+# (docs/system/blueprint/workspace-themes/, section 7).
+[theming]
+mode = "tokens"
+
+# A preview serves the page on a free port over the live markers and registry, which it only reads. The app keeps
+# nothing under data/.apps/, so there is nothing to copy.
+[preview]
+command = ["onboarding-checklist"]
+env = {ONBOARDING_CHECKLIST_PORT = "{port:main}", ONBOARDING_CHECKLIST_HOST = "{host}"}
+health_path = "/api/health"

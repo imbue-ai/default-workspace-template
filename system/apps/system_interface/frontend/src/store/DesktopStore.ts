@@ -219,6 +219,9 @@ export type SwitchCause = "user" | "landing" | "follow";
 // writing the detach itself: the main window's shell writes it as the window leaves, and that save is on its
 // way while the solo shell boots, so a first load that beats it is followed by the broadcast within this.
 const SOLO_HEAL_GRACE_MS = 1000;
+/** How many times the layout is read for a window the shell just showed before the wait for a read of its own is
+ *  given up: each further read is one a broadcast's read displaced. */
+const HELD_LAYOUT_READ_ATTEMPTS = 3;
 
 /** The routes the store calls, injectable so the store is tested against a fake shell. */
 export interface DesktopApi {
@@ -709,6 +712,10 @@ export class DesktopStore {
   private opensLocalFiles = false;
   /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
   private canReportBug = false;
+  /** Whether the embedder opens its workspace settings when a page asks; off until it says so. */
+  private opensWorkspaceSettings = false;
+  /** Whether the embedder draws coach marks on its own controls when a page asks; off until it says so. */
+  private showsCoachMarks = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -745,6 +752,10 @@ export class DesktopStore {
   /** Where the shell said this client lands, once an arrival has been answered; a retried startup read arrives again
    *  only while none has. */
   private bootArrival: ClientArrival | null = null;
+  /** The phone shows home only for want of anything to land on: there is no desktop yet. Never recorded as where this client was, and the next read that has a desktop lands it. */
+  private isLandingProvisional = false;
+  /** The inventory read in flight after the start, which a second ask joins. */
+  private inventoryRefresh: Promise<void> | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
   /** The requests of the agents asked from the shell's own buttons whose launch has not settled. */
@@ -1210,6 +1221,29 @@ export class DesktopStore {
     if (this.canReportBug) this.reportBug(failure);
   }
 
+  /** Whether the embedder opens its workspace settings when a page asks, which each page is told in its handshake. */
+  getOpensWorkspaceSettings(): boolean {
+    return this.opensWorkspaceSettings;
+  }
+
+  /** The embedder said whether it opens its workspace settings (``minds:embedder-capabilities``). Pages already
+   *  greeted hear it as the shell's rebroadcast of that message. */
+  setOpensWorkspaceSettings(opensWorkspaceSettings: boolean): void {
+    this.opensWorkspaceSettings = opensWorkspaceSettings;
+  }
+
+  /** Whether the embedder draws coach marks on its own controls when a page asks, which each page is told in its
+   *  handshake. */
+  getShowsCoachMarks(): boolean {
+    return this.showsCoachMarks;
+  }
+
+  /** The embedder said whether it draws coach marks (``minds:embedder-capabilities``). Pages already greeted hear it
+   *  as the shell's rebroadcast of that message. */
+  setShowsCoachMarks(showsCoachMarks: boolean): void {
+    this.showsCoachMarks = showsCoachMarks;
+  }
+
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
   getCanImmerse(): boolean {
     return this.canImmerse;
@@ -1516,6 +1550,7 @@ export class DesktopStore {
    *  reload lands there, and an agent reading the client sees it. Closes any open sheet. */
   showOnPhone(shown: PhoneShown): void {
     this.pendingPhoneShowId = null;
+    this.isLandingProvisional = false;
     this.dispatch({ type: "phone_shown", shown });
     this.recordShownWithShell(shown);
   }
@@ -1532,7 +1567,12 @@ export class DesktopStore {
    *  the shell, the windows sheet's order and the screen agree. */
   private takeShownHistory(history: readonly string[]): void {
     const shown = this.state.phone.shown;
-    if (!this.isPhoneLayout() || shown === null || history[history.length - 1] === shownHistoryEntry(shown)) {
+    if (
+      !this.isPhoneLayout() ||
+      shown === null ||
+      this.isLandingProvisional ||
+      history[history.length - 1] === shownHistoryEntry(shown)
+    ) {
       this.dispatch({ type: "phone_history_loaded", history });
       return;
     }
@@ -1554,9 +1594,20 @@ export class DesktopStore {
   }
 
   /** Where the phone lands: what this client recorded last, else the pinned chat window, else home. Taken without
-   *  recording, since the history already says it. */
+   *  recording, since the history already says it. With nothing to land on yet (there is no desktop), home,
+   *  provisionally: the page is never left blank, and a later landing replaces it. */
   private landPhone(): void {
-    if (!this.isPhoneLayout() || this.state.phone.shown !== null || !this.state.isDesktopsLoaded) return;
+    if (!this.isPhoneLayout()) return;
+    if (this.state.phone.shown !== null && !this.isLandingProvisional) return;
+    const hasDesktop = this.state.isDesktopsLoaded && this.state.activeDesktopId !== null;
+    if (!hasDesktop) {
+      if (this.state.phone.shown === null && this.state.isDesktopsLoaded) {
+        this.isLandingProvisional = true;
+        this.dispatch({ type: "phone_shown", shown: { kind: "home" } });
+      }
+      return;
+    }
+    this.isLandingProvisional = false;
     this.dispatch({ type: "phone_shown", shown: phoneLanding(this.state) });
   }
 
@@ -1588,20 +1639,37 @@ export class DesktopStore {
     for (const window of windows) await this.closeWindow(window.id);
   }
 
-  /** The page came back into sight or went out of it. Back in sight, the shell's word is read again, since a
-   *  phone's page sleeps while hidden and the pushes of the time away may never have arrived. */
+  /** The page came back into sight or went out of it. Back in sight, the socket is made live at once (reopened,
+   *  or checked if it reads as open) and the shell's word is read again, since the pushes of the time away may
+   *  never have arrived. */
   onVisibilityChange(isVisible: boolean): void {
     if (!isVisible) {
       this.isHiddenSinceConnect = true;
       return;
     }
+    this.deps.socket.reviveNow();
     void this.refreshInventory();
+  }
+
+  /** The socket held while the page was out of sight, so the shown page's own connections most likely did too: a
+   *  later reconnect is no reason to reload it. */
+  private takeLiveConfirmed(): void {
+    this.isHiddenSinceConnect = false;
   }
 
   /** Read the shell's word again (the inventory), taking it as a push would. Before a startup read has answered it is
    *  that read, tried again, so the window lands too. */
-  private async refreshInventory(): Promise<void> {
+  private refreshInventory(): Promise<void> {
     if (!this.isBooted) return this.boot();
+    if (this.inventoryRefresh === null) {
+      this.inventoryRefresh = this.readInventoryAgain().finally(() => {
+        this.inventoryRefresh = null;
+      });
+    }
+    return this.inventoryRefresh;
+  }
+
+  private async readInventoryAgain(): Promise<void> {
     let inventory: Inventory;
     try {
       inventory = await this.deps.api.fetchInventory();
@@ -1615,6 +1683,13 @@ export class DesktopStore {
     this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     if (own !== undefined) this.takeShownHistory(own.shown_history);
+    // A window that never got onto a desktop (there was none) gets onto one now, as the
+    // start would have put it, and a phone that could only land home provisionally lands.
+    if (this.state.activeDesktopId === null) {
+      const chosen = chooseInitialDesktopId(inventory.desktops, null, own?.active_desktop ?? null);
+      if (chosen !== null) await this.switchDesktop(chosen, "landing");
+    }
+    this.landPhone();
   }
 
   /** Schedule a redraw, telling the shown-theme listeners first when the shown theme changed. */
@@ -1719,6 +1794,7 @@ export class DesktopStore {
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
+      onLiveConfirmed: () => this.takeLiveConfirmed(),
       onAppsUpdated: (apps) => this.takeApps(apps),
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
@@ -1859,7 +1935,10 @@ export class DesktopStore {
     // A phone never picks a desktop: its active one is only ever the one the shell assigns on arrival.
     const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
     const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
-    if (chosen === null) return;
+    if (chosen === null) {
+      this.landPhone();
+      return;
+    }
     await this.switchDesktop(chosen, "landing");
     this.landPhone();
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -2395,6 +2474,16 @@ export class DesktopStore {
     const wasViewing = this.viewedDesktop() !== null;
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
+    // A window still on no desktop (there was none) gets onto one once a push brings
+    // some. The inventory is read first, for this client's record and history, which a push does not carry.
+    if (
+      this.state.activeDesktopId === null &&
+      desktops.length > 0 &&
+      this.isLandingProvisional &&
+      this.inventoryRefresh === null
+    ) {
+      void this.refreshInventory();
+    }
     if (this.state.activeDesktopId === previous) return;
     // The active desktop was deleted and the reducer landed on the fallback (the first desktop listed).
     this.cancelGesture();
@@ -2563,14 +2652,13 @@ export class DesktopStore {
   /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
    *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
   private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
-    const { type, ...payload } = message;
     let relay: MessageRelay;
     try {
-      relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+      relay = await this.relayMessage(message, sender);
     } catch (error) {
       const refusing = undeliveredAppOf(error);
       const app = refusing === null ? undefined : appByName(this.state, refusing);
-      this.toastFailure(this.relayWhatFailed(type, error), error, { isLasting: false, app, isAboutApp: true });
+      this.toastFailure(this.relayWhatFailed(message.type, error), error, { isLasting: false, app, isAboutApp: true });
       return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
@@ -2587,6 +2675,61 @@ export class DesktopStore {
     if (!type.startsWith(OPEN_MESSAGE_PREFIX)) return "Couldn't do that";
     const app = undeliveredAppOf(error);
     return app === null ? "Couldn't open this link" : `${this.displayNameOf(app)} couldn't open this link`;
+  }
+
+  /** The relay itself; throws with the shell's detail when the message did not reach every app. An app that takes
+   *  the message may have the shell raise a window, which the shell does over the stored layout: a gesture still
+   *  waiting in the debounce (the raise of the window whose page was clicked) goes into the file first, or the
+   *  shell raises over a stack that already has that window on top, changes nothing, and the gesture then puts
+   *  the clicked window back in front of the one the message was for. */
+  private async relayMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay> {
+    const { type, ...payload } = message;
+    await this.flushPendingSave();
+    return this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+  }
+
+  /** Send the apps registered for ``type`` a message of the shell's own, and put each window a ``show`` handler
+   *  answered it with at ``frame``: normal, shown, and on top of the stack, with no other window touched. The shell
+   *  names no app: whichever registered the type takes the message. Nothing happens when none did, in a preview
+   *  shell (whose backend refuses the relay), or in a solo shell (which leaves the desktop's arrangement to the
+   *  client's main window). Nobody asked for the page by hand, so a relay that fails is logged and the user is
+   *  told nothing. */
+  async showRegisteredPageAt(type: string, frame: Frame): Promise<void> {
+    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, type)) return;
+    let relay: MessageRelay;
+    try {
+      relay = await this.relayMessage({ type }, SHELL_SENDER);
+    } catch (error) {
+      console.warn(`[si] could not show the page registered for ${type}`, error);
+      return;
+    }
+    for (const delivery of relay.deliveries) {
+      if (delivery.window_id !== null) await this.placeShownWindow(delivery.window_id, frame);
+    }
+  }
+
+  /** Put a window the shell just showed this client at ``frame``. The show wrote the window's placement, so the
+   *  shell's desktops and layout are taken first: a frame set over the layout from before the show would be
+   *  refused as stale when saved, and thrown away by the read the show's broadcast starts. A window the show found
+   *  on another desktop is left as it is placed there. */
+  private async placeShownWindow(windowId: string, frame: Frame): Promise<void> {
+    if (findWindow(this.state, windowId) === null) await this.refreshInventory();
+    if (!(await this.readLayoutUntilHeld())) return;
+    if (findWindow(this.state, windowId)?.desktop.id !== this.state.activeDesktopId) return;
+    this.setWindowFrame(windowId, frame);
+  }
+
+  /** Read the shell's layout, again while another read that began meanwhile (a broadcast's) has taken its place:
+   *  a read is dropped when a later one began, and what that later one brings would land over a change made in
+   *  between. Answers whether a read made here is the one this window holds. */
+  private async readLayoutUntilHeld(): Promise<boolean> {
+    for (let attempt = 0; attempt < HELD_LAYOUT_READ_ATTEMPTS; attempt += 1) {
+      const read = this.refetchLayout();
+      const sequence = this.layoutFetchSequence;
+      await read;
+      if (sequence === this.layoutFetchSequence) return true;
+    }
+    return false;
   }
 
   /** Open a link where it belongs in this workspace: a file in Files (``open:file``), a local URL on an
@@ -2894,6 +3037,9 @@ export class DesktopStore {
         break;
       case "landing":
         this.reportMove("");
+        // Where a phone lands needs the desktop, not its layout, so a window other than the pinned chat (which is
+        // mounted with the desktop anyway) starts loading without waiting on the layout read.
+        this.landPhone();
         break;
       case "follow":
         this.reportFollowedDesktop();
@@ -3857,7 +4003,7 @@ export class DesktopStore {
 
   /** Put a window on screen without ever putting it away: for a pulled-out window, its own desktop window; otherwise
    *  restore and raise when minimized, raise otherwise. */
-  private showWindow(windowId: string): void {
+  showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       this.showDetachedWindow(windowId);
@@ -4329,6 +4475,12 @@ export class DesktopStore {
   windowGesture(): MoveGesture | ResizeGesture | null {
     const gesture = this.gesture;
     return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
+  }
+
+  /** The window a drag is moving, else null. */
+  movingWindowId(): string | null {
+    const gesture = this.gesture;
+    return gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
   }
 
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */

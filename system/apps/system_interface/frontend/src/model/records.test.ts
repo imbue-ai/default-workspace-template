@@ -103,7 +103,7 @@ describe("parseClientArrival", () => {
 });
 
 describe("parseMessageRelay", () => {
-  it("reads a shown page's wait for a desktop window, a posted message as not waiting, and refuses the wrong shape", () => {
+  it("reads a shown page's window and its wait for a desktop window, a posted message as neither, and refuses the wrong shape", () => {
     const relay = parseMessageRelay({
       type: "open:file",
       deliveries: [
@@ -113,8 +113,8 @@ describe("parseMessageRelay", () => {
       detail: null,
     });
     expect(relay.deliveries).toEqual([
-      { app: "logger", has_no_desktop_window: false },
-      { app: "files", has_no_desktop_window: true },
+      { app: "logger", window_id: null, has_no_desktop_window: false },
+      { app: "files", window_id: "win-1", has_no_desktop_window: true },
     ]);
     expect(() => parseMessageRelay({ type: "open:file" })).toThrow(WireShapeError);
   });

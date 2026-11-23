@@ -8,6 +8,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import APP_CONTRACT_ROUTE
@@ -26,7 +27,6 @@ from flask import Response
 from flask import redirect
 from flask import request
 from flask import send_file
-from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from loguru import logger as _loguru_logger
 from pydantic import ValidationError
@@ -495,7 +495,8 @@ def _favicon() -> Response:
 
 
 def _serve_asset(filename: str) -> Response:
-    """One file of the page's built bundle, by name."""
+    """One file of the page's built bundle, by name; one named from its content is cached for good, so a load (a
+    phone opening the page over a slow link above all) does not ask again for files that cannot have changed."""
     assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
@@ -503,7 +504,7 @@ def _serve_asset(filename: str) -> Response:
     # ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        return send_built_asset(assets_directory, filename)
     except NotFound:
         return Response(status=404)
 
@@ -527,7 +528,11 @@ def _handle_client_state_message(
 ) -> bool:
     """Process one incoming WebSocket message; returns True for a well-formed ``client_state``.
 
-    ``client_state`` is the only message type clients send: it registers the browser's client id and the
+    A ``ping`` is answered with a ``pong`` on the same connection: a page coming back into sight asks whether its
+    socket survived the time away, since a connection the network dropped can still read as open (the shell
+    frontend's ``ShellSocket.reviveNow``).
+
+    ``client_state`` is the only other message type clients send: it registers the browser's client id and the
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
     the report names a different previous desktop). A following report (a window that followed the client's stored
@@ -540,6 +545,9 @@ def _handle_client_state_message(
         parsed = json.loads(raw_message)
     except json.JSONDecodeError as e:
         _loguru_logger.opt(exception=e).warning("Ignored unparsable WebSocket message from client")
+        return False
+    if isinstance(parsed, dict) and parsed.get("type") == "ping":
+        client_queue.put(json.dumps({"type": "pong"}))
         return False
     if not isinstance(parsed, dict) or parsed.get("type") != "client_state":
         _loguru_logger.warning("Ignored unexpected WebSocket message type from client: {!r}", parsed)

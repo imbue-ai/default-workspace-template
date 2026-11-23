@@ -10,6 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { ONLY_DESKTOP_REASON } from "../model/failures";
 import type { Desktop, DesktopShortcut } from "../model/records";
+import {
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
+  SHELL_SHOW_COACH_CARD,
+} from "@imbue/workspace-ui/src/app_contract";
+import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
+import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -51,6 +58,9 @@ let store: DesktopStore;
 let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
+/** What the App passed on, each time, of whether any page says an agent is working in it. */
+let pagesAgentWorking: boolean[] = [];
+const notePagesAgentWorking = (isWorking: boolean): void => void pagesAgentWorking.push(isWorking);
 
 function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -79,6 +89,7 @@ async function mountApp(
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   openedOutside = [];
+  pagesAgentWorking = [];
   const laterWindowIds = options.laterWindowIds ?? [];
   api.desktops = [
     desktopRecord("home", {
@@ -117,9 +128,10 @@ async function mountApp(
     api: new FakeTourApi({ isSeen: true }),
     highlightChrome: () => undefined,
     isAutoStartAllowed: () => false,
+    isViewerOwner: () => true,
     redraw: () => m.redraw(),
   });
-  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+  mountView(() => m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -161,7 +173,9 @@ describe("the startup read", () => {
     const answer = refusal === null ? api.holdReads() : () => undefined;
     api.refusal = refusal;
     void store.start(NO_LINK);
-    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
     await settle();
     m.redraw.sync();
     return answer;
@@ -769,6 +783,128 @@ describe("the window menu's Theming submenu", () => {
     expect(api.calls).toContain(
       `launch:home:buddy:draft:${JSON.stringify({ message: enableThemingPrompt("Docs") })}:window:win-9:without-page`,
     );
+  });
+});
+
+describe("sharing a window's app", () => {
+  const GUEST = {
+    owner: false,
+    user_id: "user-alice-0001",
+    email: "alice@example.com",
+    participant: "user:user-alice-0001",
+  };
+
+  function titleBarShare(): HTMLElement | null {
+    return document.querySelector('[data-window-id="win-1"] [data-window-control="share"]');
+  }
+
+  /** Open win-1's window menu and answer its Share row. */
+  function windowMenuShare(): HTMLElement | null {
+    (document.querySelector('[data-window-id="win-1"] [data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    return document.querySelector('[data-menu-row="share"]');
+  }
+
+  /** Stand a spy in as the chrome framing the page, which is where a message to the embedder goes. */
+  function framedUnderChrome(): { postMessage: ReturnType<typeof vi.fn> } {
+    const chrome = { postMessage: vi.fn() };
+    Object.defineProperty(window, "parent", { value: chrome, configurable: true });
+    return chrome;
+  }
+
+  // A backdrop of a real size, so the window is one whose title leaves Share room.
+  beforeEach(() => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "parent", { value: window, configurable: true });
+  });
+
+  it("offers Share in the title bar once a chrome has said what it can do, and asks it for the app's share settings", () => {
+    m.redraw.sync();
+    expect(titleBarShare()).toBeNull();
+
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    const chrome = framedUnderChrome();
+    (titleBarShare() as HTMLElement).click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
+  it("offers the title bar's Share to the workspace's owner alone", () => {
+    store.setEmbedderPresent(true);
+    // The guest's own desktop, so the window is theirs to focus and its bar draws its actions.
+    api.desktops = [
+      desktopRecord("home", { owner: GUEST.participant, windows: [windowRecord("win-1", "docs", "/a")] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    setOwnIdentityForTesting(GUEST);
+    m.redraw.sync();
+    expect(document.querySelector('[data-window-id="win-1"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(titleBarShare()).toBeNull();
+
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    setOwnIdentityForTesting({ ...GUEST, owner: true });
+    m.redraw.sync();
+    expect(titleBarShare()).not.toBeNull();
+  });
+
+  it("offers Share in the title bar and the window menu for a critical app, and sends the app's name from the menu", () => {
+    offerApps(api, socket, [appRecord("docs", { critical: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    expect(titleBarShare()).not.toBeNull();
+
+    const chrome = framedUnderChrome();
+    const row = windowMenuShare() as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
+  it("offers Share in neither the title bar nor the window menu for an internal app", () => {
+    offerApps(api, socket, [appRecord("docs", { internal: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+
+    expect(titleBarShare()).toBeNull();
+    expect(windowMenuShare()).toBeNull();
+    expect(document.querySelector('[data-menu-row="close"]')).not.toBeNull();
+  });
+
+  it("offers Share on the phone's window menu by the same rule, under a chrome", () => {
+    const openPhoneWindowMenu = (): void => {
+      store.openPhoneSheet("windows");
+      m.redraw.sync();
+      (document.querySelector('[data-phone-window-menu="win-1"]') as HTMLElement).click();
+      m.redraw.sync();
+    };
+    offerApps(api, socket, [appRecord("docs", { critical: true })]);
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    openPhoneWindowMenu();
+    // No chrome frames the page, so there is nowhere to share from.
+    expect(document.querySelector('.phone-window-menu [data-menu-row="refresh"]')).not.toBeNull();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="share"]')).toBeNull();
+    pressEscape();
+
+    const chrome = framedUnderChrome();
+    openPhoneWindowMenu();
+    const row = document.querySelector('.phone-window-menu [data-menu-row="share"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+    pressEscape();
+
+    offerApps(api, socket, [appRecord("docs", { internal: true })]);
+    m.redraw.sync();
+    openPhoneWindowMenu();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="refresh"]')).not.toBeNull();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="share"]')).toBeNull();
   });
 });
 
@@ -1434,6 +1570,76 @@ describe("the switch to the phone layout", () => {
     expect(document.querySelector(".launcher-failure")).toBeNull();
   });
 
+  it("draws no home grid before the phone lands, so the window it lands on is not preceded by home", async () => {
+    unmountViews();
+    api = new FakeDesktopApi();
+    socket = new FakeDesktopSocket();
+    api.apps = [appRecord("docs")];
+    api.desktops = [desktopRecord("home")];
+    const answerReads = api.holdReads();
+    store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: themeMetricsRecord(),
+      modes: { isPhone: true, isTouch: true },
+      redraw: () => m.redraw(),
+      reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
+      soloWindowId: null,
+      outsideLinks: {
+        openInEmbedder: () => undefined,
+        openInBrowser: () => undefined,
+        launchInSystemApp: () => undefined,
+      },
+    });
+    const starting = store.start(NO_LINK);
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
+    expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
+    // The bar says the page is opening, not that home is on screen, and offers Home.
+    expect(document.querySelector("[data-phone-pill]")?.getAttribute("data-phone-pill")).toBe("opening");
+    expect(document.querySelector<HTMLButtonElement>("[data-phone-home]")?.disabled).toBe(false);
+    answerReads();
+    await starting;
+    m.redraw.sync();
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
+  });
+
+  it("tells a phone's startup read nothing answers in place of home, not a blank page", async () => {
+    unmountViews();
+    api = new FakeDesktopApi();
+    socket = new FakeDesktopSocket();
+    api.refusal = new HttpError(
+      readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" }),
+    );
+    store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: themeMetricsRecord(),
+      modes: { isPhone: true, isTouch: true },
+      redraw: () => m.redraw(),
+      reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
+      soloWindowId: null,
+      outsideLinks: {
+        openInEmbedder: () => undefined,
+        openInBrowser: () => undefined,
+        launchInSystemApp: () => undefined,
+      },
+    });
+    await store.start(NO_LINK);
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
+    expect(document.querySelector("[data-boot-failure]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");
@@ -1503,5 +1709,135 @@ describe("a fullscreen window", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});
+
+describe("a page's word that an agent is working in it", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("is passed on from the page's shell:agent-working, for the tour to begin on", () => {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isWorking of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_AGENT_WORKING, isWorking },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(pagesAgentWorking.slice(-2)).toEqual([true, false]);
+  });
+});
+
+describe("a page's word that the workspace's first conversation is following its script", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("reaches the tour from the page's shell:first-conversation-step, as the page's own word", () => {
+    initEmbedderRelay();
+    const heard = vi.spyOn(tour, "noteFirstConversationPending");
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isPending of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_FIRST_CONVERSATION_STEP, isPending },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(heard.mock.calls).toEqual([
+      [true, true],
+      [false, true],
+    ]);
+  });
+});
+
+describe("a page's coach card", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  /** Post win-1's page's ``shell:show-coach-card`` to the shell, at ``place``, and draw what it made of it. */
+  function askForCoachCard(place: Record<string, string> = { chromeAnchor: "permissions" }): void {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", ...place },
+        source: frame.contentWindow,
+        origin: window.location.origin,
+      }),
+    );
+    m.redraw.sync();
+  }
+
+  it("is drawn over the desktop from the page's shell:show-coach-card, and goes on Got it", () => {
+    askForCoachCard();
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("permissions");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is drawn at the avatar when the page names that target, and goes on Got it", () => {
+    askForCoachCard({ target: "avatar" });
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("avatar");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is dropped by a solo shell, which draws no card: nothing is left up that no button could take down", async () => {
+    unmountViews();
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
+  });
+
+  it("is dropped by the phone layout, which draws no card either", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
+  });
+});
+
+describe("the view's removal", () => {
+  it("stops the pages layer's focus watcher, so no tick of it outlives the document", async () => {
+    unmountViews();
+    const started = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    try {
+      await mountApp();
+      const watchers = started.mock.calls.flatMap(([, delay], idx) =>
+        delay === FOCUS_WATCH_INTERVAL_MS ? [started.mock.results[idx].value] : [],
+      );
+      expect(watchers).toHaveLength(1);
+      expect(cleared).not.toHaveBeenCalledWith(watchers[0]);
+      unmountViews();
+      expect(cleared).toHaveBeenCalledWith(watchers[0]);
+    } finally {
+      started.mockRestore();
+      cleared.mockRestore();
+    }
   });
 });

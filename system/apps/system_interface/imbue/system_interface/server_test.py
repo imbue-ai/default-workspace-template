@@ -816,6 +816,24 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
     assert "javascript" in response.headers["Content-Type"]
 
 
+def test_assets_named_from_their_content_are_cached_for_good_and_others_are_revalidated(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "assets" / "index-BScc3eNh.js").write_text("console.log('app');")
+    (static_dir / "assets" / "index.js").write_text("console.log('app');")
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    hashed = test_client.get("/assets/index-BScc3eNh.js")
+    unhashed = test_client.get("/assets/index.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """Routing-level HTTP errors pass through the unhandled-exception handler intact.
 
@@ -1312,6 +1330,25 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
         )
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_ping_is_answered_on_its_own_connection_and_registers_nothing(app: Flask) -> None:
+    """A page back in sight pings its socket to learn whether it survived; the answer goes to that connection
+    alone, and the ping neither registers nor moves the client."""
+    shell = state_of(app).shell
+    pinging_queue = shell.broadcaster.register()
+    other_queue = shell.broadcaster.register()
+    try:
+        assert (
+            _handle_client_state_message(json.dumps({"type": "ping"}), pinging_queue, shell, is_first_report=False)
+            is False
+        )
+        assert pinging_queue.get_nowait() == json.dumps({"type": "pong"})
+        assert pinging_queue.empty() and other_queue.empty()
+        assert shell.broadcaster.get_client_info(pinging_queue) is None
+    finally:
+        shell.broadcaster.unregister(pinging_queue)
+        shell.broadcaster.unregister(other_queue)
 
 
 def test_client_state_reports_register_the_client_and_log_only_real_desktop_switches(app: Flask) -> None:

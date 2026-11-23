@@ -10,6 +10,8 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import is_marked
 from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
@@ -656,6 +658,32 @@ def test_recording_a_window_no_desktop_holds_or_an_unknown_client_is_a_404_and_r
     assert client.post("/api/clients/c1/shown", json={}).status_code == 400
     recorded = _shell(app).clients.get_client("c1")
     assert recorded is not None and recorded.shown_history == ()
+
+
+def test_the_owners_phone_layout_report_sets_the_marker_and_a_visitors_does_not(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+
+    visitors = client.post(
+        "/api/clients/c2/shown",
+        json={"window_id": None},
+        headers=identity_headers(_BOB_IDENTITY),
+        environ_base=_NOT_LOOPBACK,
+    )
+
+    assert visitors.status_code == 200
+    assert not is_marked(Marker.PHONE_LAYOUT_USED)
+
+    # A report the shell refuses records nothing, the owner's included.
+    assert _record_shown(client, "c1", "win-00000000000000ff").status_code == 404
+    assert not is_marked(Marker.PHONE_LAYOUT_USED)
+
+    assert _record_shown(client, "c1", None).status_code == 200
+
+    assert is_marked(Marker.PHONE_LAYOUT_USED)
+    assert not is_marked(Marker.TOUR_FINISHED)
 
 
 def test_every_way_a_window_closes_drops_it_from_every_clients_shown_history(
@@ -1935,8 +1963,20 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
         "terminal": [],
         "files": [],
         "buddy": [
-            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
-            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+            {
+                "type": "minds:focus-chat",
+                "path": "/api/focus-chat",
+                "show": None,
+                "showing": [],
+                "reload_when_raised": False,
+            },
+            {
+                "type": "open:file",
+                "path": None,
+                "show": "{path}?view",
+                "showing": ["{path}/"],
+                "reload_when_raised": False,
+            },
         ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]
@@ -3641,17 +3681,35 @@ def test_a_themeable_app_turns_its_theming_on_and_off(tmp_path: Path, broadcaste
 
 def test_the_tour_record_round_trips(client: FlaskClient) -> None:
     # A workspace the bootstrap did not mark new is not offered the tour until something asks for it.
-    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": None}
-    assert client.post("/api/tour", json={"is_seen": True}).get_json() == {"is_seen": True, "resume_index": None}
+    unoffered = {"is_seen": True, "resume_index": None, "is_finished": False}
+    assert client.get("/api/tour").get_json() == unoffered
+    assert client.post("/api/tour", json={"is_seen": True}).get_json() == unoffered
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": 3}).get_json() == {
         "is_seen": True,
         "resume_index": 3,
+        "is_finished": False,
     }
-    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": 3}
-    assert client.post("/api/tour", json={"is_seen": False}).get_json() == {"is_seen": False, "resume_index": None}
+    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": 3, "is_finished": False}
+    assert client.post("/api/tour", json={"is_seen": False}).get_json() == {
+        "is_seen": False,
+        "resume_index": None,
+        "is_finished": False,
+    }
     assert client.post("/api/tour", json={"is_seen": "not a flag"}).status_code == 400
+    assert client.post("/api/tour", json={"is_seen": True, "is_finished": "not a flag"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": "three"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": -1}).status_code == 400
+
+
+def test_a_tour_record_written_finished_sets_the_marker_the_rest_of_the_workspace_reads(client: FlaskClient) -> None:
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": 2}).status_code == 200
+    assert not is_marked(Marker.TOUR_FINISHED)
+
+    finished = client.post("/api/tour", json={"is_seen": True, "resume_index": None, "is_finished": True})
+
+    assert finished.get_json() == {"is_seen": True, "resume_index": None, "is_finished": True}
+    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": None, "is_finished": True}
+    assert is_marked(Marker.TOUR_FINISHED)
 
 
 def test_the_resource_gauge_settings_round_trip_and_are_the_owners_alone(client: FlaskClient) -> None:
@@ -3660,7 +3718,7 @@ def test_the_resource_gauge_settings_round_trip_and_are_the_owners_alone(client:
         "visibility": "when_warning",
         "disk_warning_free_gb": 5.0,
         "memory_warning_percent": None,
-        "cpu_warning_percent": None,
+        "cpu_warning_percent": 90,
     }
     assert set(view["readings"]) == {"cpu", "memory", "disk"}
     assert view["alerts"] == []

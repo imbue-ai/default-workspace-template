@@ -5,6 +5,8 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
+import { readComposerDraft } from "../models/ComposerDraft";
+import { mayHoldStudioWidget } from "../studio-widgets";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
@@ -28,6 +30,7 @@ import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-c
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
+import { isReplyAwaitingAnswer } from "./last-reply";
 import { STRETCH_PIECES_CLASS, STRETCH_TEXT_EDGE_CLASS, renderAgentProse } from "./machine-bubbles";
 import { railNodeAttrs } from "./agent-rail";
 import { runningCallElapsed, runningToolCall } from "./ActivityIndicator";
@@ -177,6 +180,13 @@ function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): stri
   return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id, prompts) ?? "-"}|${resending}`;
 }
 
+/** What a picker in this event's text is drawn from outside the event: whether it takes clicks, and the draft its
+ *  pills read as pressed from. Empty for text that carries no picker. */
+function pickerSignature(event: AssistantMessageEvent, chatId: string): string {
+  if (!mayHoldStudioWidget(event.text || "")) return "";
+  return `${isReplyAwaitingAnswer(chatId, event.event_id)}|${readComposerDraft(chatId)}`;
+}
+
 /** What this event's chip row shows of the call the agent is running now: its id and how long the turn has run, or
  *  nothing when the call is not this event's. The running chip's look and clock live outside the event, so the memo
  *  below has to carry them. */
@@ -198,6 +208,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
   let renderedRunningChipSignature = "";
+  let renderedPickerSignature = "";
   let renderedIsStretchHead = false;
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
@@ -223,6 +234,7 @@ export function StableAssistantMessage(): m.Component<{
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         runningChipSignature(event, chatId) !== renderedRunningChipSignature ||
+        pickerSignature(event, chatId) !== renderedPickerSignature ||
         isStretchHead !== renderedIsStretchHead ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
@@ -241,6 +253,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
       renderedRunningChipSignature = runningChipSignature(event, chatId);
+      renderedPickerSignature = pickerSignature(event, chatId);
       renderedIsStretchHead = isStretchHead;
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
@@ -781,6 +794,8 @@ function appendEventParts(
         expansionKeyPrefix: event.event_id,
         layout: isOnLine ? "bubble" : "plain",
         isStretchHead: placement.isStretchHead && children.length === 0,
+        chatId,
+        isPickerLive: mayHoldStudioWidget(textContent) && isReplyAwaitingAnswer(chatId, event.event_id),
       });
       if (prose !== null) children.push(prose);
     }

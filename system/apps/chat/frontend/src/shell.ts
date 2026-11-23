@@ -8,15 +8,25 @@
  */
 
 import m from "mithril";
-import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { adoptClientIdentity, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
-import { reportChatOnScreen } from "@imbue/workspace-ui/src/embed";
+import { rereadNextStepSuggestions } from "./models/Suggestions";
+import {
+  EMBEDDER_CAPABILITIES,
+  OPEN_SHARE_SETTINGS,
+  OPEN_WORKSPACE_SETTINGS,
+  reportChatOnScreen,
+  reportProviderChooserOnScreen,
+  sendToEmbedder,
+  setEmbedderMessageHandler,
+} from "@imbue/workspace-ui/src/embed";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellChromeAnchor, ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import type { ShareSettingsCoachMark } from "@imbue/workspace-ui/src/embed";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
@@ -36,6 +46,56 @@ let lastHandshake: ShellHandshake | null = null;
 export function getShellHandshake(): ShellHandshake | null {
   return lastHandshake;
 }
+
+// Whether the Imbue Studio chrome said it opens its workspace settings when a page asks: read off the handshake by
+// a page greeted after the chrome spoke, and off the chrome's own word, which the shell passes on, by one already
+// open. A page the chat root frames hears only the handshake, which the root keeps up to date.
+let isWorkspaceSettingsOpenedByChrome = false;
+
+/** Whether a chrome stands above this page that opens its workspace settings when asked. */
+export function opensWorkspaceSettings(): boolean {
+  return isWorkspaceSettingsOpenedByChrome;
+}
+
+/** Ask the Imbue Studio chrome to open its workspace settings at ``group``. */
+export function openWorkspaceSettings(group: string): void {
+  sendToEmbedder(OPEN_WORKSPACE_SETTINGS, { group });
+}
+
+// Whether the chrome said it draws coach marks on its own controls, read the same two ways.
+let isCoachMarkDrawnByChrome = false;
+
+/** Whether a chrome stands above this page that draws coach marks on its own controls when asked. */
+export function showsCoachMarks(): boolean {
+  return isCoachMarkDrawnByChrome;
+}
+
+/** Ask the Imbue Studio chrome to open its share settings on the whole workspace, with a coach mark at
+ *  ``coachMark``. */
+export function openShareSettingsWithCoachMark(coachMark: ShareSettingsCoachMark): void {
+  sendToEmbedder(OPEN_SHARE_SETTINGS, { coachMark });
+}
+
+/** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the chrome. */
+export function showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void {
+  connection?.showCoachCard(text, { chromeAnchor });
+}
+
+// What this page last told the shell of its chat's agent. No to begin with, which is what a shell that has not heard
+// from a page takes it to say.
+let isAgentWorkingReported = false;
+
+/**
+ * After a look at this page's chat: tell the shell whether a reply is under way in it, when that has changed since
+ * the shell was last told. The shell's show-around tour begins when an agent goes to work, and a chat page knows a
+ * turn's start and end on every harness.
+ */
+export function reportAgentWorking(isWorking: boolean): void {
+  if (isWorking === isAgentWorkingReported) return;
+  isAgentWorkingReported = isWorking;
+  connection?.agentWorking(isWorking);
+}
+
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
 // visit, and false from the moment a framed page connects, until the shell says shown.
 let isShown = true;
@@ -67,6 +127,20 @@ export function reportChatOnScreenOnce(chatId: string, isTranscriptLoaded: boole
   reportChatOnScreen(chatId);
 }
 
+let isProviderChooserOnScreenReported = false;
+
+/**
+ * After a draw of the chat root's provider chooser: tell the Imbue Studio chrome, once per page, that the chooser is
+ * on screen. ``isShownByShell`` is the root's own shown state (the root, not a chat page, owns this chooser). The
+ * chrome lifts its wash over a new workspace on this as it does on the welcome chat's report, so a root the shell
+ * has not shown yet does not count.
+ */
+export function reportProviderChooserOnScreenOnce(isShownByShell: boolean): void {
+  if (isProviderChooserOnScreenReported || !isShownByShell || !isFrameRendered()) return;
+  isProviderChooserOnScreenReported = true;
+  reportProviderChooserOnScreen();
+}
+
 export interface ChatShellOptions {
   /**
    * Whether this page reports its presence for `chatId`. A chat's own page does; a subagent
@@ -88,17 +162,24 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const { isPresenceReported } = options;
   const onHandshake = (received: ShellHandshake): void => {
     lastHandshake = received;
+    isWorkspaceSettingsOpenedByChrome = received.opensWorkspaceSettings;
+    isCoachMarkDrawnByChrome = received.showsCoachMarks;
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any page's unexpired visible or hidden report) is what a hidden report keeps.
     if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
+    // A shell forgets what a page said when the page's frame loads, which can be after the page spoke, and greets
+    // it then.
+    if (isAgentWorkingReported) connection?.agentWorking(true);
     m.redraw();
   };
   const onShown = (): void => {
     isShown = true;
     if (isPresenceReported) reportPresence("visible");
-    // Whoever joined while the page was out of view is drawn right once it is back.
+    // Whoever joined while the page was out of view is drawn right once it is back, and so is a reply that ended
+    // meanwhile, with its suggestions.
     void ensureParticipants();
+    rereadNextStepSuggestions(chatId);
     m.redraw();
   };
   const onHidden = (): void => {
@@ -119,6 +200,11 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   });
   void refreshKeybindings();
   mirrorParentTheme();
+  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
+    isWorkspaceSettingsOpenedByChrome = message.opensWorkspaceSettings === true;
+    isCoachMarkDrawnByChrome = message.showsCoachMarks === true;
+    m.redraw();
+  });
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (of the shell's messages, only the handshake comes down as one);
@@ -144,7 +230,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) {
       startPresenceReporting(chatId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
       document.addEventListener("visibilitychange", () => {
-        reportPresence(document.visibilityState === "visible" ? "visible" : "hidden");
+        const isVisible = document.visibilityState === "visible";
+        reportPresence(isVisible ? "visible" : "hidden");
+        if (isVisible) rereadNextStepSuggestions(chatId);
       });
     }
   } else {
@@ -186,7 +274,8 @@ function reportChatLocation(chatId: string, path: string): void {
  * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
  * given and ``pick`` as the model it runs on (null for the harness's default). The switch
  * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
- * notice with neither. The chat is filed in no project: the desktop has none.
+ * notice with neither. The chat is filed in no project: the desktop has none. A person pressed a button for it,
+ * so the create names the client it came from, as the New chat button's does.
  */
 export async function startChatOnAccount(
   accountId: string,
@@ -195,7 +284,7 @@ export async function startChatOnAccount(
 ): Promise<boolean> {
   let created: CreatedChat;
   try {
-    created = await createChat("", accountId, message, pick);
+    created = await createChat("", accountId, message, pick, getClientId());
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return false;

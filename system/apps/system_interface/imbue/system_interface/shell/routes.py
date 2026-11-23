@@ -13,10 +13,12 @@ from flask import Flask
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
+from onboarding_activity.markers import Marker
 from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatsActivityReport
+from workspace_layout.identity import is_owner_participant
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import parse_op_body
@@ -78,6 +80,7 @@ from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.errors import WindowPoppedOutError
+from imbue.system_interface.shell.onboarding_markers import set_onboarding_marker
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
@@ -335,10 +338,13 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
 
 def record_client_shown(client_id: str) -> ResponseReturnValue:
     """What a client's phone layout now shows (the phone plan's shown history): a window some desktop holds, or
-    ``null`` for its home grid; answers the client record."""
+    ``null`` for its home grid; answers the client record. Only the phone layout reports here, so the owner's report
+    also sets the ``phone_layout_used`` marker."""
     body = parse_request_body(ClientShownRequest)
     shell = _shell()
     record = shell.record_client_shown(ClientId(client_id), body.window_id)
+    if is_owner_participant(request_identity()):
+        set_onboarding_marker(Marker.PHONE_LAYOUT_USED)
     return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
@@ -395,7 +401,15 @@ def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -
         return MessageDelivery(app=shown.app, status=None, detail=shown.refusal, is_delivered=False)
     requester = OpRequester(app=shown.app, marker="")
     try:
-        result = show_page_for_client(_shell(), shown.app, shown.page, shown.showing, relayed.client_id, requester)
+        result = show_page_for_client(
+            _shell(),
+            shown.app,
+            shown.page,
+            shown.showing,
+            relayed.client_id,
+            requester,
+            is_reloaded_when_raised=shown.is_reloaded_when_raised,
+        )
     except ShellError as e:
         logger.warning("Could not show {} of {} for {}: {}", shown.page, shown.app, relayed.type, e)
         return MessageDelivery(app=shown.app, status=None, detail=str(e), is_delivered=False)
@@ -455,12 +469,13 @@ def layout_broadcast() -> ResponseReturnValue:
 
 
 def get_tour() -> ResponseReturnValue:
-    """Whether the show-around tour has run in this workspace, and the card it resumes at."""
+    """Whether the show-around tour has run in this workspace, the card it resumes at, and whether it is finished."""
     return model_response(get_state().shell.tour.read())
 
 
 def set_tour() -> ResponseReturnValue:
-    """Record that the tour has run and where it resumes (or clear both, so a fresh visit offers it again)."""
+    """Record that the tour has run, where it resumes, and whether it is finished (or clear them all, so a fresh visit
+    offers it again). A record written finished also sets the ``tour_finished`` marker."""
     get_state().shell.tour.write(parse_request_body(TourProgress))
     return model_response(get_state().shell.tour.read())
 
