@@ -5,3 +5,5 @@ The same contracts (section 7) list the new page message `shell:show-coach-card`
 The new Onboarding checklist app (`system/apps/onboarding_checklist`) joins the uv workspace, the root project's dependencies, the npm workspace and the image's manifest layer, with its supervisord program (`onboarding-checklist`, port 8070) and its built bundle ignored by git. The contracts list its manifest row, the manifest key `seeds_shortcuts`, the chat's `onboarding:show-new-chat-pointer` handler, and how the tour's end opens and places the checklist; `test_app_manifests.py` holds the app to the built-in rules.
 
 The contracts also list the page message `shell:agent-working {isWorking}`, which the tour's start reads beside the avatar's status, and the app contract in `workspace_ui` gains it (`connection.agentWorking`).
+
+They list `shell:first-conversation-step {isPending}` the same way (`connection.firstConversationStep`), which holds the tour's start while a new workspace's first conversation follows its script, and the workspace app model's contracts name the `is_first_conversation_pending` the chat's `chats_updated` push carries.

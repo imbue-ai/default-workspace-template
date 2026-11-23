@@ -21,6 +21,7 @@ import {
   SHELL_SHOWN,
   SHELL_SHOW_COACH_CARD,
   SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
@@ -226,7 +227,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, draftText, showCoachCard, agentWorking, sendMessage, and openLink to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, draftText, showCoachCard, agentWorking, firstConversationStep, sendMessage, and openLink to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -239,6 +240,8 @@ describe("connectToShell", () => {
     connection.showCoachCard("Tell the agent what to build.", { target: "avatar" });
     connection.agentWorking(true);
     connection.agentWorking(false);
+    connection.firstConversationStep(true);
+    connection.firstConversationStep(false);
     connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
     connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
@@ -252,6 +255,8 @@ describe("connectToShell", () => {
       [{ type: SHELL_SHOW_COACH_CARD, text: "Tell the agent what to build.", target: "avatar" }, "*"],
       [{ type: SHELL_AGENT_WORKING, isWorking: true }, "*"],
       [{ type: SHELL_AGENT_WORKING, isWorking: false }, "*"],
+      [{ type: SHELL_FIRST_CONVERSATION_STEP, isPending: true }, "*"],
+      [{ type: SHELL_FIRST_CONVERSATION_STEP, isPending: false }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
     ]);

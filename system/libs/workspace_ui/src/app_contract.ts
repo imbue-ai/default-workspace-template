@@ -89,6 +89,12 @@ export const SHELL_OPEN_LINK = "shell:open-link";
  *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
 export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
 
+/** App to shell: whether the workspace's first conversation is still following its script (the chat app's word for
+ *  it), sent once the page knows and when that changes. The shell keeps each page's last report and drops it when the
+ *  page goes away or loads again, so a page that is greeted says it again; while any page says yes, the shell's
+ *  show-around tour neither begins nor resumes by itself. */
+export const SHELL_FIRST_CONVERSATION_STEP = "shell:first-conversation-step";
+
 /** App to shell: show a one-button card with the page's words in one place (``ShellCoachCardPlace``): under a
  *  control of the Imbue Studio chrome, which is ringed while the card is up, or popping out of the agent's avatar,
  *  whose window the shell brings forward. The shell shows it only while it has nothing else of the kind on screen
@@ -269,6 +275,8 @@ export interface ShellConnection {
   agentWorking(isWorking: boolean): void;
   /** Say whether the first run's provider page is still owed to this workspace's owner. */
   firstRunProviderStep(isPending: boolean): void;
+  /** Say whether the workspace's first conversation is still following its script. */
+  firstConversationStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
@@ -570,6 +578,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     showCoachCard: (text: string, place: ShellCoachCardPlace) => send(SHELL_SHOW_COACH_CARD, { text, ...place }),
     agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
     firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
+    firstConversationStep: (isPending: boolean) => send(SHELL_FIRST_CONVERSATION_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
