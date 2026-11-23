@@ -1756,7 +1756,7 @@ export class DesktopStore {
       return false;
     }
     this.setBubbles(withoutChat(this.bubbles, chatId));
-    return (await this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER)) !== null;
+    return this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER);
   }
 
   /** A click on a person's tray entry (the multiplayer spec, section 7.5): a mention of them is drafted through the
@@ -2034,24 +2034,23 @@ export class DesktopStore {
     ) {
       return false;
     }
-    return (await this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER)) !== null;
+    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
   }
 
   /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
-   *  reach every one, or when a page it showed waits for a desktop window; answers what each app did with it, or
-   *  null when it did not reach every app. */
-  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay | null> {
+   *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     let relay: MessageRelay;
     try {
       relay = await this.relayMessage(message, sender);
     } catch (error) {
       this.toast((error as Error).message);
-      return null;
+      return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
       this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
-    return relay;
+    return true;
   }
 
   /** The relay itself; throws with the shell's detail when the message did not reach every app. An app that takes
