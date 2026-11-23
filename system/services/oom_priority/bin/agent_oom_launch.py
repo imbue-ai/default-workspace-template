@@ -90,9 +90,9 @@ def _band_for(agent_name: str) -> int:
     - A chat (``user_created``) starts at ``CHAT_AGENT_BASE``, the middle of the
       chat range. The system_interface prioritizer moves it either way from
       there -- down toward the protected floor as the user engages with it, up
-      toward ``CHAT_AGENT_STALE_CEILING`` (past the worker band) as it is left
-      alone -- so an un-re-tagged chat stays middling-expendable rather than
-      pinned to the protected floor.
+      past the worker band toward the aged stage as it is left alone -- so an
+      un-re-tagged chat stays middling-expendable rather than pinned to the
+      protected floor.
     - Everything else -- a worker, or an agent whose record we cannot read to
       classify -- lands at ``WORKER_AGENT``, the least-protected agent tier: an
       agent we cannot identify must not be shielded by our ignorance."""

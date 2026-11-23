@@ -1,1 +1,0 @@
-The `is_ghost_hidden` field of a client's `popped_out` entries is described as what it now carries, whether the pulled-out window's placement is also minimized, since the desktop no longer draws a ghost for a pulled-out window. The field keeps its name.

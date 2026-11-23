@@ -1,11 +1,11 @@
 #!/bin/bash
 # Install the pinned owner-exec static binary from its GitHub release, verifying
 # the published sha256. Idempotent and version-gated: a binary already at the
-# pinned version is left in place. Runs both at image build (inner service) and
-# is the same logic the VM install path mirrors from the monorepo.
+# pinned version is left in place. Runs at image build, and again each time the
+# in-container daemon starts.
 #
-# The version is pinned here and MUST be kept in lockstep with the monorepo's
-# VM-install pin (see the bump-owner-exec skill).
+# The version is pinned here and nowhere else (see the mngr repo's
+# bump-owner-exec skill).
 set -euo pipefail
 
 OWNER_EXEC_VERSION="v0.2.2"

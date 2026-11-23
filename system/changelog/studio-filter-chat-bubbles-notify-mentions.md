@@ -1,1 +1,0 @@
-The desktop-interface contracts describe the `kind` on `POST /api/bubbles` and the `bubble` push (`message` or `notification`), the new loopback `POST /api/chats/<chat-id>/notification` the notify-user script calls, and that only a notification or a mention of the viewer raises a speech bubble.

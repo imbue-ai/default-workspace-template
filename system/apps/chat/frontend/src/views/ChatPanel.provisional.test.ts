@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
     isTranscriptLoaded: false,
     reportChatOnScreenOnce: vi.fn(),
     isChatListReceived: true,
+    // What the panel last made its scroll engine from.
+    engineConfig: null as { getEndOverlayEl?: () => HTMLElement | null } | null,
     // The ids the account list holds, and the one a new chat would start on.
     accountIds: ["acct-1"] as string[],
     selectedAccountId: "acct-1" as string | null,
@@ -84,14 +86,17 @@ vi.mock("../models/StreamingMessage", () => ({
 }));
 vi.mock("../models/ComposerAttachments", () => ({ uploadFilesToComposer: () => undefined }));
 vi.mock("./transcript-scroll-engine", () => ({
-  createTranscriptScrollEngine: () => ({
-    setChat: () => undefined,
-    detach: () => undefined,
-    noteMessageSent: () => undefined,
-    afterRender: () => undefined,
-    computeRenderPlan: () => ({ topPadPx: 0, startIndex: 0, endIndex: 0, bottomPadPx: 0 }),
-    isViewportInSpacer: () => false,
-  }),
+  createTranscriptScrollEngine: (config: { getEndOverlayEl?: () => HTMLElement | null }) => {
+    mocks.engineConfig = config;
+    return {
+      setChat: () => undefined,
+      detach: () => undefined,
+      noteMessageSent: () => undefined,
+      afterRender: () => undefined,
+      computeRenderPlan: () => ({ topPadPx: 0, startIndex: 0, endIndex: 0, bottomPadPx: 0 }),
+      isViewportInSpacer: () => false,
+    };
+  },
 }));
 // The views beside the transcript are not what this file pins; each becomes an inert component
 // (a factory is hoisted, so it cannot share one constant).
@@ -115,7 +120,9 @@ vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { ChatSuggestions } from "./ChatSuggestions";
 import { MESSAGE_LIST_CLASS } from "./conversation-rows";
+import { SuggestionLayer } from "./SuggestionLayer";
 
 type AnyVnode = { tag?: unknown; key?: unknown; attrs?: Record<string, unknown>; children?: unknown };
 
@@ -544,5 +551,57 @@ describe("ChatPanel over a seeded chat", () => {
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
     expect(renderedText(tree)).toContain("mngr create exited with code 3");
     expect(mocks.fetchEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe("where ChatPanel draws a chat's suggestions", () => {
+  beforeEach(() => {
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    mocks.isConversationNotFound = false;
+  });
+
+  function hasComponent(node: unknown, component: unknown): boolean {
+    return flatten(node).some((vnode) => vnode.tag === component);
+  }
+
+  it("ends the transcript's scroll element with the layer of open pills, and keeps the lines in the footer", () => {
+    const tree = mountPanel()();
+    const scroller = findByClass(tree, "transcript-scroll")!;
+    const footer = findByClass(tree, "app-footer")!;
+    const scrolled = scroller.children as AnyVnode[];
+
+    expect(scrolled[scrolled.length - 1].tag).toBe(SuggestionLayer);
+    expect(hasComponent(scroller.children, ChatSuggestions)).toBe(false);
+    expect(hasComponent(footer.children, ChatSuggestions)).toBe(true);
+    expect(hasComponent(footer.children, SuggestionLayer)).toBe(false);
+  });
+
+  it("lays the scroll element out as a column with no padding at its end, in either layout", () => {
+    for (const isCompact of [false, true]) {
+      const panel = ChatPanel();
+      panel.oninit!({ attrs: { chatId: AGENT_ID } } as never);
+      const tree = panel.view({ attrs: { chatId: AGENT_ID, isCompact } } as never);
+      const attrs = findByClass(tree, "transcript-scroll")!.attrs!;
+      const classes = String(attrs.className ?? attrs.class).split(" ");
+
+      // The layer's `mt-auto` puts it at the column's bottom edge under a short transcript.
+      expect(classes).toEqual(expect.arrayContaining(["flex", "flex-col", "overflow-y-auto", "*:shrink-0"]));
+      expect(classes).toEqual(expect.arrayContaining(isCompact ? ["px-4", "pt-4"] : ["px-6", "pt-6"]));
+      expect(classes.filter((name) => /^p[yb]?-/.test(name))).toEqual([]);
+    }
+  });
+
+  it("hands the scroll engine the layer's element, and null once the layer is gone", () => {
+    const tree = mountPanel()();
+    const scrolled = findByClass(tree, "transcript-scroll")!.children as AnyVnode[];
+    const onElement = scrolled[scrolled.length - 1].attrs!.onElement as (element: HTMLElement | null) => void;
+    const element = document.createElement("div");
+
+    expect(mocks.engineConfig?.getEndOverlayEl?.()).toBeNull();
+    onElement(element);
+    expect(mocks.engineConfig?.getEndOverlayEl?.()).toBe(element);
+    onElement(null);
+    expect(mocks.engineConfig?.getEndOverlayEl?.()).toBeNull();
   });
 });

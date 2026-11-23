@@ -89,6 +89,10 @@ import { renderQueuedMessages } from "./QueuedMessageView";
 import { closedPendingRun, renderOutgoingMessages, type PendingBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
+import { AgentWorkingReport } from "./AgentWorkingReport";
+import { answeredReplySuggestions } from "./AnsweredReplySuggestions";
+import { ChatSuggestions } from "./ChatSuggestions";
+import { SuggestionLayer } from "./SuggestionLayer";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
 import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
@@ -216,6 +220,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
+  // The layer of open suggestion pills over the transcript's end, which the scroll engine reads.
+  let suggestionLayerElement: HTMLElement | null = null;
   // Whether the cached rows show the reply draft, in the step live at their tail.
   let isReplyDraftInStep = false;
 
@@ -226,6 +232,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // (via the data source below) and renders the rows/spacers it asks for.
   const engine = createTranscriptScrollEngine({
     isVisible: () => panelVisible,
+    getEndOverlayEl: () => suggestionLayerElement,
     dataSource: {
       getRows: () => cachedRows,
       getWindowEventIds: () => getEventsForChat(currentChatId ?? "").map((event) => event.event_id),
@@ -857,6 +864,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 ...renderAgentLiveTail(chatId, false, isReplyDraftInStep),
                 ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
               ],
+        (eventIds) => answeredReplySuggestions(chatId, eventIds),
       );
       cachedRows = view.rows;
       isReplyDraftInStep = view.isReplyDraftInStep;
@@ -999,7 +1007,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(
                   "main",
                   {
-                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-chat ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
+                    // A column, so the suggestion layer that ends it sits at its bottom edge under a short
+                    // transcript too. No padding at its end: what the transcript ends on brings its own margin,
+                    // which is all that stands between it and the footer's line or the first pill.
+                    class:
+                      "app-content transcript-scroll flex flex-1 flex-col overflow-y-auto bg-chat *:shrink-0 " +
+                      (isCompact ? "px-4 pt-4" : "px-6 pt-6"),
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -1012,7 +1025,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                       reportChatOnScreenOnce(chatId, isTranscriptLoaded(chatId));
                     },
                   },
-                  content,
+                  [
+                    content,
+                    m(SuggestionLayer, {
+                      chatId,
+                      onElement: (element) => {
+                        suggestionLayerElement = element;
+                      },
+                    }),
+                  ],
                 ),
                 m(TranscriptScrollbar, { engine }),
                 // While the viewport is over a virtual end spacer (e.g. the scrollbar
@@ -1038,6 +1059,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
+                m(AgentWorkingReport, { chatId }),
+                m(ChatSuggestions, { chatId }),
                 m(MessageInput, {
                   chatId,
                   leading:

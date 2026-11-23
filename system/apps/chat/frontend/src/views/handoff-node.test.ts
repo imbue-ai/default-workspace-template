@@ -6,7 +6,10 @@ const state = vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
   return { chat: null as unknown };
 });
-vi.mock("../models/Chats", () => ({ getChatById: () => state.chat ?? undefined }));
+vi.mock("../models/Chats", () => ({
+  getChatById: () => state.chat ?? undefined,
+  addHeldSendFailedListener: () => undefined,
+}));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,

@@ -194,6 +194,9 @@ class HttpClient:
 class SpawnedServer(Protocol):
     """What the pre-flight boot reads off a spawned throwaway server."""
 
+    @property
+    def pid(self) -> int: ...
+
     def terminate(self) -> None: ...
 
     def has_exited(self) -> bool: ...
@@ -207,6 +210,10 @@ class Spawned:
 
     _process: subprocess.Popen
     _output_path: Path
+
+    @property
+    def pid(self) -> int:
+        return self._process.pid
 
     def terminate(self) -> None:
         self._process.terminate()
