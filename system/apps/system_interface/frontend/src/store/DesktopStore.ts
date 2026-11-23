@@ -90,7 +90,7 @@ import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
-import { SHELL_APP_NAME, noticeFromWire } from "../model/UpdateNotice";
+import { noticeFromWire } from "../model/UpdateNotice";
 import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
@@ -2075,7 +2075,7 @@ export class DesktopStore {
     if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, type)) return;
     let relay: MessageRelay;
     try {
-      relay = await this.relayMessage({ type }, SHELL_APP_NAME);
+      relay = await this.relayMessage({ type }, SHELL_SENDER);
     } catch (error) {
       console.warn(`[si] could not show the page registered for ${type}`, error);
       return;
