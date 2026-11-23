@@ -58,8 +58,9 @@ export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
 
 // Layout for the centered message column. Shared by the live transcript views
 // and the offscreen measurer, whose rows must lay out identically to measure
-// identically.
-export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6";
+// identically. No padding at its end: the last row's own margin is the space
+// under the transcript.
+export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col pt-6";
 
 export interface RowDescriptor {
   key: string;
@@ -86,6 +87,11 @@ export interface RowDescriptor {
  *  written, the status row), read when the row it lands in renders. */
 export type LiveTail = () => m.Children[];
 
+/** What stands under the agent's messages of one part of a stretch, from outside the transcript (the suggestions
+ *  a reply keeps once it has been answered), read when the row renders; null for nothing. ``eventIds`` are the
+ *  part's assistant messages, in order. */
+export type ReplyFollowUp = (eventIds: readonly string[]) => m.Vnode | null;
+
 /** One piece of a stretch of the agent's output: a message, a chip run, a turn's progress block, a card, a notice. */
 interface TurnPart {
   key: string;
@@ -103,6 +109,24 @@ function chipCallIdsOf(events: readonly RunPart[], toolResults: Map<string, Tool
       ? []
       : event.tool_calls.filter((call) => rendersAsChip(call, toolResults)).map((call) => call.tool_call_id),
   );
+}
+
+/** The assistant messages among `events`, by id. */
+function assistantEventIdsOf(events: readonly RunPart[]): string[] {
+  return events.flatMap((event) => (event.type === "assistant_message" ? [event.event_id] : []));
+}
+
+/** Every assistant message a turn's progress block draws, by id, in order. */
+function assistantEventIdsOfSection(section: SectionView): string[] {
+  return [
+    ...section.items.flatMap((item) => {
+      if (item.kind === "step") return item.step.events.map((event) => event.event_id);
+      if (item.kind === "ungrouped") return assistantEventIdsOf(item.events);
+      if (item.kind === "permission") return [item.event.event_id];
+      return [];
+    }),
+    ...section.trailing_reply.map((event) => event.event_id),
+  ];
 }
 
 /** A stretch of the agent's output as one row: its parts under the agent's name and face. */
@@ -161,6 +185,7 @@ function buildRows(
   resentTurnIds: ReadonlySet<string>,
   replyDraft: (() => AssistantMessageEvent | null) | null,
   liveTail: LiveTail | null,
+  replyFollowUp: ReplyFollowUp | null,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
   // A stretch of the agent's output runs until a person speaks or another agent takes over; the system chips and
@@ -195,6 +220,22 @@ function buildRows(
   const addPart = (part: TurnPart): void => {
     parts.push(part);
     isLastTurnOpen = true;
+  };
+  // What follows the messages of the part just added, as a part of its own: outside the memoized message, so it
+  // redraws with the state it is read from. It renders nothing, and takes no room, where there is nothing to follow.
+  const addFollowUp = (eventIds: readonly string[]): void => {
+    if (replyFollowUp === null || eventIds.length === 0) return;
+    const key = `follow-up-${eventIds[eventIds.length - 1]}`;
+    addPart({
+      key,
+      estimate: 0,
+      anchorEventId: null,
+      render: () => {
+        const followUp = replyFollowUp(eventIds);
+        return followUp === null ? null : m("div", { key, class: "reply-follow-up" }, followUp);
+      },
+      chipCallIds: [],
+    });
   };
   // The compactions that landed after a turn's reply: a chip run of their own below it.
   const addTrailingCompactions = (compactions: CompactionPart[]): void => {
@@ -268,6 +309,7 @@ function buildRows(
           toolResults,
         ),
       });
+      addFollowUp(assistantEventIdsOfSection(section));
       addTrailingCompactions(section.trailing_status);
       continue;
     }
@@ -301,6 +343,7 @@ function buildRows(
               render: (isStretchHead) => renderAssistantMessage(head, toolResults, chatId, isStretchHead),
               chipCallIds: chipCallIdsOf(run, toolResults),
             });
+            addFollowUp([head.event_id]);
             continue;
           }
           addPart({
@@ -312,6 +355,7 @@ function buildRows(
             render: (isStretchHead) => renderAssistantRunRow(run, toolResults, chatId, isStretchHead),
             chipCallIds: chipCallIdsOf(run, toolResults),
           });
+          addFollowUp(assistantEventIdsOf(run));
         }
       } else if (item.kind === "permission") {
         // A permission request lifted out of its step: rendered inline as an
@@ -334,6 +378,7 @@ function buildRows(
             ),
           chipCallIds: chipCallIdsOf([permissionEvent], toolResults),
         });
+        addFollowUp([permissionEvent.event_id]);
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
@@ -365,6 +410,7 @@ function buildRows(
         render: (isStretchHead) => renderAssistantMessage(event, toolResults, chatId, isStretchHead),
         chipCallIds: chipCallIdsOf([event], toolResults),
       });
+      addFollowUp([event.event_id]);
     }
     addTrailingCompactions(section.trailing_status);
   }
@@ -390,7 +436,9 @@ function runAnchorEventId(head: RunPart): string | null {
  * models/ResentSends) puts "Sent again" under the messages the chat app sent a
  * second time and folds their second copies into it. ``liveTail`` is the agent's
  * output past the transcript, drawn at the end of the last row when that row is a
- * stretch of the agent's output.
+ * stretch of the agent's output. ``replyFollowUp`` is what stands under a part's
+ * messages from outside the transcript (the main chat's suggestions under an
+ * answered reply).
  */
 export function buildConversationRows(
   chatId: string,
@@ -399,8 +447,18 @@ export function buildConversationRows(
   liveCompaction: LiveCompaction | null = null,
   resentTurns: ResentTurns | null = null,
   liveTail: LiveTail | null = null,
+  replyFollowUp: ReplyFollowUp | null = null,
 ): RowDescriptor[] {
-  return buildConversationView(chatId, events, isTailSettled, liveCompaction, resentTurns, null, liveTail).rows;
+  return buildConversationView(
+    chatId,
+    events,
+    isTailSettled,
+    liveCompaction,
+    resentTurns,
+    null,
+    liveTail,
+    replyFollowUp,
+  ).rows;
 }
 
 /** The rows, and whether the reply the agent is still writing shows inside them. */
@@ -420,6 +478,7 @@ export function buildConversationView(
   resentTurns: ResentTurns | null,
   replyDraft: (() => AssistantMessageEvent | null) | null,
   liveTail: LiveTail | null = null,
+  replyFollowUp: ReplyFollowUp | null = null,
 ): ConversationView {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
@@ -427,7 +486,15 @@ export function buildConversationView(
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
   return {
-    rows: buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), replyDraft, liveTail),
+    rows: buildRows(
+      chatId,
+      sections,
+      toolResults,
+      resentTurns?.notedTurnIds ?? new Set(),
+      replyDraft,
+      liveTail,
+      replyFollowUp,
+    ),
     isReplyDraftInStep: sections.some((section) => section.live_step_id !== null),
   };
 }
