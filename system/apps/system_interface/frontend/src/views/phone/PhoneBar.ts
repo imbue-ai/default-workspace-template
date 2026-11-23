@@ -1,8 +1,9 @@
 /**
  * The phone's bar (plan-phone-interface.md): home, the pill, and plus, above the safe-area inset. Home is disabled
  * on the home grid; the pill names what is on screen (the workspace on the home grid, the avatar and the app's
- * name for the pinned window, else the window's icon and title) with the count of other open windows, opens the
- * windows sheet on a tap and the shown window's menu on a long press; plus opens the start sheet.
+ * name for the pinned window, else the window's icon and title, and "Opening…" before the page lands) with the
+ * count of other open windows, opens the windows sheet on a tap and the shown window's menu on a long press; plus
+ * opens the start sheet.
  */
 
 import m from "mithril";
@@ -35,7 +36,7 @@ const CONTROL_CLASS =
   "not-disabled:active:before:bg-fill-active [&>svg]:relative";
 
 function pillIcon(pill: PhonePill, avatar: AvatarState): m.Children {
-  if (pill.kind === "home") return null;
+  if (pill.kind !== "window") return null;
   return windowIcon(pill.window, pill.app, avatar, "phone-pill-icon size-(--desk-phone-pill-icon)", PILL_GLYPH_SIZE);
 }
 
@@ -43,6 +44,7 @@ export const PhoneBar: m.Component<PhoneBarAttrs> = {
   view(vnode) {
     const { pill, count, avatar, onHome, onPill, onPillLongPress, onNew, thresholdPx } = vnode.attrs;
     const isHome = pill.kind === "home";
+    const isWindow = pill.kind === "window";
     return m(
       "nav",
       {
@@ -69,17 +71,25 @@ export const PhoneBar: m.Component<PhoneBarAttrs> = {
           "button",
           {
             type: "button",
-            "data-phone-pill": pill.kind === "home" ? "home" : pill.window.id,
+            "data-phone-pill": pill.kind === "window" ? pill.window.id : pill.kind,
             "aria-label": `${pill.title}: open windows`,
             class:
               "phone-pill flex h-(--desk-phone-pill-height) max-w-(--desk-phone-pill-max-width) min-w-0 flex-1 " +
               "items-center gap-2 rounded-full bg-fill-hover pr-2 text-left select-none active:bg-fill-active " +
-              (isHome ? "pl-4" : "pl-2"),
+              (isWindow ? "pl-2" : "pl-4"),
             ...longPressAttrs({ onTap: onPill, onLongPress: onPillLongPress, thresholdPx }),
           },
           [
             pillIcon(pill, avatar),
-            m("span", { class: "phone-pill-title min-w-0 flex-1 truncate text-sm font-semibold" }, pill.title),
+            m(
+              "span",
+              {
+                class:
+                  "phone-pill-title min-w-0 flex-1 truncate text-sm font-semibold " +
+                  (pill.kind === "opening" ? "animate-pulse text-secondary" : ""),
+              },
+              pill.title,
+            ),
             count === 0
               ? null
               : m(

@@ -11,7 +11,7 @@ contents list beside the catalog, in three groups.
   stacking layers and widths, and the whole icon set.
 - **Components**: the Button in every variant, size and state, the text
   fields, the Dropdown and the SegmentedControl, the Menu (with a submenu,
-  check rows, a disabled and a danger row), hover tooltips, badges, banners,
+  check rows, a disabled and a danger row), hover tooltips, coach marks, badges, banners,
   activity dots and spinners, the Modal, the notice and delete-confirmation
   dialogs (a notice with its details), toasts (plain, and lasting with their
   details and buttons), and the surfaces stacked as the apps stack them.

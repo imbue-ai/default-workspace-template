@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatKind, getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
@@ -15,6 +16,7 @@ import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { fetchOrNotAnswered, postJson, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
 import type { RequestKind } from "@imbue/workspace-ui/src/models/failure";
 import { loadAccounts } from "./Providers";
+import { rereadChatSettings } from "./ChatSettings";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -219,6 +221,9 @@ export interface ProvisionalChat {
   // What it launches as: an agent chat, or a room.
   kind: ChatKind;
   phase: ProvisionalChatPhase;
+  // The first message the chat sends once it launches: what its create or its launch brought. Empty for none, as
+  // for a chat awaiting its first send and for one launched with nothing to say.
+  message: string;
   // Why the create failed, in the failed phase.
   error: string | null;
   // Whether the chat has a seed segment to show while it is created: turns written before any agent
@@ -233,7 +238,12 @@ export interface ProvisionalChat {
 }
 
 type WsEvent =
-  | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
+  | {
+      type: "chats_updated";
+      chats: ChatSnapshot[];
+      main_chat_id: string | null;
+      is_first_conversation_pending?: boolean;
+    }
   | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | {
@@ -244,7 +254,17 @@ type WsEvent =
       // A discard's: the messages the chat held, dropped with it. Absent from any other completion.
       held_sends?: HeldSend[];
     }
-  | { type: "accounts_updated" };
+  | { type: "accounts_updated" }
+  | { type: "settings_updated" }
+  | { type: "suggestions_updated"; chat_id: string }
+  | { type: "held_send_failed"; chat_id: string; message_id: string; detail: string; kind: string };
+
+/** Notified when a message the chat app held while its agent came up never reached the agent: the chat, the message's
+ *  send-time id, why (in the harness's words when it gave any) and mngr's classification of it. */
+export type HeldSendFailedListener = (chatId: string, messageId: string, detail: string, kind: string) => void;
+
+/** Notified when the chat app says a chat's stored next-step suggestions were replaced or removed. */
+export type SuggestionsUpdatedListener = (chatId: string) => void;
 
 /** A send refused because its chat never became an agent (its create failed, or it was closed first): there is no
  *  agent behind it to retry or restart. */
@@ -278,6 +298,9 @@ let chats: ChatSnapshot[] = [];
 // The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
 // own goes. It can be a chat that is still provisional. Null while the workspace has no chat to take it.
 let mainChatId: string | null = null;
+// Whether a first-run chat among them is still following its tree (the backend's ``first_run_tree.py``), which the
+// chat root passes on to the shell.
+let firstConversationPending = false;
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
@@ -296,6 +319,8 @@ const registrationWaiters = new Map<string, { resolve: () => void; reject: (erro
 const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
+const heldSendFailedListeners: HeldSendFailedListener[] = [];
+let suggestionsUpdatedListeners: SuggestionsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 const provisionalChatDiscardedListeners: ProvisionalChatDiscardedListener[] = [];
@@ -317,9 +342,11 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // A change to the account list, or to someone's pending mentions, while the socket was down was pushed to no one.
+    // A change to the account list, to the settings, or to someone's pending mentions, while the socket was down
+    // was pushed to no one.
     if (hasConnectedBefore) {
       rereadAccounts();
+      rereadChatSettings();
       notifyMentionsUpdated();
     }
     hasConnectedBefore = true;
@@ -384,17 +411,30 @@ function handleEvent(event: WsEvent): void {
     case "accounts_updated":
       rereadAccounts();
       break;
+    case "settings_updated":
+      rereadChatSettings();
+      break;
+    case "suggestions_updated":
+      for (const listener of suggestionsUpdatedListeners) listener(event.chat_id);
+      break;
     case "mentions_updated":
       notifyMentionsUpdated();
+      break;
+    case "held_send_failed":
+      for (const listener of heldSendFailedListeners) {
+        listener(event.chat_id, event.message_id, event.detail, event.kind);
+      }
       break;
     case "chats_updated": {
       isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
-      const serialized = JSON.stringify([event.chats, event.main_chat_id]);
+      const isFirstConversationPending = event.is_first_conversation_pending === true;
+      const serialized = JSON.stringify([event.chats, event.main_chat_id, isFirstConversationPending]);
       if (serialized === lastChatsSerialized) break;
       lastChatsSerialized = serialized;
       mainChatId = event.main_chat_id;
+      firstConversationPending = isFirstConversationPending;
       // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
@@ -554,6 +594,11 @@ export function getMainChatId(): string | null {
   return mainChatId;
 }
 
+/** Whether the workspace's first conversation is still following its tree, as the last chat list said. */
+export function isFirstConversationPending(): boolean {
+  return firstConversationPending;
+}
+
 export function getChatById(chatId: string): ChatSnapshot | undefined {
   return chats.find((c) => c.chat_id === chatId);
 }
@@ -582,6 +627,18 @@ export function addMentionsUpdatedListener(listener: () => void): void {
 
 export function removeMentionsUpdatedListener(listener: () => void): void {
   mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
+export function addHeldSendFailedListener(listener: HeldSendFailedListener): void {
+  heldSendFailedListeners.push(listener);
+}
+
+export function addSuggestionsUpdatedListener(listener: SuggestionsUpdatedListener): void {
+  suggestionsUpdatedListeners.push(listener);
+}
+
+export function removeSuggestionsUpdatedListener(listener: SuggestionsUpdatedListener): void {
+  suggestionsUpdatedListeners = suggestionsUpdatedListeners.filter((entry) => entry !== listener);
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
@@ -662,6 +719,9 @@ export interface CreatedChat {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
  * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
+ * ``clientId`` names the browser a person asked for the chat from (the New chat button, or "Start a new chat" in
+ * the switch dialog), which is how the chat app tells such a chat from one a script made; empty for a create
+ * nobody pressed a button for.
  * Throws an ``HttpError`` on a refusal (its ``failure.kind`` says when the account is the reason) or no answer.
  */
 export function createChat(
@@ -669,9 +729,11 @@ export function createChat(
   accountId: string = "",
   message: string = "",
   pick: ModelIdentity | null = null,
+  clientId: string = "",
 ): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
+  const body = { project_id: projectId, account_id: accountId, message, model: pick };
+  return postCreateChat(clientId === "" ? body : { ...body, client_id: clientId });
 }
 
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
@@ -706,7 +768,11 @@ export async function launchChat(
     // A seeded chat's launch brings the user's first message; a failed create's retry has none
     // to bring, so the field is left out then.
     const body = { chat_id: chatId, account_id: accountId, kind };
-    return await postCreateChat(message === "" ? body : { ...body, message });
+    // A launch is always a person's, from this page, so it names the client it came from as the New chat
+    // button's create does.
+    const clientId = getClientId();
+    const identified = clientId === "" ? body : { ...body, client_id: clientId };
+    return await postCreateChat(message === "" ? identified : { ...identified, message });
   } catch (error) {
     // The launch did not take: the next send may launch the chat, and a send that waited on this
     // one gets the refusal back rather than waiting for a chat that is not coming.

@@ -18,7 +18,10 @@ vi.mock("../shell", () => ({
     return Promise.resolve(true);
   },
 }));
-vi.mock("../models/Chats", () => ({ getChatById: () => state.chat ?? undefined }));
+vi.mock("../models/Chats", () => ({
+  getChatById: () => state.chat ?? undefined,
+  addHeldSendFailedListener: () => undefined,
+}));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,

@@ -182,6 +182,26 @@ def test_seeded_welcome_is_hidden() -> None:
     assert decision.display is DisplayKind.HIDDEN
 
 
+def test_a_first_run_kickoff_note_in_an_older_transcript_stays_hidden() -> None:
+    """Nothing writes the note any more, but a chat it started keeps it in its transcript, so the tag is spelled
+    out here as those transcripts hold it."""
+    note = (
+        "<first-run-kickoff>\n"
+        "This chat did not begin with you. The user has just arrived in their new Imbue Studio workspace for the "
+        "first time, and the chat already shows them the welcome this note carries.\n\n"
+        '<conversation>\n<turn speaker="assistant">\nHi, I\'m your Studio agent.\n</turn>\n</conversation>\n\n'
+        "Open with one short, warm sentence saying you are here and ready to help.\n"
+        "</first-run-kickoff>"
+    )
+
+    decision = classify_user_message(note)
+
+    assert decision is not None
+    assert decision.display is DisplayKind.HIDDEN
+    # Only the note itself: a message that merely mentions the tag is a human turn.
+    assert classify_user_message("what does <first-run-kickoff> mean?") is None
+
+
 def test_is_meta_hides_a_framework_message() -> None:
     note = (
         "[Image: original 1800x2800, displayed at 1286x2000. Multiply coordinates by 1.40 to map to original image.]"

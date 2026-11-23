@@ -164,7 +164,8 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     return m("div", { class: "message-list-wrapper" }, [
       m(
         "div",
-        { class: MESSAGE_LIST_CLASS },
+        // Nothing stands under this transcript, so it keeps room of its own at its end.
+        { class: `${MESSAGE_LIST_CLASS} pb-6` },
         renderTranscriptSegments(rows, [
           { kind: "spacer", height: plan.topPadPx },
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },

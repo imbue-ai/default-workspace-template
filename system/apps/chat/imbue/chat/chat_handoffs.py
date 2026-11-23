@@ -85,6 +85,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.errors import SendFailureKind
 
 logger = _loguru_logger
 
@@ -96,6 +97,14 @@ DEFAULT_PROMPT_TEMPLATE_PATH: Final[Path] = Path(".agents/shared/references/cont
 # summary can take a while; an agent that cannot write one (out of tokens, a full context
 # window) ends its turn within seconds and is caught by the idle rule long before this.
 _SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
+# The waits before each new try at a held send refused for a reason that can pass. Each try that finds the input
+# blocked already waits mngr's own readiness window first, so these add up to a few minutes in all.
+_HELD_SEND_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (5.0, 10.0, 20.0, 30.0)
+# The refusals that type nothing and can clear without the user. Claude still drawing its input box reads to mngr as
+# a blocked input.
+_PASSING_HELD_SEND_REFUSAL_KINDS: Final[frozenset[str]] = frozenset(
+    (str(SendFailureKind.INPUT_BLOCKED), str(SendFailureKind.NOT_READY), str(SendFailureKind.STATE_UNKNOWN))
+)
 # The turn the request starts can be shorter than one poll, so an idle reading counts as the
 # turn having ended either after a busy reading or after this much time with none.
 _SUMMARY_IDLE_GRACE_SECONDS: Final[float] = 10.0
@@ -389,6 +398,25 @@ class CreationOutputTail(MutableModel):
         return "\n".join(self.lines)
 
 
+# What a held send that did not land tells the user when the harness gave no words of its own.
+UNDELIVERED_HELD_SEND_DETAIL: Final[str] = "The agent didn't take the message."
+
+
+class HeldSendDelivery(FrozenModel):
+    """How a held send reaches its agent: the message route's send, the pacing of its retries, and who is told
+    when it never lands."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    # The message route's send, revival included; raises ``SendFailedError`` like it.
+    deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    sleep: Callable[[float], None]
+    is_stopping: Callable[[], bool]
+    # Told the chat, the message id, the reason and its kind for a send that never landed, so the page that sent it
+    # can hand it back.
+    report_undelivered: Callable[[ChatId, str, str, str], None]
+
+
 class SuccessorCreateSpec(FrozenModel):
     """What the successor's ``mngr create`` names, for the manager's shared argv builder."""
 
@@ -428,6 +456,8 @@ class HandoffDeps(FrozenModel):
     resolve_account: Callable[[str], Account]
     # The send path the message route takes, revival included; raises ``SendFailedError``.
     deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    # Told of a held send that never landed (``HeldSendDelivery.report_undelivered``).
+    report_undelivered: Callable[[ChatId, str, str, str], None]
     # Apply a model pick to a running agent, validated against its option set as the model
     # bar's own pick is; raises ``ModelApplyError`` with the reason the failed page shows.
     apply_model: Callable[[AgentInfo, ModelPick], None]
@@ -466,6 +496,14 @@ class HandoffRunner:
         runner = cls.__new__(cls)
         runner._deps = deps
         return runner
+
+    def _held_send_delivery(self) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=self._deps.deliver,
+            sleep=self._deps.sleep,
+            is_stopping=self._deps.shutdown_event.is_set,
+            report_undelivered=self._deps.report_undelivered,
+        )
 
     def _current(self, chat_id: ChatId, handoff_id: str) -> tuple[ChatRecord, ChatHandoffRecord]:
         if self._deps.shutdown_event.is_set():
@@ -1038,7 +1076,7 @@ class HandoffRunner:
         successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
         self._deps.ensure_watcher(successor_info)
         deliver_held_send(
-            self._deps.deliver,
+            self._held_send_delivery(),
             successor_info,
             HeldSend(
                 message_id=prompt_message_id(handoff_id),
@@ -1072,47 +1110,84 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            if not deliver_held_send(self._deps.deliver, successor_info, held, chat_id):
+            if not deliver_held_send(self._held_send_delivery(), successor_info, held, chat_id):
                 self._update_handoff(
                     chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
                 )
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 
-def deliver_held_send(
-    deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
-) -> bool:
+def deliver_held_send(delivery: HeldSendDelivery, agent_info: AgentInfo, held: HeldSend, chat_id: ChatId) -> bool:
     """Hand one held send to an agent through the message route's path; whether it landed.
 
-    A refusal or a miss is logged rather than raised: the send was answered 202 when it was
-    held, and one that cannot land must not stop the ones behind it.
+    A refusal or a miss is logged and reported rather than raised: the send was answered 202 when it
+    was held, and one that cannot land must not stop the ones behind it. A refusal that typed nothing
+    and can pass (an agent still drawing its input box, a host too loaded to answer) is tried again
+    after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody is at a composer to press Retry.
+    A send Stop took back, or one the agent took before a dialog blocked it, is not reported: the
+    first is in the composer already and the second reached the agent.
     """
-    try:
-        outcome = deliver(agent_info, held.text, held.message_id)
-    except SendFailedError as e:
+    for delay_seconds in _HELD_SEND_RETRY_DELAYS_SECONDS:
+        answer = _try_held_send(delivery.deliver, agent_info, held)
+        if (
+            not (isinstance(answer, SendFailedError) and _is_held_send_refusal_passing(answer))
+            or delivery.is_stopping()
+        ):
+            break
+        logger.info(
+            "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            answer.kind,
+            delay_seconds,
+        )
+        delivery.sleep(delay_seconds)
+    else:
+        answer = _try_held_send(delivery.deliver, agent_info, held)
+    if isinstance(answer, SendFailedError):
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} was refused: {}",
             chat_id,
             held.message_id,
             agent_info.id,
-            e.detail,
+            answer.detail,
         )
+        if not answer.is_delivered:
+            delivery.report_undelivered(chat_id, held.message_id, answer.detail, answer.kind)
         return False
-    if outcome is SendOutcome.WITHDRAWN:
+    if answer is SendOutcome.WITHDRAWN:
         logger.info(
             "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
         )
         return False
-    if not outcome.is_delivered:
+    if not answer.is_delivered:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
             chat_id,
             held.message_id,
             agent_info.id,
-            outcome.value,
+            answer.value,
         )
+        delivery.report_undelivered(chat_id, held.message_id, UNDELIVERED_HELD_SEND_DETAIL, answer.value)
         return False
     return True
+
+
+def _try_held_send(
+    deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend
+) -> SendOutcome | SendFailedError:
+    """One try at a held send: how it resolved, or the refusal it raised."""
+    try:
+        return deliver(agent_info, held.text, held.message_id)
+    except SendFailedError as e:
+        return e
+
+
+@pure
+def _is_held_send_refusal_passing(error: SendFailedError) -> bool:
+    """Whether a held send was refused before anything was typed, for a reason that can clear on its own."""
+    return not error.is_delivered and error.kind in _PASSING_HELD_SEND_REFUSAL_KINDS
 
 
 # The environment a room's ``mngr create`` carries, which the workspace's create guard

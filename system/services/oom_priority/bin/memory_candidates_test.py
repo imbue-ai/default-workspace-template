@@ -248,10 +248,14 @@ def _sources(
     supervised_pids: Mapping[str, int] | None = None,
     host_meminfo: Path | None = None,
     main_chat_file: Path | None = None,
+    earlyoom_program_conf: Path | None = None,
 ) -> memory_candidates.Sources:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         host_meminfo=host_meminfo if host_meminfo is not None else proc_dir / "absent",
+        earlyoom_program_conf=earlyoom_program_conf
+        if earlyoom_program_conf is not None
+        else proc_dir / "absent-earlyoom.conf",
         run_command=mngr,
         fetch_json=http,
         read_supervised_pids=lambda: dict(supervised_pids or {}),
@@ -891,7 +895,7 @@ def test_free_memory_names_the_meminfo_field_it_read(
 ) -> None:
     _write_meminfo(tmp_path, fields)
     free = memory_candidates.read_free_memory(
-        tmp_path / "meminfo", tmp_path / "absent-host-meminfo", _NOW
+        tmp_path / "meminfo", tmp_path / "absent-host-meminfo", _NOW, shed_percent=None
     )
     assert free is not None
     assert (free.field, free.free_kib, free.total_kib) == expected
@@ -909,16 +913,81 @@ def test_free_memory_comes_from_the_headroom_file_the_memory_guard_acts_on(
     host.write_text("MemTotal:         8192 kB\nMemAvailable:     1000 kB\n")
     os.utime(host, (_NOW.timestamp(), _NOW.timestamp()))
 
-    fresh = memory_candidates.read_free_memory(proc / "meminfo", host, _NOW)
+    fresh = memory_candidates.read_free_memory(
+        proc / "meminfo", host, _NOW, shed_percent=None
+    )
     assert fresh is not None
     assert (fresh.source, fresh.free_kib) == (str(host), 1000)
 
     # earlyoom ignores the file once it is stale, and so must this: a publisher that died would
     # otherwise freeze the reported headroom at whatever it last wrote.
     stale = _NOW + timedelta(seconds=HOST_MEMINFO_MAX_AGE_SECONDS + 1)
-    fallen_back = memory_candidates.read_free_memory(proc / "meminfo", host, stale)
+    fallen_back = memory_candidates.read_free_memory(
+        proc / "meminfo", host, stale, shed_percent=None
+    )
     assert fallen_back is not None
     assert (fallen_back.source, fallen_back.free_kib) == (str(proc / "meminfo"), 6000)
+
+
+def _write_earlyoom_program(path: Path, command: str) -> Path:
+    path.write_text(f"[program:earlyoom]\ncommand={command}\nautostart=true\n")
+    return path
+
+
+def test_free_memory_says_how_much_of_it_is_left_before_the_memory_guard_acts(
+    tmp_path: Path,
+) -> None:
+    """The guard stops processes at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
+    workspace is about 400 MiB of room."""
+    _write_meminfo(tmp_path, {"MemTotal": 6568960, "MemAvailable": 1076224})
+    program = _write_earlyoom_program(
+        tmp_path / "earlyoom.conf",
+        "/home/user/workspace/run.sh /usr/local/bin/earlyoom -m 10,5 -s 100,100 -r 0",
+    )
+
+    free = memory_candidates.read_free_memory(
+        tmp_path / "meminfo",
+        tmp_path / "absent-host-meminfo",
+        _NOW,
+        shed_percent=memory_candidates.read_shed_percent(program),
+    )
+
+    assert memory_candidates.render_free_memory(free) == (
+        f"Free memory: 1051 MiB (MemAvailable from {tmp_path / 'meminfo'}; MemTotal 6415 MiB); "
+        "409 MiB of it before the memory guard starts stopping processes at 10% of MemTotal"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/local/bin/earlyoom -s 100,100 -r 0",
+        "/usr/local/bin/earlyoom -m nope",
+        '/usr/local/bin/earlyoom -m 10,5 --avoid "^(sshd',
+    ],
+    ids=["no-threshold", "unparseable-threshold", "unbalanced-quote"],
+)
+def test_free_memory_without_a_readable_guard_threshold_says_only_the_free_memory(
+    tmp_path: Path, command: str
+) -> None:
+    _write_meminfo(tmp_path, {"MemTotal": 8192, "MemAvailable": 2048})
+    program = _write_earlyoom_program(tmp_path / "earlyoom.conf", command)
+
+    free = memory_candidates.read_free_memory(
+        tmp_path / "meminfo",
+        tmp_path / "absent-host-meminfo",
+        _NOW,
+        shed_percent=memory_candidates.read_shed_percent(program),
+    )
+
+    assert "memory guard" not in memory_candidates.render_free_memory(free)
+
+
+def test_the_guard_threshold_is_read_off_the_workspaces_own_earlyoom_program() -> None:
+    assert (
+        memory_candidates.read_shed_percent(memory_candidates.EARLYOOM_PROGRAM_CONF)
+        is not None
+    )
 
 
 def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
@@ -951,7 +1020,15 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
     )
 
     report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr([chat]), http, supervised_pids={"daily-digest": 400})
+        _sources(
+            proc,
+            _FakeMngr([chat]),
+            http,
+            supervised_pids={"daily-digest": 400},
+            earlyoom_program_conf=_write_earlyoom_program(
+                tmp_path / "earlyoom.conf", "/usr/local/bin/earlyoom -m 10,5"
+            ),
+        )
     )
     document = json.loads(json.dumps(memory_candidates.report_to_json(report)))
 
@@ -963,6 +1040,8 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
             "free_kib": 1024,
             "total_kib": 4096,
             "source": str(proc / "meminfo"),
+            "shed_line_kib": 409,
+            "room_kib": 615,
         },
         "agents": {
             "candidates": [
