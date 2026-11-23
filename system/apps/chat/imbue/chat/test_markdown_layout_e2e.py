@@ -23,9 +23,12 @@ from playwright.sync_api import expect
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
+from imbue.chat.testing import assistant_record
+from imbue.chat.testing import bash_call_record
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
+from imbue.chat.testing import tool_result_record
 from imbue.system_interface.testing import find_free_port
 
 pytestmark = [
@@ -102,27 +105,12 @@ Inline code with nowhere to break: `{_LONG_TOKEN}`
 """
 
 
-def _user_line(uuid: str, timestamp: str, content: str | list[dict[str, Any]]) -> dict[str, Any]:
+def _user_line(uuid: str, timestamp: str, content: str) -> dict[str, Any]:
     return {"type": "user", "uuid": uuid, "timestamp": timestamp, "message": {"role": "user", "content": content}}
 
 
-def _assistant_line(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
-    return {
-        "type": "assistant",
-        "uuid": uuid,
-        "timestamp": timestamp,
-        "message": {
-            "role": "assistant",
-            "model": "claude-opus-4-6",
-            "content": content,
-            "stop_reason": stop_reason,
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-        },
-    }
-
-
 def _read_call(uuid: str, timestamp: str, tool_use_id: str) -> dict[str, Any]:
-    return _assistant_line(
+    return assistant_record(
         uuid,
         timestamp,
         [{"type": "tool_use", "id": tool_use_id, "name": "Read", "input": {"file_path": "/tmp/trips.md"}}],
@@ -134,7 +122,7 @@ def _reply_session(kitchen_sink: str) -> list[dict[str, Any]]:
     """The kitchen sink as a reply, then a person's message holding a URL and a key, last so both are on screen."""
     return [
         _user_line("uuid-md-1", "2026-01-01T00:00:00Z", "What trips do I have booked?"),
-        _assistant_line("uuid-md-2", "2026-01-01T00:00:01Z", [{"type": "text", "text": kitchen_sink}], "end_turn"),
+        assistant_record("uuid-md-2", "2026-01-01T00:00:01Z", [{"type": "text", "text": kitchen_sink}], "end_turn"),
         _user_line("uuid-md-3", "2026-01-01T00:00:02Z", f"Here is the link {_LONG_URL} and the key {_LONG_TOKEN}"),
     ]
 
@@ -144,30 +132,16 @@ def _running_step_session(kitchen_sink: str) -> list[dict[str, Any]]:
     back, so the step is the live one and the kitchen sink its narration."""
     return [
         _user_line("uuid-md-1", "2026-01-01T00:00:00Z", "Go through my trips one at a time"),
-        _assistant_line(
-            "uuid-md-2",
-            "2026-01-01T00:00:01Z",
-            [{"type": "tool_use", "id": "toolu_md1", "name": "Bash", "input": {"command": f"tk start {_STEP_ID}"}}],
-            "tool_use",
-        ),
-        _user_line(
+        bash_call_record("uuid-md-2", "2026-01-01T00:00:01Z", "toolu_md1", f"tk start {_STEP_ID}"),
+        tool_result_record(
             "uuid-md-3",
             "2026-01-01T00:00:02Z",
-            [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_md1",
-                    "content": f"Updated {_STEP_ID} -> in_progress\ntk-step {_STEP_ID} title: {_STEP_TITLE}",
-                }
-            ],
+            "toolu_md1",
+            f"Updated {_STEP_ID} -> in_progress\ntk-step {_STEP_ID} title: {_STEP_TITLE}",
         ),
         _read_call("uuid-md-4", "2026-01-01T00:00:03Z", "toolu_md2"),
-        _user_line(
-            "uuid-md-5",
-            "2026-01-01T00:00:04Z",
-            [{"type": "tool_result", "tool_use_id": "toolu_md2", "content": "trips"}],
-        ),
-        _assistant_line("uuid-md-6", "2026-01-01T00:00:05Z", [{"type": "text", "text": kitchen_sink}], "tool_use"),
+        tool_result_record("uuid-md-5", "2026-01-01T00:00:04Z", "toolu_md2", "trips"),
+        assistant_record("uuid-md-6", "2026-01-01T00:00:05Z", [{"type": "text", "text": kitchen_sink}], "tool_use"),
         _read_call("uuid-md-7", "2026-01-01T00:00:06Z", "toolu_md3"),
     ]
 

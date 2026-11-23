@@ -1393,6 +1393,45 @@ def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
     }
 
 
+def assistant_record(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
+    """A Claude Code transcript record of one assistant message holding ``content``."""
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+
+
+def bash_call_record(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
+    """A Claude Code transcript record of the agent calling Bash with ``command``."""
+    return assistant_record(
+        uuid,
+        timestamp,
+        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
+        "tool_use",
+    )
+
+
+def tool_result_record(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
+    """A Claude Code transcript record of a tool call's ``output`` coming back."""
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": output}],
+        },
+    }
+
+
 def make_agent_fixture(
     tmp_path: Path,
     agent_id: str = FIXTURE_AGENT_ID,
