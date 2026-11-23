@@ -51,7 +51,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   the `workspace_profile` library checks),
   `DefaultShortcut`
   (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
-  array of them, read as `default_shortcuts`), `ShortcutMode`,
+  array of them, read as `default_shortcuts`; the manifest's
+  `seeds_shortcuts = false` keeps them off every desktop, leaving the app in
+  the launcher alone), `ShortcutMode`,
   `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the

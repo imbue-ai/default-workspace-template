@@ -136,17 +136,27 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   tour as finished when Done on the last card or Exit walkthrough is pressed,
   and the owner's page does so for a record that reads seen with nothing to
   resume, when it is a page the tour could begin on (the desktop layout, not a
-  pulled-out window).
-- A coach card for a page that asks (`shell:show-coach-card {text,
-  chromeAnchor}`): the page's words and a Got it button under the control of
-  the Imbue Studio chrome it names, which the chrome rings until the card
-  goes. It is drawn in the tour's box, only while the tour shows nothing and
-  no other coach card is up, and it gives way to a tour that starts. The
-  phone layout and a pulled-out window's own shell draw no such box, so a
-  request there is dropped. A text
-  that is empty or longer than 500 characters, or an anchor that is not one
-  of the chrome's, is dropped. The shell names no app here: the words come
-  from the page.
+  pulled-out window). The last card tells the user to click the entries of
+  the onboarding checklist. As that card shows, and when Exit walkthrough is
+  pressed on a card before it, the page relays `onboarding:show-checklist` to
+  whichever app registered it and puts the window that opens down the left of
+  the desktop (30% of its width, 85% of its height), in front, with no other
+  window moved (`frontend/src/store/tourActions.ts`, and the store's
+  `showRegisteredPageAt`); the shell holds the message's type, never an app's
+  name, and nothing happens when no app registered it.
+- A coach card for a page that asks (`shell:show-coach-card`, with exactly one
+  place): the page's words and a Got it button, under the control of the Imbue
+  Studio chrome it names (`chromeAnchor`), which the chrome rings until the
+  card goes, or popping out of the agent's avatar (`target: "avatar"`), whose
+  window the shell first brings forward. It is drawn in the tour's box: while
+  the tour shows nothing, in place of a coach card that is up, and in place of
+  the tour's last card or its exit badge, which it closes as that card's own
+  button would. During any other tour card, or the pause notice, it is
+  dropped, and it gives way to a tour that starts. The phone layout and a
+  pulled-out window's own shell draw no such box, so a request there is
+  dropped. A text that is empty or longer than 500 characters, or a place
+  that is not exactly one the shell knows, is dropped. The shell names no app
+  here: the words come from the page.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
@@ -202,8 +212,9 @@ shell only writes them; what reads them is each reader's own business.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcuts (each `default_shortcut` it
   declares, else, for an app a program runs, its first launch path taking no
-  text and no mention, or its first when every one takes one) on the first
-  read after the registry has been read.
+  text and no mention, or its first when every one takes one; none for an app
+  whose manifest says `seeds_shortcuts = false`, which is in the launcher
+  only) on the first read after the registry has been read.
   A default shortcut not yet offered (an app that registers later, or a
   further one an app comes to declare) is added to every desktop once, on the
   registry change and on every read; `default_shortcuts_offered.json` lists

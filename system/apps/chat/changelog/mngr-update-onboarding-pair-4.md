@@ -12,6 +12,8 @@
 
 - Clicking one of these sends nothing: it points a bubble at the chat list's New chat button, at the message box, at the Imbue Studio app's permissions button, or at the phone-access control of its share panel, every time it is clicked. A suggestion whose bubble this page cannot have drawn is not offered.
 
+- The chat app takes a new message, `onboarding:show-new-chat-pointer` (`POST /api/show-new-chat-pointer`), which another app's page sends through the shell: the chat list comes forward and its New chat button gets the same bubble, with the chat on screen left as it is. The onboarding checklist's first entry sends it.
+
 - Each strip is its pills over one quiet line, which holds the strip's link with Undo: "disable new chat suggestions" at the right end of the new-chat strip's line, and "disable suggestions" immediately left of "Hide suggestions" on the next-step line while its pills are shown.
 
 - A strip's suggestions are a list on the user's side of the transcript's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a solid fill and a light shadow. While shown they float over the end of the transcript, directly above the footer, which keeps its height: the transcript scrolls underneath, a click beside the pills reaches it, a reader at its end stays there with the last reply clear of the pills, and one who has scrolled up sees nothing move. A list taller than 60% of the transcript scrolls in place.
