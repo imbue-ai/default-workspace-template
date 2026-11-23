@@ -90,6 +90,7 @@ from imbue.chat.testing import running_workspace
 from imbue.chat.testing import scripted_send_mngr_messenger
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import tool_result_record
+from imbue.chat.testing import user_record
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.errors import SendFailureKind
@@ -2346,17 +2347,7 @@ def _allow_mngr_config_in_pytest(tmp_path: Path) -> None:
 def _append_user_turn(session_file: Path, uuid: str, text: str) -> None:
     """Write a user turn holding ``text`` to the fixture agent's transcript, as Claude records one it took."""
     with open(session_file, "a") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "type": "user",
-                    "uuid": uuid,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "message": {"role": "user", "content": text},
-                }
-            )
-            + "\n"
-        )
+        handle.write(json.dumps(user_record(uuid, datetime.now(UTC).isoformat(), text)) + "\n")
 
 
 @pytest.mark.timeout(120, func_only=False)

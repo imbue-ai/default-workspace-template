@@ -29,6 +29,7 @@ from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import tool_result_record
+from imbue.chat.testing import user_record
 from imbue.system_interface.testing import find_free_port
 
 pytestmark = [
@@ -105,10 +106,6 @@ Inline code with nowhere to break: `{_LONG_TOKEN}`
 """
 
 
-def _user_line(uuid: str, timestamp: str, content: str) -> dict[str, Any]:
-    return {"type": "user", "uuid": uuid, "timestamp": timestamp, "message": {"role": "user", "content": content}}
-
-
 def _read_call(uuid: str, timestamp: str, tool_use_id: str) -> dict[str, Any]:
     return assistant_record(
         uuid,
@@ -121,9 +118,9 @@ def _read_call(uuid: str, timestamp: str, tool_use_id: str) -> dict[str, Any]:
 def _reply_session(kitchen_sink: str) -> list[dict[str, Any]]:
     """The kitchen sink as a reply, then a person's message holding a URL and a key, last so both are on screen."""
     return [
-        _user_line("uuid-md-1", "2026-01-01T00:00:00Z", "What trips do I have booked?"),
+        user_record("uuid-md-1", "2026-01-01T00:00:00Z", "What trips do I have booked?"),
         assistant_record("uuid-md-2", "2026-01-01T00:00:01Z", [{"type": "text", "text": kitchen_sink}], "end_turn"),
-        _user_line("uuid-md-3", "2026-01-01T00:00:02Z", f"Here is the link {_LONG_URL} and the key {_LONG_TOKEN}"),
+        user_record("uuid-md-3", "2026-01-01T00:00:02Z", f"Here is the link {_LONG_URL} and the key {_LONG_TOKEN}"),
     ]
 
 
@@ -131,7 +128,7 @@ def _running_step_session(kitchen_sink: str) -> list[dict[str, Any]]:
     """A turn still running inside a step, whose latest words are the kitchen sink and whose next call has not come
     back, so the step is the live one and the kitchen sink its narration."""
     return [
-        _user_line("uuid-md-1", "2026-01-01T00:00:00Z", "Go through my trips one at a time"),
+        user_record("uuid-md-1", "2026-01-01T00:00:00Z", "Go through my trips one at a time"),
         bash_call_record("uuid-md-2", "2026-01-01T00:00:01Z", "toolu_md1", f"tk start {_STEP_ID}"),
         tool_result_record(
             "uuid-md-3",

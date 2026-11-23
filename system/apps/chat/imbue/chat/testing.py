@@ -1393,6 +1393,11 @@ def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
     }
 
 
+def user_record(uuid: str, timestamp: str, content: str) -> dict[str, Any]:
+    """A Claude Code transcript record of one user message holding ``content``."""
+    return {"type": "user", "uuid": uuid, "timestamp": timestamp, "message": {"role": "user", "content": content}}
+
+
 def assistant_record(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
     """A Claude Code transcript record of one assistant message holding ``content``."""
     return {
