@@ -126,13 +126,13 @@ needed nontrivial merge work there.**
 
 For the shell, build the frontends in your worktree: `uv sync
 --all-packages`, then `cd system && npm ci && npm run build`. One npm
-workspace emits all seven bundles: the shell's, the chat app's, the Getting
-Started app's, the Files app's, the Routines app's, the Screen's, and the
-Style Guide's. Drive it per
+workspace emits all eight bundles: the shell's, the chat app's, the Getting
+Started app's, the Files app's, the Routines app's, the Screen's, the Style
+Guide's, and the Onboarding checklist's. Drive it per
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`.
 
-Those seven bundles are what the lead's apply installs live
-(`--worker-bundle`, one per app, installed only as a set), so name all seven
+Those eight bundles are what the lead's apply installs live
+(`--worker-bundle`, one per app, installed only as a set), so name all eight
 locations in your report.
 
 ## Customization survival

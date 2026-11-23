@@ -19,9 +19,11 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     state: "NORMAL",
     stackIndex: 1,
     isFocused: true,
+    isMoving: false,
     isTouch: false,
     isMenuOpen: false,
     hasAppChat: true,
+    hasShare: false,
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
@@ -106,6 +108,32 @@ describe("Window", () => {
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
     (element.querySelector('[data-window-control="app-chat"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("app-chat", expect.anything());
+  });
+
+  it("offers Share after the balloon where the caller says so, and reports it", () => {
+    const onControl = vi.fn();
+    const element = render({ hasShare: true, onControl });
+    expect(controlNamesOf(element)).toEqual(["menu", "refresh", "app-chat", "share", "minimize", "maximize", "close"]);
+    (element.querySelector('[data-window-control="share"]') as HTMLElement).click();
+    expect(onControl).toHaveBeenCalledWith("share", expect.anything());
+    unmountViews();
+    expect(controlNamesOf(render({ hasShare: true, isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
+  });
+
+  it("draws Share by the window's own width, its title, and whether the client is a touch one", () => {
+    const shareTextAt = (width: number, overrides: Partial<WindowAttrs> = {}): string | null => {
+      const element = render({ hasShare: true, rect: { x: 0, y: 0, width, height: 480 }, ...overrides });
+      const share = element.querySelector('[data-window-control="share"]');
+      unmountViews();
+      return share === null ? null : share.textContent;
+    };
+
+    expect(shareTextAt(500)).toBe("Share");
+    expect(shareTextAt(400)).toBe("");
+    // A touch client's wider controls leave the word no room at a width a desktop client writes it at.
+    expect(shareTextAt(500, { isTouch: true })).toBe("");
+    // A title too long for the window leaves no room for the control at all.
+    expect(shareTextAt(400, { title: "Quarterly planning notes for the whole team" })).toBeNull();
   });
 
   it("offers Chat about this app only where the caller says so, and no title action on an unfocused window", () => {

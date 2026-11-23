@@ -4,6 +4,7 @@
  */
 
 import m from "mithril";
+import "@fontsource/besley/500.css";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
 import { addActiveAgentChangedListener, addMentionsUpdatedListener, initChats } from "./models/Chats";
