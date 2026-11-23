@@ -378,7 +378,7 @@
 /* A table scrolls sideways inside its own box (markdown.ts wraps it in one) when its columns need more than the
    bubble's width. It fills the box when it fits, and is at least 7em wide for each of its columns, so a phone
    scrolls a wide table rather than squeezing its words a few letters to a line. The floor is on the table, not
-   each cell, since a cell's min-width is undefined in CSS 2.1 tables and not reliably honoured. */
+   each cell: browsers honour a table's min-width, but not reliably a cell's. */
 .markdown-content .markdown-table-scroll {
   overflow-x: auto;
   margin-top: 0.75em;
