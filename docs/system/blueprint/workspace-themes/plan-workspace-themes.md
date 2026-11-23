@@ -144,7 +144,7 @@ Every part carries `data-part`. State is said with standard attributes, which a 
 | `title-bar` | the window's title bar | `data-focused` |
 | `window-icon` | the app's icon in the title bar | |
 | `window-title` | the window's title | |
-| `window-control` | a title bar button | `data-control="close"\|"minimize"\|"maximize"\|"restore"\|"refresh"\|"menu"` |
+| `window-control` | a title bar button | `data-control="close"\|"minimize"\|"maximize"\|"fullscreen"\|"restore"\|"refresh"\|"app-chat"\|"share"\|"menu"` |
 | `window-content` | the box the app's page is laid over | |
 | `taskbar` | the bar along the bottom of the desktop | |
 | `taskbar-entry` | a window's entry in the taskbar | `data-focused` |
@@ -185,6 +185,8 @@ Every slot but `icon` appears exactly once across the two lists, and `icon` at m
 With `title_align = "center"` the title is centred on the whole bar, whichever list holds it.
 A slot the window does not show (refresh and the window menu on a window in the background, maximize on a phone) leaves no gap.
 Spacing between controls, their size, and their look are the theme's CSS.
+The `refresh` slot also draws, on a focused window, the `app-chat` control and then the `share` control, where the window offers them.
+`share` is the one control that can wear a word beside its glyph: a theme whose controls have no room for a word hides it (`[data-part="window-control"][data-control="share"]`), which leaves Share to the window menu.
 
 ### 4.4 Render modes
 

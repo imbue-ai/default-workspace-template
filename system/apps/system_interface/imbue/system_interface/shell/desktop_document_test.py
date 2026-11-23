@@ -689,6 +689,35 @@ def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shor
     assert default_shortcut_targets(rows) == {chat_root}
 
 
+def test_an_app_that_keeps_its_shortcuts_off_the_desktop_is_neither_seeded_nor_offered_and_keeps_its_launch(
+    tmp_path: Path,
+) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            builtin_chat_row_toml(),
+            registry_row_toml(
+                "checklist",
+                "http://localhost:2",
+                program="checklist",
+                launcher_rank=16,
+                default_shortcuts=[("open", "focus")],
+                seeds_shortcuts=False,
+            ),
+            # The same app with no shortcut declared, which the shell would otherwise choose one for.
+            registry_row_toml("bare", "http://localhost:3", program="bare", seeds_shortcuts=False),
+        )
+    )
+    chat_root = ShortcutTarget(app=AppName("chat"), launch=LaunchPathId("root"))
+
+    assert [shortcut.target for shortcut in seed_desktop_shortcuts(rows)] == [chat_root]
+    assert default_shortcut_targets(rows) == {chat_root}
+    seeded = _desktop_with_shortcuts(*seed_desktop_shortcuts(rows))
+    assert with_default_shortcuts_offered(seeded, rows, {chat_root}) is seeded
+    # A bare ``open`` op still runs the launch the app's shortcut names.
+    assert default_launch_path_id(rows[1]) == "open"
+
+
 def test_an_offered_apps_further_default_shortcut_is_added_at_the_next_free_cell(tmp_path: Path) -> None:
     """A workspace offered the Screen's one shortcut before the Screen declared a second gets only the second."""
     rows = read_registry(

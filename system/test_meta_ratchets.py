@@ -459,8 +459,8 @@ def test_prevent_web_service_terminology() -> None:
 
 def test_prevent_application_terminology() -> None:
     """'application(s)' was retired in prose: always 'app(s)' (MIME types and the macOS
-    ``Application Support`` directory are paths, not prose)."""
-    pattern = re.compile(r"(?i)\bapplications?\b")
+    ``Application Support`` directory are paths, not prose, and a job application is no app)."""
+    pattern = re.compile(r"(?i)(?<!\bjob )\bapplications?\b")
     violations = [
         v
         for v in _count_pattern_in_live_prose(pattern)

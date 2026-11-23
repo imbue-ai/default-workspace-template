@@ -275,6 +275,11 @@ lets two agents scaffold two apps at once:
 - Root `pyproject.toml` and `uv.lock` -- untouched. The root `members` names
   only the built-in packages; an app it does not name is a standalone project,
   so its dependencies never move the chat's or another app's.
+- `data/.state/onboarding_activity/app_build_started` -- an empty marker, set on
+  every run and carrying that run's time. The chat reads it so that it does not
+  suggest building an app while one is being built. It is workspace state, not
+  a tracked file, and setting it twice is harmless; a run that cannot write it
+  prints a warning and carries on.
 - `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini

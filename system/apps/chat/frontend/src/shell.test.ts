@@ -36,8 +36,10 @@ vi.mock("./presence", () => ({
 }));
 const ensureParticipants = vi.fn(() => Promise.resolve());
 vi.mock("./models/Participants", () => ({ ensureParticipants }));
+const rereadNextStepSuggestions = vi.fn();
+vi.mock("./models/Suggestions", () => ({ rereadNextStepSuggestions }));
 
-import { CHAT_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
+import { CHAT_ON_SCREEN, PROVIDER_CHOOSER_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
@@ -58,6 +60,7 @@ let connection: ShellConnection | null = null;
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   reportChatOnScreenOnce: typeof import("./shell").reportChatOnScreenOnce;
+  reportProviderChooserOnScreenOnce: typeof import("./shell").reportProviderChooserOnScreenOnce;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
   openSubagentView: typeof import("./shell").openSubagentView;
   presence: {
@@ -76,6 +79,7 @@ async function loadShell(): Promise<{
   return {
     connectChatToShell: shell.connectChatToShell,
     reportChatOnScreenOnce: shell.reportChatOnScreenOnce,
+    reportProviderChooserOnScreenOnce: shell.reportProviderChooserOnScreenOnce,
     startChatOnAccount: shell.startChatOnAccount,
     openSubagentView: shell.openSubagentView,
     presence,
@@ -273,6 +277,225 @@ describe("reportChatOnScreenOnce", () => {
   });
 });
 
+describe("reportProviderChooserOnScreenOnce", () => {
+  function chooserReports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((data) => data.type === PROVIDER_CHOOSER_ON_SCREEN);
+  }
+
+  let layoutSpy: MockInstance | null = null;
+
+  afterEach(() => {
+    layoutSpy?.mockRestore();
+    layoutSpy = null;
+  });
+
+  it("reports once the root is shown and laid out, with no chat named, and only once", async () => {
+    const parent = framed();
+    layoutSpy = vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height: 0 } as DOMRect);
+    const { reportProviderChooserOnScreenOnce } = await loadShell();
+
+    reportProviderChooserOnScreenOnce(false);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([]);
+
+    layoutSpy.mockReturnValue({ height: 900 } as DOMRect);
+    reportProviderChooserOnScreenOnce(false);
+    expect(chooserReports(parent)).toEqual([]);
+
+    reportProviderChooserOnScreenOnce(true);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([{ type: PROVIDER_CHOOSER_ON_SCREEN }]);
+  });
+});
+
+describe("whether the chrome opens its workspace settings", () => {
+  const CAPABILITIES = { type: "minds:embedder-capabilities", canPopOut: false };
+
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  it("is no until a handshake says so, for a page greeted after the chrome spoke or framed by the chat root", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+
+    deliver(HANDSHAKE, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+
+    // The root hands its pages the shell's handshake again when the chrome speaks after it.
+    deliver({ ...HANDSHAKE, opensWorkspaceSettings: true }, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(true);
+  });
+
+  it("follows the chrome's own word, which the shell passes on to a page it already greeted", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    deliver(HANDSHAKE, parent);
+
+    deliver({ ...CAPABILITIES, opensWorkspaceSettings: true }, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(true);
+
+    deliver(CAPABILITIES, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+  });
+
+  it("asks the chrome for its workspace settings at a group with the contract's message", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.openWorkspaceSettings("suggestions");
+
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "minds:open-workspace-settings",
+      group: "suggestions",
+    });
+  });
+});
+
+describe("whether the chrome draws coach marks on its own controls", () => {
+  const CAPABILITIES = { type: "minds:embedder-capabilities", canPopOut: false };
+
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  it("is no until a handshake says so, and follows the chrome's own word after it", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver(HANDSHAKE, parent);
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver({ ...HANDSHAKE, showsCoachMarks: true }, parent);
+    expect(shell.showsCoachMarks()).toBe(true);
+
+    deliver(CAPABILITIES, parent);
+    expect(shell.showsCoachMarks()).toBe(false);
+
+    deliver({ ...CAPABILITIES, showsCoachMarks: true }, parent);
+    expect(shell.showsCoachMarks()).toBe(true);
+  });
+
+  it("asks the chrome for its share settings on the whole workspace, with a coach mark at one control", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.openShareSettingsWithCoachMark("mobile-access");
+
+    // No serviceName: the tab opens on the workspace, not on one app.
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "minds:open-share-settings",
+      coachMark: "mobile-access",
+    });
+  });
+
+  it("asks the shell for a coach card under a control of the chrome", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.showCoachCard("Your connections live here.", "permissions");
+
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "shell:show-coach-card",
+      text: "Your connections live here.",
+      chromeAnchor: "permissions",
+    });
+  });
+});
+
+describe("what the page tells the shell of its chat's agent", () => {
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  function reports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls
+      .map(([data]) => data as { type?: string })
+      .filter((data) => data.type === "shell:agent-working");
+  }
+
+  it("says an agent is working only when that has changed, and nothing while none has worked yet", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.reportAgentWorking(false);
+    expect(reports(parent)).toEqual([]);
+
+    shell.reportAgentWorking(true);
+    shell.reportAgentWorking(true);
+    shell.reportAgentWorking(false);
+    shell.reportAgentWorking(false);
+
+    expect(reports(parent)).toEqual([
+      { type: "shell:agent-working", isWorking: true },
+      { type: "shell:agent-working", isWorking: false },
+    ]);
+  });
+
+  it("says so again to a shell that greets it while an agent works, and not once the agent has stopped", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toEqual([]);
+
+    shell.reportAgentWorking(true);
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toEqual([
+      { type: "shell:agent-working", isWorking: true },
+      { type: "shell:agent-working", isWorking: true },
+    ]);
+
+    shell.reportAgentWorking(false);
+    deliver(HANDSHAKE, parent);
+    expect(reports(parent)).toHaveLength(3);
+  });
+});
+
+describe("the chat's suggestions when its page is shown again", () => {
+  it("are read again when the shell shows the page", async () => {
+    const parent = framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    deliver(HANDSHAKE, parent);
+    expect(rereadNextStepSuggestions).not.toHaveBeenCalled();
+
+    deliver({ type: SHELL_SHOWN }, parent);
+
+    expect(rereadNextStepSuggestions.mock.calls).toEqual([["agent-1"]]);
+  });
+
+  it("are read again when a page visited directly becomes visible", async () => {
+    const { connectChatToShell } = await loadShell();
+    const addSpy = vi.spyOn(document, "addEventListener");
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    const onVisibilityChange = addSpy.mock.calls.find(([type]) => type === "visibilitychange")?.[1] as () => void;
+    addSpy.mockRestore();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+
+    visibility.mockReturnValue("hidden");
+    onVisibilityChange();
+    expect(rereadNextStepSuggestions).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    onVisibilityChange();
+    expect(rereadNextStepSuggestions.mock.calls).toEqual([["agent-1"]]);
+    visibility.mockRestore();
+  });
+});
+
 describe("the embed API", () => {
   it("drives a framed page's presence the way the shell's messages do", async () => {
     const parent = framed();
@@ -315,7 +538,8 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
+    // The create names the client the shell's handshake gave this page: a person asked for the chat.
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null, "client-1");
     expect(parent.postMessage).toHaveBeenCalledWith(
       { type: "shell:open", path: "/?chat=agent-2", ifPresent: "focus" },
       "*",
@@ -331,7 +555,7 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null, "client-1");
   });
 
   it("passes a first message through and reports whether the chat opened", async () => {
@@ -341,7 +565,7 @@ describe("startChatOnAccount", () => {
     deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
     expect(await startChatOnAccount("account-1", "Carry on here")).toBe(true);
-    expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here", null);
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here", null, "client-1");
 
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     createChat.mockRejectedValueOnce(new Error("no usable account"));

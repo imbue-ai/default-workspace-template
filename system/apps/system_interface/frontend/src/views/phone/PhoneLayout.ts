@@ -30,7 +30,7 @@ import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
 import { stoppedPlaceholder } from "../Window";
-import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
+import { isAppShareable, MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
 import { isSoftKeyboardUp, readViewport } from "./softKeyboard";
@@ -104,7 +104,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     const app = appByName(state, found.window.app);
     return phoneWindowMenuRows(app, {
       refresh: () => store.refreshWindow(windowId),
-      share: app === undefined || app.critical || !isEmbedded() ? null : () => openShareSettings(app),
+      share: isAppShareable(app) && isEmbedded() ? () => openShareSettings(app) : null,
       quit: app !== undefined && store.canStopApp(app) ? () => void store.quitApp(app.name) : null,
     });
   }
@@ -217,7 +217,9 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       const state = store.getState();
       const shownWindow = shownWindowOf(state);
       const shownApp = shownWindow === null ? undefined : appByName(state, shownWindow.app);
-      const isHome = state.phone.shown === null || state.phone.shown.kind === "home";
+      // Nothing shown yet is the page before it lands, not home: drawing the home grid then would flash it before
+      // the window the phone lands on.
+      const isHome = state.phone.shown?.kind === "home";
       const thresholdPx = store.getMetrics().dragThreshold;
       const menuRows =
         openMenu === null

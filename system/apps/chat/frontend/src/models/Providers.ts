@@ -177,11 +177,25 @@ export async function loadLanes(): Promise<void> {
   lanesLoaded = true;
 }
 
+// Whether the first run's provider page (views/FirstRunProvidersPage.ts) is still owed to the workspace's owner.
+let firstRunProviderStepPending = false;
+
+export function isFirstRunProviderStepPending(): boolean {
+  return firstRunProviderStepPending;
+}
+
+/** The owner left the first run's provider page (Skip or Next): it is never shown again. */
+export async function finishFirstRunProviderStep(): Promise<void> {
+  await m.request({ method: "POST", url: apiUrl("/api/first-run/provider-step/done") });
+  firstRunProviderStepPending = false;
+}
+
 export async function loadAccounts(): Promise<void> {
   const body = await m.request<{
     accounts: ProviderAccount[];
     mru: string | null;
     default: string | null;
+    is_first_run_provider_step_pending?: boolean;
   }>({
     method: "GET",
     url: apiUrl("/api/accounts"),
@@ -189,6 +203,7 @@ export async function loadAccounts(): Promise<void> {
   accounts = body.accounts;
   mru = body.mru;
   defaultAccountId = body.default;
+  firstRunProviderStepPending = body.is_first_run_provider_step_pending === true;
   accountsLoaded = true;
   markAccountsLoaded();
 }
@@ -445,6 +460,8 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
+// Which lane the chooser should open ON, for a caller that already showed the lanes itself.
+let chooserLaneId: string | null = null;
 // What to do once a sign-in succeeds or a signed-in account is picked: launch a chat waiting for
 // an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
 // can tell.
@@ -473,6 +490,8 @@ export interface UnpickableAccount {
 export interface ProviderChooserIntent {
   /** Re-authenticate THIS account rather than add a provider. */
   accountId?: string;
+  /** Open on THIS lane's sign-in rather than the lane list: the caller listed the lanes itself. */
+  laneId?: string;
   /** Run once a sign-in succeeds, with the account it produced. Also run when a signed-in
    *  account is picked instead, which is why its presence makes those rows pickable. */
   onSignedIn?: (accountId: string) => void;
@@ -490,6 +509,7 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   if (chooserOpen) return;
   chooserOpen = true;
   chooserAccountId = intent.accountId ?? null;
+  chooserLaneId = intent.laneId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
@@ -537,6 +557,13 @@ export function takeChooserAccountId(): string | null {
   const accountId = chooserAccountId;
   chooserAccountId = null;
   return accountId;
+}
+
+/** The lane the chooser was opened on, or null. Read once by the modal at init, like the account. */
+export function takeChooserLaneId(): string | null {
+  const laneId = chooserLaneId;
+  chooserLaneId = null;
+  return laneId;
 }
 
 export function closeProviderChooser(): void {
