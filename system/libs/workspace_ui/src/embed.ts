@@ -95,7 +95,7 @@ export const DETACHED_WINDOWS: "minds:detached-windows" =
 // opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive?, opensWorkspaceSettings?,
 // showsCoachMarks?, opensHelp? }: whether it takes OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES,
 // IMMERSIVE_REQUEST, and OPEN_WORKSPACE_SETTINGS, whether it draws a coach mark an OPEN_SHARE_SETTINGS asks for, and
-// (opensHelp, from contract v16) whether it takes OPEN_HELP with its bug report, so a failure's "Report a bug" can
+// (opensHelp, from contract v20) whether it takes OPEN_HELP with its bug report, so a failure's "Report a bug" can
 // work; absent, the workspace offers no such button.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
@@ -157,7 +157,7 @@ export const IMMERSIVE_REQUEST: "minds:immersive-request" =
 export const IMMERSIVE_CHANGED: "minds:immersive-changed" =
   "IMMERSIVE_CHANGED" in embedContract ? embedContract.IMMERSIVE_CHANGED : "minds:immersive-changed";
 
-// The longest ``errorDetails`` (the failure a "Report a bug" is about) OPEN_HELP takes from contract v16; an
+// The longest ``errorDetails`` (the failure a "Report a bug" is about) OPEN_HELP takes from contract v20; an
 // embedder drops a message whose details run longer.
 export const MAX_HELP_ERROR_DETAILS_LENGTH: number =
   "MAX_HELP_ERROR_DETAILS_LENGTH" in embedContract ? embedContract.MAX_HELP_ERROR_DETAILS_LENGTH : 16384;
