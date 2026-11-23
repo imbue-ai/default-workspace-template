@@ -18,6 +18,8 @@ The lifecycle skills, the harden worker and the shared references they rest on f
 
 - **Two rules made exact.** `crystallize-creation` says what to do with the freshness check while the skill it is building is not on the lead's branch yet (every merge before the first that brings it): skip it, since `pass-scope` refuses a creation that does not exist and nothing could have moved under it. `lead-proxy.md` has a lead close its ticket where its skill says to, which for the three lifecycle skills is after go-live, as they always did; it used to say before.
 
+- **Descriptions.** `crystallize-creation`, `update-creation` and `heal-creation` are in the third person, with their triggers unchanged.
+
 - **Wording.** A worker's own workers are called that, not sub-workers or siblings; a service is no longer said to have a tab; stale lines in `post-crystallize-migration.md` (a PR description, a missing `tk` list command) are corrected.
 
 The exemptions of `do-something-new`, `migrate-workspace` and `publish-template` lose the checks these shared files were the only cause of.
