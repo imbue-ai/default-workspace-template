@@ -153,7 +153,7 @@ A reference has no size limit. That was decided against: the contents-list rule 
 | A skill only another agent's task invokes says so in one line | A worker's guide is a skill so that the worker invokes it, because an invoked skill is what a compaction preserves and a file merely read is not. Its description is one line so it costs the catalog little. `disable-model-invocation` was rejected: it would block the worker's own invocation, and it is not in the spec. |
 | 1 to 1,024 characters, no tighter cap | The specification. Anthropic ships 835 to 993 characters of trigger phrases, and the listing of all built-in descriptions fit its budget on a real workspace (Claude Code truncates an entry at 1,536 characters and budgets the listing at 1% of the context window). |
 
-Every built-in description was brought to this shape, not only the flagged ones, so the tree does not ship violations of the guide it ships. The rewrite added no trigger vocabulary, since triggering was not a problem, and so got no triggering check.
+Every built-in description was brought to this shape, not only the flagged ones, so the tree does not ship violations of the guide it ships. Each rewrite was read against its old text for a trigger it dropped, as the row above says, and adds no trigger vocabulary its old text did not carry.
 
 ### Scripts
 
