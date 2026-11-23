@@ -4,6 +4,196 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-22
+
+### .agents
+
+A new `first-run-onboarding` skill holds the agent's replies in a new workspace's first conversation: what to say when the user picks "Describe what you want to make" or "See what Studio can do" under the welcome (the second also opens the Getting Started app beside the chat). The chat app sends the first chat's agent to it, and any other first message is answered as an ordinary request.
+
+The `first-run-onboarding` skill gains the path behind the welcome's new "Get ideas for what to make" suggestion: the two questions it asks (what the workspace is for, and which apps the user has, each with a picker tag the chat draws), the rules for the list of ideas that follows, and the replies to "More ideas", a picked idea, and "Something else". A new reference beside it, `references/app-ideas.md`, holds starter ideas for each category and what makes an idea a good fit for Studio.
+
+The `build-app` skill's scaffolder sets the workspace's `app_build_started` onboarding marker on every run, so the chat does not suggest building an app while one is being built. A run that cannot write the marker prints a warning and scaffolds as before.
+
+The `first-run-onboarding` skill lists Books, Movies and Music as three Creative categories in place of "Books, movies & music", and its ideas reference has a row of ideas for each. The skill also says that the pickers' "Other" pills put "Write whatever you want!" and "Write whatever data you want here!" in the message as prompts to write over, so either sentence arriving unchanged names no category and no app.
+
+The `update-self` skill counts the Onboarding checklist's frontend among the bundles its apply builds, installs, snapshots and verifies (`--worker-bundle onboarding_checklist=<path>`), so a worker now reports eight built bundles.
+
+### system
+
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list the `opensWorkspaceSettings` flag the shell now puts in `shell:handshake`.
+
+The shared frontend library (`system/libs/workspace_ui`) gains a coach mark component, `components/CoachMark.ts`: a bubble with an arrow and a "Got it" button that a page points at one of its own controls. Its README lists it with the other shared components.
+
+The check that keeps the retired word "application" out of prose (`system/test_meta_ratchets.py`) no longer counts "job application", which names no app.
+
+The new `onboarding_activity` library joins the uv workspace and the root project's dependencies, and `docs/system/blueprint/desktop-interface/contracts.md` describes the tour record's `is_finished` field and the `data/.state/onboarding_activity/` marker directory.
+
+The same contracts (section 7) list the new page message `shell:show-coach-card` with its two places (a chrome control, or the agent's avatar), the coach card it shows, and the `showsCoachMarks` flag of `shell:handshake`. In the shared `workspace_ui` library the app contract gains that message and that flag, `embed.ts` the `coachMark` of `minds:open-share-settings`, and the new `onboarding_pointers.ts` the words two onboarding pointers show.
+
+The new Onboarding checklist app (`system/apps/onboarding_checklist`) joins the uv workspace, the root project's dependencies, the npm workspace and the image's manifest layer, with its supervisord program (`onboarding-checklist`, port 8070) and its built bundle ignored by git. The contracts list its manifest row, the manifest key `seeds_shortcuts`, the chat's `onboarding:show-new-chat-pointer` handler, and how the tour's end opens and places the checklist; `test_app_manifests.py` holds the app to the built-in rules.
+
+The contracts also list the page message `shell:agent-working {isWorking}`, which the tour's start reads beside the avatar's status, and the app contract in `workspace_ui` gains it (`connection.agentWorking`).
+
+They list `shell:first-conversation-step {isPending}` the same way (`connection.firstConversationStep`), which holds the tour's start while a new workspace's first conversation follows its script, and the workspace app model's contracts name the `is_first_conversation_pending` the chat's `chats_updated` push carries.
+
+The Classic Mac and Windows 2000 themes hide the title bar's new Share control, whose word their title bar boxes have no room for; Share stays in the window menu there.
+
+The desktop interface's concepts and contracts say where Share is offered and name the `share` window control, and the theme contract's part table lists it among the title bar's controls, with how a theme hides it.
+
+The shared icon set (`workspace_ui`) gains a `share` glyph.
+
+A workspace no longer runs the `vm-exec-register` one-shot at start: `system/supervisord.conf.d/vm-exec-register.conf` and `system/scripts/register_vm_exec.sh` are removed. The program probed the machine around the container for an owner-exec daemon and registered it as the `vm-exec` service; Imbue Studio no longer installs that daemon, and nothing called it. A `vm-exec` row a workspace registered earlier stays in its app registry, unused.
+
+### system/apps/chat
+
+The chat now offers suggestions: short replies above the composer that the user can click instead of typing.
+
+- When a chat has suggested replies to its last message, they appear as a list of pills above the composer. Clicking one sends it as a message; with text already in the composer, that text is sent with the suggestion on a new line, along with any attachments. Once a message is sent, they stay with the reply they were made for. A chat room shows none.
+
+- A new workspace's first chat opens on a shorter welcome that ends in "How do you want to start?", over two suggestions: "Describe what you want to make" and "See what Studio can do". Once a provider is connected the agent no longer speaks first: it waits for a pick or a typed message, and answers a pick with a prepared reply (the second also opens the Getting Started app beside the chat). What an older Imbue Studio app says the user wants Studio for still reaches the agent.
+
+- The workspace's owner can turn the suggestions off with the "disable suggestions" link beside them, with "Undo" offered for a few seconds. The chat settings gain two switches, both on by default: `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`. `PUT /api/settings/suggestions` changes either or both and leaves every other setting as it is, and every settings change is pushed to the open pages as `settings_updated` on `/api/ws`.
+
+- `GET /api/chats/<chat-id>/suggestions` answers the suggestions stored for a chat (`suggestions.json` in the chat's folder), or `none`.
+
+The chat now works out its own suggested replies.
+
+- When an agent finishes a reply, the chat suggests two or three replies to it a few seconds later, as the pills above the composer. One may be marked as the recommended one, in green. Nothing is suggested when no reply would make sense, under a reply that is a provider failure, in a chat room, or in a chat an agent started.
+
+- The suggestions come from one call per finished reply to a mid-sized model (Sonnet for Claude, the account's newest "terra" model for Codex) on the account the chat already runs on, sent the last few turns of the conversation. The call stays outside the chat's transcript. Every chat gets them, whether or not it is on screen; switching "Next step suggestions" off stops the calls. Chats on Pi, Antigravity and OpenCode get none.
+
+- A chat's suggestions never outlive the reply they were made for: the stored set is replaced or removed each time a turn ends.
+
+- `GET /api/chats/<chat-id>/suggestions` answers `pending` while a set is being worked out, and `/api/ws` pushes `suggestions_updated` with the `chat_id` when a chat's stored set is replaced or removed.
+
+A new workspace's first conversation can now help its user find something to build.
+
+- The welcome offers a third start suggestion, "Get ideas for what to make", between "Describe what you want to make" and "See what Studio can do". Picking it has the agent ask what the workspace is for and which apps the user has, and then list ideas that fit both answers.
+
+- The two questions come with pickers drawn in the agent's message: three columns of categories (Work, Life, Creative), and a row of fifteen apps, each with its logo where the workspace has one for it. Clicking a pill adds its name to the message box, and clicking it again takes it out; the user sends the message themselves and can type anything of their own. A picker in a message that has been answered is greyed out. The first category picked in a workspace points a bubble at the send button, "Click this button to send your message", which goes once the message is sent.
+
+- The replies offered under these messages are the chat's own, with no model asked, so they appear the moment the reply ends and work with every AI provider: "Show me some ideas" under the question about apps, and one per idea, then "More ideas" and "Something else", under a list of ideas. Typing anything else at the start or under the ideas ends the scripted conversation, after which the chat gets suggested replies like any other.
+
+- An assistant message that carries `<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own draws that picker. The chat's folder holds the conversation's step in `first_run_tree.json`, and the chat settings gain `is_picker_send_hint_shown`.
+
+- New route `GET /api/suggestions/new-chat?chat_id=<chat-id>`: the things worth trying in Studio that the workspace's owner has not done yet (start a second chat, open Studio on a phone, build an app, connect some data), each an action suggestion. They are the four onboarding items the `onboarding_activity` library names, which the onboarding checklist shows too. It answers nothing to a visitor, with new chat suggestions switched off, before the tour has finished, or in the first-run chat while its first conversation follows its tree.
+
+- A suggestion gains `action`, null for a reply suggestion, which every next-step suggestion is.
+
+- `POST /api/chats/create` takes an optional `client_id`, naming the page a person asked for the chat from.
+
+- The chat app sets two onboarding markers: `second_chat_started` when a person starts a chat (through the create route, or through an intake that makes a new chat, as the shell launcher's "New Chat" does) while another chat a person talks to exists, and `permission_request_filed` when it reads a filed permission request.
+
+- The chat settings hold two suggestion switches, `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`, and `PUT /api/settings/suggestions` takes those two. The settings file and both settings routes drop a field they do not know, so a file or a writer that carries one keeps every other value.
+
+- A chat nobody has said anything in shows a strip above the composer offering the workspace's owner up to three of those things. It goes for good on the chat's first message.
+
+- Clicking one of these sends nothing: it points a bubble at the chat list's New chat button, at the message box, at the Imbue Studio app's permissions button, or at the phone-access control of its share panel, every time it is clicked. A suggestion whose bubble this page cannot have drawn is not offered.
+
+- The chat app takes a new message, `onboarding:show-new-chat-pointer` (`POST /api/show-new-chat-pointer`), which another app's page sends through the shell: the chat list comes forward and its New chat button gets the same bubble, with the chat on screen left as it is. The onboarding checklist's first entry sends it.
+
+- Each strip is its pills over one quiet line, which holds the strip's link with Undo: "disable new chat suggestions" at the right end of the new-chat strip's line, and "disable suggestions" immediately left of "Hide suggestions" on the next-step line while its pills are shown.
+
+- A strip's suggestions are a list on the user's side of the transcript's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a solid fill and a light shadow. While shown they float over the end of the transcript, directly above the footer, which keeps its height: the transcript scrolls underneath, a click beside the pills reaches it, a reader at its end stays there with the last reply clear of the pills, and one who has scrolled up sees nothing move. A list taller than 60% of the transcript scrolls in place.
+
+- A chat ends closer to the composer: about 20px separates the end of the last reply (its "Done" mark) from the line above the composer, and about 24px from the first shown pill, where about 70px did.
+
+- A reply's suggestions wait on one quiet line directly above the composer, whose height is always kept in a chat with an agent so their arrival moves nothing: "See N suggestions" shows them above it and becomes "Hide suggestions". The first conversation's fixed sets start shown and a generated set hidden, and every suggestion of a set is drawn.
+
+- An answered reply keeps its suggestions: on a send or a turn's start they move to the transcript as the same line under that reply, hidden until asked for, and a pill clicked there is sent. `GET /api/chats/<chat-id>/suggestions` gains `sets`, every set the chat app remembers for the chat (in memory, the newest 200), so after it restarts only the last reply's is left.
+
+- The chat list's New chat button names the browser it was pressed in (`client_id`) when it creates a chat, as does "Start a new chat" in the switch dialog and the failed-switch notice, and a chat waiting for its first send names it when it launches.
+
+- The first run's provider page reads "Studio runs your agents and apps 24/7. Connect your provider to start.", and "Add another (optional)" over "Studio can use multiple subscriptions and switch between providers mid-conversation." The first account connected there is pinned as the workspace's default, so connecting a second provider no longer moves the first conversation onto it. With two or more connected, the page marks the default and a click on another connected account makes that one the default.
+
+- A first-run chat's start suggestions stay shown while the agent the provider page started comes up: a chat whose first agent is starting with nothing sent to it counts as having no turn under way, for its suggestions and for a picker in a message.
+
+- The category picker offers Books, Movies and Music in place of "Books, movies & music", and each picker ends in an "Other" pill that puts a prompt to write over in the draft ("Write whatever you want!", "Write whatever data you want here!").
+
+- The prompt that works out next-step suggestions asks for a question's own answers when the reply's one main question has a small set of them.
+
+- A chat page says when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`), and the chat root tells the shell an agent is working while any chat page it holds says so, so the show-around tour starts on every harness.
+
+- The show-around tour waits for a new workspace's first conversation to leave its tree. Every `chats_updated` push carries `is_first_conversation_pending`, true while a first-run chat the app lists stands at a step other than `done`, and the message that ends the tree pushes the chat list at once. The chat root passes it to the shell as `shell:first-conversation-step {isPending}`, so the tour begins with the reply to that message, or with the next one.
+
+### system/apps/onboarding_checklist
+
+New built-in app, the Onboarding checklist (`onboarding-checklist`, port 8070): one small page listing the four things worth trying in a new workspace (start a second chat, open Studio on a phone, build an app, connect some data), with a check mark on the ones already done.
+
+A click on an entry shows where that thing is, whether or not it is done: the chat list's New chat button with its bubble, the share panel with a bubble at its phone control, a card popping out of the agent's avatar, or a card under the permissions button. The two entries that need the Imbue Studio app to draw a bubble cannot be clicked where it does not.
+
+The app is in the launcher and has no desktop shortcut. The desktop's tour opens it as the tour ends. It stores nothing: `GET /api/items` reads what is done from the `onboarding_activity` library and the app registry, and answers an item it could not read as not done.
+
+### system/apps/style_guide
+
+The Components group shows the shared coach mark: a button points one at a control, with its arrow, its text and its "Got it" button.
+
+### system/apps/system_interface
+
+The shell keeps what Imbue Studio says with `minds:embedder-capabilities` about `opensWorkspaceSettings` and puts it in every window's `shell:handshake` (false when no chrome said so), so a page opened after Studio spoke still knows whether it can ask for the workspace settings with `minds:open-workspace-settings`. The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list the new field.
+
+The tour record (`GET` and `POST /api/tour`, `tour.json`) gains `is_finished`, false by default so an older file reads whole. A record written finished sets the `tour_finished` onboarding marker, and the owner's phone layout reporting what it shows (`POST /api/clients/<client_id>/shown`) sets `phone_layout_used`; the chat's new-chat suggestions read both. A marker that cannot be written is logged and does not fail the request. The markers come from the new `onboarding_activity` library, which the shell's "updated, not activated" check counts among the code it runs.
+
+The shell's page records the tour as finished when Done on its last card or Exit walkthrough is pressed, and the owner's page does so for a tour that has run and has nothing to resume.
+
+The tour's last card reads "That’s the tour.", "You can take it again anytime from the launcher." and "Click on any of the entries in the onboarding checklist to learn more!". As that card shows, and when Exit walkthrough is pressed on a card before it, the onboarding checklist's window opens down the left of the desktop, in front of the other windows, none of which is moved. The shell sends the message `onboarding:show-checklist` to whichever app registered it and places the window that opens; it names no app, does nothing when none registered the message, and logs a relay that fails without telling the user.
+
+A page can ask for a coach card with the new `shell:show-coach-card`, naming exactly one place: `{text, chromeAnchor}` shows its words and a Got it button under a control of the Imbue Studio chrome, which is ringed until the card goes, and `{text, target: "avatar"}` brings the avatar's window forward and pops the card out of the avatar. The card is shown only in the desktop layout: while the tour shows nothing, in place of another coach card, and in place of the tour's last card or its exit badge, which it closes as that card's own button would. Any other tour card, and the pause notice, drop it, and it gives way to a tour that starts. `shell:handshake` tells each page, with `showsCoachMarks`, whether the chrome draws coach marks on its own controls.
+
+A message a page sends for another app (`shell:message`) is relayed after the shell's page has saved a raise that was still waiting, so a window the message brings forward ends in front of the window whose page was clicked. Before, a click in a window behind the one the message was for left the clicked window in front.
+
+An app whose manifest says `seeds_shortcuts = false` gets no desktop shortcut: neither a new desktop's seed nor the pass that offers a late app's shortcut adds one. The launcher still lists it.
+
+The tour begins, resumes and pauses on an agent working as the shell hears it from two places: the avatar's status, as before, and the pages it frames, each of which can say so with the new `shell:agent-working {isWorking}`. The shell keeps each page's last report and drops it when the page's frame loads again or its window goes, so the tour starts for an agent whose activity never reaches the avatar's status.
+
+The tour neither begins nor resumes by itself while a page says, with the new `shell:first-conversation-step {isPending}`, that the workspace's first conversation is still following its script, so a new workspace's tour does not run on top of its first scripted replies. When a page says that conversation is over the tour begins right then if an agent is already at work, and with the next work otherwise. The report is kept per page and dropped with it, which only stops holding the tour, and the launcher's "Show me around" row starts it whatever a page says.
+
+A coach card's text is drawn as a paragraph per blank line, with the words between a pair of `**` in bold.
+
+A focused window's title bar offers Share after "Chat about this app": a glyph and the word "Share" that ask the Imbue Studio chrome to open its share settings for the window's app. It is offered to the workspace's owner, under a chrome that has announced its capabilities, on every window of an app that is not internal. It never sits over the centred title: where the title leaves no room for the word it is the glyph alone, and where it leaves no room for the glyph either it is not drawn, which leaves Share to the window menu.
+
+The window menu's Share row, on the desktop and on the phone, is offered by the same rule and drawn with the same glyph, so the chat and the terminal now have it: any app that is not internal can be shared, where before a critical app could not.
+
+### system/apps/system_monitor
+
+The System Monitor no longer has a label for `vm-exec-register`, which the template no longer runs.
+
+### system/libs/app_manifest
+
+New `user_apps` module: `has_user_built_app(repo_root, registry)` says whether the registry holds an app the workspace's user built, which is a row that is neither `system` nor `internal` and that a package outside the root workspace's members registered. The template's own apps, a new app's mock frame and a preview never count. The chat's "Build an app" suggestion reads it.
+
+A manifest can say `seeds_shortcuts = false` (default true), and the registry row carries it: the app's default shortcuts are kept off every desktop, and the launcher lists it all the same. The onboarding checklist declares it.
+
+The comment on the reserved app names says `vm` stays reserved from the retired `vm-exec-register` program, whose `vm-exec` row a workspace's registry may still hold. The reserved names themselves are unchanged.
+
+### system/libs/app_registration
+
+`forward_port.py --manifest` copies the manifest's new `seeds_shortcuts` boolean onto the registry row, and clears it from the row when a later manifest drops it.
+
+### system/libs/onboarding_activity
+
+New library: one-way markers recording what a workspace's owner has already done (finished the tour, used the phone layout, started a second chat, filed a permission request, started an app build), one empty file each under `data/.state/onboarding_activity/`. `mark`, `is_marked` and `marked_at` set and read them, and a reader can tell a marker that is not set from one that could not be read. `onboarding_activity.items` names the four onboarding items in order, with their labels and one rule for when each is done (`is_item_done`), which the chat's new-chat suggestions and the onboarding checklist share.
+
+### system/libs/workspace_ui
+
+`shell:handshake` has an `opensWorkspaceSettings` flag, read as false when the shell does not send it: whether the Imbue Studio chrome opens its workspace settings when a page asks. `embed.ts` exports `OPEN_WORKSPACE_SETTINGS` (`minds:open-workspace-settings {group?}`, embed contract v18), probed by name with the literal as its fallback, so an older vendored contract still builds.
+
+Added a coach mark to the shared components (`components/CoachMark.ts`): a small bubble with an arrow, a line of text and a "Got it" button that points at one control of the page. It sits below, above, right or left of the control, whichever has room, follows the control as the page changes, and goes when "Got it" or the control itself is clicked, or when the control leaves the page. The chat uses it to point at its send button.
+
+The app contract has a new page-to-shell message, `shell:show-coach-card` (`connection.showCoachCard(text, place)`): the shell shows the page's words as a one-button card at exactly one place, under a control of the Imbue Studio chrome, which it rings (`{chromeAnchor}`), or popping out of the agent's avatar (`{target: "avatar"}`). `coachCardPlaceOf` reads the place a payload names. `shell:handshake` has a `showsCoachMarks` flag, read as false when the shell does not send it: whether the chrome draws coach marks on its own controls. `embed.ts` documents the optional `coachMark` of `minds:open-share-settings` (embed contract v19) and exports its type.
+
+The app contract also has `shell:agent-working {isWorking}` (`connection.agentWorking`): a page says whether an agent is working in what it shows, and the shell keeps each page's last report until the page loads again or goes away. `shell:first-conversation-step {isPending}` (`connection.firstConversationStep`) is kept the same way: a page says whether the workspace's first conversation is still following its script, and the shell's tour does not start by itself while one does.
+
+New `onboarding_pointers.ts`: the words of the build-an-app and connect-some-data pointers, which the chat app and the onboarding checklist both show.
+
+The icon set gains `share` (Lucide's "forward"), for the shell's Share control and its window menu's Share row.
+
+### system/services/oom_priority
+
+New service band `onboarding-checklist` (82), for the Onboarding checklist app: between Getting Started's and the Style Guide's, since a shed costs one reload of a page that stores nothing.
+
+The memory-priority bands no longer name `vm-exec-register`, which the template no longer runs.
+
 ## 2026-11-21
 
 ### .agents
