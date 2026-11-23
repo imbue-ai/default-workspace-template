@@ -23,6 +23,11 @@ also carries the browser hardening headers (``Strict-Transport-Security``,
 ``X-Content-Type-Options``) and no ``Server`` header: the relay is SNI
 passthrough and never sees a response, so caddy is the one place they can be
 set for every service alike.
+
+Caddy also compresses what the apps serve (``render_compression``): a plain
+``GET`` of a text type goes out zstd- or gzip-encoded, while a ``HEAD``, a
+ranged request, an event stream and any already-compressed type pass through
+untouched.
 """
 
 import tomllib
@@ -155,6 +160,45 @@ def _render_hardening_headers(indent: str) -> str:
     return "\n".join(f"{indent}{line}" for line in lines)
 
 
+# The text types worth compressing. A server-sent event stream (text/event-stream) is not among them, nor is any
+# type whose bytes are compressed already (images other than SVG, wasm, archives, media).
+_COMPRESSED_CONTENT_TYPES = (
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "text/plain",
+    "application/javascript",
+    "application/json",
+    "application/manifest+json",
+    "image/svg+xml",
+)
+
+
+def render_compression(indent: str) -> str:
+    """The ``encode`` directive compressing what the apps serve, none of which compresses its own responses.
+
+    Only a plain ``GET`` of a named text type is compressed. A ``HEAD`` is not, since caddy would answer it with the
+    length of an empty compressed body in place of the real one (the Files app reads a file's size from it); nor a
+    ``Range`` request, whose ranges count bytes of the uncompressed body; nor a request for an event stream, since
+    an encoder holds the response's headers until the first body byte and a quiet stream would open late.
+    """
+    lines = [
+        "# Compress what the apps serve: a phone on a mobile link pays for",
+        "# every byte of each page's bundle.",
+        "@compressible {",
+        "    not method HEAD",
+        "    not header Accept text/event-stream",
+        "    not header Range *",
+        "}",
+        "encode @compressible zstd gzip {",
+        "    match {",
+        *(f"        header Content-Type {content_type}*" for content_type in _COMPRESSED_CONTENT_TYPES),
+        "    }",
+        "}",
+    ]
+    return "\n".join(f"{indent}{line}" for line in lines)
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -171,6 +215,7 @@ def render_caddyfile(
     gateway_backend = f"127.0.0.1:{gateway_port}"
     frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
     site_hardening_headers = _render_hardening_headers(indent="    ")
+    compression = render_compression(indent="    ")
     error_hardening_headers = _render_hardening_headers(indent="        ")
 
     # One matcher per registered service, keyed on its unguessable label host.
@@ -253,6 +298,8 @@ https://*.{workspace_domain}:{https_port} {{
             }}
         }}
     }}
+
+{compression}
 
     # Labels are semi-secret (they gate the relay), so never leak one to
     # another site via the Referer of an outbound navigation.

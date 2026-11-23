@@ -3,6 +3,7 @@
  * awaiting its first send, whose page asks for a provider before anything is created.
  */
 
+import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { awaitingChatForEmptyList, createChat } from "../models/Chats";
@@ -24,8 +25,9 @@ export async function startNewChat(): Promise<NewChatOutcome> {
   if (getSelectedAccount() !== null) {
     try {
       // No account named: the chat app picks it from its own account list as the create runs, so an account
-      // signed out since this page read the list is never the one a new chat starts on.
-      const created = await createChat("");
+      // signed out since this page read the list is never the one a new chat starts on. The client is named
+      // because a person pressed the button for this chat.
+      const created = await createChat("", "", "", null, getClientId());
       return { kind: "created", chatId: created.chatId };
     } catch (error) {
       if (!(error instanceof HttpError) || error.failure.kind !== NO_PROVIDER_ACCOUNT_KIND) {

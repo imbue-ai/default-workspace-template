@@ -27,6 +27,11 @@ declare module "@minds/embed-contract" {
   export const WORKSPACE_READY: "minds:workspace-ready";
   // The chat-on-screen report (contract v15). Probed like the ones above.
   export const CHAT_ON_SCREEN: "minds:chat-on-screen";
+  // The provider-chooser-on-screen report (contract v16). Probed like the ones above.
+  export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen";
+  // The first-run provider step report and the chrome's cover time for its end (contract v17). Probed like the ones above.
+  export const FIRST_RUN_PROVIDER_STEP: "minds:first-run-provider-step";
+  export const FIRST_RUN_EXIT_COVER_MS: number;
   // The pull-out window set (contract v6). Probed like the ones above.
   export const POP_OUT_WINDOW: "minds:pop-out-window";
   export const WINDOW_DRAG_STARTED: "minds:window-drag-started";
@@ -52,6 +57,8 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
+  // Opening the chrome's workspace settings at a group (contract v18). Probed like the ones above.
+  export const OPEN_WORKSPACE_SETTINGS: "minds:open-workspace-settings";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

@@ -2,6 +2,7 @@
 user built, and the programs supervisord runs."""
 
 import json
+import os
 import re
 import tomllib
 from collections.abc import Mapping
@@ -11,7 +12,9 @@ from typing import Any, NamedTuple
 from oom_priority.meminfo import KIB, PROC, parse_kib_fields
 from oom_priority.registry import live_pids_by_agent_id
 
-MNGR_AGENTS_DIR = Path("/home/user/.mngr/agents")
+# mngr's host dir is not the same path on every host (a container keeps it at /home/user/.mngr, a
+# Modal sandbox at /mngr), so the agent records are found through the agent environment's own.
+DEFAULT_MNGR_HOST_DIR = Path("/home/user/.mngr")
 APPS_REGISTRY = Path("data/.state/apps.toml")
 # Command-line fragments of the language servers chats start to check code.
 CODE_CHECKER_MARKERS = (
@@ -23,7 +26,7 @@ CODE_CHECKER_MARKERS = (
     "clangd",
     "pylsp",
 )
-_AGENT_DIR = re.compile(r"/\.mngr/agents/(agent-[^/\s]+)")
+_AGENT_DIR = re.compile(r"/\.?mngr/agents/(agent-[^/\s]+)")
 
 
 # Friendly names for the supervised programs that are not apps (an app's name comes from the
@@ -41,7 +44,6 @@ PROGRAM_NAMES = {
     "xvfb": "Virtual display",
     "terminal-pty": "Terminal",
     "owner-exec": "Web access",
-    "vm-exec-register": "Web access",
     "env-converge": "Environment setup",
 }
 
@@ -136,7 +138,9 @@ def is_code_checker(command: str) -> bool:
 
 
 def chat_agent_id(command: str) -> str | None:
-    """The agent id a command line names through its ``~/.mngr/agents/agent-...`` path, if any."""
+    """The agent id a command line names through its ``<host dir>/agents/agent-...`` path, if any.
+
+    The host dir is ``~/.mngr`` in a container and ``/mngr`` in a Modal sandbox."""
     found = _AGENT_DIR.search(command)
     return found.group(1) if found else None
 
@@ -169,10 +173,16 @@ class Chat(NamedTuple):
     chat_id: str  # the id the chat app knows it by: its chat_id label, else the agent id itself
 
 
-def chats(agents_dir: Path = MNGR_AGENTS_DIR) -> dict[str, Chat]:
+def mngr_agents_dir(environ: Mapping[str, str] = os.environ) -> Path:
+    """Where mngr keeps the agent records: under ``MNGR_HOST_DIR``, else the container's host dir."""
+    host_dir = environ.get("MNGR_HOST_DIR", "")
+    return (Path(host_dir) if host_dir else DEFAULT_MNGR_HOST_DIR) / "agents"
+
+
+def chats(agents_dir: Path | None = None) -> dict[str, Chat]:
     """Agent id -> its chat, from one read of the agent records."""
     found: dict[str, Chat] = {}
-    for agent_id, record in _agent_records(agents_dir).items():
+    for agent_id, record in _agent_records(agents_dir or mngr_agents_dir()).items():
         labels = _labels(record)
         name = labels.get("display_name") or record.get("name") or agent_id
         found[agent_id] = Chat(

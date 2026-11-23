@@ -15,25 +15,31 @@ wrapper page -- so the same mechanism can wrap a preview of any service, not
 just the system interface itself.
 
 The wrapper itself is registered as its own service, so it is served at its
-own origin too. Every service origin prefixes the service name as one hostname
-label on the workspace host (``<name>.<workspace-host>``), and the workspace
-host cannot be known server-side -- so the inner iframe's ``src`` is derived
-in the page's JavaScript from ``location.host`` by swapping the wrapper's own
-leading label for the inner service's name.
+own origin too. Every service origin prefixes the service's registered origin
+label (``<name>-<rand>``, minted by ``forward_port``) as one hostname label on
+the workspace host, and the workspace host cannot be known server-side -- so
+the wrapper looks the inner service's label up in the app registry on each
+request, and the page's JavaScript derives the inner iframe's ``src`` from
+``location.host`` by swapping the wrapper's own leading label for that label.
+A share routes only registered labels, never a bare service name.
 
 Standard library only, so it runs under the system ``python3`` with no venv;
 ``serve_isolated_instance`` launches it by its path under its own interpreter. To run it
 by hand:
 
     python3 .agents/shared/scripts/agents_shared/preview_wrapper_server.py --port 8200 \\
-        --inner-service chat-preview-app --title "my-change"
+        --apps-file data/.state/apps.toml --inner-service chat-preview-app --title "my-change"
 """
 
 import argparse
 import html
 import json
+import re
+import sys
+import tomllib
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import NamedTuple
 
 
@@ -69,14 +75,39 @@ BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
 }
 
 
+# A single hostname label; the registry is a file other programs write, and the
+# label is written into the page's script. Underscores are admitted because a
+# label minted before ``forward_port`` turned them into hyphens keeps its own.
+_ORIGIN_LABEL_PATTERN = re.compile(
+    r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?", re.IGNORECASE
+)
+
+
+def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
+    """The origin label ``service_name`` is registered under in ``apps_file``; None when it has no valid one.
+
+    Read on every request rather than once at startup: a service removed and
+    registered again while its frame is up is given a fresh label.
+    """
+    with apps_file.open("rb") as registry_file:
+        registry = tomllib.load(registry_file)
+    for app in registry.get("apps", []):
+        if isinstance(app, dict) and app.get("name") == service_name:
+            label = app.get("label")
+            if isinstance(label, str) and _ORIGIN_LABEL_PATTERN.fullmatch(label):
+                return label
+            return None
+    return None
+
+
 def build_wrapper_html(
-    inner_service: str,
+    inner_label: str,
     title: str,
     inner_path: str = "/",
     kind: FrameKind = FrameKind.CHANGE,
     note: str | None = None,
 ) -> str:
-    """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
+    """Build the wrapper chrome page embedding the service at origin label ``inner_label`` in an iframe.
 
     ``title`` is shown in the banner (HTML-escaped), beside what ``kind`` says the
     framed page is; ``note``, when given, is a line under the banner (HTML-escaped)
@@ -94,8 +125,8 @@ def build_wrapper_html(
     note_html = (
         f'\n  <div class="preview-note">{html.escape(note)}</div>' if note else ""
     )
-    # json.dumps yields safe, quoted JS string literals for the service name and path.
-    service_literal = json.dumps(inner_service)
+    # json.dumps yields safe, quoted JS string literals for the label and path.
+    label_literal = json.dumps(inner_label)
     path_literal = json.dumps(inner_path)
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -166,16 +197,16 @@ def build_wrapper_html(
   </div>
   <script>
     // Derive the inner service's sibling origin from this page's own host.
-    // Every service origin is <name>.<workspace-host> (the same prefix rule
-    // locally and on shares), so the wrapper at <wrapper>.<workspace-host>
+    // Every service origin is <label>.<workspace-host> (the same prefix rule
+    // locally and on shares), so the wrapper at <wrapper-label>.<workspace-host>
     // reaches the inner service by swapping its own leading label.
     // The origin scheme is owned by deriveAppOrigin in
     // system/libs/workspace_ui/src/origin.ts; if it changes, this sibling-swap
     // must change too.
-    var previewService = {service_literal};
+    var previewLabel = {label_literal};
     var previewPath = {path_literal};
     var host = location.host;
-    var innerHost = previewService + host.slice(host.indexOf("."));
+    var innerHost = previewLabel + host.slice(host.indexOf("."));
     var previewTarget = location.protocol + "//" + innerHost + previewPath;
     var previewFrame = document.getElementById("preview-frame");
     // The shell tells this page, not the one it frames, which theme to wear (shell:theme). Hand the last one on to
@@ -198,17 +229,48 @@ def build_wrapper_html(
 </html>"""
 
 
-def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
-    encoded = page_html.encode("utf-8")
-
+def make_handler(
+    apps_file: Path,
+    inner_service: str,
+    title: str,
+    inner_path: str = "/",
+    kind: FrameKind = FrameKind.CHANGE,
+    note: str | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class _WrapperHandler(BaseHTTPRequestHandler):
         # ``do_GET`` is the method name ``http.server`` dispatches to; only the
         # wrapper root is ever fetched here, since the inner iframe is loaded by
         # the browser directly from the inner service's own origin and never
         # reaches this server.
         def do_GET(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            try:
+                inner_label = registered_origin_label(apps_file, inner_service)
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+                self._refuse(f"The app registry {apps_file} could not be read: {exc}\n")
+                return
+            if inner_label is None:
+                self._refuse(
+                    f"The framed service {inner_service!r} has no valid origin label in {apps_file}.\n"
+                )
+                return
+            page_html = build_wrapper_html(
+                inner_label=inner_label,
+                title=title,
+                inner_path=inner_path,
+                kind=kind,
+                note=note,
+            )
+            self._send(200, "text/html; charset=utf-8", page_html)
+
+        def _refuse(self, message: str) -> None:
+            # The detached server's stderr is its log file, where a broken frame is investigated.
+            sys.stderr.write(message)
+            self._send(503, "text/plain; charset=utf-8", message)
+
+        def _send(self, status: int, content_type: str, body: str) -> None:
+            encoded = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -224,20 +286,22 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
 
 def serve(
     port: int,
+    apps_file: Path,
     inner_service: str,
     title: str,
     inner_path: str,
     kind: FrameKind = FrameKind.CHANGE,
     note: str | None = None,
 ) -> None:
-    page_html = build_wrapper_html(
+    handler = make_handler(
+        apps_file=apps_file,
         inner_service=inner_service,
         title=title,
         inner_path=inner_path,
         kind=kind,
         note=note,
     )
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(page_html))
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     server.serve_forever()
 
 
@@ -247,10 +311,17 @@ def main(argv: list[str] | None = None) -> int:
         "--port", type=int, required=True, help="Port to listen on (127.0.0.1)."
     )
     parser.add_argument(
+        "--apps-file",
+        type=Path,
+        required=True,
+        help="The app registry the inner service is registered in; its origin "
+        "label is read from here on each request.",
+    )
+    parser.add_argument(
         "--inner-service",
         required=True,
         help="Name of the already-registered service to embed (reached at its "
-        "own sibling origin, derived in the page from location.host).",
+        "registered label's sibling origin, derived in the page from location.host).",
     )
     parser.add_argument(
         "--title",
@@ -279,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     serve(
         port=args.port,
+        apps_file=args.apps_file,
         inner_service=args.inner_service,
         title=args.title,
         inner_path=args.inner_path,

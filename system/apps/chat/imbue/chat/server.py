@@ -13,6 +13,8 @@ import time
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -21,6 +23,7 @@ from typing import assert_never
 from uuid import uuid4
 
 import httpx
+from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -44,9 +47,9 @@ from flask import Response
 from flask import current_app
 from flask import request
 from flask import send_file
-from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
+from onboarding_activity.markers import Marker
 from pydantic import Field
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
@@ -67,6 +70,7 @@ from imbue.chat import focus_chat
 from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import mentions_endpoints
+from imbue.chat import new_chat_pointer
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import AccountError
@@ -110,7 +114,9 @@ from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import SuggestionSettingsUpdate
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.client_activity import is_client_activity_reportable
@@ -176,6 +182,7 @@ from imbue.chat.models import ChatNotificationRequest
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import ChatSuggestionsResponse
 from imbue.chat.models import ChatWatchersResponse
 from imbue.chat.models import ConvergingResponse
 from imbue.chat.models import CreateChatRequest
@@ -203,6 +210,7 @@ from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import InterruptBusyResponse
 from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
+from imbue.chat.models import NewChatSuggestionsResponse
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
 from imbue.chat.models import ParticipantsResponse
@@ -228,6 +236,11 @@ from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import is_name_conflict
+from imbue.chat.new_chat_suggestions import offered_new_chat_suggestions
+from imbue.chat.new_chat_suggestions import read_marker
+from imbue.chat.new_chat_suggestions import read_new_chat_facts
+from imbue.chat.new_chat_suggestions import reason_no_new_chat_suggestions
+from imbue.chat.onboarding_markers import set_onboarding_marker
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
@@ -246,6 +259,7 @@ from imbue.chat.send_ledger import SendStillUnderWayError
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
+from imbue.chat.suggestions import SuggestionPlacement
 from imbue.chat.ws_broadcaster import chats_updated_message
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
@@ -358,17 +372,19 @@ def _segment_reader(state: ChatAppState, segment: ChatSegmentInfo) -> Transcript
 
 
 def _chat_transcript(chat_id: str) -> ChatTranscript | None:
+    """The transcript of the chat a request names (``chat_transcript_of``), or None for one the app does not list."""
+    parsed = parse_chat_ref(chat_id)
+    return None if parsed is None else chat_transcript_of(get_state(), parsed)
+
+
+def chat_transcript_of(state: ChatAppState, chat_id: ChatId) -> ChatTranscript | None:
     """The chat's transcript over every segment the record names, or None for a chat the app does not list.
 
     The live segment reads through its watcher (built here if need be, so a chat's first
     read starts tailing it); an archived segment reads through the loader the state already
     holds, or loads on the first read that reaches into it.
     """
-    parsed = parse_chat_ref(chat_id)
-    if parsed is None:
-        return None
-    state = get_state()
-    segments = state.agent_manager.get_chat_segments(parsed)
+    segments = state.agent_manager.get_chat_segments(chat_id)
     if segments is None:
         return None
     info_by_agent_id = {segment.agent.id: segment for segment in segments}
@@ -382,7 +398,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
         if resident is not None:
             reader_by_agent_id[segment.agent.id] = resident
     return ChatTranscript.build(
-        parsed,
+        chat_id,
         tuple(
             TranscriptSegment(
                 agent_id=segment.agent.id,
@@ -399,6 +415,13 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
         reader_by_agent_id,
         lambda transcript_segment: _segment_reader(state, info_by_agent_id[transcript_segment.agent_id]),
     )
+
+
+def read_chat_tail_events(state: ChatAppState, chat_id: ChatId, limit: int) -> list[dict[str, Any]] | None:
+    """The newest ``limit`` events of the chat's transcript, as its pages read them; None for a chat the app does
+    not list."""
+    transcript = chat_transcript_of(state, chat_id)
+    return None if transcript is None else transcript.get_tail_events(limit)
 
 
 def _get_events(chat_id: str) -> Response:
@@ -862,6 +885,13 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
         state.chat_namer.consider_message(chat_id, without_dictation_notes(message))
 
 
+def _advance_first_run_tree(state: ChatAppState, chat_id: ChatId, message: str) -> None:
+    """Move a first-run chat's first conversation on by a message its user sent that the chat took, delivered or
+    held for its agent (``first_run_tree.py``): the words alone, as the namer reads them. A send the chat refused
+    moves nothing, since the user sends it again."""
+    state.agent_manager.advance_first_run_tree(chat_id, without_dictation_notes(message))
+
+
 # The send-failure kind a chat whose account was signed out answers with. The composer already
 # offers "Choose a provider" in place of the input from the account list, so only a page whose
 # list has not caught up with the sign-out sends and meets this.
@@ -1280,6 +1310,7 @@ def _send_message(
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
         if held is not None:
+            _advance_first_run_tree(state, ChatId(chat_id), send_message_request.message)
             _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
             return held
         # The create may have landed between the lookup and the hold, which then refuses.
@@ -1299,6 +1330,8 @@ def _send_message(
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
+    if not accepted.is_withdrawn:
+        _advance_first_run_tree(state, ChatId(chat_id), send_message_request.message)
     _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
@@ -1474,6 +1507,52 @@ def _known_chat_or_not_found(chat_id: str) -> ChatId | Response:
     return parsed
 
 
+def _get_suggestions_endpoint(chat_id: str) -> Response:
+    """``GET /api/chats/<chat_id>/suggestions``: the next-step suggestions stored for the chat, with the message
+    they follow; ``pending`` while a set for the chat's last reply is being worked out; else ``none``. A page shows
+    that set above its composer only while the message is still the chat's last assistant message, so the route
+    answers a set left from an earlier turn as it stands. ``sets`` is every set the app remembers for the chat,
+    which a page draws under the replies that have been answered."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    state = get_state()
+    generator = state.suggestion_generator
+    pending_reply_event_id = None if generator is None else generator.get_pending_reply_event_id(parsed)
+    # Read before the remembered sets are, since reading the stored set is what remembers it after a start.
+    stored = state.agent_manager.get_chat_suggestions(parsed)
+    remembered = state.agent_manager.get_remembered_suggestions(parsed)
+    if pending_reply_event_id is not None:
+        return model_response(ChatSuggestionsResponse.pending(pending_reply_event_id, remembered))
+    return model_response(ChatSuggestionsResponse.of(stored, remembered))
+
+
+def _get_new_chat_suggestions_endpoint() -> Response:
+    """``GET /api/suggestions/new-chat?chat_id=<chat-id>``: the things to try in Studio offered to the requester
+    on a chat nobody has spoken in, every onboarding item that is not done, in their fixed order.
+
+    The list is empty when none is offered here at all: the requester is not the workspace's owner, new-chat
+    suggestions are switched off, the tour has not finished, or ``chat_id`` names the first-run chat while its
+    first conversation still follows its tree. ``chat_id`` may be left out, or name a chat this app does not know
+    (one its page has not created yet), which no tree holds back."""
+    state = get_state()
+    chat_ref = request.args.get("chat_id", "")
+    # Only an id of a chat's shape can name a folder of this app's, which is where a tree's step is kept.
+    chat_id = ChatId(chat_ref) if AGENT_ID_PATTERN.fullmatch(chat_ref) else None
+    withheld_reason = reason_no_new_chat_suggestions(
+        is_owner=is_owner_participant(request_identity()),
+        tour_finished=read_marker(Marker.TOUR_FINISHED),
+        tree_step=None if chat_id is None else state.agent_manager.get_first_run_tree_step(chat_id),
+        is_switched_on=state.chat_settings.read().is_new_chat_suggestions_enabled,
+    )
+    if withheld_reason is not None:
+        logger.debug("Offering no {} suggestions: {}", SuggestionPlacement.NEW_CHAT.value, withheld_reason)
+        return model_response(NewChatSuggestionsResponse(suggestions=()))
+    facts = read_new_chat_facts(Path.cwd(), registry_path())
+    offered = offered_new_chat_suggestions(facts, datetime.now(timezone.utc))
+    return model_response(NewChatSuggestionsResponse(suggestions=offered))
+
+
 def _get_fast_mode_endpoint(chat_id: str) -> Response:
     """``GET /api/chats/<chat_id>/fast-mode``: the chat's fast mode (off, auto or on, and whether auto has switched)."""
     parsed = _known_chat_or_not_found(chat_id)
@@ -1519,7 +1598,19 @@ def _put_settings_endpoint() -> Response:
     value answers 400.
     """
     settings = parse_request_body(ChatSettings)
-    get_state().chat_settings.write(settings)
+    state = get_state()
+    state.chat_settings.write(settings)
+    state.broadcaster.broadcast_settings_updated()
+    return model_response(ChatSettingsResponse(settings=settings))
+
+
+def _put_suggestion_settings_endpoint() -> Response:
+    """``PUT /api/settings/suggestions``: change the suggestion switches the body names and leave every other
+    setting as it is; answers the settings as they then stand."""
+    update = parse_request_body(SuggestionSettingsUpdate)
+    state = get_state()
+    settings = state.chat_settings.update(update.apply_to)
+    state.broadcaster.broadcast_settings_updated()
     return model_response(ChatSettingsResponse(settings=settings))
 
 
@@ -2202,8 +2293,11 @@ def _run_create_chat() -> CreatedChat | Response:
         return created
     if attributed is not None and attributed.annotation is not None:
         state.authors.record(created.chat_id, attributed.annotation)
+    _note_chat_started_by_a_person(state, created.chat_id, create_request.kind, create_request.client_id)
     if create_request.kind is not ChatKind.ROOM:
         _consider_naming_chat(state, created.chat_id, create_request.message)
+        if create_request.message:
+            _advance_first_run_tree(state, created.chat_id, create_request.message)
         _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
         return created
@@ -2215,6 +2309,17 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _note_chat_started_by_a_person(state: ChatAppState, chat_id: ChatId, kind: ChatKind, client_id: str) -> None:
+    """Set the ``second_chat_started`` onboarding marker when the chat just made, by the create route or by an
+    intake, is an agent chat a person asked for (the request names the client it came from; a script's names
+    none) while another chat a person talks to exists. Launching the one chat a workspace opened on, seeded and
+    awaiting its first send, is no second chat: the chat made is never counted as the other one."""
+    if kind is ChatKind.ROOM or not client_id:
+        return
+    if state.agent_manager.has_person_chat_other_than(chat_id):
+        set_onboarding_marker(Marker.SECOND_CHAT_STARTED)
 
 
 def _bubble_new_chats_first_message(
@@ -2303,8 +2408,21 @@ def _seed_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
+    if seed_request.is_first_run:
+        # Handed over again as the user enters the workspace: the chat is there already, and only what they
+        # said about themselves may have changed.
+        updated = agent_manager.update_first_run_context(seed_request.context)
+        if updated is not None:
+            return model_response(
+                CreateChatResponse(chat_id=updated.chat_id, name=updated.name, display_name=updated.display_name), 201
+            )
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        if seed_request.is_first_run:
+            created = agent_manager.seed_chat(
+                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context, is_first_run=True
+            )
+        else:
+            created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:
@@ -2321,6 +2439,10 @@ class _ResolvedIntakeChat(FrozenModel):
 
     chat_id: ChatId | None = Field(description="The receiving chat; None for a pick or a create")
     needs_pick: bool = Field(default=False, description="Whether several chats qualify and the user chooses")
+    is_agent_chat_made_for_it: bool = Field(
+        default=False,
+        description="Whether reading the target made the receiving chat, as an agent's, rather than found it",
+    )
 
 
 def _agent_chat_snapshot(agent_manager: AgentManager, chat_id: ChatId) -> ChatSnapshot | None:
@@ -2376,9 +2498,13 @@ def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Resolve
         return account
     if account is None:
         minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title, labels=labels))
-        return minted if isinstance(minted, Response) else _ResolvedIntakeChat(chat_id=minted.chat_id)
+        if isinstance(minted, Response):
+            return minted
+        return _ResolvedIntakeChat(chat_id=minted.chat_id, is_agent_chat_made_for_it=True)
     created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account, labels=labels))
-    return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
+    if isinstance(created, Response):
+        return created
+    return _ResolvedIntakeChat(chat_id=created.chat_id, is_agent_chat_made_for_it=True)
 
 
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
@@ -2451,6 +2577,8 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
+    if not accepted.is_withdrawn:
+        _advance_first_run_tree(state, chat_id, intake.message)
     _act_on_accepted_send(state, chat_id, message_id, intake.message, identity)
     return None
 
@@ -2515,6 +2643,8 @@ def _intake_chat() -> Response:
         return model_response(IntakeResponse(path=intake_path(None, token)))
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
+    if resolved.is_agent_chat_made_for_it:
+        _note_chat_started_by_a_person(state, resolved.chat_id, ChatKind.AGENT, intake.client_id)
     if intake.target is IntakeTarget.APP_CHAT:
         # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
         # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
@@ -2547,10 +2677,12 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
             return created
         if attributed.annotation is not None:
             state.authors.record(created.chat_id, attributed.annotation)
+        _note_chat_started_by_a_person(state, created.chat_id, ChatKind.AGENT, intake.client_id)
         _consider_naming_chat(state, created.chat_id, intake.message)
         _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
+    _note_chat_started_by_a_person(state, minted.chat_id, ChatKind.AGENT, intake.client_id)
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
     return model_response(IntakeResponse(path=intake_path(minted.chat_id, token)))
 
@@ -2991,14 +3123,15 @@ def _favicon() -> Response:
 
 
 def _serve_asset(filename: str) -> Response:
-    """The chat page's built bundle (``static/assets/``), by the hashed name the document links."""
+    """The chat page's built bundle (``static/assets/``), by the hashed name the document links; one named from its
+    content is cached for good, so a load (a phone over a slow link above all) does not ask for it again."""
     assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404 rather than the HTML error page ``send_from_directory``
     # would raise. Existence and safety are both left to ``send_from_directory``: ``filename``
     # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        return send_built_asset(assets_directory, filename)
     except NotFound:
         return Response(status=404)
 
@@ -3062,7 +3195,13 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         if agent_manager.is_agent_list_known():
             websocket.send(
-                json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
+                json.dumps(
+                    chats_updated_message(
+                        agent_manager.get_chat_snapshots(),
+                        agent_manager.get_main_chat_id(),
+                        agent_manager.is_first_conversation_pending(),
+                    )
+                )
             )
         shutdown = False
         while not shutdown:
@@ -3103,6 +3242,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
+    ("suggestions", _get_suggestions_endpoint, ("GET",)),
     ("interrupt", _interrupt_agent_endpoint, ("POST",)),
     ("flush-queue", _flush_queue_endpoint, ("POST",)),
     ("shoulder-tap-atomic", _shoulder_tap_atomic_endpoint, ("POST",)),
@@ -3177,13 +3317,15 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
-    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
-        response_model=AttachmentUploadResponse, success_status=201
-    ),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
+    ("PUT", "/api/settings/suggestions"): RouteModels(
+        request_model=SuggestionSettingsUpdate, response_model=ChatSettingsResponse
+    ),
+    ("GET", "/api/suggestions/new-chat"): RouteModels(response_model=NewChatSuggestionsResponse),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
         request_model=RenameChatRequest, response_model=RenameChatResponse
@@ -3218,6 +3360,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    ("GET", "/api/chats/{chat_id}/suggestions"): RouteModels(response_model=ChatSuggestionsResponse),
     # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(
         request_model=InterruptAgentRequest,
@@ -3273,6 +3416,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     accounts_endpoints.ROUTE_TABLE,
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
+    new_chat_pointer.ROUTE_TABLE,
     keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
@@ -3376,6 +3520,10 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule(
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
     )
+    application.add_url_rule("/api/settings/suggestions", view_func=_put_suggestion_settings_endpoint, methods=["PUT"])
+    application.add_url_rule(
+        "/api/suggestions/new-chat", view_func=_get_new_chat_suggestions_endpoint, methods=["GET"]
+    )
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
@@ -3411,6 +3559,7 @@ def create_application(state: ChatAppState) -> Flask:
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
+    new_chat_pointer.register_routes(application)
     keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)

@@ -78,12 +78,13 @@ def test_broadcast_chats_updated() -> None:
         background_tasks=(),
         compaction_cause=None,
     )
-    broadcaster.broadcast_chats_updated([snapshot], ChatId("a1"))
+    broadcaster.broadcast_chats_updated([snapshot], ChatId("a1"), is_first_conversation_pending=True)
 
     msg = json.loads(_get_message(q))
     assert msg["type"] == "chats_updated"
     assert msg["chats"] == [snapshot.model_dump(mode="json")]
     assert msg["main_chat_id"] == "a1"
+    assert msg["is_first_conversation_pending"] is True
     assert msg["chats"][0]["chat_id"] == "a1"
     assert msg["chats"][0]["active_agent"]["agent_id"] == "a1"
 
@@ -117,6 +118,15 @@ def test_broadcast_provisional_chat_completed() -> None:
     assert msg["type"] == "provisional_chat_completed"
     assert msg["success"] is True
     assert msg["error"] is None
+
+
+def test_broadcast_suggestions_updated_names_the_chat_whose_set_changed() -> None:
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+
+    broadcaster.broadcast_suggestions_updated(ChatId("agent-suggested"))
+
+    assert json.loads(client_queue.get_nowait() or "") == {"type": "suggestions_updated", "chat_id": "agent-suggested"}
 
 
 def test_shutdown_sends_none_sentinel() -> None:

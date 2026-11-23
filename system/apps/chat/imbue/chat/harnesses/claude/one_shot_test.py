@@ -8,6 +8,7 @@ from imbue.chat.harnesses.claude.one_shot import claude_one_shot_argv
 from imbue.chat.harnesses.claude.one_shot import claude_one_shot_env
 from imbue.chat.harnesses.claude.one_shot import parse_claude_print_result
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.testing import put_stand_in_cli_on_path
 
 
@@ -36,10 +37,17 @@ def test_claude_one_shot_argv_leaves_the_model_to_the_account_when_none_is_named
 _SUCCESS_RESULT = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Rome trip: plan"})
 
 
+def _name_a_chat(account_dir: Path) -> str:
+    """The call chat naming makes: the small tier, with no thinking."""
+    return ClaudeOneShotCompletion().complete(
+        account_dir, "Name this chat.", "Plan Rome", model_tier=OneShotModelTier.SMALL, thinking_token_allowance=None
+    )
+
+
 def test_complete_answers_on_haiku_when_the_account_has_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = put_stand_in_cli_on_path(tmp_path, "claude", f"echo '{_SUCCESS_RESULT}'", monkeypatch)
 
-    answer = ClaudeOneShotCompletion().complete(tmp_path / "account", "Name this chat.", "Plan Rome")
+    answer = _name_a_chat(tmp_path / "account")
 
     assert answer == "Rome trip: plan"
     assert "--model haiku" in log_path.read_text()
@@ -55,7 +63,7 @@ def test_complete_moves_down_the_preference_list_to_the_accounts_default(
     )
     log_path = put_stand_in_cli_on_path(tmp_path, "claude", body, monkeypatch)
 
-    answer = ClaudeOneShotCompletion().complete(tmp_path / "account", "Name this chat.", "Plan Rome")
+    answer = _name_a_chat(tmp_path / "account")
 
     assert answer == "Rome trip: plan"
     calls = log_path.read_text().splitlines()
@@ -69,7 +77,7 @@ def test_complete_raises_with_every_models_failure_when_none_answers(
     put_stand_in_cli_on_path(tmp_path, "claude", "echo 'Not logged in' >&2; exit 1", monkeypatch)
 
     with pytest.raises(OneShotCompletionError, match="haiku: .*default model: .*Not logged in"):
-        ClaudeOneShotCompletion().complete(tmp_path / "account", "Name this chat.", "Plan Rome")
+        _name_a_chat(tmp_path / "account")
 
 
 def test_claude_one_shot_env_runs_on_the_chats_account_not_the_servers_credentials() -> None:
@@ -83,9 +91,34 @@ def test_claude_one_shot_env_runs_on_the_chats_account_not_the_servers_credentia
         "CLAUDE_CONFIG_DIR": "/somewhere/else",
     }
 
-    env = claude_one_shot_env(ambient, Path("/accounts/acct-5813"))
+    env = claude_one_shot_env(ambient, Path("/accounts/acct-5813"), None)
 
     assert env == {"PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": "/accounts/acct-5813", "MAX_THINKING_TOKENS": "0"}
+
+
+def test_claude_one_shot_env_lets_the_model_think_up_to_the_allowance() -> None:
+    env = claude_one_shot_env({"PATH": "/usr/bin"}, Path("/accounts/acct-5813"), 4000)
+
+    assert env["MAX_THINKING_TOKENS"] == "4000"
+
+
+def test_complete_answers_on_sonnet_for_the_medium_tier_with_the_thinking_allowance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = f'echo "thinking=$MAX_THINKING_TOKENS" >> "{tmp_path}/thinking.log"\necho \'{_SUCCESS_RESULT}\''
+    log_path = put_stand_in_cli_on_path(tmp_path, "claude", body, monkeypatch)
+
+    answer = ClaudeOneShotCompletion().complete(
+        tmp_path / "account",
+        "Suggest replies.",
+        "Plan Rome",
+        model_tier=OneShotModelTier.MEDIUM,
+        thinking_token_allowance=4000,
+    )
+
+    assert answer == "Rome trip: plan"
+    assert "--model sonnet" in log_path.read_text()
+    assert (tmp_path / "thinking.log").read_text() == "thinking=4000\n"
 
 
 def test_parse_claude_print_result_returns_the_answer_text() -> None:

@@ -75,10 +75,17 @@ export interface WindowAttrs {
   readonly state: WindowState;
   readonly stackIndex: number;
   readonly isFocused: boolean;
+  /** Whether the window is being moved by a drag: it gets a compositor layer of its own (``will-change``) until the
+   *  drag ends, so each move slides the layer instead of repainting the window and what it passes over, repaints
+   *  that run the renderer out of GPU tile memory. */
+  readonly isMoving: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
   /** Whether the title bar offers "Chat about this app" (the multiplayer spec, section 9.1). */
   readonly hasAppChat: boolean;
+  /** Whether the title bar offers Share: an app that can be shared on its own, to the workspace's owner under an
+   *  Imbue Studio chrome. */
+  readonly hasShare: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   /** Whether the shield covers the content: every window while a menu or the launcher is open, and on a touch
@@ -192,6 +199,7 @@ export function Window(): m.Component<WindowAttrs> {
           style: {
             ...rectStyle(rect),
             zIndex: windowChromeZIndex(stackIndex),
+            ...(attrs.isMoving ? { willChange: "transform" } : {}),
           },
           onpointerdown: () => {
             if (!isFocused) attrs.onRaise();
@@ -220,6 +228,7 @@ export function Window(): m.Component<WindowAttrs> {
                     isFocused,
                     isMenuOpen: attrs.isMenuOpen,
                     hasAppChat: attrs.hasAppChat,
+                    share: attrs.hasShare ? { barWidth: rect.width, isTouch } : undefined,
                     sizeMenuTrigger: attrs.sizeMenuTrigger,
                     onControl: attrs.onControl,
                     onDoubleClick: attrs.onToggleMaximize,

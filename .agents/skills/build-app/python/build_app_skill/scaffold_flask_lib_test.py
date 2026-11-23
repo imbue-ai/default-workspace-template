@@ -43,6 +43,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PA
 from app_manifest.testing import commit_everything, init_git_repository
 from app_schema.api_schema import NO_SCHEMA_KEY
 from loguru import logger
+from onboarding_activity.markers import MARKER_DIR_ENV, Marker, marked_at
 from workspace_bare_scripts import venv_links
 
 from build_app_skill import scaffold_flask_lib
@@ -202,6 +203,51 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
 
     assert (root / "system/supervisord.conf").read_text() == before_conf
     assert (root / "pyproject.toml").read_text() == before_pyproject
+
+
+def test_every_scaffold_run_sets_the_app_build_started_marker_and_refreshes_its_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chat holds back its "Build an app" suggestion while a build is under way, which it reads from this."""
+    monkeypatch.delenv(MARKER_DIR_ENV, raising=False)
+    root = _make_workspace(tmp_path / "workspace", {})
+    markers = root / "data" / ".state" / "onboarding_activity"
+
+    first = _scaffold(root, "news")
+
+    assert first.returncode == 0, first.stderr
+    assert [path.name for path in markers.iterdir()] == ["app_build_started"]
+    long_ago = time.time() - 7200
+    os.utime(markers / "app_build_started", (long_ago, long_ago))
+
+    second = _scaffold(root, "notes")
+
+    assert second.returncode == 0, second.stderr
+    refreshed = marked_at(Marker.APP_BUILD_STARTED, markers)
+    assert refreshed is not None and refreshed.timestamp() > long_ago + 3600
+
+
+def test_the_marker_goes_where_the_environment_names_and_a_run_that_cannot_write_it_still_scaffolds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_workspace(tmp_path / "workspace", {})
+    monkeypatch.setenv(MARKER_DIR_ENV, str(tmp_path / "elsewhere"))
+
+    assert _scaffold(root, "news").returncode == 0
+
+    assert (tmp_path / "elsewhere" / "app_build_started").is_file()
+    assert not (root / "data").exists()
+
+    # A file where the marker directory should be: nothing can be made under it.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+
+    unrecorded = _scaffold(root, "notes")
+
+    assert unrecorded.returncode == 0, unrecorded.stderr
+    assert "warning: could not record that an app build started" in unrecorded.stderr
+    assert (root / "system/apps/notes/src/notes/runner.py").exists()
 
 
 def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> None:
@@ -872,6 +918,12 @@ def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
         for package in root_lock["package"]
         if package["name"] == "imbue-common"
     )
+    # The harden pass's browser tests run from this venv, which the repo root's does not reach.
+    assert by_name["playwright"]["version"] == root_versions["playwright"]
+    assert "pytest-timeout" in by_name
+    pyproject = tomllib.loads((app / "pyproject.toml").read_text())
+    marks = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+    assert {mark.split(":")[0] for mark in marks} == {"browser", "frontend"}
     # The program line, run as supervisord would (less the registration with the shell,
     # which needs a live workspace), boots the app from its own venv.
     command = configparser.RawConfigParser()

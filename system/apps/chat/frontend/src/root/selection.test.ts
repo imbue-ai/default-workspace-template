@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   intakeTokenFromSearch,
+  isNewChatPointerRequested,
   isProviderChooserRequested,
   rootPathFor,
   selectionFromSearch,
@@ -33,6 +34,15 @@ describe("selection", () => {
     expect(rootPathFor(selectionFromSearch(search))).toBe("/?chat=agent-0123abc");
   });
 
+  it("reads a request for the New chat pointer, which names no chat and is dropped from the path written back", () => {
+    expect(isNewChatPointerRequested("?open=new-chat-pointer")).toBe(true);
+    expect(isNewChatPointerRequested("?chat=agent-0123abc&open=new-chat-pointer")).toBe(true);
+    expect(isNewChatPointerRequested("?open=providers")).toBe(false);
+    expect(isNewChatPointerRequested("")).toBe(false);
+    expect(selectionFromSearch("?open=new-chat-pointer")).toBeNull();
+    expect(rootPathFor(selectionFromSearch("?chat=agent-0123abc&open=new-chat-pointer"))).toBe("/?chat=agent-0123abc");
+  });
+
   it("writes the selection back as the root's path, with no token", () => {
     expect(rootPathFor("agent-0123abc")).toBe("/?chat=agent-0123abc");
     expect(rootPathFor(null)).toBe("/");
@@ -48,6 +58,7 @@ describe("slotFill", () => {
     isCompact: false,
     isShown: true,
     isDeletePending: false,
+    canStartNew: true,
   };
 
   it("asks for no new chat while a delete is on its way, and still shows a chat that is listed", () => {
@@ -68,6 +79,15 @@ describe("slotFill", () => {
   it("opens a new chat when there are none, but only while the list is on screen", () => {
     expect(slotFill(empty)).toEqual({ kind: "open_new" });
     expect(slotFill({ ...empty, isShown: false })).toEqual({ kind: "keep" });
+  });
+
+  it("opens no new chat while nothing is signed in, or a sign-in waits to start the chat still to come", () => {
+    expect(slotFill({ ...empty, canStartNew: false })).toEqual({ kind: "keep" });
+    // Listed chats are still shown: only the empty-list chat waits for an account.
+    expect(slotFill({ ...empty, canStartNew: false, chatIds: ["agent-welcome"] })).toEqual({
+      kind: "select",
+      chatId: "agent-welcome",
+    });
   });
 
   it("keeps what is shown: a selection, a list not read yet, a choice in progress, and the phone list", () => {

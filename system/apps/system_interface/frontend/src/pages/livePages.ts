@@ -22,7 +22,8 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, ``shell:show-coach-card``, ``shell:agent-working``, and
+ * ``shell:report-bug``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -36,6 +37,9 @@
 
 import {
   INPUT_REPORT_INTERVAL_MS,
+  MAX_COACH_CARD_TEXT_LENGTH,
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -50,11 +54,14 @@ import {
   SHELL_OPEN_LINK,
   SHELL_REPORT_BUG,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  coachCardPlaceOf,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -177,6 +184,11 @@ interface LivePage {
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
   greetedIsViewing: boolean;
+  /** Whether the page's last ``shell:agent-working`` since its load said an agent is working in it. */
+  isAgentWorking: boolean;
+  /** Whether the page's last ``shell:first-conversation-step`` since its load said the workspace's first
+   *  conversation is still following its script. */
+  isFirstConversationPending: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -207,6 +219,16 @@ export interface LivePagesOptions {
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
+  /** Shows a page's coach card: its words under a control of the Imbue Studio chrome, or popping out of the agent's
+   *  avatar (``shell:show-coach-card``). */
+  readonly showCoachCard: (text: string, place: ShellCoachCardPlace) => void;
+  /** Told whether the last ``shell:agent-working`` of any page the layer holds says an agent is working: when a
+   *  page's report changes, when a page that said so loads again or goes away, and when the layer starts or stops. */
+  readonly notePagesAgentWorking: (isWorking: boolean) => void;
+  /** Told whether the last ``shell:first-conversation-step`` of any page the layer holds says the workspace's first
+   *  conversation is still following its script, at the same moments. ``isSaidByPage`` is whether a page's own
+   *  report brought the answer, rather than a report dropped with its page. */
+  readonly notePagesFirstConversationPending: (isPending: boolean, isSaidByPage: boolean) => void;
 }
 
 /** The phone's pages: the shown window's, and the ones it keeps beside it. */
@@ -243,6 +265,8 @@ export class LivePagesLayer implements PageDriver {
   private lastFocusedWindowId: string | null = null;
   /** Drops the ``ttyd-focus`` posts still pending for the window last focused. */
   private cancelFrameFocus: () => void = () => undefined;
+  /** Lets go of what ``start`` took hold of. */
+  private stopStarted: () => void = () => undefined;
   /** The ticks the watcher has run. */
   private watchedTicks = 0;
   /** The tick the watcher last raised a window in; null before any. */
@@ -277,11 +301,20 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
     setChildFrameMessageHandler(SHELL_REPORT_BUG, (frame, payload) => this.takeReportBug(frame, payload));
+    setChildFrameMessageHandler(SHELL_SHOW_COACH_CARD, (frame, payload) => this.takeShowCoachCard(frame, payload));
+    setChildFrameMessageHandler(SHELL_AGENT_WORKING, (frame, payload) => this.takeAgentWorking(frame, payload));
+    setChildFrameMessageHandler(SHELL_FIRST_CONVERSATION_STEP, (frame, payload) =>
+      this.takeFirstConversationStep(frame, payload),
+    );
+    // The newest layer takes these seats too: whatever the pages of a layer it replaces said went with them.
+    this.tellPagesAgentWorking();
+    this.tellPagesFirstConversationPending(false);
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
     stopFollowingTheme?.();
-    stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
+    const stopFollowing = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
+    stopFollowingTheme = stopFollowing;
     // The window loses focus when it lands in a frame: for a page that binds no contract, the one sign a person
     // reached its window (the app-usage-signals spec, section 6.4).
     stopWatchingFrameFocus?.();
@@ -296,11 +329,24 @@ export class LivePagesLayer implements PageDriver {
       this.raiseWindowOfActiveFrame(true);
       this.pageToHandBack = null;
     }, FOCUS_WATCH_INTERVAL_MS);
-    stopWatchingFrameFocus = () => {
+    const stopWatching = (): void => {
       window.removeEventListener("blur", onWindowBlur);
       clearInterval(watchTimer);
       this.cancelFrameFocus();
     };
+    stopWatchingFrameFocus = stopWatching;
+    this.stopStarted = () => {
+      stopFollowing();
+      stopWatching();
+    };
+  }
+
+  /** Stop hearing theme changes and watching focus land in a frame, once the layer's view is gone: the watcher is
+   *  a timer, and would go on reading a document that is no longer there. The pages went with the view, and what
+   *  they said of an agent working and of the first conversation with them. */
+  stop(): void {
+    this.stopStarted();
+    for (const page of this.pages.values()) this.forgetPageReports(page);
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -789,7 +835,8 @@ export class LivePagesLayer implements PageDriver {
   /**
    * The shown pages the windows in front of them cover, both where the windows are drawn now and where they are
    * going: a window still travelling to its place covers nothing until it lands there, and one travelling away
-   * uncovers at once. Nothing is covered while a window is moved or resized, which moves it with no reconcile.
+   * uncovers at once. A window being moved or resized moves with no reconcile, so for the length of the gesture it
+   * neither is covered nor covers: the pages behind the windows that stay put stay parked.
    * The focused window's page never is: nothing is in front of it, and parking it (its content dragged below the
    * backdrop) would take the keyboard from the window the user is in.
    */
@@ -799,7 +846,7 @@ export class LivePagesLayer implements PageDriver {
     focused: string | null,
   ): Set<string> {
     const covered = new Set<string>();
-    if (this.store.windowGesture() !== null) return covered;
+    const gestureWindowId = this.store.windowGesture()?.windowId ?? null;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.frameBackdrop();
     // While a fullscreen window is on screen the desktop paints over the taskbar's band as well.
@@ -815,11 +862,15 @@ export class LivePagesLayer implements PageDriver {
       const rect = this.windowBox(entry.windowId);
       return rect === null ? null : { rect, hasTitleBar: entry.hasTitleBar, isContentOpaque: isContentOpaque[index] };
     });
+    const isStill = (index: number): boolean => drawn[index].windowId !== gestureWindowId;
     drawn.forEach((entry, index) => {
       const here = now[index];
-      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
-      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), drawnArea, metrics);
-      const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
+      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || !isStill(index) || here === null) return;
+      const goingFront = going.filter((_, frontIndex) => frontIndex > index && isStill(frontIndex));
+      const isCoveredWhereGoing = isPageCovered(going[index], goingFront, drawnArea, metrics);
+      const frontNow = now.filter(
+        (front, frontIndex): front is FrontWindow => front !== null && frontIndex > index && isStill(frontIndex),
+      );
       if (isCoveredWhereGoing && isPageCovered(here, frontNow, drawnArea, metrics)) covered.add(entry.windowId);
     });
     return covered;
@@ -885,6 +936,8 @@ export class LivePagesLayer implements PageDriver {
       lastFocusPromptTick: null,
       greetedDesktopId: null,
       greetedIsViewing: false,
+      isAgentWorking: false,
+      isFirstConversationPending: false,
       lastSentVisibility: null,
       isHeldForStop: false,
       isHidden: true,
@@ -898,6 +951,8 @@ export class LivePagesLayer implements PageDriver {
       page.isCloseChordCapable = false;
       page.hasCapabilities = false;
       page.lastSentVisibility = null;
+      // Before the greeting, which a page answers by saying again what still holds.
+      this.forgetPageReports(page);
       this.greet(page);
       this.syncVisibility(page, this.isShown(page));
     });
@@ -910,6 +965,7 @@ export class LivePagesLayer implements PageDriver {
   private destroy(page: LivePage): void {
     this.pages.delete(page.windowId);
     page.wrapper.remove();
+    this.forgetPageReports(page);
   }
 
   private position(page: LivePage, box: HostRect): void {
@@ -935,6 +991,7 @@ export class LivePagesLayer implements PageDriver {
     style.transform = `scale(${scale})`;
     style.zIndex = OVERVIEW_PAGE_Z_INDEX;
     style.pointerEvents = "none";
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, true);
   }
 
@@ -946,6 +1003,7 @@ export class LivePagesLayer implements PageDriver {
     page.isHidden = false;
     page.isCovered = isCovered;
     this.updateParking(page);
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, true);
   }
 
@@ -953,7 +1011,16 @@ export class LivePagesLayer implements PageDriver {
     page.isHidden = true;
     page.isCovered = false;
     this.updateParking(page);
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, false);
+  }
+
+  /** Give the page of the window being moved a compositor layer of its own for the length of the move, as its
+   *  chrome has (``Window``): each move then slides the layer instead of repainting the page, and the repaints
+   *  of a drag are what run the renderer out of GPU tile memory. */
+  private updateLayerPromotion(page: LivePage): void {
+    const isMoving = !page.isHidden && this.store.movingWindowId() === page.windowId;
+    page.wrapper.style.willChange = isMoving ? "transform" : "";
   }
 
   /** Park a page that is hidden or covered, and take the document's focus out of it: a parked frame left holding
@@ -988,6 +1055,8 @@ export class LivePagesLayer implements PageDriver {
       path,
       canReportBug: this.store.getCanReportBug(),
       opensLocalFiles: this.store.getOpensLocalFiles(),
+      opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
+      showsCoachMarks: this.store.getShowsCoachMarks(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;
@@ -1151,6 +1220,73 @@ export class LivePagesLayer implements PageDriver {
     const failure = reportedFailureOf(payload);
     if (failure === null) console.warn(`[si] shell:report-bug carried no failure (${JSON.stringify(payload)})`);
     this.store.reportBugFromPage(failure);
+  }
+
+  /** ``shell:show-coach-card {text, chromeAnchor}`` or ``{text, target}`` from a page: the page's words as a
+   *  one-button card under a control of the Imbue Studio chrome, or popping out of the agent's avatar. The frame
+   *  has to be one the shell created; a text that is empty or too long, or a payload that does not name exactly
+   *  one place this shell knows, is dropped without a word, since the page that sent it may be newer than this
+   *  shell. */
+  private takeShowCoachCard(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const text = payload.text;
+    if (typeof text !== "string" || text === "" || text.length > MAX_COACH_CARD_TEXT_LENGTH) return;
+    const place = coachCardPlaceOf(payload);
+    if (place === null) return;
+    this.options.showCoachCard(text, place);
+  }
+
+  /** ``shell:agent-working {isWorking}`` from a page: whether an agent is working in what the page shows, kept as
+   *  the page's last word until it loads again or goes away. The frame has to be one the shell created; a message
+   *  that carries no boolean is dropped without a word, since the page that sent it may be newer than this shell. */
+  private takeAgentWorking(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    const isWorking = payload.isWorking;
+    if (page === undefined || typeof isWorking !== "boolean" || page.isAgentWorking === isWorking) return;
+    page.isAgentWorking = isWorking;
+    this.tellPagesAgentWorking();
+  }
+
+  /** Drop what a page said of an agent working: the page that said it is gone, or is a fresh page now. */
+  private forgetAgentWorking(page: LivePage): void {
+    if (!page.isAgentWorking) return;
+    page.isAgentWorking = false;
+    this.tellPagesAgentWorking();
+  }
+
+  private tellPagesAgentWorking(): void {
+    this.options.notePagesAgentWorking([...this.pages.values()].some((page) => page.isAgentWorking));
+  }
+
+  /** ``shell:first-conversation-step {isPending}`` from a page: whether the workspace's first conversation is still
+   *  following its script, kept as the page's last word until it loads again or goes away, so a page that is gone
+   *  never holds the tour. The frame has to be one the shell created; a message that carries no boolean is dropped. */
+  private takeFirstConversationStep(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    const isPending = payload.isPending;
+    if (page === undefined || typeof isPending !== "boolean" || page.isFirstConversationPending === isPending) return;
+    page.isFirstConversationPending = isPending;
+    this.tellPagesFirstConversationPending(true);
+  }
+
+  private forgetFirstConversationStep(page: LivePage): void {
+    if (!page.isFirstConversationPending) return;
+    page.isFirstConversationPending = false;
+    this.tellPagesFirstConversationPending(false);
+  }
+
+  private tellPagesFirstConversationPending(isSaidByPage: boolean): void {
+    this.options.notePagesFirstConversationPending(
+      [...this.pages.values()].some((page) => page.isFirstConversationPending),
+      isSaidByPage,
+    );
+  }
+
+  /** Drop what a page said that the shell keeps as its last word: the page that said it is gone, or is a fresh page
+   *  now. */
+  private forgetPageReports(page: LivePage): void {
+    this.forgetAgentWorking(page);
+    this.forgetFirstConversationStep(page);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

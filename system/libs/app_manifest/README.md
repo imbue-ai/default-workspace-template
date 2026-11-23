@@ -42,14 +42,18 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   exactly one of `path`, the route under the app's origin the shell posts each
   message of that type to, shaped like a launch path, or `show`, the
   `PageTemplate` of the app's page the shell shows for it, with `showing`, the
-  templates of the app's other pages that count as already showing it, only
-  beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
-  within the manifest; `label`, a `KeybindingActionLabel`; and
+  templates of the app's other pages that count as already showing it, and
+  `reload_when_raised`, whether a window the message raises at the `show` page
+  itself has its page reloaded, both only beside `show`), `KeybindingAction`
+  (`id`, a `KeybindingActionId` unique within the manifest; `label`, a
+  `KeybindingActionLabel`; and
   `default_chords`, the chords that trigger it out of the box, whose grammar
   the `workspace_profile` library checks),
   `DefaultShortcut`
   (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
-  array of them, read as `default_shortcuts`), `ShortcutMode`,
+  array of them, read as `default_shortcuts`; the manifest's
+  `seeds_shortcuts = false` keeps them off every desktop, leaving the app in
+  the launcher alone), `ShortcutMode`,
   `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the
@@ -129,6 +133,13 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   upgraded and who depends on it (`classify_lockfile_change`).
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
   read, and `select_tests_for_pass_scope` selects from a pass scope file.
+- `app_manifest.user_apps`: `has_user_built_app(repo_root, registry)`, whether
+  the registry holds an app the workspace's user built: a row that is neither
+  `system` nor `internal`, registered by a package under `system/apps/` that
+  the root `pyproject.toml` does not list as a workspace member, under its
+  manifest's name. The template's own apps never count, and neither does a
+  new app's mock frame or a preview: a frame's row belongs to no package, and
+  the app behind one is `internal` while the frame is up.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
   `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,
