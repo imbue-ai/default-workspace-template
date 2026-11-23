@@ -177,6 +177,23 @@ def test_a_departure_the_sweep_finds_goes_out_after_a_profile_announcement_alrea
     assert announced == [["user-bob-4471"], []]
 
 
+def test_a_heartbeat_after_a_profile_announcement_left_its_sender_out_announces_them_again(tmp_path: Path) -> None:
+    """A profile announcement made after Bob's last heartbeat passed the connected window, before the sweep noticed,
+    tells the windows he is gone; his next heartbeat then brings him back to every window."""
+    store = _store(tmp_path)
+    store.heartbeat(_BOB, utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1))
+    announced: list[list[str]] = []
+
+    def record(users: Sequence[PresentUser]) -> None:
+        announced.append([user.user_id for user in users])
+
+    sweep = PresenceSweep(store=store, announce=record, announce_roster=lambda: None)
+    sweep.announce_connected()
+    sweep.record_heartbeat(_BOB, utc_now())
+
+    assert announced == [[], ["user-bob-4471"]]
+
+
 def test_an_announcement_of_a_refreshed_profile_that_fails_is_logged_not_raised(
     tmp_path: Path, loguru_records: list[str]
 ) -> None:

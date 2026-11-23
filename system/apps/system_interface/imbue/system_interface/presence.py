@@ -180,7 +180,7 @@ class PresenceStore(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a user outlives their last heartbeat"
     )
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
-    # The connected set as last reported changed, so a heartbeat and the sweep agree on what the windows know.
+    # The connected set as last reported, so every announcement agrees on what the windows know.
     _announced_user_ids: frozenset[str] = PrivateAttr(default=frozenset())
 
     @property
@@ -432,7 +432,9 @@ class PresenceSweep(MutableModel):
         # Runs on the profile-refresh thread, where nothing else would log it.
         try:
             with self._announce_lock:
-                self.announce(self.store.connected_users(utc_now()))
+                # Read through the sweep, which records the set as announced, so a heartbeat that differs from what
+                # this pushes announces again.
+                self.announce(self.store.sweep(utc_now()).users)
             self.announce_roster()
         except (OSError, ValueError) as e:
             logger.opt(exception=e).error("Failed to announce a refreshed profile; the next announcement carries it")
