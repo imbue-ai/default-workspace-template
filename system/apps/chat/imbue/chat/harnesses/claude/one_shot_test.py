@@ -8,6 +8,7 @@ from imbue.chat.harnesses.claude.one_shot import claude_one_shot_argv
 from imbue.chat.harnesses.claude.one_shot import claude_one_shot_env
 from imbue.chat.harnesses.claude.one_shot import parse_claude_print_result
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
 from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.testing import put_stand_in_cli_on_path
 
@@ -40,7 +41,12 @@ _SUCCESS_RESULT = json.dumps({"type": "result", "subtype": "success", "is_error"
 def _name_a_chat(account_dir: Path) -> str:
     """The call chat naming makes: the small tier, with no thinking."""
     return ClaudeOneShotCompletion().complete(
-        account_dir, "Name this chat.", "Plan Rome", model_tier=OneShotModelTier.SMALL, thinking_token_allowance=None
+        account_dir,
+        "Name this chat.",
+        "Plan Rome",
+        model_tier=OneShotModelTier.SMALL,
+        thinking_token_allowance=None,
+        timeout_seconds=60.0,
     )
 
 
@@ -80,6 +86,24 @@ def test_complete_raises_with_every_models_failure_when_none_answers(
         _name_a_chat(tmp_path / "account")
 
 
+def test_complete_gives_up_at_the_callers_timeout_without_asking_another_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_path = put_stand_in_cli_on_path(tmp_path, "claude", "exec sleep 30", monkeypatch)
+
+    with pytest.raises(OneShotCompletionTimeoutError, match="within 1s"):
+        ClaudeOneShotCompletion().complete(
+            tmp_path / "account",
+            "Name this chat.",
+            "Plan Rome",
+            model_tier=OneShotModelTier.SMALL,
+            thinking_token_allowance=None,
+            timeout_seconds=1.0,
+        )
+
+    assert len(log_path.read_text().splitlines()) == 1
+
+
 def test_claude_one_shot_env_runs_on_the_chats_account_not_the_servers_credentials() -> None:
     ambient = {
         "PATH": "/usr/bin",
@@ -114,6 +138,7 @@ def test_complete_answers_on_sonnet_for_the_medium_tier_with_the_thinking_allowa
         "Plan Rome",
         model_tier=OneShotModelTier.MEDIUM,
         thinking_token_allowance=4000,
+        timeout_seconds=120.0,
     )
 
     assert answer == "Rome trip: plan"
