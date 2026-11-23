@@ -65,7 +65,7 @@ It has no status, no listing of what is inside an app, and no verbs on the app's
 
 ### 2.3 Placement and layout
 
-A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`, or `FULLSCREEN`, the last filling the whole viewport over the taskbar with no title bar; the Screen spec's L2 layer), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop keeping a ghost at its frame; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
+A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`, or `FULLSCREEN`, the last filling the whole viewport over the taskbar with no title bar; the Screen spec's L2 layer), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop drawing nothing in its place and keeping its frame for a return; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
 The frame is kept through every state, so restore always has somewhere to go, and minimized and detached are orthogonal to the state.
 A layout is one client's placements for one desktop, in stacking order, last on top.
 Raising, minimizing, maximizing, snapping, moving, and resizing are per client and never leave the client.
@@ -99,12 +99,17 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: while the window is focused, the window menu (three dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9); the app icon and the title centred over the bar; then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
+Left to right: while the window is focused, the window menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9), and Share; the app icon and the title centred over the bar; then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
 No status indicator.
+Share asks the Imbue Studio chrome to open its share settings for the window's app (`minds:open-share-settings` with the app's name).
+It is offered to the workspace's owner, under a chrome that has said what it can do, on every window of an app that is not internal, the chat and the terminal included.
+It never sits over the centred title, whose width the bar estimates from its length: it is a glyph and the word "Share" where the title leaves room for both, the glyph alone where it leaves room for that, and not drawn where it leaves room for neither, which leaves Share to the window menu.
+A theme that sets the title in the bar's own run always gets the word.
+The Classic Mac and Windows 2000 themes, whose title bar controls have no room for a word, hide it and leave Share to the window menu.
 "Chat about this app" opens the chat about the app (the one labelled `app_chat` with the app's name, else the one titled "<App display name> Chat", made with both on the default provider when there is none; the chat app's own windows open "Chat Chat") through the chat app's `app-chat` launch path, and lays the two windows out side by side for this client, the chat on the half it was already nearer and on top (section 9.2 of the spec).
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 A fullscreen window has no title bar: a strip at its top edge shows on hover with Exit fullscreen and, where the Imbue Studio chrome can take the whole app window with the keyboard locked, Immersive (the Screen spec, section 12; mngr's `specs/screen-studio-integration/spec.md`).
-The window menu offers Move and resize, Fullscreen, Immersive (where the chrome can), Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
+The window menu offers Move and resize, Fullscreen, Immersive (where the chrome can), Open in its own window (where the embedding chrome can pull windows out), Share (for every app that is not internal), Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
 A pinned window keeps its close control and its menus' Close, and each closes it for this client alone: the shared window is never closed, only minimized, and its entry leaves this client's bar until something shows the window again.
 
@@ -114,7 +119,7 @@ The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
 An entry shows the app icon and the title.
 A pinned window's entry is a plain bar entry like any other window's (absent while this client has closed the window), and a client may draw the app's creature (the workspace's avatar) floating above the windows beside it (pinned-taskbar-entries plan section 4.2).
-Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window (or, when its ghost is hidden, the ghost), minimizes the top window, or raises any other window.
+Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window, minimized or not, minimizes the top window, or raises any other window.
 
 The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
 One row is always highlighted; Enter runs it, Ctrl+Enter (Cmd+Enter on macOS) runs the secondary free-text row, and typing filters the rows.
@@ -209,7 +214,7 @@ The agent-facing `workspace-layout` speaks the same verbs, targets exactly one c
 
 ## 6. What each prototype contributes
 
-From Kanjun's `desktop-mode`: the snap zones with an edge threshold and the fractional re-hang on un-snap, the "scale from the user's own placement, never from the last clamped result" resize policy (here as fractional frames), the inert-background-page rule for click-to-raise, the taskbar entry click policy, and the Playwright coverage of window gestures.
+From Kanjun's `desktop-mode`: the snap zones with an edge threshold and the fractional re-hang on un-snap, the "scale from the user's own placement, never from the last clamped result" resize policy (here as fractional frames), the inert-background-page rule for click-to-raise (kept for touch clients only, plan section 4.2), the taskbar entry click policy, and the Playwright coverage of window gestures.
 Not taken: dockview floating groups, window state fanned across panel params, the pet subsystem, the chat app's draft flow, the hard-coded wallpaper.
 
 From Gleb's `desktop-shell`: the shape of a desktop document with pure editors on both sides of the wire, the icon grid with nearest-free-cell collision and drawn-position-versus-saved-cell, the resize edges, the chat list beside an inner chat frame with pages held alive across picks, and the taskbar built from live state rather than from stored entries.

@@ -1,1 +1,0 @@
-The chat app's baked Claude model catalog is regenerated from Claude Code 2.1.307, the version workspaces now run. Models, aliases, display names and fast mode are unchanged; each model only gains a `total_tokens_reminder` capability.

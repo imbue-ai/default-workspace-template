@@ -120,7 +120,7 @@ def test_never_lowers_a_process_already_above_its_band() -> None:
 
 
 def test_protected_programs_are_never_touched() -> None:
-    # The one-shots (env-converge, vm-exec-register) matter as much as the OOM
+    # The one-shot (env-converge) matters as much as the OOM
     # machinery here: the backstop *raises*, so a program missing from
     # _NON_SERVICE_PROGRAM_BANDS is not merely left alone but actively pushed to
     # USER_SERVICE (200), above every built-in.
@@ -130,7 +130,6 @@ def test_protected_programs_are_never_touched() -> None:
         "oom-tag-backstop",
         "publish_cgroup_meminfo",
         "env-converge",
-        "vm-exec-register",
     ):
         oom_tag_backstop.handle_running_event(
             _running_payload(program_name, 400),

@@ -13,11 +13,13 @@ const mocks = vi.hoisted(() => {
     CreateChatRefusedError,
     // What the fresh read of the account list leaves selected; null when nothing is signed in.
     selectedAccount: null as { id: string } | null,
-    createChat: vi.fn(async (_projectId: string, _accountId?: string) => ({
-      chatId: "chat-new",
-      name: "Chat-1",
-      displayName: "Chat 1",
-    })),
+    createChat: vi.fn(
+      async (_projectId: string, _accountId?: string, _message?: string, _pick?: null, _clientId?: string) => ({
+        chatId: "chat-new",
+        name: "Chat-1",
+        displayName: "Chat 1",
+      }),
+    ),
     awaitingChatForEmptyList: vi.fn(async () => "chat-awaiting"),
     whenAccountsReadyToChoose: vi.fn(async () => undefined),
   };
@@ -28,6 +30,7 @@ vi.mock("../models/Chats", () => ({
   createChat: mocks.createChat,
   awaitingChatForEmptyList: mocks.awaitingChatForEmptyList,
 }));
+vi.mock("@imbue/workspace-ui/src/models/ClientIdentity", () => ({ getClientId: () => "client-of-this-browser" }));
 vi.mock("../models/Providers", () => ({
   getSelectedAccount: () => mocks.selectedAccount,
   whenAccountsReadyToChoose: mocks.whenAccountsReadyToChoose,
@@ -47,8 +50,10 @@ describe("startNewChat", () => {
     expect(await startNewChat()).toEqual({ kind: "created", chatId: "chat-new" });
     expect(mocks.whenAccountsReadyToChoose).toHaveBeenCalledOnce();
     expect(mocks.createChat).toHaveBeenCalledOnce();
-    const [, accountId] = mocks.createChat.mock.calls[0];
+    const [, accountId, , , clientId] = mocks.createChat.mock.calls[0];
     expect(accountId ?? "").toBe("");
+    // A person pressed the button, so the create says which browser it came from.
+    expect(clientId).toBe("client-of-this-browser");
     expect(mocks.awaitingChatForEmptyList).not.toHaveBeenCalled();
   });
 

@@ -20,12 +20,17 @@ the root venv):
 
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \\
         --app <name> --worktree <dir> [--with <name>]... [--instance-key <key>] \\
-        [--title <label>] [--repo-root PATH]
+        [--title <label> | --private] [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name> [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
-of it with ``uv run --no-sync workspace-layout open <name>-preview``. ``refresh``
+of it with ``uv run --no-sync workspace-layout open <name>-preview``. A preview the
+user opens is booted from the live checkout: from a git worktree ``up`` refuses,
+since the window would be registered where the workspace never looks. ``--private``
+boots the same instance with no window, for an agent to drive on its loopback port
+from wherever it runs, and prints that loopback URL on stdout in place of the app
+name; its data copies and secrets still come from the live checkout. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.
@@ -33,7 +38,9 @@ with the siblings it booted, and verifies the processes died.
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared boot failed (which quotes the boot log).
+       pass's preview is up, a preview with a window was asked for from a git
+       worktree, ``--private`` was given with ``--with`` or over a preview that has
+       a window, or the shared boot failed (which quotes the boot log).
 """
 
 from __future__ import annotations
@@ -48,8 +55,9 @@ from pathlib import Path
 
 from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
-from app_manifest.registry_location import registry_path
 from app_registration import forward_port
+
+from update_app_skill.errors import PreviewError
 
 # Where the shared substrate files each instance, and where this script keeps what it
 # adds: the registry copy and the sibling list.
@@ -68,8 +76,13 @@ PREVIEW_SERVICE_SUFFIX = "-preview"
 SHELL_APP_NAME = "system_interface"
 
 
-class PreviewError(Exception):
-    """A preview could not be described or booted."""
+@dataclass(frozen=True)
+class PreviewWindow:
+    """How a preview surfaces: the inner app's registration, the frame's, and the frame's label."""
+
+    service_name: str
+    preview_service_name: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -83,9 +96,8 @@ class InstanceSpec:
     env_overrides: dict[str, str]
     copy_sources: dict[str, str]
     health_path: str
-    service_name: str
-    preview_service_name: str
-    preview_title: str
+    # None for a private instance, which registers nothing.
+    window: PreviewWindow | None
     inner_path: str
     theming_mode: str | None
     project: str | None
@@ -95,6 +107,7 @@ class Instances:
     """Indirection over the shared isolated-instance substrate, so tests can stand in for it."""
 
     def up(self, spec: InstanceSpec, repo_root: Path) -> int:
+        window = spec.window
         return serve_isolated_instance.up(
             spec.name,
             spec.command,
@@ -104,9 +117,11 @@ class Instances:
             env_overrides=spec.env_overrides,
             copy_sources=spec.copy_sources,
             health_path=spec.health_path,
-            service_name=spec.service_name,
-            preview_service_name=spec.preview_service_name,
-            preview_title=spec.preview_title,
+            service_name=window.service_name if window is not None else None,
+            preview_service_name=(
+                window.preview_service_name if window is not None else None
+            ),
+            preview_title=window.title if window is not None else None,
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
             project=spec.project,
@@ -186,6 +201,18 @@ def live_preview_url(repo_root: Path, app_name: str) -> str | None:
     return f"http://127.0.0.1:{int(str(port))}" if port else None
 
 
+def live_preview_is_surfaced(repo_root: Path, app_name: str) -> bool:
+    """Whether the app's current preview registered a window, as a private instance does not."""
+    state = _read_json(_instance_state_path(repo_root, app_name))
+    return state is not None and bool(state.get("services"))
+
+
+def live_registry_path(repo_root: Path) -> Path:
+    """The workspace's registry: the live checkout's, even when ``repo_root`` is a git worktree."""
+    main_checkout = serve_isolated_instance.main_checkout_of_linked_worktree(repo_root)
+    return forward_port.apps_file(main_checkout or repo_root)
+
+
 def write_registry_copy(
     live_registry: Path,
     destination: Path,
@@ -237,7 +264,8 @@ def _reframe_previews_naming(
     written when it booted, and it watches that file. A sibling re-upped on its own
     moves to new ports, and one taken down on its own is gone; either way the copy
     is rewritten with where every recorded sibling is now, so the framing preview
-    follows without a re-up of its own.
+    follows without a re-up of its own. A sibling re-upped as a private instance
+    registers no origin to be framed at, so its row goes back to the live app.
     """
     for state_path in sorted(
         (repo_root / INSTANCES_ROOT).glob(f"*{PREVIEW_STATE_SUFFIX}")
@@ -260,10 +288,14 @@ def _reframe_previews_naming(
         preview_url_by_app = {
             str(name): url
             for name in recorded
-            if (url := live_preview_url(repo_root, str(name))) is not None
+            if live_preview_is_surfaced(repo_root, str(name))
+            and (url := live_preview_url(repo_root, str(name))) is not None
         }
         write_registry_copy(
-            registry_path(), registry_copy, preview_url_by_app, dump_registry
+            live_registry_path(repo_root),
+            registry_copy,
+            preview_url_by_app,
+            dump_registry,
         )
 
 
@@ -312,7 +344,10 @@ def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--repo-root",
         default=".",
-        help="Path to the live repository root (default: current directory).",
+        help=(
+            "The checkout the preview's state is kept under (default: current directory); "
+            "a preview with a window must use the live one, not a git worktree."
+        ),
     )
 
 
@@ -324,7 +359,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     up_parser = subparsers.add_parser(
         "up",
-        help="Boot the app's preview from a worktree and surface it as an app to open.",
+        help=(
+            "Boot the app's preview from a worktree and, unless --private, surface it "
+            "as an app to open."
+        ),
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
@@ -345,10 +383,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="The instance the window opens on, for an app whose open_path takes one.",
     )
-    up_parser.add_argument(
+    surfacing = up_parser.add_mutually_exclusive_group()
+    surfacing.add_argument(
         "--title",
         default=None,
-        help="The label shown in the preview frame (default: the app and the worktree).",
+        help="The label shown in the preview frame (default: '<app> (preview)').",
+    )
+    surfacing.add_argument(
+        "--private",
+        action="store_true",
+        help=(
+            "Register no window: an instance only you reach on its loopback port, e.g. a "
+            "worker checking its own build from its worktree. Takes no --with."
+        ),
     )
     _add_repo_root_arg(up_parser)
 
@@ -379,6 +426,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with_apps=args.with_apps,
                 instance_key=args.instance_key,
                 title=args.title,
+                is_private=args.private,
                 instances=Instances(),
             )
         if args.command == "refresh":

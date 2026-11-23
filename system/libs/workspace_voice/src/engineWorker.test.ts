@@ -21,6 +21,7 @@ describe("the engine worker's entry", () => {
     scope.onconnect!({ ports: [port] });
     expect(port.onmessage).toBeTypeOf("function");
     expect(port.start).toHaveBeenCalledTimes(1);
+    expect(port.postMessage).toHaveBeenCalledWith({ type: "hello", loaded: null });
   });
 
   it("is its page's own port as a dedicated worker", async () => {
@@ -28,6 +29,7 @@ describe("the engine worker's entry", () => {
     const scope: WorkerScopeLike = { postMessage: vi.fn(), onmessage: null };
     attachWorkerScope(scope);
     expect(scope.onmessage).toBeTypeOf("function");
+    expect(scope.postMessage).toHaveBeenCalledWith({ type: "hello", loaded: null });
   });
 
   it("does nothing in a window", async () => {

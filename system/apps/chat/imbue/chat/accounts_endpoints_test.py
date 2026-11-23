@@ -18,6 +18,7 @@ from flask.testing import FlaskClient
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
+from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
@@ -26,6 +27,7 @@ from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import build_test_state
+from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import ReasoningEffortOption
 
@@ -94,7 +96,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         response = client.get("/api/accounts")
     assert response.status_code == 200
     payload = response.get_json()
-    assert set(payload) == {"accounts", "mru", "default"}
+    assert set(payload) == {"accounts", "mru", "default", "is_first_run_provider_step_pending"}
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
@@ -271,6 +273,36 @@ def test_a_key_paste_mints_an_account_and_lists_it(tmp_path: Path) -> None:
     assert row["label"] == "Opencode Go (Pi)"
     assert row["harness"] == "pi-coding"
     assert len(read_index().accounts) == 1
+
+
+def _paste_key(client: FlaskClient, lane_id: str, api_key: str) -> str:
+    started = client.post("/api/accounts", json={"lane_id": lane_id, "method_id": "api_key"})
+    submitted = client.post(f"/api/accounts/flow/{started.get_json()['flow_id']}", json={"api_key": api_key})
+    assert submitted.get_json()["state"] == "ok"
+    return submitted.get_json()["account_id"]
+
+
+def test_the_first_account_connected_while_the_first_runs_provider_page_is_owed_is_listed_as_the_default(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    agent_manager.note_agent_list_known()
+    service = AuthFlowService.create(
+        home=None,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        is_first_run_provider_step_pending=agent_manager.is_first_run_provider_step_pending,
+    )
+    with _client_for(build_test_state(agent_manager=agent_manager, auth_flows=service)) as client:
+        assert client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).status_code == 201
+
+        first = _paste_key(client, "anthropic", "sk-ant-xyz")
+        second = _paste_key(client, "openai", "sk-openai-123")
+        listed = client.get("/api/accounts").get_json()
+
+    assert listed["is_first_run_provider_step_pending"] is True
+    assert listed["default"] == first
+    assert listed["mru"] == second
 
 
 def test_aborting_a_flow_leaves_no_account_behind(tmp_path: Path) -> None:

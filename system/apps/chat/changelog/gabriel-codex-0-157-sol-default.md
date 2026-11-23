@@ -1,1 +1,0 @@
-The tool-call policies state-of-things doc now records how codex's `write_stdin` guard bypass is actually closed: `features.unified_exec_tty = false` (stdin closed for every exec'd process), since `features.unified_exec = false` is ignored by codex 0.154 and later.

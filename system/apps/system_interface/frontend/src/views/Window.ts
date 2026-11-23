@@ -1,9 +1,9 @@
 /**
  * A window's chrome (desktop-interface plan sections 4.2 and 4.3): the title bar, the content
  * box the live page is laid over (``data-window-content``), the transparent shield over the
- * content of every window but the focused one (a press on it raises the window and is consumed,
- * since a click into a cross-origin page cannot reach the shell) and over every window while a
- * menu or the launcher is open (the press that closes them has to reach the shell), and the eight
+ * content of every window while a menu or the launcher is open (the press that closes them has to
+ * reach the shell) and, on a touch client, of every window but the focused one (a press on it
+ * raises the window and is consumed, since a tap cannot reach the shell), and the eight
  * resize handles (``data-resize-edge``). The root (``data-window-id``) is positioned by the
  * pixels the store hands it and clips nothing: it carries the handles, which overhang the
  * window's border so a press just outside the frame still grabs an edge, around an inner frame
@@ -75,14 +75,21 @@ export interface WindowAttrs {
   readonly state: WindowState;
   readonly stackIndex: number;
   readonly isFocused: boolean;
+  /** Whether the window is being moved by a drag: it gets a compositor layer of its own (``will-change``) until the
+   *  drag ends, so each move slides the layer instead of repainting the window and what it passes over, repaints
+   *  that run the renderer out of GPU tile memory. */
+  readonly isMoving: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
   /** Whether the title bar offers "Chat about this app" (the multiplayer spec, section 9.1). */
   readonly hasAppChat: boolean;
+  /** Whether the title bar offers Share: an app that can be shared on its own, to the workspace's owner under an
+   *  Imbue Studio chrome. */
+  readonly hasShare: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
-  /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
-   *  launcher is open. */
+  /** Whether the shield covers the content: every window while a menu or the launcher is open, and on a touch
+   *  client every unfocused window. */
   readonly isShielded: boolean;
   /** Whether the app behind the window is stopped and nothing brings it back on a request (a row the workspace
    *  cannot start: no supervised program, critical, or inside a critical app's program): its page is replaced by
@@ -192,6 +199,7 @@ export function Window(): m.Component<WindowAttrs> {
           style: {
             ...rectStyle(rect),
             zIndex: windowChromeZIndex(stackIndex),
+            ...(attrs.isMoving ? { willChange: "transform" } : {}),
           },
           onpointerdown: () => {
             if (!isFocused) attrs.onRaise();
@@ -220,6 +228,7 @@ export function Window(): m.Component<WindowAttrs> {
                     isFocused,
                     isMenuOpen: attrs.isMenuOpen,
                     hasAppChat: attrs.hasAppChat,
+                    share: attrs.hasShare ? { barWidth: rect.width, isTouch } : undefined,
                     sizeMenuTrigger: attrs.sizeMenuTrigger,
                     onControl: attrs.onControl,
                     onDoubleClick: attrs.onToggleMaximize,
@@ -237,7 +246,7 @@ export function Window(): m.Component<WindowAttrs> {
                 },
                 [
                   isStopped ? stoppedPlaceholder(app) : null,
-                  // The shield: the press that raises the window (or closes an open menu or the launcher)
+                  // The shield: the press that closes an open menu or the launcher (or raises the window, on touch)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the
                   // desktop's element menu yields to it (element-reference-menu plan section 12).
