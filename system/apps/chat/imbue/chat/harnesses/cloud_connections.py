@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import ClassVar
 from typing import Final
 
-from imbue.chat.harnesses.agent_env import host_env_path_of
-from imbue.chat.harnesses.agent_env import read_env_file
 from pydantic import Field
 
+from imbue.chat.harnesses.agent_env import host_env_path_of
+from imbue.chat.harnesses.agent_env import read_env_file
 from imbue.chat.harnesses.agent_env import rewrite_env_var
 from imbue.imbue_common.frozen_model import FrozenModel
 
