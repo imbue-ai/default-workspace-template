@@ -596,7 +596,7 @@ do", under the welcome's last turn, with the step its first conversation stands 
 below). The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
 under its lanes; the first account connected there is pinned as the workspace's default (see
 "Provider accounts"), and with two or more connected the page marks the default's row "Default"
-and makes every other row a button that pins that account instead. Every row ends in Remove, which
+and gives every other row a button that pins that account instead. Every row ends in Remove, which
 asks first (the chat's own remove-account dialog) and then signs the account out; with the last
 one removed the page offers Skip again and holds Next. The dialogs the page opens, that one and
 the provider chooser a tile opens, wear the page's cream and brown ink whatever theme the
