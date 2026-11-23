@@ -14,6 +14,7 @@ from workspace_layout.primitives import ParticipantKey
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
+from imbue.system_interface.presence import PRESENCE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.presence import PresenceAnnouncer
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import PresentUser
@@ -32,6 +33,20 @@ _OWNER = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@exa
 
 def _store(tmp_path: Path) -> PresenceStore:
     return PresenceStore(directory=tmp_path / "presence")
+
+
+def _recording_announcer(
+    tmp_path: Path, interval_seconds: float = PRESENCE_SWEEP_INTERVAL_SECONDS
+) -> tuple[PresenceAnnouncer, list[list[str]]]:
+    """An announcer over a new store at ``tmp_path``, and the list it records each announced set in, as user ids."""
+    announced: list[list[str]] = []
+    announcer = PresenceAnnouncer(
+        store=_store(tmp_path),
+        interval_seconds=interval_seconds,
+        announce=lambda users: announced.append([user.user_id for user in users]),
+        announce_roster=lambda: None,
+    )
+    return announcer, announced
 
 
 def test_the_first_heartbeat_writes_the_identity_snapshot_and_connects_the_user(tmp_path: Path) -> None:
@@ -96,12 +111,7 @@ def test_a_user_is_connected_while_the_mtime_is_within_the_window_and_the_file_i
 def test_a_heartbeat_announces_the_membership_change_an_expiry_made_since_the_last_announcement(
     tmp_path: Path,
 ) -> None:
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    announcer = PresenceAnnouncer(store=_store(tmp_path), announce=record, announce_roster=lambda: None)
+    announcer, announced = _recording_announcer(tmp_path)
     announcer.record_heartbeat(_BOB, _T0)
     announcer.record_heartbeat(_OWNER, _T0 + timedelta(seconds=60))
     # Bob's file is past the window by the owner's next heartbeat, so the connected set shrank; the one after it
@@ -113,13 +123,7 @@ def test_a_heartbeat_announces_the_membership_change_an_expiry_made_since_the_la
 
 
 def test_the_sweep_announces_the_connected_set_only_when_it_changed(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    announcer = PresenceAnnouncer(store=store, announce=record, announce_roster=lambda: None)
+    announcer, announced = _recording_announcer(tmp_path)
     announcer.record_heartbeat(_BOB, _T0)
 
     assert announcer.sweep_once(_T0 + timedelta(seconds=10)) is False
@@ -166,12 +170,7 @@ def test_a_departure_the_sweep_finds_goes_out_after_a_profile_announcement_alrea
 def test_a_heartbeat_after_a_profile_announcement_left_its_sender_out_announces_them_again(tmp_path: Path) -> None:
     """A profile announcement made after Bob's last heartbeat passed the connected window, before the sweep noticed,
     tells the windows he is gone; his next heartbeat then brings him back to every window."""
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    announcer = PresenceAnnouncer(store=_store(tmp_path), announce=record, announce_roster=lambda: None)
+    announcer, announced = _recording_announcer(tmp_path)
     announcer.record_heartbeat(_BOB, utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1))
     announcer.announce_connected()
     announcer.record_heartbeat(_BOB, utc_now())
@@ -199,14 +198,7 @@ def test_a_started_sweep_announces_on_its_own_interval_and_ends_when_stopped(tmp
     # A store from an earlier process left a fresh file, which a new store's first sweep announces
     # (its own heartbeat path would have reported the change already).
     _store(tmp_path).heartbeat(_BOB, utc_now())
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    announcer = PresenceAnnouncer(
-        store=_store(tmp_path), interval_seconds=0.01, announce=record, announce_roster=lambda: None
-    )
+    announcer, announced = _recording_announcer(tmp_path, interval_seconds=0.01)
     announcer.start()
     try:
         assert announcer.is_running is True
@@ -222,12 +214,7 @@ def test_a_fresh_store_announces_files_left_by_an_earlier_process_when_they_are_
     earlier = _store(tmp_path)
     earlier.heartbeat(_BOB, _T0)
 
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    restarted = PresenceAnnouncer(store=_store(tmp_path), announce=record, announce_roster=lambda: None)
+    restarted, announced = _recording_announcer(tmp_path)
 
     assert restarted.sweep_once(_T0 + timedelta(seconds=5)) is True
     assert announced == [["user-bob-4471"]]
