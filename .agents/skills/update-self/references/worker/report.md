@@ -24,7 +24,7 @@ either of the two rule records under Validation.
   evidence for the manifest apps: which carried local content and which the
   update reached.
 - **Built frontend bundles**: when you built them, the absolute paths of all
-  seven; omit the section when you did not build.
+  eight; omit the section when you did not build.
   - `<your work_dir>/system/apps/system_interface/imbue/system_interface/static`
   - `<your work_dir>/system/apps/chat/imbue/chat/static`
   - `<your work_dir>/system/apps/getting_started/src/getting_started/static`
@@ -32,6 +32,7 @@ either of the two rule records under Validation.
   - `<your work_dir>/system/apps/routines/src/routines_app/static`
   - `<your work_dir>/system/apps/screen/src/screen/static`
   - `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`
+  - `<your work_dir>/system/apps/onboarding_checklist/src/onboarding_checklist/static`
 - **Impact analysis**: what you checked and how; the retired names you
   enumerated and what each search found; each use you rewrote to a stated
   replacement; each hit you report instead; and any user-created app or skill

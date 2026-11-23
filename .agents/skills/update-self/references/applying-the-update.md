@@ -147,10 +147,11 @@ Only when the update touches any of these:
 
 - a critical app's tree: `system/apps/system_interface/`, `system/apps/chat/`,
   `system/apps/terminal/`, `system/apps/terminal_pty/`;
-- the frontend of the Getting Started, Files, Routines, Screen or Style Guide
-  app: `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
-  `system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
-  `system/apps/style_guide/frontend/`;
+- the frontend of the Getting Started, Files, Routines, Screen, Style Guide or
+  Onboarding checklist app: `system/apps/getting_started/frontend/`,
+  `system/apps/files/frontend/`, `system/apps/routines/frontend/`,
+  `system/apps/screen/frontend/`, `system/apps/style_guide/frontend/`,
+  `system/apps/onboarding_checklist/frontend/`;
 - `system/libs/workspace_ui/`, `system/libs/workspace_layout/` or
   `system/libs/workspace_themes/`: the shared library compiled into every
   frontend, and the layout wire contract and theme library the critical apps
@@ -204,8 +205,9 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles**, append one
-`--worker-bundle <app>=<path>` for each of the seven (`system_interface`,
-`chat`, `getting_started`, `files`, `routines`, `screen`, `style_guide`), so
+`--worker-bundle <app>=<path>` for each of the eight (`system_interface`,
+`chat`, `getting_started`, `files`, `routines`, `screen`, `style_guide`,
+`onboarding_checklist`), so
 the exact builds the worker validated are installed instead of a live build.
 The apply installs them only as a set (one `npm run build` emits them all),
 and builds live when any is missing or stale.

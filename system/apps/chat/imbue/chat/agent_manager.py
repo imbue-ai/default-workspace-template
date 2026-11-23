@@ -20,6 +20,7 @@ from uuid import uuid4
 from chat_background_tasks.markers import TaskSource
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
+from onboarding_activity.markers import Marker
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
@@ -34,8 +35,10 @@ from imbue.chat.accounts import NoAccountsError
 from imbue.chat.accounts import UnknownAccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
+from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import index_path
+from imbue.chat.accounts import read_index
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -105,10 +108,13 @@ from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_start_suggestions
+from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
@@ -121,6 +127,13 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
 from imbue.chat.compaction_status import shown_compaction_cause
 from imbue.chat.compaction_status import write_compaction_request
+from imbue.chat.first_run import finish_provider_step
+from imbue.chat.first_run import is_provider_step_pending
+from imbue.chat.first_run import mark_provider_step_pending
+from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import next_first_run_tree_step
+from imbue.chat.first_run_tree import read_first_run_tree_step
+from imbue.chat.first_run_tree import write_first_run_tree_step
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
@@ -207,6 +220,7 @@ from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.naming import is_name_conflict
+from imbue.chat.onboarding_markers import set_onboarding_marker
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceTracker
@@ -217,6 +231,8 @@ from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
 from imbue.chat.sign_in_notices import SignInFailureNotices
+from imbue.chat.suggestion_store import ChatSuggestionStore
+from imbue.chat.suggestions import ChatSuggestions
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -930,6 +946,24 @@ def _has_new_user_turn_saying(events: list[dict[str, Any]], text: str, seen_ids:
 
 
 @pure
+def _filed_permission_request_id(event: Mapping[str, Any]) -> str | None:
+    """The id of the permission request an event files: a tool result carrying the gateway's echoed
+    ``permission_request`` object, the field the request's card is drawn from. None for any other event."""
+    filed = event.get("permission_request")
+    if not isinstance(filed, dict):
+        return None
+    request_id = filed.get("request_id")
+    return request_id if isinstance(request_id, str) else None
+
+
+@pure
+def _is_person_agent_chat(agent: AgentStateItem) -> bool:
+    """Whether a listed chat on ``agent`` is one a person talks to an agent in: no agent started it, and it is
+    not a room."""
+    return agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
+
+
+@pure
 def _has_user_turn_since(events: list[dict[str, Any]], since: float) -> bool:
     """Whether one of the events is a user turn timestamped at or after ``since`` (epoch seconds).
 
@@ -1461,6 +1495,8 @@ class AgentManager:
     _chat_settings: ChatSettingsStore
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
+    # Each chat's next-step suggestions: the set stored in its folder, and the sets remembered for it.
+    _suggestions: ChatSuggestionStore
     _prompt_template_path: Path
     # The handoff runner's tie to the app state, set at composition (``set_handoff_capabilities``);
     # None (tests that never hand off) refuses every handoff.
@@ -1604,6 +1640,9 @@ class AgentManager:
     # from the transcript events the watcher parses. A non-empty set is the chat's
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
+    # Whether this process has set the ``permission_request_filed`` onboarding marker, so a transcript read
+    # again (a watcher's backlog) does not write it again.
+    _is_permission_request_marker_set: bool
     # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
     # non-empty set, less the withdrawn ones, is the snapshot's ``is_connecting``; the whole set
     # keeps the chat reading as revived while a send's start is still running.
@@ -1640,6 +1679,8 @@ class AgentManager:
     # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
     # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
     _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
+    # What hears that a turn ended in a chat (``set_turn_end_listener``); ``None`` (tests, a secondary) = nobody.
+    _turn_end_listener: Callable[[ChatId], object] | None
     # A chat's author annotations, which live on the app state the manager must not import: they say who has written
     # in the chat (the multiplayer spec, section 5.4) and who sent each message not on its transcript yet. Set once
     # at composition (``set_author_annotations_reader``); ``None`` (tests) = no chat has any.
@@ -1732,6 +1773,7 @@ class AgentManager:
         manager._awaiting_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
+        manager._suggestions = ChatSuggestionStore(chat_files_root=chat_files_root)
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
@@ -1791,6 +1833,7 @@ class AgentManager:
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._chats_updated_listener = None
+        manager._turn_end_listener = None
         manager._author_annotations_reader = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
@@ -1807,6 +1850,7 @@ class AgentManager:
             manager._auto_open.request_open(restored_chat_id)
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
+        manager._is_permission_request_marker_set = False
         manager._connecting_message_ids_by_agent = {}
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
@@ -1978,11 +2022,13 @@ class AgentManager:
             self._is_agent_list_known = True
 
     def _broadcast_chats_updated(self) -> None:
-        """Push every chat's snapshot, and which is the main chat, to every WebSocket client (and to the listener
-        the composition root installed, which tells the shell's tray); and wake the main chat if the list now shows
-        it stopped."""
+        """Push every chat's snapshot, which is the main chat, and whether a first conversation is still following
+        its tree, to every WebSocket client (and the snapshots to the listener the composition root installed, which
+        tells the shell's tray); and wake the main chat if the list now shows it stopped."""
         snapshots = self.get_chat_snapshots()
-        self._broadcaster.broadcast_chats_updated(snapshots, self.get_main_chat_id())
+        self._broadcaster.broadcast_chats_updated(
+            snapshots, self.get_main_chat_id(), self.is_first_conversation_pending()
+        )
         if self._chats_updated_listener is not None:
             self._chats_updated_listener(snapshots)
         self._wake_main_chat_if_stopped()
@@ -1991,6 +2037,12 @@ class AgentManager:
         """Install what hears every chat-list push beside the pages: the tray's feed to the shell (the multiplayer
         spec, section 6.4). The composition root calls this once."""
         self._chats_updated_listener = listener
+
+    def set_turn_end_listener(self, listener: Callable[[ChatId], object]) -> None:
+        """Install what hears that a turn ended in a chat, once its harness has closed the turn: what works out the
+        chat's next-step suggestions (``suggestion_generation.py``). It is called on the thread that saw the turn
+        end, so it must hand its work off."""
+        self._turn_end_listener = listener
 
     def set_author_annotations_reader(self, reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]]) -> None:
         """Install what reads a chat's author annotations, for its snapshot: who has written in it (the multiplayer
@@ -2097,16 +2149,25 @@ class AgentManager:
         self._broadcast_chats_updated()
         return True
 
+    def has_person_chat_other_than(self, chat_id: ChatId) -> bool:
+        """Whether a chat a person talks to exists besides ``chat_id``: a listed agent chat that no agent started,
+        or an agent chat that is not on an agent yet (awaiting its first send, being created, or failed)."""
+        with self._lock:
+            if any(
+                chat.chat_id != chat_id for agent, chat in self._listed_chats_locked() if _is_person_agent_chat(agent)
+            ):
+                return True
+            return any(
+                provisional.chat_id != chat_id and provisional.kind is not ChatKind.ROOM
+                for provisional in self._provisional_chats.values()
+            )
+
     def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
         """The chats that can be the main chat: every listed chat a user started that is not a room (make-main
         never picks a room, though the main chat may be switched into one), and every chat still provisional.
         Lock held."""
         last_messaged = self._message_stamps.read()
-        candidate_ids = [
-            chat.chat_id
-            for agent, chat in self._listed_chats_locked()
-            if agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
-        ]
+        candidate_ids = [chat.chat_id for agent, chat in self._listed_chats_locked() if _is_person_agent_chat(agent)]
         candidate_ids.extend(chat_id for chat_id in self._provisional_chats if chat_id not in candidate_ids)
         return [
             MainChatCandidate(
@@ -4607,6 +4668,12 @@ class AgentManager:
         with self._lock:
             return list(self._provisional_chats.values())
 
+    def get_shown_chat_ids(self) -> list[ChatId]:
+        """The id of every chat the pages are shown: the listed chats, then the provisional ones not listed yet."""
+        with self._lock:
+            listed = [chat.chat_id for _agent, chat in self._listed_chats_locked()]
+            return [*listed, *(chat_id for chat_id in self._provisional_chats if chat_id not in listed)]
+
     def get_provisional_chats_as_shown(self) -> list[ProvisionalChatAsShown]:
         """``get_provisional_chats`` as the pages are sent them, for a client catching up."""
         return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
@@ -4657,7 +4724,64 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
+    def is_first_run_provider_step_pending(self) -> bool:
+        """Whether the workspace still owes its owner the first run's "pick your AI" page (``first_run.py``)."""
+        return is_provider_step_pending(self._chat_files_root)
+
+    def finish_first_run_provider_step(self) -> None:
+        """The owner left the first run's provider page: it is never shown again, and every page reads that."""
+        finish_provider_step(self._chat_files_root)
+        self._broadcaster.broadcast_accounts_updated()
+        self._start_first_run_main_chat()
+
+    def _start_first_run_main_chat(self) -> None:
+        """Start the main chat's first agent as the owner leaves the provider page with an account connected, so
+        their first pick or message goes to an agent that is already up. The agent is sent nothing and says
+        nothing until then. Nothing to start (they skipped, or the chat is already running or gone) is not an
+        error, and a launch that is refused leaves the chat awaiting its first send as before."""
+        main_chat_id = self._main_chat.read()
+        if main_chat_id is None:
+            return
+        provisional = self.get_provisional_chat(str(main_chat_id))
+        if provisional is None or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND:
+            return
+        if not is_first_run_seed(self._chat_files_root / main_chat_id):
+            return
+        account = choose_default_account(read_index())
+        if account is None:
+            return
+        try:
+            self.create_chat("", chat_id=str(main_chat_id), account_id=account.id)
+        except (AgentCreationError, AccountError, OSError, ValueError) as e:
+            _loguru_logger.warning("Did not start the first-run main chat {}: {}", main_chat_id, e)
+
+    # CLEANUP: drop this method and its call in the seed route once no supported Imbue Studio app sends
+    # ``context`` with its first-run seed (the ones that ask what type of studio the user wants to make).
+    def update_first_run_context(self, first_run_context: str) -> CreatedChat | None:
+        """Take what the user told Imbue Studio's first run again, for a first-run main chat nobody has sent to
+        yet: the app seeds the chat as the workspace finishes building and hands the answer over once more as the
+        user enters, since they may have answered in between. Answers the chat, or None when there is no such
+        chat to update (no first-run seed, or its first agent has been launched)."""
+        main_chat_id = self._main_chat.read()
+        if main_chat_id is None:
+            return None
+        chat_dir = self._chat_files_root / main_chat_id
+        with self._lock:
+            provisional = self._provisional_chats.get(main_chat_id)
+            if (
+                provisional is None
+                or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND
+                or not is_first_run_seed(chat_dir)
+            ):
+                return None
+            write_first_run_context(chat_dir, first_run_context)
+        return CreatedChat(
+            chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
+        )
+
+    def seed_chat(
+        self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "", is_first_run: bool = False
+    ) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
@@ -4674,13 +4798,29 @@ class AgentManager:
         no usable characters raises ``AgentCreationError`` and one already taken raises
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
         empty title mints the first free "Chat N".
+
+        ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
+        seed and is never shown. ``is_first_run`` owes the owner the first run's provider page, marked before the
+        chat is published so the first page to load already knows, and opens the chat's first conversation as a
+        tree (``first_run_tree.py``), at its start, with the start suggestions under the seeded turns
+        (``chat_seed.first_run_start_suggestions``).
         """
         explicit_title = explicit_chat_name(title)
+        if is_first_run:
+            mark_provider_step_pending(self._chat_files_root)
         with self._lock:
             provisional = self._seed_chat_locked(
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
             )
+            if is_first_run:
+                chat_dir = self._chat_files_root / provisional.chat_id
+                write_first_run_context(chat_dir, first_run_context)
+                write_first_run_tree_step(chat_dir, FirstRunTreeStep.START)
+                self._suggestions.write(provisional.chat_id, first_run_start_suggestions(provisional.chat_id, turns))
         self._publish_seeded_chat(provisional)
+        if is_first_run:
+            # A page that read the accounts before this seed does not know the provider page is owed.
+            self._broadcaster.broadcast_accounts_updated()
         return CreatedChat(
             chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
         )
@@ -4808,6 +4948,67 @@ class AgentManager:
         self._provisional_chats[chat_id] = provisional
         return provisional
 
+    @property
+    def suggestion_store(self) -> ChatSuggestionStore:
+        """Where chats' next-step suggestions are kept, for what works them out to store them through."""
+        return self._suggestions
+
+    def get_chat_suggestions(self, chat_id: ChatId) -> ChatSuggestions | None:
+        """The next-step suggestions stored for the chat (``suggestions.py``), or None when it has none."""
+        return self._suggestions.read(chat_id)
+
+    def get_remembered_suggestions(self, chat_id: ChatId) -> tuple[ChatSuggestions, ...]:
+        """Every set of next-step suggestions remembered for the chat (``suggestion_store.py``), oldest first."""
+        return self._suggestions.remembered(chat_id)
+
+    def get_first_run_tree_step(self, chat_id: ChatId) -> FirstRunTreeStep | None:
+        """Where the chat's first conversation stands in its tree (``first_run_tree.py``); None for any chat but
+        the one a first-run workspace opened on."""
+        with self._lock:
+            return self._first_run_tree_step_locked(chat_id)
+
+    def advance_first_run_tree(self, chat_id: ChatId, message: str) -> None:
+        """Move a first-run chat's tree on by a message the chat took from its user, given as the user's own
+        words; any other chat has no tree to move. A slash command is a word to the harness rather than a turn of
+        the conversation, and moves nothing. A message that ends the tree is pushed to every page at once, with
+        the chat list (``is_first_conversation_pending``)."""
+        if is_slash_command(message):
+            return
+        with self._lock:
+            step = self._first_run_tree_step_locked(chat_id)
+            if step is None:
+                return
+            next_step = next_first_run_tree_step(step, message)
+            if next_step is step:
+                return
+            write_first_run_tree_step(self._chat_files_root / chat_id, next_step)
+        if next_step is FirstRunTreeStep.DONE:
+            self._broadcast_chats_updated()
+
+    def is_first_conversation_pending(self) -> bool:
+        """Whether the workspace's first conversation is still following its tree: a chat this app lists is a
+        first-run chat whose step is not ``done`` (``first_run_tree.py``). Every chat-list push carries it, and the
+        chat root passes it to the shell, which holds its show-around tour meanwhile. A first-run chat that is gone
+        holds nothing, whatever its record still says."""
+        with self._lock:
+            in_progress_ids = [
+                chat_id
+                for chat_id, record in self._chat_record_by_id.items()
+                if record.is_seeded and self._first_run_tree_step_locked(chat_id) not in (None, FirstRunTreeStep.DONE)
+            ]
+            if not in_progress_ids:
+                return False
+            listed_ids = set(self._provisional_chats)
+            listed_ids.update(chat.chat_id for _agent, chat in self._listed_chats_locked())
+            return any(chat_id in listed_ids for chat_id in in_progress_ids)
+
+    def _first_run_tree_step_locked(self, chat_id: ChatId) -> FirstRunTreeStep | None:
+        chat_dir = self._chat_files_root / chat_id
+        if not is_first_run_seed(chat_dir):
+            return None
+        record = self._chat_record_by_id.get(chat_id)
+        return read_first_run_tree_step(chat_dir, is_awaiting_first_agent=record is not None and record.is_seed_only)
+
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
@@ -4908,6 +5109,7 @@ class AgentManager:
                 if record is None or record.is_seed_only:
                     self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
+        self._suggestions.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._broadcast_chats_updated()
         return True
@@ -5053,7 +5255,10 @@ class AgentManager:
                 None
                 if seed_record is None
                 else self._name_seeded_member_locked(
-                    seed_record, account, harness, is_seed_carried_by_first_send=not message
+                    seed_record,
+                    account,
+                    harness,
+                    is_seed_carried_by_first_send=not message,
                 )
             )
             provisional = ProvisionalChat(
@@ -5101,11 +5306,10 @@ class AgentManager:
         # sign-in's) leaves the conversation for the first send to carry. A room's words ride bare:
         # a room has no agent to need the context, and its page shows the seeded conversation as the
         # chat's earlier segment already (the multiplayer spec, section 7.3).
-        launch_message = (
-            message
-            if seed_record is None or not message or harness is HarnessType.ROOM
-            else seed_context_message(self._chat_files_root / launched_chat_id, message)
-        )
+        if seed_record is None or not message or harness is HarnessType.ROOM:
+            launch_message = message
+        else:
+            launch_message = seed_context_message(self._chat_files_root / launched_chat_id, message)
 
         first_message = (
             FirstMessage(text=launch_message, message_id=message_id or uuid4().hex, on_delivered=on_message_delivered)
@@ -5608,6 +5812,7 @@ class AgentManager:
         self._oom_prioritizer.forget_chat(chat_id)
         self._message_stamps.forget(chat_id)
         self._auto_open.forget(chat_id)
+        self._suggestions.forget(chat_id)
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
             self._background_tasks_by_chat.pop(chat_id, None)
@@ -6963,6 +7168,7 @@ class AgentManager:
         # after the sibling hooks that write them). Reading them now, not on the poller's next
         # pass, publishes the end with its wait, so the chat never reads idle (done) in between.
         was_turn_open = is_turn_in_flight(old_state) or was_turn_closing
+        ended_chat_id: ChatId | None = None
         if was_turn_open and not (is_turn_in_flight(new_state) or is_turn_closing):
             with self._lock:
                 ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
@@ -6987,6 +7193,8 @@ class AgentManager:
 
         if broadcast_on_change:
             self._broadcast_chats_updated()
+        if ended_chat_id is not None and self._turn_end_listener is not None:
+            self._turn_end_listener(ended_chat_id)
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Fold a batch of transcript events into the agent's activity signals.
@@ -6999,9 +7207,12 @@ class AgentManager:
         changed, so a streamed line that moves nothing skips both the recompute
         and its per-event marker stat.
 
-        No-op for agents not being tracked for activity (e.g. remote agents, or
-        stale callbacks for an agent that was just destroyed).
+        A permission request filed in the batch also sets the ``permission_request_filed``
+        onboarding marker, whichever agent the batch is from. The activity signals are left
+        alone for agents not being tracked for activity (e.g. remote agents, or stale
+        callbacks for an agent that was just destroyed).
         """
+        self._note_filed_permission_requests(events)
         is_pending_compaction_ended = self._end_pending_compaction_by_a_later_turn(agent_id, events)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
@@ -7046,6 +7257,15 @@ class AgentManager:
         _loguru_logger.info("autocompact: compaction pending ended by a turn agent={} cause={}", agent_id, cause.value)
         return True
 
+    def _note_filed_permission_requests(self, events: list[dict[str, Any]]) -> None:
+        """Set the ``permission_request_filed`` onboarding marker when one of ``events`` files a permission
+        request, in whichever chat, settled since or not. Once the marker is written this process leaves it be."""
+        if self._is_permission_request_marker_set:
+            return
+        if not any(_filed_permission_request_id(event) is not None for event in events):
+            return
+        self._is_permission_request_marker_set = set_onboarding_marker(Marker.PERMISSION_REQUEST_FILED)
+
     def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
         """Fold a batch of events into the agent's pending permission requests; True when the set changed.
 
@@ -7057,9 +7277,9 @@ class AgentManager:
         pending = self._pending_permission_ids_by_agent.setdefault(agent_id, set())
         before = set(pending)
         for event in events:
-            filed = event.get("permission_request")
-            if isinstance(filed, dict) and isinstance(filed.get("request_id"), str):
-                pending.add(filed["request_id"])
+            filed_request_id = _filed_permission_request_id(event)
+            if filed_request_id is not None:
+                pending.add(filed_request_id)
             if event.get("display") == DisplayKind.PERMISSION_RESOLUTION.value:
                 resolved_id = event.get("request_id")
                 if isinstance(resolved_id, str):

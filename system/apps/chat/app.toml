@@ -150,6 +150,13 @@ note = "Writes the resume note whose tag and outcomes harnesses/message_display.
 type = "minds:focus-chat"
 path = "/api/focus-chat"
 
+# Another app's ask to point the user at the chat list's New chat button (the onboarding checklist's first entry):
+# the shell posts it here, and this app has the shell bring the chat root forward at a path that tells the root to
+# draw its coach mark.
+[[message_handlers]]
+type = "onboarding:show-new-chat-pointer"
+path = "/api/show-new-chat-pointer"
+
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the chat list
 # with the conversation the user is in selected ({key} is a chat id).

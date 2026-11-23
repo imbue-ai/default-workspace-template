@@ -79,12 +79,13 @@ the workspace's commits as your edits.
   already live in that state.
 - **Playwright** for a web surface with a file you resolved a conflict in, as
   4b drives it.
-- **Bundles**: rebuild all seven when you reported them and `$PRE..HEAD`
-  touches what they are built from: the directory of any of the seven apps
+- **Bundles**: rebuild all eight when you reported them and `$PRE..HEAD`
+  touches what they are built from: the directory of any of the eight apps
   (`system/apps/system_interface/`, `system/apps/chat/`,
   `system/apps/getting_started/`, `system/apps/files/`,
   `system/apps/routines/`, `system/apps/screen/`,
-  `system/apps/style_guide/`), `system/libs/workspace_ui/`,
+  `system/apps/style_guide/`, `system/apps/onboarding_checklist/`),
+  `system/libs/workspace_ui/`,
   `system/package.json`, or `system/package-lock.json`.
 - **Customization survival** for a creation the update touches (the scope
   files) whose files the incoming commits also change.
