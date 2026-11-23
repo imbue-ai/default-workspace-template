@@ -1,0 +1,1 @@
+- The lockfile records the chat app's new test-only dependency on `bootstrap`, whose boot-time rollback note the chat app's tests classify.

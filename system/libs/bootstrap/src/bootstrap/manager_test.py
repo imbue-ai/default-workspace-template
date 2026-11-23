@@ -35,7 +35,7 @@ from bootstrap.manager import (
     _install_runtime_cron_entries,
     _migrate_cron_entries_to_routines,
     _read_host_name,
-    _read_update_marker_dri_agent,
+    _read_update_marker,
     _recover_interrupted_update,
     _set_container_timezone,
     _supervisord_environment,
@@ -44,6 +44,7 @@ from bootstrap.manager import (
     _write_update_recovery_cron_entry,
     main,
 )
+from bootstrap.rollback_note import BootRollback, compose_rollback_note
 
 # _configure_git_global
 
@@ -642,34 +643,60 @@ def _clear_marker_on_recover(cmd: list[str]) -> None:
         UPDATE_APPLY_MARKER.unlink()
 
 
-def _write_apply_marker(dri_agent: str = "the-lead") -> None:
+_MERGE_REF = "mngr/update-self"
+_RELEASE = "minds-v0.10.1"
+
+
+def _write_apply_marker(
+    dri_agent: str = "the-lead", target_ref: str | None = _RELEASE
+) -> None:
+    """An apply marker as update_self.py writes it: an update-self landing names its
+    release in ``target_ref``, and a critical app's go-live records None there."""
     UPDATE_APPLY_MARKER.parent.mkdir(parents=True, exist_ok=True)
     UPDATE_APPLY_MARKER.write_text(
-        json.dumps({"dri_agent": dri_agent, "phase": "merged"})
+        json.dumps(
+            {
+                "dri_agent": dri_agent,
+                "merge_ref": _MERGE_REF,
+                "target_ref": target_ref,
+                "phase": "merged",
+            }
+        )
     )
 
 
-def test_read_update_marker_dri_agent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def _rollback(
+    *, is_restore_complete: bool = True, release: str | None = _RELEASE
+) -> BootRollback:
+    return BootRollback(
+        dri_agent="agent-omega",
+        merge_ref=_MERGE_REF,
+        release=release,
+        is_restore_complete=is_restore_complete,
+    )
+
+
+def test_read_update_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    assert _read_update_marker_dri_agent() == ""  # no marker
+    assert _read_update_marker().dri_agent == ""  # no marker
     _write_apply_marker("agent-omega")
-    assert _read_update_marker_dri_agent() == "agent-omega"
+    assert _read_update_marker() == ("agent-omega", _MERGE_REF, _RELEASE)
+    _write_apply_marker("agent-omega", target_ref=None)
+    assert _read_update_marker().release is None  # a critical app's go-live
     UPDATE_APPLY_MARKER.write_text("not json {")
-    assert _read_update_marker_dri_agent() == ""  # corrupt marker degrades
+    assert _read_update_marker().dri_agent == ""  # corrupt marker degrades
     # A write torn mid-multibyte -- the failure mode an interrupted apply
     # actually produces -- must degrade too, not raise out of boot.
     UPDATE_APPLY_MARKER.write_bytes(b'{"dri_agent": "\xff\xfe')
-    assert _read_update_marker_dri_agent() == ""
+    assert _read_update_marker().dri_agent == ""
     # Well-formed JSON of the wrong shape degrades the same way.
     UPDATE_APPLY_MARKER.write_text(json.dumps([{"dri_agent": "agent-omega"}]))
-    assert _read_update_marker_dri_agent() == ""
+    assert _read_update_marker().dri_agent == ""
     UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": 7}))
-    assert _read_update_marker_dri_agent() == ""
+    assert _read_update_marker().dri_agent == ""
     # An apply driven outside an agent records no name; that is not corruption.
     UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": ""}))
-    assert _read_update_marker_dri_agent() == ""
+    assert _read_update_marker().dri_agent == ""
 
 
 def test_recover_skips_entirely_without_a_marker(
@@ -679,7 +706,7 @@ def test_recover_skips_entirely_without_a_marker(
     stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    assert _recover_interrupted_update() == ""
+    assert _recover_interrupted_update() is None
 
     assert stub.calls == []
 
@@ -695,7 +722,7 @@ def test_recover_rolls_back_and_names_the_dri_agent_to_wake(
     stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    dri_agent = _recover_interrupted_update()
+    rollback = _recover_interrupted_update()
 
     recover_call = stub.calls[0]
     assert recover_call[:2] == ["python3", str(UPDATE_APPLY_SCRIPT)]
@@ -704,22 +731,25 @@ def test_recover_rolls_back_and_names_the_dri_agent_to_wake(
     assert "--no-restart" in recover_call
     assert "--if-stale" in recover_call
     assert stub.kwargs[0].get("timeout") == _UPDATE_RECOVER_TIMEOUT_SECONDS
-    # The agent is named back to main(), not started here: starting it would
-    # race _sync_workspace_venv, which runs after this.
-    assert dri_agent == "agent-omega"
+    # The rollback is handed back to main(), not reported here: starting the
+    # agent would race _sync_workspace_venv, which runs after this.
+    assert rollback == _rollback()
     assert len(stub.calls) == 1
 
 
-def test_wake_starts_the_agent_and_hands_it_the_finding(
+def test_wake_starts_the_agent_and_hands_it_the_note(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    rollback = _rollback(is_restore_complete=False)
 
-    _wake_update_dri_agent("agent-omega")
+    _wake_update_dri_agent(rollback)
 
-    assert stub.calls[0] == ["mngr", "start", "agent-omega"]
-    assert stub.calls[1][:3] == ["mngr", "message", "agent-omega"]
+    assert stub.calls == [
+        ["mngr", "start", "agent-omega"],
+        ["mngr", "message", "agent-omega", "-m", compose_rollback_note(rollback)],
+    ]
     for argv in stub.calls:
         assert_mngr_argv_valid(argv)
     # Both gate boot, so neither may hang forever.
@@ -741,7 +771,7 @@ def test_wake_survives_an_unrunnable_mngr_so_boot_continues(
     stub.raise_on = {"start": FileNotFoundError("mngr")}
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _wake_update_dri_agent("agent-omega")
+    _wake_update_dri_agent(_rollback())
 
     assert stub.calls == [["mngr", "start", "agent-omega"]]
 
@@ -752,7 +782,7 @@ def test_wake_skips_the_message_when_the_start_failed(
     stub = _StubSubprocess(returncode=1)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _wake_update_dri_agent("agent-omega")
+    _wake_update_dri_agent(_rollback())
 
     assert stub.calls == [["mngr", "start", "agent-omega"]]
 
@@ -768,7 +798,7 @@ def test_recover_names_nobody_when_the_guard_noops(
     stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    assert _recover_interrupted_update() == ""
+    assert _recover_interrupted_update() is None
 
     assert len(stub.calls) == 1  # only the recover invocation, no mngr calls
 
@@ -783,7 +813,7 @@ def test_recover_names_nobody_when_the_rollback_itself_failed(
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     # Boot continues even though the recovery could not run at all.
-    assert _recover_interrupted_update() == ""
+    assert _recover_interrupted_update() is None
 
 
 def test_recover_failure_does_not_wake_or_raise(
@@ -795,31 +825,33 @@ def test_recover_failure_does_not_wake_or_raise(
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     # Must not raise: boot continues regardless, and nobody is woken.
-    assert _recover_interrupted_update() == ""
+    assert _recover_interrupted_update() is None
 
     assert len(stub.calls) == 1
 
 
+@pytest.mark.parametrize("release", [_RELEASE, None])
 def test_a_partial_restore_at_boot_is_an_error_that_still_wakes_the_dri_agent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, release: str | None
 ) -> None:
     # Exit 3: the tree is rolled back, the marker is gone, but a snapshot
     # could not be put back and the services are about to boot over that
     # mismatch. That is the state most in need of a person, so it is logged
-    # as an error (a clean rollback is a warning) and the agent is still named.
+    # as an error (a clean rollback is a warning) and the agent is still told,
+    # as a rollback that is not complete.
     monkeypatch.chdir(tmp_path)
-    _write_apply_marker("agent-omega")
+    _write_apply_marker("agent-omega", target_ref=release)
     stub = _StubSubprocess(returncode=UPDATE_RECOVER_EXIT_EMERGENCY)
     stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     errors: list[str] = []
     sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
     try:
-        dri_agent = _recover_interrupted_update()
+        rollback = _recover_interrupted_update()
     finally:
         logger.remove(sink)
 
-    assert dri_agent == "agent-omega"
+    assert rollback == _rollback(is_restore_complete=False, release=release)
     assert len(stub.calls) == 1
     assert any("could not put the pre-apply state back" in line for line in errors)
 
@@ -1070,7 +1102,7 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
     stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    assert _recover_interrupted_update() == ""
+    assert _recover_interrupted_update() is None
 
     assert len(stub.calls) == 1  # the recover invocation, and no mngr calls
     assert not UPDATE_APPLY_MARKER.exists()

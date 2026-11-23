@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -133,6 +134,15 @@ class SnapshotRecord:
     source: str
     copy: str
 
+    def to_payload(self) -> dict[str, str]:
+        return {"name": self.name, "source": self.source, "copy": self.copy}
+
+    @classmethod
+    def from_payload(cls, raw: Mapping[str, object]) -> SnapshotRecord:
+        return cls(
+            name=str(raw["name"]), source=str(raw["source"]), copy=str(raw["copy"])
+        )
+
 
 @dataclass
 class VenvSwap:
@@ -222,10 +232,7 @@ class ApplyMarker:
             "venv_swap": None
             if self.venv_swap is None
             else self.venv_swap.to_payload(),
-            "snapshots": [
-                {"name": s.name, "source": s.source, "copy": s.copy}
-                for s in self.snapshots
-            ],
+            "snapshots": [s.to_payload() for s in self.snapshots],
         }
         return json.dumps(payload, indent=2)
 
@@ -253,10 +260,7 @@ class ApplyMarker:
                 for phase, at in (raw.get("phase_timings") or {}).items()
             },
             snapshots=[
-                SnapshotRecord(
-                    name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
-                )
-                for s in raw.get("snapshots", [])
+                SnapshotRecord.from_payload(s) for s in raw.get("snapshots", [])
             ],
             venv_swap=VenvSwap.from_payload(raw.get("venv_swap")),
         )
@@ -298,10 +302,7 @@ class LastGoodRecord:
                 "rollback_to": self.rollback_to,
                 "applied_at": self.applied_at,
                 "driven_by": self.driven_by,
-                "snapshots": [
-                    {"name": s.name, "source": s.source, "copy": s.copy}
-                    for s in self.snapshots
-                ],
+                "snapshots": [s.to_payload() for s in self.snapshots],
                 "programs": list(self.programs),
                 "apps": list(self.apps),
                 "needs_system_services_restart": self.needs_system_services_restart,
@@ -325,10 +326,7 @@ class LastGoodRecord:
             applied_at=float(raw.get("applied_at", 0.0)),
             driven_by=str(raw.get("driven_by", "")),
             snapshots=[
-                SnapshotRecord(
-                    name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
-                )
-                for s in raw.get("snapshots", [])
+                SnapshotRecord.from_payload(s) for s in raw.get("snapshots", [])
             ],
             programs=[str(p) for p in raw.get("programs", [])],
             apps=[str(a) for a in raw.get("apps", [])],
@@ -800,8 +798,68 @@ def emergency_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / EMERGENCY_FILENAME
 
 
+@dataclass
+class EmergencyRecord:
+    """A rollback that left the workspace unhealthy, as ``emergency.json`` keeps it.
+
+    ``unrestored`` are the pre-apply copies a boot-time rollback could not put
+    back, each with the path it belongs at: the marker that named those paths
+    is gone, and ``finish-restore`` puts them back from this record. ``None``
+    (every other emergency) leaves the field out, so a record that never had
+    such a list is not read as one whose copies are all back.
+    """
+
+    reason: str
+    recorded_at: float
+    dri_agent: str
+    snapshots_dir: str
+    unrestored: list[SnapshotRecord] | None = None
+
+    def to_json(self) -> str:
+        payload: dict[str, object] = {
+            "reason": self.reason,
+            "recorded_at": self.recorded_at,
+            "dri_agent": self.dri_agent,
+            "snapshots_dir": self.snapshots_dir,
+        }
+        if self.unrestored is not None:
+            payload["unrestored"] = [s.to_payload() for s in self.unrestored]
+        return json.dumps(payload, indent=2)
+
+    @classmethod
+    def from_json(cls, text: str) -> EmergencyRecord:
+        """Raises ``ValueError`` for a record that cannot be read whole: an
+        ``unrestored`` entry skipped here would be dropped from the record and its
+        copy discarded."""
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        entries = raw.get("unrestored")
+        if entries is not None and not (
+            isinstance(entries, list)
+            and all(
+                isinstance(e, dict) and {"name", "source", "copy"} <= e.keys()
+                for e in entries
+            )
+        ):
+            raise ValueError("its unrestored list is malformed")
+        return cls(
+            reason=str(raw.get("reason", "")),
+            recorded_at=float(raw.get("recorded_at", 0.0)),
+            dri_agent=str(raw.get("dri_agent", "")),
+            snapshots_dir=str(raw.get("snapshots_dir", "")),
+            unrestored=None
+            if entries is None
+            else [SnapshotRecord.from_payload(e) for e in entries],
+        )
+
+
 def write_emergency(
-    repo_root: Path, reason: str, dri_agent: str, now: Callable[[], float]
+    repo_root: Path,
+    reason: str,
+    dri_agent: str,
+    now: Callable[[], float],
+    unrestored: Sequence[SnapshotRecord] | None = None,
 ) -> None:
     """Record that a rollback left the workspace unhealthy, atomically.
 
@@ -810,32 +868,49 @@ def write_emergency(
     cron, bootstrap) carry no ``MNGR_AGENT_NAME`` at all, and an agent-driven
     ``recover`` carries the *recovering* agent rather than the one whose apply
     failed. The marker is the only other place that name lives and it comes
-    down on this same path.
+    down on this same path. ``unrestored`` is :class:`EmergencyRecord`'s.
 
     Best-effort: this runs on the way out of a failure that has already been
     written to stderr in full, so a filesystem that will not take the record
     must not turn a reported emergency into a traceback.
     """
+    write_emergency_record(
+        repo_root,
+        EmergencyRecord(
+            reason=reason,
+            recorded_at=now(),
+            dri_agent=dri_agent,
+            snapshots_dir=str(snapshots_root(repo_root)),
+            unrestored=None if unrestored is None else list(unrestored),
+        ),
+    )
+
+
+def write_emergency_record(repo_root: Path, record: EmergencyRecord) -> None:
+    """Write ``record`` as the emergency record, atomically and best-effort, as
+    :func:`write_emergency` does."""
     path = emergency_path(repo_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         scratch = path.with_suffix(".json.tmp")
-        scratch.write_text(
-            json.dumps(
-                {
-                    "reason": reason,
-                    "recorded_at": now(),
-                    "dri_agent": dri_agent,
-                    "snapshots_dir": str(snapshots_root(repo_root)),
-                },
-                indent=2,
-            )
-        )
+        scratch.write_text(record.to_json())
         scratch.replace(path)
     except OSError as exc:
         sys.stderr.write(
             f"warning: could not record the emergency at {path} ({exc}).\n"
         )
+
+
+def read_emergency(repo_root: Path) -> EmergencyRecord | None:
+    """The emergency record, or ``None`` when there is none or it cannot be read whole."""
+    path = emergency_path(repo_root)
+    try:
+        return EmergencyRecord.from_json(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError) as exc:
+        sys.stderr.write(f"warning: could not read {path} ({exc}).\n")
+        return None
 
 
 def clear_emergency(repo_root: Path) -> None:

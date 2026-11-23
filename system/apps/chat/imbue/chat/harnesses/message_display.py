@@ -54,8 +54,10 @@ BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 # Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
 # it paused for an update's apply (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``,
 # sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
-# picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
-# pins the tag and both outcomes equal.
+# picks the notice's label; only the ``<summary>`` line is for the user. Bootstrap sends the agent
+# whose apply a restart interrupted a ``not-landed`` note too
+# (``system/libs/bootstrap/src/bootstrap/rollback_note.py``). ``message_display_test.py`` pins the
+# tag and the outcomes equal to both writers' copies.
 WORKSPACE_UPDATE_NOTE_TAG = "workspace-update-note"
 WORKSPACE_UPDATE_OUTCOME_LANDED = "landed"
 WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
@@ -353,8 +355,9 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
 
 
 def _match_workspace_update_note(content: str) -> MessageDisplay | None:
-    """The note a chat paused for a workspace update gets when it resumes; a NOTICE showing only its
-    summary line, labelled by whether the update landed."""
+    """The note a chat paused for a workspace update gets when it resumes, or the ``not-landed`` one
+    bootstrap wakes an agent with after a boot-time rollback; a NOTICE showing only its summary
+    line, labelled by whether the update landed."""
     match = _WORKSPACE_UPDATE_NOTE_RE.match(content)
     if match is None:
         return None

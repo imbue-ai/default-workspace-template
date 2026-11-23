@@ -134,6 +134,16 @@ belong in tested code rather than agent prose:
     rolled back but the pre-apply state or health could not be put back
     (emergency recorded, marker cleared).
 
+``finish-restore``
+    Put back the pre-apply copies a boot-time ``recover`` could not, from the
+    list the emergency record keeps (the marker that named them is gone). Run
+    once what stopped the restore is fixed. Exit codes: 0 every copy is back,
+    or no emergency is recorded and no copy is left over / 1 nothing done: an
+    apply is in flight or a later one kept its rollback point, or the record is
+    unreadable, keeps no such list, or is missing beside left-over copies
+    (repair by hand) / 3 some still would not restore. The record
+    stays until the workspace is confirmed healthy.
+
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
 shelled-out scripts, API-surface coupling) that a deterministic helper would
@@ -190,6 +200,7 @@ from update_self_skill.update_apply import (
     UpdateRollbackHistory,
     apply_update,
     confirm_last,
+    finish_restore,
     pending_update_rollbacks,
     read_pass_scope,
     recover,
@@ -1162,6 +1173,10 @@ def _cmd_run_status_resume_chats(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _cmd_finish_restore(args: argparse.Namespace) -> int:
+    return finish_restore(_repo_root(args).resolve())
+
+
 def _cmd_recover(args: argparse.Namespace) -> int:
     return recover(
         _repo_root(args).resolve(),
@@ -1484,6 +1499,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recover_parser.set_defaults(func=_cmd_recover)
 
+    finish_restore_parser = sub.add_parser(
+        "finish-restore",
+        help="Put back the pre-apply copies a boot-time rollback could not, as the "
+        "emergency record names them, once what stopped the restore is fixed.",
+        parents=[common],
+    )
+    finish_restore_parser.set_defaults(func=_cmd_finish_restore)
+
     run_status_parser = sub.add_parser(
         "run-status",
         help="Record this run for the Imbue Studio app (data/.state/update-apply/run.json).",
@@ -1704,12 +1727,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def shed_protection_target(argv: Sequence[str]) -> Path | None:
-    """The repo root to band for when ``argv`` names apply/recover, else None.
+    """The repo root to band for when ``argv`` names a banded motion, else None.
 
-    Only those two band themselves: they are the motions that can be
-    interrupted half-way through replacing what the workspace runs, and the
-    ones holding the only copies of what it ran before. A crude parse rather
-    than argparse, because banding must happen before ``main`` does anything.
+    Only apply, recover, rollback-last and finish-restore band themselves: they
+    are the motions that can be interrupted half-way through replacing what the
+    workspace runs, and the ones holding the only copies of what it ran before.
+    A crude parse rather than argparse, because banding must happen before
+    ``main`` does anything.
     """
     tokens = list(argv)
     repo_root = Path.cwd()
@@ -1728,6 +1752,6 @@ def shed_protection_target(argv: Sequence[str]) -> Path | None:
         if subcommand is None and not token.startswith("-"):
             subcommand = token
         index += 1
-    if subcommand in ("apply", "recover", "rollback-last"):
+    if subcommand in ("apply", "recover", "rollback-last", "finish-restore"):
         return repo_root
     return None
