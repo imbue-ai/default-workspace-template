@@ -2,7 +2,7 @@
  * The show-around tour's card, the badge the tour leaves when exited early, the pause notice it shows when the
  * agent's reply interrupted it (the new-onboarding spec, section 2.6), and the coach card a page asks for
  * (``shell:show-coach-card``): that page's words and one button, under the control of the Imbue Studio chrome it
- * names. One fixed box over the desktop: the avatar
+ * names, or popped out of the avatar as the tour's own avatar cards are. One fixed box over the desktop: the avatar
  * and the card's words, its bullets, a picture or a link when the card has one, and a footer with Exit walkthrough,
  * Go back, and Next (Done on the last card). Where it sits comes from ``model/tourPlacement``: beside the shell's
  * own target when the card has one, popped out of the avatar otherwise, and under the Imbue Studio chrome for a
@@ -16,7 +16,7 @@ import m from "mithril";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { avatarImageUrl } from "../model/api";
 import type { TourController, TourState } from "../model/tour";
-import type { ChromeAnchor, TourCard as TourCardRecord } from "../model/tourCards";
+import type { ChromeAnchor, CoachPlace, TourCard as TourCardRecord } from "../model/tourCards";
 import {
   COACH_CARD_BUTTON_LABEL,
   TOUR_EXIT_BADGE_BUTTON_LABEL,
@@ -78,8 +78,8 @@ export function textParagraphs(text: string): m.Children[] {
 }
 
 /** What the box shows when it is not a card: the exit badge at the launcher, the pause notice by the avatar, or a
- *  page's coach card under the chrome control it names. */
-export type TourNotice = "badge" | "paused" | { readonly coachAnchor: ChromeAnchor };
+ *  page's coach card at the place it names. */
+export type TourNotice = "badge" | "paused" | { readonly coachPlace: CoachPlace };
 
 /** Where the box goes for ``subject`` (a card or a notice), given its own size. */
 export function placeCard(
@@ -88,10 +88,11 @@ export function placeCard(
   root: ParentNode,
   viewport: Size,
 ): TourPlacement {
-  if (typeof subject === "object" && "coachAnchor" in subject) {
-    return placeUnderChrome(chromeSideOf(subject.coachAnchor), cardSize, viewport);
+  if (typeof subject === "object" && "coachPlace" in subject && "chromeAnchor" in subject.coachPlace) {
+    return placeUnderChrome(chromeSideOf(subject.coachPlace.chromeAnchor), cardSize, viewport);
   }
   const avatar = findTargetBox(root, tourTargetSelectors("avatar"));
+  if (typeof subject === "object" && "coachPlace" in subject) return placeByAvatar(avatar, cardSize, viewport);
   if (subject === "paused") return placeByAvatar(avatar, cardSize, viewport);
   if (subject === "badge") {
     const launcher = findTargetBox(root, tourTargetSelectors("launcher"));
@@ -148,7 +149,7 @@ function noticeShown(state: TourState): NoticeShown | null {
       };
     case "coach":
       return {
-        subject: { coachAnchor: state.chromeAnchor },
+        subject: { coachPlace: state.place },
         text: state.text,
         buttonLabel: COACH_CARD_BUTTON_LABEL,
         dismiss: (tour) => tour.dismissCoach(),
@@ -212,7 +213,12 @@ export function TourCard(): m.Component<TourCardAttrs> {
           "data-tour-card": notice === null ? card?.id : undefined,
           "data-tour-badge": state.phase === "exit-badge" ? "" : undefined,
           "data-tour-paused": state.phase === "paused" ? "" : undefined,
-          "data-tour-coach": state.phase === "coach" ? state.chromeAnchor : undefined,
+          "data-tour-coach":
+            state.phase === "coach"
+              ? "chromeAnchor" in state.place
+                ? state.place.chromeAnchor
+                : state.place.target
+              : undefined,
           class:
             "tour-card fixed z-(--z-popover) rounded-lg border border-default bg-surface p-4 shadow-overlay " +
             (size === null ? "invisible" : ""),

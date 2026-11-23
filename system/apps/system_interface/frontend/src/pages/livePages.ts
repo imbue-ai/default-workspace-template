@@ -39,7 +39,6 @@ import {
   MAX_COACH_CARD_TEXT_LENGTH,
   SHELL_AGENT_WORKING,
   SHELL_CAPABILITIES,
-  SHELL_CHROME_ANCHORS,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
@@ -56,8 +55,9 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  coachCardPlaceOf,
 } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellChromeAnchor } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -212,8 +212,9 @@ export interface LivePagesOptions {
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
-  /** Shows a page's coach card: its words under a control of the Imbue Studio chrome (``shell:show-coach-card``). */
-  readonly showCoachCard: (text: string, chromeAnchor: ShellChromeAnchor) => void;
+  /** Shows a page's coach card: its words under a control of the Imbue Studio chrome, or popping out of the agent's
+   *  avatar (``shell:show-coach-card``). */
+  readonly showCoachCard: (text: string, place: ShellCoachCardPlace) => void;
   /** Told whether the last ``shell:agent-working`` of any page the layer holds says an agent is working: when a
    *  page's report changes, when a page that said so loads again or goes away, and when the layer starts or stops. */
   readonly notePagesAgentWorking: (isWorking: boolean) => void;
@@ -1187,17 +1188,18 @@ export class LivePagesLayer implements PageDriver {
     void this.store.openLink(url, window.location.host, page.app);
   }
 
-  /** ``shell:show-coach-card {text, chromeAnchor}`` from a page: the page's words as a one-button card under a
-   *  control of the Imbue Studio chrome. The frame has to be one the shell created; a text that is empty or too
-   *  long, or an anchor that is not one of the chrome's, is dropped without a word, since the page that sent it
-   *  may be newer than this shell. */
+  /** ``shell:show-coach-card {text, chromeAnchor}`` or ``{text, target}`` from a page: the page's words as a
+   *  one-button card under a control of the Imbue Studio chrome, or popping out of the agent's avatar. The frame
+   *  has to be one the shell created; a text that is empty or too long, or a payload that does not name exactly
+   *  one place this shell knows, is dropped without a word, since the page that sent it may be newer than this
+   *  shell. */
   private takeShowCoachCard(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     if (this.pageOfFrame(frame) === undefined) return;
-    const { text, chromeAnchor } = payload;
+    const text = payload.text;
     if (typeof text !== "string" || text === "" || text.length > MAX_COACH_CARD_TEXT_LENGTH) return;
-    const anchor = SHELL_CHROME_ANCHORS.find((known) => known === chromeAnchor);
-    if (anchor === undefined) return;
-    this.options.showCoachCard(text, anchor);
+    const place = coachCardPlaceOf(payload);
+    if (place === null) return;
+    this.options.showCoachCard(text, place);
   }
 
   /** ``shell:agent-working {isWorking}`` from a page: whether an agent is working in what the page shows, kept as

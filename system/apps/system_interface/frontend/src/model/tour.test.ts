@@ -10,6 +10,7 @@ import {
   dismissPause,
   exitTour,
   interruptTour,
+  isLastCardShown,
   nextCard,
   parseTourRecord,
   previousCard,
@@ -61,8 +62,14 @@ describe("the tour's state machine", () => {
     expect(new Set(TOUR_CARDS.map((card) => card.id)).size).toBe(TOUR_CARDS.length);
     for (const card of TOUR_CARDS) expect(card.text.length).toBeGreaterThan(0);
     const last = TOUR_CARDS[TOUR_CARDS.length - 1];
+    expect(last.id).toBe("done");
     expect(last.target).toBe("launcher");
     expect(last.buttonLabel).toBe("Done");
+    expect(last.text.split("\n\n")).toEqual([
+      "That’s the tour.",
+      "You can take it again anytime from the launcher.",
+      "Click on any of the entries in the onboarding checklist to learn more!",
+    ]);
     expect(TOUR_CARDS.filter((card) => card.image !== null).map((card) => card.id)).toEqual([
       "connect",
       "devices",
@@ -283,7 +290,7 @@ describe("TourController", () => {
     expect(actions).toEqual(["snap-avatar-window-right"]);
     expect(highlights).toEqual(["share"]);
     tour.next();
-    expect(actions).toEqual(["snap-avatar-window-right"]);
+    expect(actions.filter((action) => action === "snap-avatar-window-right")).toHaveLength(1);
     expect(highlights).toEqual(["share", null]);
     tour.back();
     expect(highlights).toEqual(["share", null, "share"]);
@@ -408,19 +415,133 @@ describe("whether the tour is finished", () => {
   });
 });
 
+describe("the onboarding checklist at the tour's end", () => {
+  /** Only the asks for the checklist among what the controller had the shell do. */
+  function checklistAsks(actions: readonly TourAction[]): number {
+    return actions.filter((action) => action === "show-onboarding-checklist").length;
+  }
+
+  it("says which card is the last", () => {
+    expect(isLastCardShown(startTour(2), CARDS)).toBe(true);
+    expect(isLastCardShown(startTour(1), CARDS)).toBe(false);
+    expect(isLastCardShown(IDLE_TOUR, CARDS)).toBe(false);
+    expect(isLastCardShown({ phase: "paused", resumeIndex: 2 }, CARDS)).toBe(false);
+  });
+
+  it("is asked for as the last card shows, not when Done is pressed", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(0);
+
+    tour.next();
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.next();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is asked for when the tour is left early from any card before the last", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.exit();
+    expect(tour.getState()).toEqual({ phase: "exit-badge" });
+    expect(checklistAsks(actions)).toBe(1);
+
+    // The badge's own button asks for nothing more.
+    tour.dismissBadge();
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is not asked for a second time when the tour is left from its last card, which asked as it showed", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.exit();
+    expect(tour.getState()).toEqual({ phase: "exit-badge" });
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is asked for again by a tour run again from the launcher, and by a last card come back to", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.back();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(2);
+  });
+
+  it("is asked for by a tour that resumes at its last card, and never by the pause notice", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 2 });
+    tour.dismissPause();
+    expect(checklistAsks(actions)).toBe(0);
+
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is not asked for by a record the owner's page settles as finished", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    const { tour, actions } = controller(api, { isViewerOwner: () => true });
+    await tour.load();
+    expect(api.writes).toEqual([seenRecord(null, true)]);
+    expect(actions).toEqual([]);
+  });
+});
+
 describe("a coach card", () => {
-  it("takes an idle tour's place and goes back to idle, and leaves every other state as it is", () => {
-    const coach = showCoach(IDLE_TOUR, "Your connections live here.", "permissions");
-    expect(coach).toEqual({ phase: "coach", text: "Your connections live here.", chromeAnchor: "permissions" });
+  it("takes an idle tour's place and another coach card's, goes back to idle, and leaves the tour's own states as they are", () => {
+    const coach = showCoach(IDLE_TOUR, "Your connections live here.", { chromeAnchor: "permissions" });
+    expect(coach).toEqual({
+      phase: "coach",
+      text: "Your connections live here.",
+      place: { chromeAnchor: "permissions" },
+    });
     expect(chromeAnchorShown(coach, CARDS)).toBe("permissions");
     expect(cardShown(coach, CARDS)).toBeNull();
     expect(dismissCoach(coach)).toEqual(IDLE_TOUR);
+    expect(showCoach(coach, "Another.", { chromeAnchor: "share" })).toEqual({
+      phase: "coach",
+      text: "Another.",
+      place: { chromeAnchor: "share" },
+    });
+
+    const atAvatar = showCoach(IDLE_TOUR, "Tell me what to build.", { target: "avatar" });
+    expect(atAvatar).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(chromeAnchorShown(atAvatar, CARDS)).toBeNull();
 
     const card = startTour();
-    expect(showCoach(card, "Another.", "share")).toBe(card);
-    expect(showCoach(coach, "Another.", "share")).toBe(coach);
-    expect(showCoach({ phase: "exit-badge" }, "Another.", "share")).toEqual({ phase: "exit-badge" });
-    expect(showCoach({ phase: "paused", resumeIndex: 1 }, "Another.", "share")).toEqual({
+    expect(showCoach(card, "Another.", { chromeAnchor: "share" })).toBe(card);
+    expect(showCoach({ phase: "exit-badge" }, "Another.", { chromeAnchor: "share" })).toEqual({
+      phase: "exit-badge",
+    });
+    expect(showCoach({ phase: "paused", resumeIndex: 1 }, "Another.", { chromeAnchor: "share" })).toEqual({
       phase: "paused",
       resumeIndex: 1,
     });
@@ -433,13 +554,13 @@ describe("a coach card", () => {
 
   it("is shown while the tour is idle, rings its control, and clears the ring when Got it is pressed", async () => {
     const api = new FakeTourApi({ isSeen: true, isFinished: true });
-    const { tour, highlights } = controller(api);
+    const { tour, highlights, actions } = controller(api);
     await tour.load();
-    tour.showCoachCard("Your connections live here.", "permissions");
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
     expect(tour.getState()).toEqual({
       phase: "coach",
       text: "Your connections live here.",
-      chromeAnchor: "permissions",
+      place: { chromeAnchor: "permissions" },
     });
     expect(tour.shownCard()).toBeNull();
     expect(highlights).toEqual(["permissions"]);
@@ -447,33 +568,85 @@ describe("a coach card", () => {
     expect(tour.getState()).toEqual(IDLE_TOUR);
     expect(highlights).toEqual(["permissions", null]);
     expect(api.writes).toEqual([]);
+    expect(actions).toEqual([]);
   });
 
-  it("is dropped while another coach card, a tour card, the pause notice or the exit badge is up", async () => {
+  it("at the avatar rings no control of the chrome and has the avatar's window put on screen", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights, actions } = controller(api);
+    await tour.load();
+    tour.showCoachCard("Tell me what to build.", { target: "avatar" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(highlights).toEqual([]);
+    expect(actions).toEqual(["show-avatar-window"]);
+    tour.dismissCoach();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(highlights).toEqual([]);
+  });
+
+  it("takes the place of a coach card that is up, moving the ring to its own control", async () => {
     const api = new FakeTourApi({ isSeen: true, isFinished: true });
     const { tour, highlights } = controller(api);
     await tour.load();
-    tour.showCoachCard("First.", "permissions");
-    tour.showCoachCard("Second.", "share");
-    expect(tour.getState()).toEqual({ phase: "coach", text: "First.", chromeAnchor: "permissions" });
-    expect(highlights).toEqual(["permissions"]);
-    tour.dismissCoach();
+    tour.showCoachCard("First.", { chromeAnchor: "permissions" });
+    tour.showCoachCard("Second.", { chromeAnchor: "share" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Second.", place: { chromeAnchor: "share" } });
+    tour.showCoachCard("Third.", { target: "avatar" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Third.", place: { target: "avatar" } });
+    expect(highlights).toEqual(["permissions", "share", null]);
+  });
 
+  it("is dropped while a tour card before the last, or the pause notice, is up", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights, actions } = controller(api);
+    await tour.load();
     tour.start();
-    tour.showCoachCard("Over a card.", "help");
+    tour.showCoachCard("Over a card.", { chromeAnchor: "help" });
+    tour.showCoachCard("Over a card, at the avatar.", { target: "avatar" });
     expect(tour.shownCard()?.id).toBe("a");
     tour.noteAgentWorking(true);
     tour.noteAgentWorking(false);
     tour.next();
-    tour.showCoachCard("Over the pause.", "help");
+    tour.showCoachCard("Over the pause.", { chromeAnchor: "help" });
     expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
-    tour.dismissPause();
+    expect(highlights).toEqual([]);
+    expect(actions).toEqual(["snap-avatar-window-right"]);
+  });
 
+  it("closes the tour's last card as Done would, finishing the tour, and is shown in its place", async () => {
+    const api = new FakeTourApi();
+    const { tour, highlights } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+
+    expect(tour.getState()).toEqual({
+      phase: "coach",
+      text: "Your connections live here.",
+      place: { chromeAnchor: "permissions" },
+    });
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+    expect(highlights).toEqual(["share", null, "permissions"]);
+  });
+
+  it("closes the exit badge as Got it would and is shown in its place", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
     tour.start();
     tour.exit();
-    tour.showCoachCard("Over the badge.", "help");
     expect(tour.getState()).toEqual({ phase: "exit-badge" });
-    expect(highlights).toEqual(["permissions", null]);
+
+    tour.showCoachCard("Tell me what to build.", { target: "avatar" });
+
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+    expect(actions).toEqual(["show-onboarding-checklist", "show-avatar-window"]);
   });
 
   it("gives way to a tour that starts, from the launcher or by itself, and its ring goes with it", async () => {
@@ -481,7 +654,7 @@ describe("a coach card", () => {
     const { tour, scheduled, highlights } = controller(api, { startAfterWorkingMs: 15000 });
     await tour.load();
     tour.noteAgentWorking(true);
-    tour.showCoachCard("Your connections live here.", "permissions");
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
     expect(highlights).toEqual(["permissions"]);
     // The start the agent's work scheduled comes due under the coach card, and takes its place.
     fire(scheduled);
@@ -490,7 +663,7 @@ describe("a coach card", () => {
     tour.exit();
     tour.dismissBadge();
 
-    tour.showCoachCard("Your connections live here.", "permissions");
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
     tour.start();
     expect(tour.shownCard()?.id).toBe("a");
     expect(highlights).toEqual(["permissions", "share", null, "permissions", null]);

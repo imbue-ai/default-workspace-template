@@ -401,11 +401,11 @@ export function App(): m.Component<AppAttrs> {
     pages = new LivePagesLayer(host, current, {
       host: attrs.host,
       protocol: attrs.protocol,
-      showCoachCard: (text, chromeAnchor) => {
+      showCoachCard: (text, place) => {
         // Only the desktop layout draws the tour's box. A card taken anywhere else would ring the chrome's control
         // with no words beside it and no button to take the ring down.
         if (current.isPhoneLayout() || current.getSoloWindowId() !== null) return;
-        attrs.tour.showCoachCard(text, chromeAnchor);
+        attrs.tour.showCoachCard(text, place);
       },
       notePagesAgentWorking: attrs.notePagesAgentWorking,
     });

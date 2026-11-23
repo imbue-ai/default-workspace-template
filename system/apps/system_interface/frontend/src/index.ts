@@ -37,11 +37,10 @@ import { PointerGestureSource } from "./gestures/pointerGestures";
 import { makeAgentWorkingSignal } from "./model/agentWorking";
 import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
-import type { TourAction } from "./model/tourCards";
-import { avatarPinnedWindow } from "./reducers/desktopState";
 import { initEmbedderRelay, setChildFrameMessageHandler, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
+import { runTourAction } from "./store/tourActions";
 import { ShellSocket } from "./store/socket";
 import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
@@ -202,17 +201,10 @@ function bootstrap(): void {
   // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
   // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
   // row any time. An agent is at work while the avatar's status says so or a page the shell frames does. A card
-  // about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's window aside. The
-  // owner's page also records as finished a tour that has nothing left to show.
-  const runTourAction = (action: TourAction): void => {
-    switch (action) {
-      case "snap-avatar-window-right": {
-        const window = avatarPinnedWindow(desktopStore.getState());
-        if (window !== null) desktopStore.setWindowState(window.id, "SNAPPED_RIGHT");
-        return;
-      }
-    }
-  };
+  // about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's window aside, a
+  // coach card at the avatar brings that window forward, and the tour's end has the onboarding checklist opened
+  // down the left of the desktop by whichever app registered its message. The owner's page also records as
+  // finished a tour that has nothing left to show.
   const tour = new TourController({
     api: TOUR_API,
     highlightChrome: (anchor) => sendToEmbedder(HIGHLIGHT_CHROME, { anchor }),
@@ -224,7 +216,7 @@ function bootstrap(): void {
       (getOwnIdentity()?.owner ?? true),
     // Unknown until the first heartbeat answers, and nobody's record is settled on a guess.
     isViewerOwner: () => getOwnIdentity()?.owner === true,
-    performAction: runTourAction,
+    performAction: (action) => runTourAction(desktopStore, action),
     startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
     redraw: () => m.redraw(),
   });

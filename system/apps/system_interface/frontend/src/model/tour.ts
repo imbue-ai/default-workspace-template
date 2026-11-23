@@ -13,14 +13,18 @@
  * seen with nothing to resume (a tour a reload cut off, or a workspace the tour was never offered in). A tour that
  * waits to resume is not finished.
  *
+ * As the last card shows, and when the tour is left early from any card before it, the controller has the
+ * onboarding checklist put on screen (``show-onboarding-checklist``); the pause notice opens nothing.
+ *
  * The same box shows a coach card for a page that asks (``shell:show-coach-card``): the page's own words under a
- * control of the chrome, ringed while the card is up. It is shown only while the tour is idle, and gives way to a
- * tour that starts.
+ * control of the chrome, ringed while the card is up, or popping out of the agent's avatar. It is shown while the
+ * tour is idle, in place of another coach card, and in place of the tour's end (its last card, or the badge it
+ * leaves when exited), which it closes as that card's own button would; it gives way to a tour that starts.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson, requestJson } from "@imbue/workspace-ui/src/models/http";
-import type { ChromeAnchor, TourAction, TourCard } from "./tourCards";
+import type { ChromeAnchor, CoachPlace, TourAction, TourCard } from "./tourCards";
 import { TOUR_CARDS } from "./tourCards";
 
 export type TourState =
@@ -28,7 +32,7 @@ export type TourState =
   | { readonly phase: "card"; readonly index: number; readonly isInterrupted: boolean }
   | { readonly phase: "paused"; readonly resumeIndex: number }
   | { readonly phase: "exit-badge" }
-  | { readonly phase: "coach"; readonly text: string; readonly chromeAnchor: ChromeAnchor };
+  | { readonly phase: "coach"; readonly text: string; readonly place: CoachPlace };
 
 export const IDLE_TOUR: TourState = { phase: "idle" };
 
@@ -82,9 +86,10 @@ export function dismissPause(state: TourState): TourState {
   return state.phase === "paused" ? IDLE_TOUR : state;
 }
 
-/** A page's coach card, which only an idle tour makes room for; any other state is kept. */
-export function showCoach(state: TourState, text: string, chromeAnchor: ChromeAnchor): TourState {
-  return state.phase === "idle" ? { phase: "coach", text, chromeAnchor } : state;
+/** A page's coach card, which an idle tour makes room for and another coach card gives way to; any other state is
+ *  kept. */
+export function showCoach(state: TourState, text: string, place: CoachPlace): TourState {
+  return isOpenToTour(state) ? { phase: "coach", text, place } : state;
 }
 
 export function dismissCoach(state: TourState): TourState {
@@ -96,6 +101,11 @@ function isOpenToTour(state: TourState): boolean {
   return state.phase === "idle" || state.phase === "coach";
 }
 
+/** Whether the last card is the one shown: the tour's end, which tells the user to click the checklist. */
+export function isLastCardShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): boolean {
+  return state.phase === "card" && state.index === cards.length - 1;
+}
+
 export function cardShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): TourCard | null {
   return state.phase === "card" ? cards[state.index] : null;
 }
@@ -103,7 +113,7 @@ export function cardShown(state: TourState, cards: readonly TourCard[] = TOUR_CA
 /** The chrome control the shown card is about, a coach card's included, or null (no card, or a card about the
  *  shell's own things). */
 export function chromeAnchorShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): ChromeAnchor | null {
-  if (state.phase === "coach") return state.chromeAnchor;
+  if (state.phase === "coach") return "chromeAnchor" in state.place ? state.place.chromeAnchor : null;
   return cardShown(state, cards)?.chromeAnchor ?? null;
 }
 
@@ -163,7 +173,9 @@ export interface TourControllerDependencies {
    *  record nobody finished. */
   readonly isViewerOwner: () => boolean;
   readonly redraw: () => void;
-  /** Do what a card's Next does in the shell (snap the chat); a controller without one skips the actions. */
+  /** Do in the shell what the tour asks for (``TourAction``): snap the avatar's window as a card's Next is pressed,
+   *  show it as a coach card pops out of the avatar, put the onboarding checklist on screen as the tour ends. A
+   *  controller without one skips the actions. */
   readonly performAction?: (action: TourAction) => void;
   readonly schedule?: (callback: () => void, delayMs: number) => void;
   readonly cards?: readonly TourCard[];
@@ -298,14 +310,24 @@ export class TourController {
 
   exit(): void {
     const isCardShown = this.state.phase === "card";
+    // The last card put the checklist on screen as it showed; where the user has it since is theirs.
+    const isChecklistOwed = isCardShown && !isLastCardShown(this.state, this.cards);
     this.apply(exitTour(this.state));
     if (isCardShown) this.persist({ isSeen: true, resumeIndex: null, isFinished: true });
+    if (isChecklistOwed) this.deps.performAction?.("show-onboarding-checklist");
   }
 
-  /** A page asked for a coach card (``shell:show-coach-card``): shown while the tour is idle and no other coach
-   *  card is up, dropped at any other time. */
-  showCoachCard(text: string, chromeAnchor: ChromeAnchor): void {
-    this.apply(showCoach(this.state, text, chromeAnchor));
+  /** A page asked for a coach card (``shell:show-coach-card``). It is shown while the tour is idle, in place of a
+   *  coach card that is up, and in place of the tour's end, closed as its own button would close it: the last
+   *  card as Done does, which finishes the tour, and the exit badge as Got it does. During any other card, or the
+   *  pause notice, it is dropped. A card at the avatar has the avatar's window put on screen. */
+  showCoachCard(text: string, place: CoachPlace): void {
+    if (isLastCardShown(this.state, this.cards)) this.next();
+    else if (this.state.phase === "exit-badge") this.dismissBadge();
+    const shown = showCoach(this.state, text, place);
+    if (shown === this.state) return;
+    this.apply(shown);
+    if ("target" in place) this.deps.performAction?.("show-avatar-window");
   }
 
   dismissCoach(): void {
@@ -338,6 +360,7 @@ export class TourController {
   }
 
   private apply(next: TourState): void {
+    const isLastCardArriving = !isLastCardShown(this.state, this.cards) && isLastCardShown(next, this.cards);
     this.state = next;
     const anchor = chromeAnchorShown(next, this.cards);
     if (anchor !== this.lastAnchor) {
@@ -345,5 +368,6 @@ export class TourController {
       this.deps.highlightChrome(anchor);
     }
     this.deps.redraw();
+    if (isLastCardArriving) this.deps.performAction?.("show-onboarding-checklist");
   }
 }

@@ -1406,13 +1406,13 @@ describe("a page's coach card", () => {
   recordResizeObservers();
   afterEach(resetEmbedderRelayForTesting);
 
-  /** Post win-1's page's ``shell:show-coach-card`` to the shell, and draw what it made of it. */
-  function askForCoachCard(): void {
+  /** Post win-1's page's ``shell:show-coach-card`` to the shell, at ``place``, and draw what it made of it. */
+  function askForCoachCard(place: Record<string, string> = { chromeAnchor: "permissions" }): void {
     initEmbedderRelay();
     const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" },
+        data: { type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", ...place },
         source: frame.contentWindow,
         origin: window.location.origin,
       }),
@@ -1424,6 +1424,17 @@ describe("a page's coach card", () => {
     askForCoachCard();
     const card = document.querySelector<HTMLElement>("[data-tour-coach]");
     expect(card?.getAttribute("data-tour-coach")).toBe("permissions");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is drawn at the avatar when the page names that target, and goes on Got it", () => {
+    askForCoachCard({ target: "avatar" });
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("avatar");
     expect(card?.textContent).toContain("Your connections live here.");
 
     document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();

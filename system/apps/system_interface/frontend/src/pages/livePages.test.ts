@@ -30,6 +30,7 @@ import {
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -71,14 +72,14 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
-/** The coach cards the pages asked the layer for, as a text and the chrome control each names. */
-let coachCards: [string, string][] = [];
+/** The coach cards the pages asked the layer for, as a text and the place each names. */
+let coachCards: [string, ShellCoachCardPlace][] = [];
 /** What the layers said, each time they said it, of whether any page has an agent working in it. */
 let pagesAgentWorking: boolean[] = [];
 const PAGE_OPTIONS: LivePagesOptions = {
   host: "127.0.0.1:8000",
   protocol: "http:",
-  showCoachCard: (text, chromeAnchor) => coachCards.push([text, chromeAnchor]),
+  showCoachCard: (text, place) => coachCards.push([text, place]),
   notePagesAgentWorking: (isWorking) => pagesAgentWorking.push(isWorking),
 };
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
@@ -1379,7 +1380,25 @@ describe("the contract", () => {
       text: "Your connections live here.",
       chromeAnchor: "permissions",
     });
-    expect(coachCards).toEqual([["Your connections live here.", "permissions"]]);
+    expect(coachCards).toEqual([["Your connections live here.", { chromeAnchor: "permissions" }]]);
+  });
+
+  it("shows a page's shell:show-coach-card as the page's words at the agent's avatar when it names that target", () => {
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Tell me what to build.", target: "avatar" });
+    expect(coachCards).toEqual([["Tell me what to build.", { target: "avatar" }]]);
+  });
+
+  it("drops a shell:show-coach-card that names both places, or a target that is not the avatar", () => {
+    messageFromPage("win-1", {
+      type: SHELL_SHOW_COACH_CARD,
+      text: "Look here.",
+      chromeAnchor: "permissions",
+      target: "avatar",
+    });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", target: "launcher" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", target: 3 });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "", target: "avatar" });
+    expect(coachCards).toEqual([]);
   });
 
   it("drops a shell:show-coach-card whose anchor is not one of the chrome's, or whose text is missing, empty or too long", () => {
@@ -1396,7 +1415,7 @@ describe("the contract", () => {
     expect(warn).not.toHaveBeenCalled();
 
     messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(500), chromeAnchor: "share" });
-    expect(coachCards).toEqual([["x".repeat(500), "share"]]);
+    expect(coachCards).toEqual([["x".repeat(500), { chromeAnchor: "share" }]]);
     warn.mockRestore();
   });
 
