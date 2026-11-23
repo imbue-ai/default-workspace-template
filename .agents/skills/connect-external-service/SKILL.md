@@ -1,6 +1,6 @@
 ---
 name: connect-external-service
-description: Connect to, integrate with, read from, or act on any external service, account, website, or files outside this workspace, whether or not you think a connection already exists. Covers latchkey (the user's connected accounts), a new connection to a service latchkey does not know, the service's MCP server, its SDK or API with a key the user supplies through a secret card, and driving a browser. Use before touching anything outside the workspace on the user's behalf.
+description: Connect to, integrate with, read from, or act on any external service, account, website, or files outside this workspace, whether or not a connection seems to exist already. Covers latchkey (the user's connected accounts), a new connection to a service latchkey does not know, the service's MCP server, its SDK or API with a key the user supplies through a secret card, and driving a browser. Use before touching anything outside the workspace on the user's behalf.
 compatibility: Requires node.js, curl and latchkey (npm install -g latchkey).
 metadata:
   author: imbue
