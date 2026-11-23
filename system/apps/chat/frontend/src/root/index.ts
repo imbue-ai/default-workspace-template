@@ -13,7 +13,8 @@
  * it, and the chat on screen stays as it is), opens the chooser whenever the chat it shows awaits
  * its first send with nothing signed in, and once with no chat to show while nothing is signed in
  * (``models/firstSendChooser.ts``), tells the Imbue Studio chrome once when a chooser of its is on
- * screen (``minds:provider-chooser-on-screen``), and drives its inner pages
+ * screen (``minds:provider-chooser-on-screen``), tells the shell whether the workspace's first conversation is still
+ * following its tree (``firstConversationReport.ts``), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. A page calls back the same way for what is the root's to draw: the
  * provider chooser, and a coach mark at the New chat button. The shell's handshake goes down to the inner pages, and their
@@ -48,6 +49,7 @@ import {
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
+  isFirstConversationPending,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -89,6 +91,7 @@ import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { FirstRunProvidersPage } from "../views/FirstRunProvidersPage";
+import { makeFirstConversationReport } from "./firstConversationReport";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
@@ -388,6 +391,11 @@ function reportFirstRunProviderStep(shell: ShellConnection): void {
   shell.firstRunProviderStep(isPending);
 }
 
+// Whether the workspace's first conversation is still following its tree, as the shell was last told.
+const firstConversationReport = makeFirstConversationReport((isPending) =>
+  connection?.firstConversationStep(isPending),
+);
+
 /** The chooser's room row: the chat on screen, awaiting its first send, becomes a room with nothing said yet; with no
  *  chat on screen, a new one does. */
 async function makeRoom(chatId: string | null): Promise<void> {
@@ -485,7 +493,10 @@ const ChatRoot: m.Component = {
     afterRootDraw();
   },
   view() {
-    if (connection !== null) reportFirstRunProviderStep(connection);
+    if (connection !== null) {
+      reportFirstRunProviderStep(connection);
+      firstConversationReport.note(hasReceivedChatList() ? isFirstConversationPending() : null);
+    }
     const rows = railRows();
     const isCompact = compactQuery.matches;
     const rail = railAttrs(rows, isCompact);
@@ -612,6 +623,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       reportedLocation = null;
       reportLocation();
       reportedFirstRunProviderStep = null;
+      firstConversationReport.forgetTold();
       relay?.repeatAgentWorking();
       m.redraw();
     },

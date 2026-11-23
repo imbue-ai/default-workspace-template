@@ -35,3 +35,5 @@
 - The prompt that works out next-step suggestions asks for a question's own answers when the reply's one main question has a small set of them.
 
 - A chat page says when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`), and the chat root tells the shell an agent is working while any chat page it holds says so, so the show-around tour starts on every harness.
+
+- The show-around tour waits for a new workspace's first conversation to leave its tree. Every `chats_updated` push carries `is_first_conversation_pending`, true while a first-run chat the app lists stands at a step other than `done`, and the message that ends the tree pushes the chat list at once. The chat root passes it to the shell as `shell:first-conversation-step {isPending}`, so the tour begins with the reply to that message, or with the next one.

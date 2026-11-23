@@ -1109,6 +1109,7 @@ def test_a_first_run_chat_seeded_before_the_tree_was_recorded_is_at_the_start_un
         chat_id = ChatId(seeded.chat_id)
         (_seed_files_root(tmp_path) / chat_id / FIRST_RUN_TREE_FILENAME).unlink()
         step_before_any_agent = manager.get_first_run_tree_step(chat_id)
+        is_pending_before_any_agent = manager.is_first_conversation_pending()
 
         manager.finish_first_run_provider_step()
         wait_until_true(
@@ -1116,7 +1117,108 @@ def test_a_first_run_chat_seeded_before_the_tree_was_recorded_is_at_the_start_un
         )
 
         assert step_before_any_agent is FirstRunTreeStep.START
+        assert is_pending_before_any_agent is True
         assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.DONE
+        assert manager.is_first_conversation_pending() is False
+    finally:
+        manager.stop()
+
+
+def _queued_chat_listings(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
+    """Every ``chats_updated`` message waiting on ``q``, in order, taking all that is queued off it."""
+    listings: list[dict[str, Any]] = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            listings.append(message)
+    return listings
+
+
+def test_no_first_conversation_is_pending_in_a_workspace_with_no_first_run_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    q = broadcaster.register()
+    try:
+        is_pending_with_no_chat = manager.is_first_conversation_pending()
+        manager.seed_chat("Getting started", _seed_turns())
+
+        assert is_pending_with_no_chat is False
+        assert manager.is_first_conversation_pending() is False
+        assert [listing["is_first_conversation_pending"] for listing in _queued_chat_listings(q)] == [False]
+    finally:
+        manager.stop()
+
+
+def test_a_first_conversation_is_pending_until_its_tree_is_done_and_the_chat_list_is_pushed_as_it_ends(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The shell holds its tour on this, so the message that ends the tree is pushed at once; a message that
+    only moves the tree on changes nothing a page reads off the list."""
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    q = broadcaster.register()
+    try:
+        chat_id = ChatId(manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id)
+        pushed_with_the_seed = [listing["is_first_conversation_pending"] for listing in _queued_chat_listings(q)]
+        pending_by_step: dict[FirstRunTreeStep | None, bool] = {
+            manager.get_first_run_tree_step(chat_id): manager.is_first_conversation_pending()
+        }
+
+        for message in (START_IDEAS_LABEL, "Sales, Money, ", "Show me some ideas"):
+            manager.advance_first_run_tree(chat_id, message)
+            pending_by_step[manager.get_first_run_tree_step(chat_id)] = manager.is_first_conversation_pending()
+        pushed_while_in_progress = _queued_chat_listings(q)
+        manager.advance_first_run_tree(chat_id, "Something else")
+        pending_by_step[manager.get_first_run_tree_step(chat_id)] = manager.is_first_conversation_pending()
+
+        assert pushed_with_the_seed == [True]
+        assert pending_by_step == {
+            FirstRunTreeStep.START: True,
+            FirstRunTreeStep.CATEGORIES: True,
+            FirstRunTreeStep.CONNECTORS: True,
+            FirstRunTreeStep.IDEAS: True,
+            FirstRunTreeStep.DONE: False,
+        }
+        assert pushed_while_in_progress == []
+        assert [listing["is_first_conversation_pending"] for listing in _queued_chat_listings(q)] == [False]
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_chat_deleted_while_its_tree_is_in_progress_leaves_no_first_conversation_pending(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    q = broadcaster.register()
+    try:
+        seeded = manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True)
+        manager.advance_first_run_tree(ChatId(seeded.chat_id), START_IDEAS_LABEL)
+        is_pending_before_the_delete = manager.is_first_conversation_pending()
+        _queued_chat_listings(q)
+
+        assert manager.discard_provisional_chat(seeded.chat_id) is True
+
+        assert is_pending_before_the_delete is True
+        assert manager.is_first_conversation_pending() is False
+        assert [listing["is_first_conversation_pending"] for listing in _queued_chat_listings(q)] == [False]
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_chat_that_is_not_listed_leaves_no_first_conversation_pending(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A record can outlive its chat (its agents destroyed outside this app); the tour is not held on one."""
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True)
+        with manager._lock:
+            del manager._provisional_chats[ChatId(seeded.chat_id)]
+
+        assert manager.get_first_run_tree_step(ChatId(seeded.chat_id)) is FirstRunTreeStep.START
+        assert manager.is_first_conversation_pending() is False
     finally:
         manager.stop()
 

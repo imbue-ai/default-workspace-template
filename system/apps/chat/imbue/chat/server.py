@@ -3190,7 +3190,13 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         if agent_manager.is_agent_list_known():
             websocket.send(
-                json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
+                json.dumps(
+                    chats_updated_message(
+                        agent_manager.get_chat_snapshots(),
+                        agent_manager.get_main_chat_id(),
+                        agent_manager.is_first_conversation_pending(),
+                    )
+                )
             )
         shutdown = False
         while not shutdown:

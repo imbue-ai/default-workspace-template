@@ -56,8 +56,12 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.first_run import finish_provider_step
+from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
+from imbue.chat.first_run_tree import START_IDEAS_LABEL
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.registry import get_model_state_path
@@ -94,6 +98,7 @@ from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
+from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
@@ -4503,3 +4508,74 @@ def test_leaving_the_tour_on_its_first_card_opens_the_onboarding_checklist_down_
         expect(page.locator('[data-tour-coach="avatar"] p')).to_have_text([_BUILD_APP_COACH_TEXT])
         _wait_for_window_in_front(page, chat_id)
         expect(page.locator("[data-toast]")).to_have_count(0)
+
+
+# Keeps, on the shell's own window, every word a page it frames has said of the first conversation, in order.
+_RECORD_FIRST_CONVERSATION_STEPS_JS = """
+window.addEventListener('message', (event) => {
+  if (event.data?.type !== 'shell:first-conversation-step') return;
+  (window.firstConversationSteps ??= []).push(event.data.isPending);
+});
+"""
+_LAST_FIRST_CONVERSATION_STEP_JS = "() => (window.firstConversationSteps ?? []).slice(-1)[0]"
+_FIRST_CONVERSATION_IS_PENDING_JS = "() => (window.firstConversationSteps ?? []).slice(-1)[0] === true"
+
+
+def _put_an_agent_to_work(server: RunningWorkspace) -> None:
+    """Have the shell's avatar read an agent as running, off the agent events it follows."""
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
+    lines = [
+        {
+            "timestamp": now,
+            "type": "AGENT_STATE",
+            "agent": {"id": "services", "state": "RUNNING", "labels": {"is_primary": "true"}},
+        },
+        {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "worker", "state": "RUNNING", "labels": {}}},
+    ]
+    with (server.state_dir / "agent-events.jsonl").open("a") as stream:
+        stream.writelines(json.dumps(line) + "\n" for line in lines)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_tour_waits_for_the_first_conversation_to_leave_its_tree_and_starts_as_it_does(
+    tmp_path: Path, page: Page
+) -> None:
+    """In a new workspace whose first-run chat is still following its tree, an agent going to work starts no tour:
+    the chat root told the shell the conversation is under way. The message that ends the tree reaches the shell
+    through the chat list's push, and the tour's first card pops out while that same stretch of work goes on."""
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), is_chat_pinned=True) as server:
+        server.state_dir.mkdir(parents=True, exist_ok=True)
+        # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
+        (server.state_dir / OFFER_TOUR_FILENAME).touch()
+        manager = server.chat_state.agent_manager
+        first_run_chat_id = ChatId(manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id)
+        # The owner has left the provider page, which holds the tour for a reason of its own.
+        finish_provider_step(manager.chat_files_root)
+        manager.advance_first_run_tree(first_run_chat_id, START_IDEAS_LABEL)
+        page.add_init_script(_RECORD_FIRST_CONVERSATION_STEPS_JS)
+        _land_on_the_desktop(page, server)
+        avatar = page.locator('[data-floating-entries] [data-pinned-entry][data-entry-style="avatar"]')
+        tour_card = page.locator("[data-tour-card]")
+        # The first conversation is had in the avatar's window, whose page is the one that tells the shell.
+        avatar.click()
+        expect(_page_of_window(page, _pinned_chat_window_id(server)).locator(".chat-rail-new").first).to_be_visible(
+            timeout=15000
+        )
+        page.wait_for_function(_FIRST_CONVERSATION_IS_PENDING_JS, timeout=15000)
+
+        _put_an_agent_to_work(server)
+
+        expect(avatar).to_have_attribute("data-mood", "working", timeout=15000)
+        # The start the shell scheduled as the agent went to work has run by the time a later timer of the page has.
+        page.evaluate("() => new Promise((resolve) => setTimeout(resolve, 0))")
+        expect(tour_card).to_have_count(0)
+        assert get_json(f"{server.shell_url}/api/tour")["is_seen"] is False
+        page.screenshot(path=str(tmp_path / "tour-held-by-the-first-conversation.png"))
+
+        for message in ("Sales", "Slack", SOMETHING_ELSE_LABEL):
+            manager.advance_first_run_tree(first_run_chat_id, message)
+
+        expect(tour_card).to_have_attribute("data-tour-card", "intro", timeout=10000)
+        expect(avatar).to_have_attribute("data-mood", "working")
+        assert page.evaluate(_LAST_FIRST_CONVERSATION_STEP_JS) is False
+        page.screenshot(path=str(tmp_path / "tour-started-as-the-first-conversation-ended.png"))

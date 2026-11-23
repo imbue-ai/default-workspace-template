@@ -35,12 +35,16 @@ def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dic
     }
 
 
-def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> dict[str, Any]:
-    """The ``chats_updated`` message: every chat's snapshot, and the main chat's id (``main_chat.py``)."""
+def chats_updated_message(
+    snapshots: list[ChatSnapshot], main_chat_id: ChatId | None, is_first_conversation_pending: bool
+) -> dict[str, Any]:
+    """The ``chats_updated`` message: every chat's snapshot, the main chat's id (``main_chat.py``), and whether a
+    first-run chat among them is still following its tree (``first_run_tree.py``)."""
     return {
         "type": "chats_updated",
         "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots],
         "main_chat_id": main_chat_id,
+        "is_first_conversation_pending": is_first_conversation_pending,
     }
 
 
@@ -136,9 +140,12 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_chats_updated(self, snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> None:
-        """Broadcast a chats_updated event: every chat's snapshot, and the main chat's id."""
-        self.broadcast(chats_updated_message(snapshots, main_chat_id))
+    def broadcast_chats_updated(
+        self, snapshots: list[ChatSnapshot], main_chat_id: ChatId | None, is_first_conversation_pending: bool
+    ) -> None:
+        """Broadcast a chats_updated event: every chat's snapshot, the main chat's id, and whether a first-run
+        chat's first conversation is still following its tree."""
+        self.broadcast(chats_updated_message(snapshots, main_chat_id, is_first_conversation_pending))
 
     def broadcast_provisional_chat_created(self, provisional: ProvisionalChatAsShown) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""

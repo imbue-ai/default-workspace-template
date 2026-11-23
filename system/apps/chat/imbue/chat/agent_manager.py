@@ -2022,11 +2022,13 @@ class AgentManager:
             self._is_agent_list_known = True
 
     def _broadcast_chats_updated(self) -> None:
-        """Push every chat's snapshot, and which is the main chat, to every WebSocket client (and to the listener
-        the composition root installed, which tells the shell's tray); and wake the main chat if the list now shows
-        it stopped."""
+        """Push every chat's snapshot, which is the main chat, and whether a first conversation is still following
+        its tree, to every WebSocket client (and the snapshots to the listener the composition root installed, which
+        tells the shell's tray); and wake the main chat if the list now shows it stopped."""
         snapshots = self.get_chat_snapshots()
-        self._broadcaster.broadcast_chats_updated(snapshots, self.get_main_chat_id())
+        self._broadcaster.broadcast_chats_updated(
+            snapshots, self.get_main_chat_id(), self.is_first_conversation_pending()
+        )
         if self._chats_updated_listener is not None:
             self._chats_updated_listener(snapshots)
         self._wake_main_chat_if_stopped()
@@ -4968,7 +4970,8 @@ class AgentManager:
     def advance_first_run_tree(self, chat_id: ChatId, message: str) -> None:
         """Move a first-run chat's tree on by a message the chat took from its user, given as the user's own
         words; any other chat has no tree to move. A slash command is a word to the harness rather than a turn of
-        the conversation, and moves nothing."""
+        the conversation, and moves nothing. A message that ends the tree is pushed to every page at once, with
+        the chat list (``is_first_conversation_pending``)."""
         if is_slash_command(message):
             return
         with self._lock:
@@ -4976,8 +4979,28 @@ class AgentManager:
             if step is None:
                 return
             next_step = next_first_run_tree_step(step, message)
-            if next_step is not step:
-                write_first_run_tree_step(self._chat_files_root / chat_id, next_step)
+            if next_step is step:
+                return
+            write_first_run_tree_step(self._chat_files_root / chat_id, next_step)
+        if next_step is FirstRunTreeStep.DONE:
+            self._broadcast_chats_updated()
+
+    def is_first_conversation_pending(self) -> bool:
+        """Whether the workspace's first conversation is still following its tree: a chat this app lists is a
+        first-run chat whose step is not ``done`` (``first_run_tree.py``). Every chat-list push carries it, and the
+        chat root passes it to the shell, which holds its show-around tour meanwhile. A first-run chat that is gone
+        holds nothing, whatever its record still says."""
+        with self._lock:
+            in_progress_ids = [
+                chat_id
+                for chat_id, record in self._chat_record_by_id.items()
+                if record.is_seeded and self._first_run_tree_step_locked(chat_id) not in (None, FirstRunTreeStep.DONE)
+            ]
+            if not in_progress_ids:
+                return False
+            listed_ids = set(self._provisional_chats)
+            listed_ids.update(chat.chat_id for _agent, chat in self._listed_chats_locked())
+            return any(chat_id in listed_ids for chat_id in in_progress_ids)
 
     def _first_run_tree_step_locked(self, chat_id: ChatId) -> FirstRunTreeStep | None:
         chat_dir = self._chat_files_root / chat_id

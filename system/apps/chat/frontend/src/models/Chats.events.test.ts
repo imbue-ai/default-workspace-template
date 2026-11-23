@@ -157,6 +157,38 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getMainChatId()).toBe("agent-2");
   });
 
+  it("takes from the list whether the first conversation is still following its tree, even when only that changed", () => {
+    expect(manager.isFirstConversationPending()).toBe(false);
+
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: true,
+    });
+    expect(manager.isFirstConversationPending()).toBe(true);
+
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: false,
+    });
+    expect(manager.isFirstConversationPending()).toBe(false);
+  });
+
+  it("reads a list that does not say as no first conversation following its tree", () => {
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: true,
+    });
+    push({ type: "chats_updated", chats: [chat("agent-1")], main_chat_id: "agent-1" });
+
+    expect(manager.isFirstConversationPending()).toBe(false);
+  });
+
   it("resolves at once for a chat the app already lists", async () => {
     push({ type: "chats_updated", chats: [chat("agent-1")] });
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();

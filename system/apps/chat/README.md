@@ -123,7 +123,9 @@ observe`, its own supervised service) writes, and serves:
   the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
-  its last message as `last_messaged_at`, which the chat root's list orders on)
+  its last message as `last_messaged_at`, which the chat root's list orders on;
+  beside them the main chat's id, and `is_first_conversation_pending`, see
+  "Telling the shell the first conversation is under way")
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`), `accounts_updated` whenever the account
   index changes, whichever process wrote it, `settings_updated` whenever a
@@ -1012,6 +1014,28 @@ evicted, removed, or loads again takes its word with it, so a chat that finishes
 still works does not read as stopped, and one deleted mid-turn leaves nothing behind. The
 shell's show-around tour begins on the message, since the avatar's status is prompt only for a
 harness that reports its activity to mngr.
+
+## Telling the shell the first conversation is under way
+
+The shell's tour does not begin while a new workspace's first conversation is still following
+its tree (`first_run_tree.py`), so the user is not shown around on top of the scripted first
+replies. The chat app holds the one fact (`AgentManager.is_first_conversation_pending`): true
+exactly while a chat it lists is a first-run chat whose step is not `done`, by the same reading
+of the step as everywhere else (a chat with no step file is at `start` until its first agent
+joins it). A workspace with no first-run chat, or one whose first-run chat was deleted, has
+none. Every `chats_updated` push carries it as `is_first_conversation_pending`, so a page learns
+it as it connects, and the message that moves the tree to `done` pushes the chat list at once
+rather than leaving the news to the next change of a chat.
+
+The chat root passes it to the shell (`frontend/src/root/firstConversationReport.ts`) as
+`shell:first-conversation-step {isPending}`: once its first chat list has arrived, each time
+the answer changes, and again when a shell greets it. The root sends it, not a chat page,
+since the root is loaded whichever chat is on screen. The shell keeps the root's word until
+its frame loads again or goes, and starts the tour as the conversation ends when a reply is
+already under way, else with the next reply. With "Describe what you want to make" or "See
+what Studio can do" as the first pick the tree is done at that message, and the tour begins
+with its reply; with "Get ideas for what to make" it waits until an idea is picked, or
+anything but "More ideas" is said, at the list of ideas.
 
 ## Chat names
 

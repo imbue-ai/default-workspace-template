@@ -5730,6 +5730,31 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
 
 
 @pytest.mark.timeout(15)
+def test_the_chat_list_a_page_connects_to_says_whether_a_first_conversation_is_still_following_its_tree(
+    app: Flask, client: FlaskClient
+) -> None:
+    """The chat root tells the shell from this, so a page that connects mid-tree learns it without a push."""
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+
+    def replayed_chat_list() -> dict[str, Any]:
+        with serve_app(app) as served:
+            ws = open_ws(served, "/api/ws")
+            try:
+                message = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+                while message["type"] != "chats_updated":
+                    message = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            finally:
+                close_ws(ws)
+        return message
+
+    replayed_at_the_start = replayed_chat_list()
+    write_first_run_tree_step(state_of(app).agent_manager.chat_files_root / chat_id, FirstRunTreeStep.DONE)
+
+    assert replayed_at_the_start["is_first_conversation_pending"] is True
+    assert replayed_chat_list()["is_first_conversation_pending"] is False
+
+
+@pytest.mark.timeout(15)
 def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
     config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:
