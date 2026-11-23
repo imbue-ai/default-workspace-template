@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NEW_CHAT_COACH_TEXT, NEW_CHAT_PULSE_CLASS, showNewChatCoachMark } from "./newChatCoachMark";
+import {
+  NEW_CHAT_COACH_TEXT,
+  NEW_CHAT_PULSE_CLASS,
+  makeNewChatPointerAsk,
+  showNewChatCoachMark,
+} from "./newChatCoachMark";
 
 function newChatButton(): HTMLButtonElement {
   const button = document.createElement("button");
@@ -121,5 +126,33 @@ describe("the coach mark at the New chat button", () => {
     endSlide();
     await shown;
     expect(bubble()).toBeNull();
+  });
+});
+
+describe("the pointer the root's path asks for", () => {
+  it("is drawn at once while the root is shown, every time it is asked for", () => {
+    const show = vi.fn();
+    const pointer = makeNewChatPointerAsk(show);
+
+    pointer.ask(true);
+    pointer.ask(true);
+
+    expect(show).toHaveBeenCalledTimes(2);
+    // Nothing is owed once it has been drawn.
+    pointer.noteShown();
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for the shell to show the root when it is asked for while the root is hidden, and is drawn once", () => {
+    const show = vi.fn();
+    const pointer = makeNewChatPointerAsk(show);
+
+    pointer.ask(false);
+    pointer.ask(false);
+    expect(show).not.toHaveBeenCalled();
+
+    pointer.noteShown();
+    pointer.noteShown();
+    expect(show).toHaveBeenCalledTimes(1);
   });
 });

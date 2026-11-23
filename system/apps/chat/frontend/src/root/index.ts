@@ -8,7 +8,9 @@
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
  * chat through the picker, or a first message that launches a chat) exactly once and then
  * reports the selection alone, opens the provider chooser once when its URL carries
- * ``open=providers`` (the Imbue Studio app's sign-in button), whenever the chat it shows awaits
+ * ``open=providers`` (the Imbue Studio app's sign-in button), draws the coach mark at its New chat
+ * button when its URL carries ``open=new-chat-pointer`` (another app's page asked the chat app for
+ * it, and the chat on screen stays as it is), opens the chooser whenever the chat it shows awaits
  * its first send with nothing signed in, and once with no chat to show while nothing is signed in
  * (``models/firstSendChooser.ts``), tells the Imbue Studio chrome once when a chooser of its is on
  * screen (``minds:provider-chooser-on-screen``), and drives its inner pages
@@ -78,7 +80,7 @@ import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
-import { showNewChatCoachMark } from "./newChatCoachMark";
+import { makeNewChatPointerAsk, showNewChatCoachMark } from "./newChatCoachMark";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import type { InnerFrameRelay } from "./relay";
@@ -92,6 +94,7 @@ import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
   isFirstRunProvidersViewRequested,
+  isNewChatPointerRequested,
   isProviderChooserRequested,
   rootPathFor,
   selectionFromSearch,
@@ -253,6 +256,9 @@ function revealChatList(): void {
   isDrawerOpen = true;
   m.redraw.sync();
 }
+
+// The pointer at the New chat button that the root's path asks for (``open=new-chat-pointer``).
+const newChatPointerAsk = makeNewChatPointerAsk(() => void showNewChatCoachMark(revealChatList));
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
  *  reported before the token path: the shell holds that path as this window's location until the root reports
@@ -615,6 +621,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       if (selectedChatId !== null) markRead(selectedChatId);
       fillSlot();
       m.redraw();
+      newChatPointerAsk.noteShown();
     },
     onHidden: () => {
       isRootShown = false;
@@ -626,6 +633,16 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
       if (isProviderChooserRequested(target.search)) openRequestedProviderChooser(accountsLoaded);
+      if (isNewChatPointerRequested(target.search)) {
+        newChatPointerAsk.ask(isRootShown);
+        if (requested === null && token === null) {
+          // The ask names no chat, so the chat on screen stays. The shell holds this window at the path it asked
+          // with until the root reports another, and is told the one the root is still at.
+          reportedLocation = null;
+          reportLocation();
+          return;
+        }
+      }
       if (token !== null) {
         // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
         pendingToken = token;
@@ -713,6 +730,7 @@ function bootstrap(): void {
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
   if (isProviderChooserRequested(window.location.search)) openRequestedProviderChooser(accountsLoaded);
+  if (isNewChatPointerRequested(window.location.search)) newChatPointerAsk.ask(isRootShown);
 }
 
 window.addEventListener("load", bootstrap);

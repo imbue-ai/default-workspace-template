@@ -141,6 +141,13 @@ observe`, its own supervised service) writes, and serves:
   pinned window comes up at `/`. The shell picks the window. It
   answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
+- `POST /api/show-new-chat-pointer`: what the shell posts for `onboarding:show-new-chat-pointer`, which
+  another app's page sends to have the user pointed at the chat list's New chat button (the onboarding
+  checklist's first entry). It takes the `client_id` the shell adds and asks the shell's `show` op
+  (`new_chat_pointer.py`) to put the chat root on that client's screen at `/?open=new-chat-pointer`: a
+  chat root window on screen is pointed at it and comes forward, else the pinned window comes up. The
+  root draws its coach mark at the button and keeps the chat it shows. It answers as `/api/focus-chat`
+  does, with the same refusals.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
@@ -168,7 +175,8 @@ opening snapshot replaces the folded view and the health recovers.
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake, and a clicked link's
 `shell:open-link`); the shell calls the chat only to post the
-messages its manifest registers for (`minds:focus-chat`).
+messages its manifest registers for (`minds:focus-chat`,
+`onboarding:show-new-chat-pointer`).
 
 The chat has no link code of its own: a click on a message's link follows the
 app contract's link rule, as a click in any app does. Rendering a message
@@ -872,7 +880,12 @@ its item is done:
 
 `build_app` is also held back while a build may be under way, which is while
 `app_build_started` was last set within the past hour. The onboarding checklist app
-(`system/apps/onboarding_checklist`) shows the same four items from the same library.
+(`system/apps/onboarding_checklist`) shows the same four items from the same library. A click
+on its `new_chat` entry reaches the same coach mark from outside the chat: the checklist sends
+`onboarding:show-new-chat-pointer` through the shell, which posts it to
+`POST /api/show-new-chat-pointer` (`new_chat_pointer.py`), and the chat app has the shell bring
+the chat root forward at `/?open=new-chat-pointer`, which the root reads as an ask to draw the
+mark at its New chat button and drops from the path it reports, keeping the chat it shows.
 
 The names in the last column are onboarding markers: empty files under
 `data/.state/onboarding_activity/` that are only ever set, so a fact stays true after what
@@ -933,7 +946,10 @@ strip is the one drawn.
 
 A click on a new-chat suggestion sends nothing and records nothing. It points the user at a
 control, every time it is clicked, and the layer that owns the control draws the bubble
-(`views/suggestion-actions.ts`); every bubble has one button, "Got it":
+(`views/suggestion-actions.ts`); every bubble has one button, "Got it". The words of the
+`build_app_coach` and `connect_data_coach` bubbles are the shared library's
+(`system/libs/workspace_ui/src/onboarding_pointers.ts`), which the onboarding checklist shows
+too:
 
 | Action | Who draws | What the page does |
 |---|---|---|

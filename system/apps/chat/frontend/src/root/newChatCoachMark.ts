@@ -1,7 +1,8 @@
 /**
  * The coach mark at the chat list's New chat button, which a chat page asks the root for (its "Work in parallel by
- * starting a new chat" suggestion): the button is the root's, so only the root can point at it. The button pulses
- * while the mark is up. In the phone layout the list is in a drawer, which opens first.
+ * starting a new chat" suggestion), and so does another app's page, through the chat app, by the path the shell
+ * points the root at (``open=new-chat-pointer``): the button is the root's, so only the root can point at it. The
+ * button pulses while the mark is up. In the phone layout the list is in a drawer, which opens first.
  */
 
 import { showCoachMark } from "@imbue/workspace-ui/src/components/CoachMark";
@@ -44,4 +45,32 @@ export async function showNewChatCoachMark(revealList: () => void, root: ParentN
   await whenAtRest(button);
   if (!button.isConnected) return;
   showCoachMark({ anchor: button, text: NEW_CHAT_COACH_TEXT, pulseClass: NEW_CHAT_PULSE_CLASS });
+}
+
+/** The pointer the root's path asked for, held back while the shell has the root's window hidden. */
+export interface NewChatPointerAsk {
+  /** The path asked for the pointer; ``isRootShown`` is whether the shell says the root is on screen. */
+  ask(isRootShown: boolean): void;
+  /** The shell showed the root. */
+  noteShown(): void;
+}
+
+/**
+ * The ask for the pointer that arrives in the root's path, drawn by ``show``. The shell points the window at the
+ * path as it brings it forward, and the page can hear of the path first: a mark placed while the frame is hidden
+ * would be placed against a button that has no place yet, so it waits for the root to be shown.
+ */
+export function makeNewChatPointerAsk(show: () => void): NewChatPointerAsk {
+  let isOwed = false;
+  return {
+    ask(isRootShown) {
+      if (isRootShown) show();
+      else isOwed = true;
+    },
+    noteShown() {
+      if (!isOwed) return;
+      isOwed = false;
+      show();
+    },
+  };
 }
