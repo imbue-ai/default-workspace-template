@@ -21,7 +21,7 @@ emit_reminder() {
     exit 0
 }
 
-repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+repo_root="${MNGR_AGENT_WORK_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
 tickets_dir="${TICKETS_DIR:-${repo_root}/.tickets}"
 
 input=$(cat)
@@ -105,5 +105,5 @@ Before continuing, declare your plan as step records (each prints \`Created <id>
   ...
 Then start the first step with its literal id: tk start <id>
 
-See CLAUDE.md > Task management for the full protocol.
+See AGENTS.md > Task management for the full protocol.
 "

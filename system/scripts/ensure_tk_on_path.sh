@@ -7,7 +7,7 @@
 # every shell in the workspace at a checkout that goes away with the worker.
 set -euo pipefail
 
-repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+repo_root="${MNGR_AGENT_WORK_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
 tk_script="${repo_root}/system/vendor/tk/ticket"
 
 [[ -x "$tk_script" ]] || exit 0

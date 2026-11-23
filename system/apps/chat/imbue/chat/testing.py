@@ -14,6 +14,7 @@ the agent manager.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -50,10 +51,12 @@ import httpx
 import pexpect
 import pytest
 import simple_websocket
+from app_manifest.testing import write_app_manifest
 from chat_background_tasks import markers
 from chat_background_tasks.markers import TaskSource
 from flask import Flask
 from flask import request
+from onboarding_activity.markers import MARKER_DIR_ENV
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.interfaces import ShellLayoutInterface
@@ -103,6 +106,9 @@ from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -314,6 +320,23 @@ def _streamed_message_events(model: str, reply: str | StandInToolUse) -> bytes:
         ("message_stop", {"type": "message_stop"}),
     ]
     return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+def _protobuf_bytes_field(field_number: int, value: bytes) -> bytes:
+    # Every length here is under 128, so the length is a single varint byte.
+    assert len(value) < 0x80
+    return bytes([(field_number << 3) | 2, len(value)]) + value
+
+
+def anthropic_thinking_block_signature(block_kind: str) -> str:
+    """A minimal stand-in for an Anthropic Messages API thinking-block signature carrying ``block_kind``.
+
+    Only the nesting the chat reads is real (field 2, then 1, then 8 holds the kind, beside a
+    varint and opaque bytes like a real one); the rest of a real signature is encrypted.
+    """
+    kind_message = bytes([0x08, 19]) + _protobuf_bytes_field(8, block_kind.encode())
+    envelope = _protobuf_bytes_field(1, kind_message) + _protobuf_bytes_field(5, b"\x00" * 16)
+    return base64.b64encode(bytes([0x08, 4]) + _protobuf_bytes_field(2, envelope)).decode()
 
 
 def skip_unless_pinned_claude() -> None:
@@ -590,6 +613,15 @@ def make_chat_agent_entry(
         ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
         archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
         final_event_count=final_event_count if is_archived else None,
+    )
+
+
+def make_generated_suggestions(reply_event_id: str, label: str = "Yes, go ahead") -> ChatSuggestions:
+    """The set a model worked out for the reply ``reply_event_id``: one suggestion, saying ``label``."""
+    return ChatSuggestions(
+        after_event_id=reply_event_id,
+        source=SuggestionSource.GENERATED,
+        suggestions=(Suggestion(suggestion_id="generated-1", label=label),),
     )
 
 
@@ -1303,6 +1335,31 @@ def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
 
 
+def write_workspace_with_a_user_built_app(repo_root: Path) -> None:
+    """Lay out a workspace checkout at ``repo_root`` whose root project lists one app as its own (``chat``), beside
+    a second app its user scaffolded (``todo-list``): each a package under ``system/apps/`` with a manifest."""
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.1.0"\n\n[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
+    )
+    for package, name in (("chat", "chat"), ("todo_list", "todo-list")):
+        manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
+        app_directory = write_app_manifest(repo_root, package, manifest, True).parent
+        (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+
+
+def block_onboarding_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the onboarding markers at a file where their directory should be, so no marker can be read or set."""
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+
+
+def write_plain_app_registry(path: Path, *names: str) -> Path:
+    """Write the app registry at ``path`` with one row per name, none of them ``system`` or ``internal``."""
+    return write_registry(path, *(registry_row_toml(name, "http://localhost:5000") for name in names))
+
+
 def utc_iso_seconds_ago(seconds: float = 0.0) -> str:
     """A UTC ISO timestamp this many seconds before now, as the hook files and transcript records carry."""
     return datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc).isoformat()
@@ -1494,6 +1551,10 @@ def running_workspace(
     background_tasks_root: Path | None = None,
     # Further registry rows beside the chat's, for apps a test serves itself.
     extra_rows: Sequence[str] = (),
+    is_first_listing_running: bool = False,
+    is_chat_pinned: bool = False,
+    # The chat row's message handlers, each as ``(type, path)``, for a test that has the shell relay one to the chat.
+    chat_message_handlers: Sequence[tuple[str, str]] = (),
 ) -> Generator[RunningWorkspace, None, None]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -1507,7 +1568,11 @@ def running_workspace(
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
     shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
     background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
-    without it the chat reads none.
+    without it the chat reads none. ``is_first_listing_running`` serves a brand-new workspace whose first read of the
+    agent list has not finished: the chat lists no agent until the test hands it a listing
+    (``AgentManager._adopt_initial_listing``). ``is_chat_pinned`` registers the chat with its ``[pin]`` as
+    ``app.toml`` declares it, so every desktop holds one chat root window, minimized until something shows it.
+    ``chat_message_handlers`` registers the chat for those message types, which the shell then posts to it.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1572,6 +1637,8 @@ def running_workspace(
                 "lounge": "POST",
                 "app-chat": "POST",
             },
+            pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
+            message_handlers=chat_message_handlers,
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
@@ -1627,17 +1694,22 @@ def running_workspace(
             if background_tasks_root is None
             else BackgroundTaskReader(root=background_tasks_root),
         )
-        # The agents carry the signed-in account's label, as a chat the app created would, so the
-        # page's provider row names it.
-        agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
-        with manager._lock:
+        if not is_first_listing_running:
+            # The agents carry the signed-in account's label, as a chat the app created would, so the
+            # page's provider row names it.
+            agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
+            with manager._lock:
+                for info in agents:
+                    manager._agents[info.id] = AgentStateItem(
+                        id=info.id,
+                        name=info.name,
+                        state="RUNNING",
+                        labels=agent_labels,
+                        work_dir=str(tmp_path / "work"),
+                    )
             for info in agents:
-                manager._agents[info.id] = AgentStateItem(
-                    id=info.id, name=info.name, state="RUNNING", labels=agent_labels, work_dir=str(tmp_path / "work")
-                )
-        for info in agents:
-            manager._ensure_activity_tracking(info.id)
-        manager.note_agent_list_known()
+                manager._ensure_activity_tracking(info.id)
+            manager.note_agent_list_known()
         chat_state = build_test_state(
             config=Config(chat_host="127.0.0.1", chat_port=chat_port),
             agent_manager=manager,

@@ -85,6 +85,59 @@ export const SHELL_MESSAGE = "shell:message";
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
 
+/** App to shell: whether the first run's provider page is still owed (the chat app's word for it); while it is, the
+ *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
+export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
+
+/** App to shell: whether the workspace's first conversation is still following its script (the chat app's word for
+ *  it), sent once the page knows and when that changes. The shell keeps each page's last report and drops it when the
+ *  page goes away or loads again, so a page that is greeted says it again; while any page says yes, the shell's
+ *  show-around tour neither begins nor resumes by itself. */
+export const SHELL_FIRST_CONVERSATION_STEP = "shell:first-conversation-step";
+
+/** App to shell: show a one-button card with the page's words in one place (``ShellCoachCardPlace``): under a
+ *  control of the Imbue Studio chrome, which is ringed while the card is up, or popping out of the agent's avatar,
+ *  whose window the shell brings forward. The shell shows it while its tour shows nothing, in place of a coach card
+ *  that is up, and in place of the end of its tour (the last card, or the badge an early exit leaves); during any
+ *  other tour card, or the tour's pause notice, the request is dropped. It also drops a text that is empty or
+ *  longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and a place it does not know. */
+export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
+
+/** App to shell: whether an agent is working in what the page shows (a reply under way in a chat), sent when that
+ *  changes. The shell keeps each page's last report and drops it when the page goes away or loads again, so a page
+ *  that is greeted while it has said yes says so again. */
+export const SHELL_AGENT_WORKING = "shell:agent-working";
+
+/** The controls of the Imbue Studio chrome a coach card can sit under, as the embed contract names them
+ *  (``minds:highlight-chrome``). */
+export const SHELL_CHROME_ANCHORS = ["workspace-switcher", "permissions", "settings", "share", "help"] as const;
+export type ShellChromeAnchor = (typeof SHELL_CHROME_ANCHORS)[number];
+
+/** What the shell draws that a coach card can pop out of: the agent's avatar. */
+export const SHELL_COACH_CARD_TARGETS = ["avatar"] as const;
+export type ShellCoachCardTarget = (typeof SHELL_COACH_CARD_TARGETS)[number];
+
+/** Where a coach card goes: under a control of the chrome (``chromeAnchor``), or at something the shell draws
+ *  (``target``). A message names exactly one. */
+export type ShellCoachCardPlace =
+  { readonly chromeAnchor: ShellChromeAnchor } | { readonly target: ShellCoachCardTarget };
+
+/** The place a ``shell:show-coach-card`` payload names, or null when it names none, both, or one this build does
+ *  not know. */
+export function coachCardPlaceOf(payload: Readonly<Record<string, unknown>>): ShellCoachCardPlace | null {
+  const { chromeAnchor, target } = payload;
+  if ((chromeAnchor === undefined) === (target === undefined)) return null;
+  if (chromeAnchor !== undefined) {
+    const anchor = SHELL_CHROME_ANCHORS.find((known) => known === chromeAnchor);
+    return anchor === undefined ? null : { chromeAnchor: anchor };
+  }
+  const known = SHELL_COACH_CARD_TARGETS.find((candidate) => candidate === target);
+  return known === undefined ? null : { target: known };
+}
+
+/** The longest text a coach card carries. */
+export const MAX_COACH_CARD_TEXT_LENGTH = 500;
+
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -153,9 +206,9 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
  * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
- * shell opens its settings for the files shared from the user's computer (desktop-interface
- * contracts.md section 7), whether it draws a native right-click menu, and whether the
- * window is being viewed on somebody else's desktop. The client id is required; a text field the
+ * shell opens its settings for the files shared from the user's computer and its workspace settings and draws coach
+ * marks on its own controls (desktop-interface contracts.md section 7), whether it draws a native right-click menu,
+ * and whether the window is being viewed on somebody else's desktop. The client id is required; a text field the
  * shell does not send, a page reads as "", and a flag it does not send, as false.
  */
 export interface ShellHandshake {
@@ -165,6 +218,8 @@ export interface ShellHandshake {
   app: string;
   path: string;
   opensLocalFiles: boolean;
+  opensWorkspaceSettings: boolean;
+  showsCoachMarks: boolean;
   /** Whether the Imbue Studio desktop app draws a native menu for a right-click the page leaves alone
    *  (element-reference-menu plan section 11): the element menu then leaves it those on text being edited, the
    *  selection, and plain links. */
@@ -217,6 +272,15 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
+  /** Ask the shell to show ``text`` as a one-button card at ``place``: under a control of the Imbue Studio chrome,
+   *  ringed while the card is up, or popping out of the agent's avatar. */
+  showCoachCard(text: string, place: ShellCoachCardPlace): void;
+  /** Say whether an agent is working in what this page shows. */
+  agentWorking(isWorking: boolean): void;
+  /** Say whether the first run's provider page is still owed to this workspace's owner. */
+  firstRunProviderStep(isPending: boolean): void;
+  /** Say whether the workspace's first conversation is still following its script. */
+  firstConversationStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
@@ -238,7 +302,18 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, opensLocalFiles, drawsContextMenus, isViewing } = data;
+  const {
+    clientId,
+    windowId,
+    desktopId,
+    app,
+    path,
+    opensLocalFiles,
+    opensWorkspaceSettings,
+    showsCoachMarks,
+    drawsContextMenus,
+    isViewing,
+  } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -247,6 +322,8 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     app: optionalString(app),
     path: optionalString(path),
     opensLocalFiles: opensLocalFiles === true,
+    opensWorkspaceSettings: opensWorkspaceSettings === true,
+    showsCoachMarks: showsCoachMarks === true,
     drawsContextMenus: drawsContextMenus === true,
     isViewing: isViewing === true,
   };
@@ -504,6 +581,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
+    showCoachCard: (text: string, place: ShellCoachCardPlace) => send(SHELL_SHOW_COACH_CARD, { text, ...place }),
+    agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
+    firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
+    firstConversationStep: (isPending: boolean) => send(SHELL_FIRST_CONVERSATION_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),

@@ -1,1 +1,0 @@
-- The launcher registers the app through the `app_registration` library in-process instead of running `system/scripts/forward_port.py`, and its `--forward-port` option is gone.

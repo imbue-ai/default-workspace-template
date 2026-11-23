@@ -280,6 +280,11 @@ lets two agents scaffold two apps at once:
 - Root `pyproject.toml` and `uv.lock` -- untouched. The root `members` names
   only the built-in packages; an app it does not name is a standalone project,
   so its dependencies never move the chat's or another app's.
+- `data/.state/onboarding_activity/app_build_started` -- an empty marker, set on
+  every run and carrying that run's time. The chat reads it so that it does not
+  suggest building an app while one is being built. It is workspace state, not
+  a tracked file, and setting it twice is harmless; a run that cannot write it
+  prints a warning and carries on.
 - `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
@@ -553,7 +558,7 @@ or a sanitizer -- so the view can't run scripts or phone home via
 tracking pixels.
 
 This is the surfacing half of the preserve-and-surface principle
-(CLAUDE.md): the derived view inevitably leaves gaps (a field the agent
+(AGENTS.md): the derived view inevitably leaves gaps (a field the agent
 didn't extract, a rendering it didn't anticipate), and the raw/source
 affordance lets the user bridge them without waiting for a rebuild.
 Design it in from the first version -- it depends on the data layer

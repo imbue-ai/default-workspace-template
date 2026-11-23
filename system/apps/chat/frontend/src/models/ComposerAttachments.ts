@@ -17,9 +17,13 @@ import m from "mithril";
 import { deleteAttachment } from "./attachments";
 import { forgetLocalImage } from "./attachments";
 import { isImagePath } from "./attachments";
+import { readAttachmentText } from "./attachments";
 import { rememberLocalImage } from "./attachments";
 import { uploadAttachment } from "./attachments";
 import type { UploadedAttachment } from "./attachments";
+import { nextPastedTextFileName } from "./pastedText";
+import { pastedTextFileOf } from "./pastedText";
+import { pastedTextSummaryOf } from "./pastedText";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 export type ComposerAttachmentStatus = "uploading" | "ready" | "error";
@@ -42,6 +46,9 @@ export interface ComposerAttachment {
    *  document (a blob URL), so it is never persisted. Once the upload succeeds it is handed to
    *  ``rememberLocalImage``, so the sent message draws from it; a failed upload or a removed chip revokes it. */
   previewUrl?: string;
+  /** A long paste's own text, held while this document has it so the chip can put it back without a fetch.
+   *  Never persisted: after a reload it is read back from the uploaded copy. */
+  pastedText?: string;
   /** Present once the upload succeeds. */
   uploaded?: UploadedAttachment;
   /** Present when the upload failed. */
@@ -196,7 +203,7 @@ function _localPreviewUrl(file: File, isImage: boolean): string | undefined {
   return isImage && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
 }
 
-function _startUpload(chatId: string, file: File, summary: string | undefined): void {
+function _startUpload(chatId: string, file: File, summary: string | undefined, pastedText?: string): void {
   const localId = _mintLocalId();
   const isImage = file.type.startsWith("image/") || isImagePath(file.name);
   const item: ComposerAttachment = {
@@ -205,6 +212,7 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
     isImage,
     status: "uploading",
     summary,
+    pastedText,
     localSize: file.size,
     previewUrl: _localPreviewUrl(file, isImage),
   };
@@ -214,7 +222,8 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
   const releasePreview = (): void => {
     if (item.previewUrl !== undefined) URL.revokeObjectURL(item.previewUrl);
   };
-  item.uploadSettled = uploadAttachment(file)
+  // A paste is the chat's own content, so it lives and dies with the chat; a picked file stays the workspace's.
+  item.uploadSettled = uploadAttachment(file, pastedText === undefined ? null : chatId)
     .then((uploaded) => {
       // A chip that left the composer mid-upload (removed, or dropped by a clear or a rollback) names no
       // message, so its preview is let go.
@@ -262,6 +271,35 @@ export function uploadFilesToComposer(chatId: string, files: FileList | readonly
 export function uploadDescribedFileToComposer(chatId: string, file: File, summary: string): void {
   _startUpload(chatId, file, summary);
   m.redraw();
+}
+
+/** Stage a long paste as a ``pasted-text-<n>.txt`` attachment, its chip saying how many lines it holds. */
+export function stagePastedText(chatId: string, text: string): void {
+  const fileName = nextPastedTextFileName(getComposerAttachments(chatId).map((attachment) => attachment.fileName));
+  _startUpload(chatId, pastedTextFileOf(text, fileName), pastedTextSummaryOf(text), text);
+  m.redraw();
+}
+
+/**
+ * Take a pasted-text attachment out of the composer and answer its text, for the composer to put back inline.
+ * The text comes from memory when this document staged it, else from the uploaded copy; the chip and its copy
+ * are removed only once the text is in hand, so a failed read leaves the attachment as it was. Answers null when
+ * the chip is not in the composer, or left it while its copy was read (sent, removed or cleared), so the text is
+ * not put back.
+ */
+export async function unstagePastedText(chatId: string, localId: string): Promise<string | null> {
+  const item = getComposerAttachments(chatId).find((attachment) => attachment.localId === localId);
+  if (item === undefined) return null;
+  let text = item.pastedText;
+  if (text === undefined) {
+    if (item.uploaded === undefined) {
+      throw new Error(`Attachment ${item.fileName} has neither its text nor an uploaded copy`);
+    }
+    text = await readAttachmentText(item.uploaded);
+    if (!getComposerAttachments(chatId).some((attachment) => attachment.localId === localId)) return null;
+  }
+  removeComposerAttachment(chatId, localId);
+  return text;
 }
 
 /**

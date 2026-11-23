@@ -24,7 +24,6 @@ import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, isAppShownStopped } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
-import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
 import { DESKTOP_ROOT_ATTRIBUTE } from "../pages/livePages";
 import { Overview } from "./Overview";
@@ -33,6 +32,7 @@ import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
+import { isAppShareable } from "./WindowMenu";
 
 export interface BackdropAttrs {
   readonly store: DesktopStore;
@@ -49,6 +49,9 @@ export interface BackdropAttrs {
   readonly onEntryClick: (windowId: string) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
   readonly isOverlayOpen: boolean;
+  /** Whether a window's title bar may offer Share: under an Imbue Studio chrome that has said what it can do, and
+   *  to the workspace's owner alone, since the chrome opens its share settings for nobody else. */
+  readonly isAppShareOffered: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   /** The overview over the backdrop, or null while it is closed. */
@@ -57,11 +60,6 @@ export interface BackdropAttrs {
    *  edge to edge. */
   readonly letterbox: BackdropLetterbox | null;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
-  /** A pulled-out window's ghost was asked to show its own desktop window, to hide itself, or to bring the
-   *  window back. */
-  readonly onShowDetachedWindow: (windowId: string) => void;
-  readonly onHideWindowGhost: (windowId: string) => void;
-  readonly onBringBackWindow: (windowId: string) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
 }
@@ -104,6 +102,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const isAppChatOffered = appChatLaunchOf(state.apps) !== null;
       const metrics = store.getMetrics();
       const gesture = store.getGesture();
+      const movingWindowId = store.movingWindowId();
       // The placement already carries the drag: the held shortcut sits in the cell under the pointer (its
       // lift translates it there from the cell it came from) and the shortcut that was there has stepped aside.
       const placed = store.placedShortcuts();
@@ -140,7 +139,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               style: stageStyle(desktop, letterbox),
               "data-viewing-letterbox": letterbox === null ? undefined : String(letterbox.box.scale),
               // A viewed desktop is looked at, never arranged (the multiplayer spec, section 8.3): the stage holds
-              // the grid, the pages, the windows, and the ghosts, and inert takes the pointer, the keyboard, and
+              // the grid, the pages, and the windows, and inert takes the pointer, the keyboard, and
               // focus from all of them at once; the band, the chip, the tray, and the taskbar lie outside it, so
               // "Stop viewing" stays reachable. A boolean, so mithril sets the property where the browser has one
               // and the attribute where it does not.
@@ -200,29 +199,12 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     {
                       class: "windows absolute inset-0 pointer-events-none" + (isViewing ? " windows-viewing" : ""),
                     },
-                    // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
-                    // window's hidden ghost included).
+                    // A keyed list tolerates no holes: a minimized, pulled-out (its page is in the chrome's own
+                    // window), or unknown window contributes nothing.
                     placements.flatMap((placement, index): m.Children[] => {
                       const window = windowsById.get(placement.window_id);
-                      if (placement.is_minimized || window === undefined) return [];
+                      if (placement.is_minimized || placement.is_detached || window === undefined) return [];
                       const app = appByName(state, window.app);
-                      // A pulled-out window leaves its ghost at its frame, where a return lands, whatever state it was
-                      // pulled out in (detach keeps the state); its page is in the chrome's own window.
-                      if (placement.is_detached) {
-                        return [
-                          m(DetachedWindowGhost, {
-                            key: window.id,
-                            window,
-                            app,
-                            title: effectiveWindowTitle(state, window, app),
-                            rect: store.renderedRect({ ...placement, state: "NORMAL" }),
-                            stackIndex: index,
-                            onShow: () => attrs.onShowDetachedWindow(window.id),
-                            onHide: () => attrs.onHideWindowGhost(window.id),
-                            onBringBack: () => attrs.onBringBackWindow(window.id),
-                          }),
-                        ];
-                      }
                       return [
                         m(Window, {
                           key: window.id,
@@ -233,11 +215,13 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           state: placement.state,
                           stackIndex: index,
                           isFocused: window.id === focusedWindowId,
+                          isMoving: window.id === movingWindowId,
                           isTouch: state.modes.isTouch,
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
+                          hasShare: attrs.isAppShareOffered && isAppShareable(app),
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
-                          isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
+                          isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           isStopped: isAppShownStopped(state, app),
                           immersive: store.getCanImmerse()
                             ? {

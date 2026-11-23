@@ -1,1 +1,0 @@
-The desktop-interface and workspace-app-model blueprint contracts, and the Routines spec (section 10.1), now list Files and Routines among the manifests that declare `system = true`, and say what follows from the flag: the share panel lists such an app under System, and the desktop app's home screen does not count it among the workspace's own apps.

@@ -9,6 +9,12 @@ import { ResourceGauge, type ResourceGaugeAttrs } from "./ResourceGauge";
 
 const GIB = 1024 ** 3;
 const DISK_ALERT = { resource: "disk", severity: "warning", headline: "Disk space is low", detail: "3.2 GB left" };
+const CPU_ALERT = {
+  resource: "cpu",
+  severity: "warning",
+  headline: "CPU is busy",
+  detail: "95% in use over the last five minutes",
+};
 const MEMORY_ALERT = { resource: "memory", severity: "warning", headline: "Memory is nearly full", detail: "0.4 GB" };
 
 function gaugeView(overrides: Record<string, unknown> = {}): ResourceGaugeView {
@@ -91,6 +97,33 @@ describe("ResourceGauge", () => {
     expect(root.querySelector("[data-resource-gauge-bar]")).toBeNull();
     alert.click();
     expect(onOpen).toHaveBeenCalledWith("disk");
+  });
+
+  it("draws a CPU warning as the CPU bar alone, beside any pill for the others", () => {
+    const onOpen = vi.fn();
+    const cpuOnly = gaugeView({ settings: { visibility: "when_warning" }, alerts: [CPU_ALERT] });
+    const root = render({ view: cpuOnly, onOpen });
+    expect(root.querySelector("[data-resource-gauge-alert]")).toBeNull();
+    expect(root.querySelectorAll("[data-resource-gauge-bar]")).toHaveLength(1);
+    expect(barOf(root, "cpu").textContent).toBe("CPU !");
+    expect(barOf(root, "cpu").dataset.level).toBe("warning");
+    expect(barOf(root, "cpu").getAttribute("aria-label")).toBe(
+      "CPU: CPU is busy, 95% in use over the last five minutes",
+    );
+    barOf(root, "cpu").click();
+    expect(onOpen).toHaveBeenCalledWith("cpu");
+
+    const both = gaugeView({ settings: { visibility: "when_warning" }, alerts: [DISK_ALERT, CPU_ALERT] });
+    const mixed = render({ view: both });
+    const pill = mixed.querySelector("[data-resource-gauge-alert]") as HTMLElement;
+    expect(pill.textContent).toBe("!Disk space is low");
+    expect(
+      [...mixed.querySelectorAll("[data-resource-gauge-bar]")].map((bar) =>
+        bar.getAttribute("data-resource-gauge-bar"),
+      ),
+    ).toEqual(["cpu"]);
+
+    expect(render({ view: cpuOnly, isStale: true }).querySelector("[data-resource-gauge]")).toBeNull();
   });
 
   it("marks an alerting bar in its label as well as its colour", () => {

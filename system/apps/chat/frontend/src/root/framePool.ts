@@ -3,7 +3,9 @@
  * session, the selected one visible and the rest hidden, so switching back is instant.
  *
  * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. Each page is handed
- * the shell's handshake to the root through the relay, as it loads. A hidden frame is
+ * the shell's handshake to the root through the relay, as it loads. A frame that is destroyed or
+ * loads again holds a different page from then on, or none, and the pool says so (``onPageGone``),
+ * so that what the root kept of the page that was there goes with it. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
  * but not on screen counts as open-but-hidden, like a minimized window's page.
@@ -20,9 +22,9 @@ export const MAX_HELD_FRAMES = 4;
 // nested frame can hold no more than its parent, so this asks for the same.
 const FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
-// The microphone too: the chat's manifest declares it, so the shell delegates it to the root's frame, and the
-// page that dictates is the one nested here.
-const FRAME_ALLOW = "clipboard-read; clipboard-write; microphone";
+// The microphone too, and the screen wake lock dictation holds on a phone: the chat's manifest declares the
+// microphone, so the shell delegates both to the root's frame, and the page that dictates is the one nested here.
+const FRAME_ALLOW = "clipboard-read; clipboard-write; microphone; screen-wake-lock";
 
 interface HeldFrame {
   frame: HTMLIFrameElement;
@@ -37,7 +39,12 @@ export class InnerFramePool {
   private isRootShown = false;
   private isCompact = false;
 
-  constructor(private readonly container: HTMLElement) {}
+  /** ``onPageGone`` is told the window of a frame whose page is gone: the frame was destroyed, or loaded, which
+   *  makes whatever it holds a fresh page. */
+  constructor(
+    private readonly container: HTMLElement,
+    private readonly onPageGone: (inner: Window) => void = () => undefined,
+  ) {}
 
   /** Whether ``source`` is the window of one of this pool's frames. */
   isInnerWindow(source: MessageEventSource | null): boolean {
@@ -100,9 +107,12 @@ export class InnerFramePool {
   destroy(chatId: string): void {
     const held = this.held.get(chatId);
     if (held === undefined) return;
+    // Read before the frame leaves the document, which takes its window from it.
+    const inner = held.frame.contentWindow;
     held.frame.remove();
     this.held.delete(chatId);
     if (this.shownChatId === chatId) this.shownChatId = null;
+    if (inner !== null) this.onPageGone(inner);
   }
 
   heldChatIds(): string[] {
@@ -121,6 +131,8 @@ export class InnerFramePool {
     const held: HeldFrame = { frame, lastShownAt: Date.now(), isLoaded: false };
     frame.addEventListener("load", () => {
       held.isLoaded = true;
+      // Before the handshake, which a page that has an agent working answers by saying so again.
+      if (frame.contentWindow !== null) this.onPageGone(frame.contentWindow);
       this.api(chatId)?.setCompact(this.isCompact);
       this.introduce(chatId);
       this.tell(chatId, this.isRootShown && this.shownChatId === chatId ? "shown" : "hidden");

@@ -87,13 +87,15 @@ COPY system/libs/routines/pyproject.toml /home/user/workspace/system/libs/routin
 COPY system/apps/routines/pyproject.toml /home/user/workspace/system/apps/routines/pyproject.toml
 
 # Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
-# package.json) -- install needs only these.
-COPY system/package.json system/package-lock.json /home/user/workspace/system/
+# package.json) -- install needs only these, plus the workspace's npm config
+# (.npmrc), which turns off onnxruntime-node's CUDA download.
+COPY system/package.json system/package-lock.json system/.npmrc /home/user/workspace/system/
 COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/workspace_ui/
 COPY system/libs/workspace_voice/package.json /home/user/workspace/system/libs/workspace_voice/
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
+COPY system/apps/onboarding_checklist/frontend/package.json /home/user/workspace/system/apps/onboarding_checklist/frontend/
 COPY system/apps/screen/frontend/package.json /home/user/workspace/system/apps/screen/frontend/
 COPY system/apps/files/frontend/package.json /home/user/workspace/system/apps/files/frontend/
 COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps/routines/frontend/

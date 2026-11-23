@@ -290,23 +290,33 @@ def test_a_profile_the_cache_cannot_keep_is_not_announced_as_changed(tmp_path: P
 def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sharing(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
-    resolver = _resolver(tmp_path, connector.handle)
+    # The stale read below starts a background refresh, which caches its result stamped with the real clock, later
+    # than _T0 + PROFILE_CACHE_TTL; held until the assertions are done, it cannot make the entry fresh under them.
+    is_holding = threading.Event()
+    release = threading.Event()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if is_holding.is_set():
+            release.wait(timeout=10.0)
+        return connector.handle(request)
+
+    resolver = _resolver(tmp_path, handle)
     resolver.resolve(_BOB, _T0)
+    is_holding.set()
+    try:
+        assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Bob"
+        resolver.share_env_path.unlink()
 
-    assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Bob"
-    # That stale answer started a refresh, which stamps what it fetches with the wall clock; it settles before the
-    # share goes, and staleness is judged from its stamp.
-    wait_for(
-        lambda: len(connector.requests) >= 2 and not _is_refresh_running(),
-        timeout=10.0,
-        poll_interval=0.01,
-        error_message="the profile refresh never settled",
-    )
-    refreshed_at = datetime.now(timezone.utc)
-    resolver.share_env_path.unlink()
-
-    assert resolver.resolve_many([_BOB], refreshed_at + PROFILE_CACHE_TTL) == {}
-    assert resolver.resolve_many([_BOB], refreshed_at)["user-bob-4471"].display_name == "Bob"
+        assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL) == {}
+        assert resolver.resolve_many([_BOB], _T0)["user-bob-4471"].display_name == "Bob"
+    finally:
+        release.set()
+        wait_for(
+            lambda: not _is_refresh_running(),
+            timeout=10.0,
+            poll_interval=0.01,
+            error_message="the profile refresh never settled",
+        )
 
 
 def test_a_malformed_broker_url_is_a_failed_fetch(tmp_path: Path) -> None:

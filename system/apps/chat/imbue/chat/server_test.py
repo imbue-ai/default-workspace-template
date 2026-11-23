@@ -30,6 +30,9 @@ from flask import Flask
 from flask.testing import FlaskClient
 from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import is_marked
+from onboarding_activity.markers import mark
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
@@ -80,13 +83,19 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import seed_context_message
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import write_first_run_tree_step
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
@@ -109,6 +118,7 @@ from imbue.chat.harnesses.room.transcript import transcript_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.main import install_suggestion_generator
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
@@ -138,10 +148,15 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
+from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
+from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
@@ -152,6 +167,7 @@ from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
+from imbue.chat.testing import make_generated_suggestions
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
@@ -161,10 +177,13 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
+from imbue.chat.testing import write_workspace_with_a_user_built_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
@@ -616,6 +635,73 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     response = client.delete("/api/uploads/deadbeef/missing.png")
 
     assert response.status_code == 200
+
+
+_UPLOAD_CHAT_ID = "agent-0000000000000000000000000000c4a7"
+
+
+def test_a_chat_upload_is_stored_in_the_chats_folder_served_and_deleted(client: FlaskClient, app: Flask) -> None:
+    """A chat's own upload lands under its folder in the chat files root, is served and deleted through the chat's
+    route, and is not reachable through the workspace uploads route."""
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert upload.status_code == 201
+    stored = Path(upload.get_json()["path"])
+    chats_root = state_of(app).agent_manager.chat_files_root.absolute()
+    assert stored.is_absolute()
+    assert stored.parent.parent == chats_root / _UPLOAD_CHAT_ID / "uploads"
+    assert stored.read_bytes() == b"pasted words"
+    relative_path = _upload_relative_path(str(stored))
+    assert client.get(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").data == b"pasted words"
+    assert client.get(f"/api/uploads/{relative_path}").status_code == 404
+
+    assert client.delete(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").status_code == 200
+    assert not stored.exists()
+
+
+def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) -> None:
+    """The chat id names a folder, so one not shaped like a chat's is refused before anything is written."""
+    response = client.post(
+        "/api/chats/not-a-chat/uploads",
+        data={"file": (io.BytesIO(b"x"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+    assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+
+
+def test_a_chats_uploads_go_with_the_chat_when_it_is_destroyed(tmp_path: Path) -> None:
+    """A pasted text lives in the chat's folder, so the chat's destroy removes it with the rest of the chat."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _UPLOAD_CHAT_ID, name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+    stored = Path(upload.get_json()["path"])
+    assert stored.exists()
+
+    assert client.post(f"/api/chats/{_UPLOAD_CHAT_ID}/destroy").status_code == 200
+
+    assert not stored.exists()
+    assert not (chats_root / _UPLOAD_CHAT_ID).exists()
 
 
 def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
@@ -1408,18 +1494,22 @@ def test_a_rooms_send_never_carries_the_pending_seed(tmp_path: Path, signed_in_a
     assert kept is not None and kept.is_seed_pending is True
 
 
-def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _client_with_chat_still_called_chat_n(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    completion: ScriptedOneShotCompletion,
+) -> tuple[FlaskClient, RecordingMngrMessenger, list[tuple[ChatId, str]]]:
+    """A client whose chat ``agent_id`` still wears "Chat 4", the messenger its sends reach, and the renames its
+    namer makes from what ``completion`` answers."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_id = "agent-00000000000000000000000000000731"
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
         )
-    completion = ScriptedOneShotCompletion(["Five days in Rome"])
     renames: list[tuple[ChatId, str]] = []
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
@@ -1433,12 +1523,40 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         executor=InlineExecutor(),
     )
     client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+    return client, messenger, renames
+
+
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000731"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, _messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
 
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
 
     assert response.status_code == 200
     assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
     assert renames == [(ChatId(agent_id), "Five days in Rome")]
+
+
+def test_a_dictated_message_names_its_chat_from_the_words_alone_and_reaches_the_agent_with_its_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000738"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
+    dictated = (
+        "Help me plan 5 days in Rome\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": dictated})
+
+    assert response.status_code == 200
+    assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
+    assert renames == [(ChatId(agent_id), "Five days in Rome")]
+    assert messenger.sent == [(agent_id, dictated)]
 
 
 def _client_with_account_labeled_chat(
@@ -3923,6 +4041,73 @@ def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_thr
     assert client.post(f"/api/chats/{chat_id}/destroy").status_code == 404
 
 
+def test_a_first_run_seed_opens_main_on_the_welcome_and_carries_the_users_words_to_the_first_send(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post(
+        "/api/chats/seed",
+        json={"title": "Welcome", "turns": [], "is_first_run": True, "context": "I want to use Studio for: Writing."},
+    )
+
+    assert response.status_code == 201
+    chat_id = response.get_json()["chat_id"]
+    events = client.get(f"/api/chats/{chat_id}/events").get_json()["events"]
+    assert [event["text"] for event in events] == [turn.text for turn in FIRST_RUN_WELCOME]
+    launch = seed_context_message(tmp_path / chat_id, "Build an app with your data")
+    assert "I want to use Studio for: Writing." in launch
+    assert launch.endswith("\nBuild an app with your data")
+    assert "I want to use Studio for: Writing." not in json.dumps(events)
+
+
+def test_a_first_run_seed_owes_the_provider_page_until_the_owner_leaves_it(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is True
+
+    assert client.post("/api/first-run/provider-step/done").status_code == 200
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+    # Finished for good: a manager built over the same files, as after a restart, still reads it finished.
+    assert (
+        AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path).is_first_run_provider_step_pending()
+        is False
+    )
+
+
+def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_same_chat(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    first = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True, "context": ""})
+
+    again = client.post(
+        "/api/chats/seed", json={"turns": [], "is_first_run": True, "context": "I want to use Studio for: Film."}
+    )
+
+    assert first.status_code == 201 and again.status_code == 201
+    chat_id = first.get_json()["chat_id"]
+    assert again.get_json()["chat_id"] == chat_id
+    assert "I want to use Studio for: Film." in seed_context_message(tmp_path / chat_id, "hello")
+    assert len(agent_manager.get_provisional_chats()) == 1
+
+
+def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    client.post("/api/chats/seed", json=_seed_body())
+
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400
@@ -3964,6 +4149,9 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
             "is_fast_mode_notice_shown": False,
             "autocompact_default": True,
             "is_autocompact_notice_shown": False,
+            "is_next_step_suggestions_enabled": True,
+            "is_new_chat_suggestions_enabled": True,
+            "is_picker_send_hint_shown": False,
         }
     }
 
@@ -3973,6 +4161,9 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "is_fast_mode_notice_shown": True,
         "autocompact_default": False,
         "is_autocompact_notice_shown": True,
+        "is_next_step_suggestions_enabled": False,
+        "is_new_chat_suggestions_enabled": False,
+        "is_picker_send_hint_shown": True,
     }
     response = client.put("/api/settings", json=replacement)
 
@@ -3980,10 +4171,770 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
     assert client.get("/api/settings").get_json() == {"settings": replacement}
 
 
+def test_a_settings_write_carrying_a_field_the_settings_do_not_hold_is_taken_without_it(client: FlaskClient) -> None:
+    """A writer that knows a field this app does not must not have its whole write refused for it."""
+    whole = client.put(
+        "/api/settings",
+        json={"fast_mode_turn_limit": 5, "is_some_other_suggestions_enabled": False},
+    )
+    partial = client.put(
+        "/api/settings/suggestions",
+        json={"is_some_other_suggestions_enabled": False, "is_new_chat_suggestions_enabled": False},
+    )
+
+    assert whole.status_code == 200
+    assert partial.status_code == 200
+    settings = client.get("/api/settings").get_json()["settings"]
+    assert "is_some_other_suggestions_enabled" not in settings
+    assert settings["fast_mode_turn_limit"] == 5
+    assert settings["is_new_chat_suggestions_enabled"] is False
+    assert partial.get_json() == {"settings": settings}
+
+
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
     assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
     assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
     assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 2
+
+
+def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setting_is_left(
+    client: FlaskClient,
+) -> None:
+    """A strip's disable link and the Imbue Studio app name only the switch they mean to change, so neither
+    resets a setting the other wrote, nor one a writer of the whole settings wrote."""
+    client.put("/api/settings", json={"fast_mode_default": "auto", "fast_mode_turn_limit": 5})
+
+    response = client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": False})
+
+    expected = {
+        "fast_mode_default": "auto",
+        "fast_mode_turn_limit": 5,
+        "is_fast_mode_notice_shown": False,
+        "autocompact_default": True,
+        "is_autocompact_notice_shown": False,
+        "is_next_step_suggestions_enabled": True,
+        "is_new_chat_suggestions_enabled": False,
+        "is_picker_send_hint_shown": False,
+    }
+    assert response.status_code == 200
+    assert response.get_json() == {"settings": expected}
+    assert client.get("/api/settings").get_json() == {"settings": expected}
+
+    # A second writer changes another switch; a null and an absent switch both stay as they are.
+    second = client.put(
+        "/api/settings/suggestions",
+        json={"is_next_step_suggestions_enabled": False, "is_new_chat_suggestions_enabled": None},
+    )
+
+    expected = {**expected, "is_next_step_suggestions_enabled": False}
+    assert second.get_json() == {"settings": expected}
+    assert client.put("/api/settings/suggestions", json={}).get_json() == {"settings": expected}
+    back_on = client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": True})
+    assert back_on.get_json() == {"settings": {**expected, "is_new_chat_suggestions_enabled": True}}
+
+
+def test_the_suggestion_switches_refuse_a_value_that_is_no_switch_and_leave_a_setting_that_is_not_theirs(
+    client: FlaskClient,
+) -> None:
+    before = client.get("/api/settings").get_json()
+
+    assert (
+        client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": "sometimes"}).status_code
+        == 400
+    )
+    assert client.put("/api/settings/suggestions", json=[True]).status_code == 400
+    # A setting that is no switch is not this route's to change: it is dropped, and the answer is the settings.
+    not_a_switch = client.put("/api/settings/suggestions", json={"fast_mode_turn_limit": 9})
+    assert not_a_switch.status_code == 200
+    assert not_a_switch.get_json() == before
+    assert client.get("/api/settings").get_json() == before
+
+
+def test_a_settings_change_through_either_route_is_pushed_to_every_page(app: Flask, client: FlaskClient) -> None:
+    """A strip switched off on one page goes at once on every other: each page reads the settings again."""
+    pushes = state_of(app).broadcaster.register()
+
+    client.put("/api/settings/suggestions", json={"is_next_step_suggestions_enabled": False})
+    assert drain_pushes(pushes) == [{"type": "settings_updated"}]
+
+    client.put("/api/settings", json={"fast_mode_turn_limit": 3})
+    assert drain_pushes(pushes) == [{"type": "settings_updated"}]
+
+    # A refused change and a read change nothing, so nothing is pushed.
+    client.put("/api/settings/suggestions", json={"is_next_step_suggestions_enabled": "sometimes"})
+    client.put("/api/settings", json={"fast_mode_turn_limit": 0})
+    client.get("/api/settings")
+    assert drain_pushes(pushes) == []
+
+
+_ALL_NEW_CHAT_SUGGESTIONS = [
+    {
+        "suggestion_id": "new_chat",
+        "label": "Work in parallel by starting a new chat",
+        "action": "new_chat_coach",
+        "is_recommended": False,
+    },
+    {
+        "suggestion_id": "phone_access",
+        "label": "Access Studio from your phone",
+        "action": "phone_access",
+        "is_recommended": False,
+    },
+    {"suggestion_id": "build_app", "label": "Build an app", "action": "build_app_coach", "is_recommended": False},
+    {
+        "suggestion_id": "connect_data",
+        "label": "Connect some data",
+        "action": "connect_data_coach",
+        "is_recommended": False,
+    },
+]
+
+
+def _get_new_chat_suggestions(
+    client: FlaskClient, chat_id: str | None = None, headers: dict[str, str] | None = None
+) -> Any:
+    query = {} if chat_id is None else {"chat_id": chat_id}
+    return client.get("/api/suggestions/new-chat", query_string=query, headers=headers)
+
+
+def _offered_new_chat_ids(client: FlaskClient, chat_id: str | None = None) -> list[str]:
+    response = _get_new_chat_suggestions(client, chat_id)
+    assert response.status_code == 200
+    return [suggestion["suggestion_id"] for suggestion in response.get_json()["suggestions"]]
+
+
+def test_the_new_chat_route_offers_nothing_until_the_tour_has_finished_and_then_everything_not_yet_done(
+    client: FlaskClient,
+) -> None:
+    """A workspace whose owner has done none of it is offered all four, in their fixed order, once the tour is
+    out of the way."""
+    before_the_tour = _get_new_chat_suggestions(client)
+
+    mark(Marker.TOUR_FINISHED)
+    after_the_tour = _get_new_chat_suggestions(client)
+
+    assert before_the_tour.status_code == 200
+    assert before_the_tour.get_json() == {"suggestions": []}
+    assert after_the_tour.status_code == 200
+    assert after_the_tour.get_json() == {"suggestions": _ALL_NEW_CHAT_SUGGESTIONS}
+
+
+def test_the_new_chat_route_drops_each_suggestion_as_its_marker_is_set(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    mark(Marker.PHONE_LAYOUT_USED)
+    assert _offered_new_chat_ids(client) == ["new_chat", "build_app", "connect_data"]
+    mark(Marker.SECOND_CHAT_STARTED)
+    assert _offered_new_chat_ids(client) == ["build_app", "connect_data"]
+    mark(Marker.PERMISSION_REQUEST_FILED)
+    assert _offered_new_chat_ids(client) == ["build_app"]
+    # A build started just now holds the last one back.
+    mark(Marker.APP_BUILD_STARTED)
+    assert _offered_new_chat_ids(client) == []
+
+
+def test_the_new_chat_route_stops_suggesting_an_app_once_the_user_has_built_one(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry is read against the workspace the app runs in: a registered package the root project does not
+    list as its own is the user's app, and the template's own apps are not."""
+    workspace = tmp_path / "workspace"
+    write_workspace_with_a_user_built_app(workspace)
+    monkeypatch.chdir(workspace)
+    registry = Path(os.environ["MINDS_APPS_FILE"])
+    mark(Marker.TOUR_FINISHED)
+
+    write_plain_app_registry(registry, "chat")
+    with_the_templates_apps = _offered_new_chat_ids(client)
+    write_plain_app_registry(registry, "chat", "todo-list")
+    with_a_built_app = _offered_new_chat_ids(client)
+
+    assert with_the_templates_apps == ["new_chat", "phone_access", "build_app", "connect_data"]
+    assert with_a_built_app == ["new_chat", "phone_access", "connect_data"]
+
+
+def test_the_new_chat_route_offers_a_visitor_nothing(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    visitors = _get_new_chat_suggestions(client, headers=_identity_header(_VISITOR))
+    owners = _get_new_chat_suggestions(client, headers=_identity_header(RequestIdentity(owner=True)))
+
+    assert visitors.status_code == 200
+    assert visitors.get_json() == {"suggestions": []}
+    assert owners.get_json() == {"suggestions": _ALL_NEW_CHAT_SUGGESTIONS}
+
+
+def test_new_chat_suggestions_are_switched_off_by_their_own_switch_alone(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": False})
+    assert _offered_new_chat_ids(client) == []
+
+    # The next-step switch is another strip's.
+    client.put(
+        "/api/settings/suggestions",
+        json={"is_new_chat_suggestions_enabled": True, "is_next_step_suggestions_enabled": False},
+    )
+    assert len(_offered_new_chat_ids(client)) == 4
+
+
+def test_the_new_chat_route_offers_nothing_in_the_first_run_chat_while_its_tree_is_in_progress(
+    app: Flask, client: FlaskClient
+) -> None:
+    """The first conversation's own suggestions are the tree's; every other chat, and a chat the app does not
+    know yet, is offered the new-chat suggestions meanwhile."""
+    manager = state_of(app).agent_manager
+    mark(Marker.TOUR_FINISHED)
+    first_run_chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    assert manager.get_first_run_tree_step(ChatId(first_run_chat_id)) is FirstRunTreeStep.START
+
+    assert _offered_new_chat_ids(client, first_run_chat_id) == []
+    assert len(_offered_new_chat_ids(client, f"agent-{uuid4().hex}")) == 4
+    assert len(_offered_new_chat_ids(client, "")) == 4
+    assert len(_offered_new_chat_ids(client)) == 4
+    # An id that is no chat's shape names no chat, so no tree holds anything back.
+    assert len(_offered_new_chat_ids(client, "../../etc")) == 4
+
+    write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.IDEAS)
+    assert _offered_new_chat_ids(client, first_run_chat_id) == []
+
+    write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.DONE)
+    assert len(_offered_new_chat_ids(client, first_run_chat_id)) == 4
+
+
+def test_the_new_chat_route_offers_nothing_when_the_markers_cannot_be_read(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark(Marker.TOUR_FINISHED)
+    block_onboarding_markers(tmp_path, monkeypatch)
+
+    offered = _get_new_chat_suggestions(client)
+
+    # With the markers unreadable nothing is offered, rather than everything.
+    assert offered.status_code == 200
+    assert offered.get_json() == {"suggestions": []}
+
+
+def _wait_for_creates_to_finish(manager: AgentManager) -> None:
+    wait_until_true(
+        lambda: all(
+            provisional.phase is not ProvisionalChatPhase.CREATING for provisional in manager.get_provisional_chats()
+        ),
+        10,
+        "the creates to finish",
+    )
+
+
+def test_a_second_chat_a_person_starts_is_recorded_and_the_first_is_not(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The create names the client it came from, as the New chat button's does. One chat is no second chat."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+
+    first = client.post("/api/chats/create", json={"client_id": "client-1"})
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    second = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_create_no_person_asked_for_is_never_a_second_chat(tmp_path: Path, signed_in_account: str) -> None:
+    """A script's create names no client, and a room is no chat with an agent: neither is a person starting a
+    second chat, whatever exists already. A refused create is none either."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-1", "RUNNING")
+
+    scripted = client.post("/api/chats/create", json={"name": "assist-1a2b3c", "message": "/assist it broke"})
+    room = client.post("/api/chats/create", json={"kind": "room", "client_id": "client-1"})
+    refused = client.post("/api/chats/create", json={"chat_id": "never-minted", "client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert (scripted.status_code, room.status_code, refused.status_code) == (201, 201, 400)
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_only_another_chat_a_person_talks_to_makes_a_create_the_second(tmp_path: Path, signed_in_account: str) -> None:
+    """A helper another agent started and a room are not chats a person talks to an agent in, so a first chat
+    started beside them is still the first."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+    with manager._lock:
+        manager._agents["agent-helper"] = AgentStateItem(
+            id="agent-helper", name="helper", state="RUNNING", labels={"agent_created": "true"}, work_dir="/code"
+        )
+        manager._agents["agent-room"] = AgentStateItem(
+            id="agent-room", name="Lounge", state="RUNNING", labels={}, work_dir="/code", harness=HarnessType.ROOM
+        )
+
+    first = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(manager)
+
+    assert first.status_code == 201
+    assert not manager.has_person_chat_other_than(ChatId(first.get_json()["chat_id"]))
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_launching_the_first_run_chat_by_its_first_message_is_no_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The chat a workspace opens on exists before its agent does, and its own launch starts no second chat."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    seeded = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+
+    launched = client.post(
+        "/api/chats/create", json={"chat_id": seeded, "message": "See what Studio can do", "client_id": "client-1"}
+    )
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert launched.status_code == 201
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_chat_started_while_the_seeded_chat_awaits_its_first_message_is_a_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """A seeded chat with no agent yet is already a chat a person talks to."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+
+    started = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert started.status_code == 201
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def _intake_from_a_client(client: FlaskClient, **fields: object) -> Any:
+    """An intake as the shell posts one a person typed into its launcher: naming the client and its desktop."""
+    return client.post("/api/chats/intake", json={"client_id": "client-1", "desktop_id": "home", **fields})
+
+
+def test_a_new_chat_a_person_starts_from_the_launcher_beside_another_is_a_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The launcher's "New Chat" goes through the intake route, which makes the chat under the create route's rule."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+
+    first = _intake_from_a_client(client, target="new_chat", message="Teach me")
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    second = _intake_from_a_client(client, target="new_chat", message="And this, meanwhile")
+    _wait_for_creates_to_finish(manager)
+
+    assert (first.status_code, second.status_code) == (200, 200)
+    assert _chat_id_of(first.get_json()["path"]) != _chat_id_of(second.get_json()["path"])
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_an_intake_that_names_no_client_starts_no_second_chat(tmp_path: Path, signed_in_account: str) -> None:
+    """A script's intake makes its chat like any other, beside whatever exists, and is no person starting one."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    existing = f"agent-{uuid4().hex}"
+    _register_agent(app, existing, "Chat-1", "RUNNING")
+
+    scripted = client.post("/api/chats/intake", json={"target": "new_chat", "message": "Teach me"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert scripted.status_code == 200
+    made = ChatId(_chat_id_of(scripted.get_json()["path"]))
+    assert made != existing
+    assert state_of(app).agent_manager.has_person_chat_other_than(made)
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_an_intake_into_a_chat_that_exists_starts_no_second_chat(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send and a draft into a chat the app already lists make no chat, however many chats there are."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    receiving = "agent-00000000000000000000000000000123"
+    _track_claude_agent(app, receiving, "test-agent", tmp_path / "claude_config")
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-2", "RUNNING")
+
+    sent = _intake_from_a_client(
+        client, target="chat", chat_id=receiving, message="Carry on", is_delivery_awaited=True
+    )
+    drafted = _intake_from_a_client(
+        client, target="current_chat", is_draft="true", message="Draw me a seal", window_path=f"/?chat={receiving}"
+    )
+
+    assert (sent.status_code, drafted.status_code) == (200, 200)
+    assert sent.get_json() == {"path": f"/?chat={receiving}"}
+    assert _chat_id_of(drafted.get_json()["path"]) == receiving
+    assert messenger.sent == [(receiving, "Carry on")]
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_new_chat_the_launcher_can_only_mint_is_a_second_chat_beside_another_and_not_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With nothing signed in, or for a draft, the new chat waits for its first send; it is a chat all the same."""
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+
+    alone = _intake_from_a_client(client, target="new_chat", message="Teach me")
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    beside_it = _intake_from_a_client(client, target="new_chat", is_draft="true", message="A second thought")
+
+    assert (alone.status_code, beside_it.status_code) == (200, 200)
+    assert [provisional.phase for provisional in manager.get_provisional_chats()] == [
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+    ]
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_the_chat_about_an_app_is_a_second_chat_when_it_is_made_beside_another_and_never_when_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+    about_docs = {"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
+
+    made_alone = _intake_from_a_client(client, **about_docs)
+    found = _intake_from_a_client(client, **about_docs)
+
+    assert (made_alone.status_code, found.status_code) == (200, 200)
+    assert _chat_id_of(found.get_json()["path"]) == _chat_id_of(made_alone.get_json()["path"])
+    assert len(manager.get_provisional_chats()) == 1
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+    made_beside_it = _intake_from_a_client(client, target="app_chat", app="files", app_display_name="Files")
+
+    assert made_beside_it.status_code == 200
+    assert len(manager.get_provisional_chats()) == 2
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_the_lounge_an_intake_makes_is_a_room_and_no_second_chat(app: Flask, client: FlaskClient) -> None:
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-1", "RUNNING")
+
+    response = _intake_from_a_client(client, target="lounge", is_draft="true", message="@Bob ")
+
+    assert response.status_code == 200
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions(tmp_path: Path) -> None:
+    """The first-run chat offers its replies before any agent exists: the route answers for a seeded chat that
+    is still provisional, naming the welcome's last turn as the message the set follows."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+
+    response = client.get(f"/api/chats/{chat_id}/suggestions")
+
+    last_event = client.get(f"/api/chats/{chat_id}/events").get_json()["events"][-1]
+    assert last_event["text"] == "**How do you want to start?**"
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "ready",
+        "after_event_id": last_event["event_id"],
+        "source": "fixed",
+        "suggestions": [
+            {
+                "suggestion_id": "start-describe",
+                "label": "Describe what you want to make",
+                "action": None,
+                "is_recommended": False,
+            },
+            {
+                "suggestion_id": "start-ideas",
+                "label": "Get ideas for what to make",
+                "action": None,
+                "is_recommended": False,
+            },
+            {
+                "suggestion_id": "start-features",
+                "label": "See what Studio can do",
+                "action": None,
+                "is_recommended": False,
+            },
+        ],
+        "sets": [
+            {
+                "after_event_id": last_event["event_id"],
+                "source": "fixed",
+                "suggestions": response.get_json()["suggestions"],
+            }
+        ],
+    }
+
+
+def test_a_first_message_that_launches_the_first_run_chat_moves_its_tree(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """With no agent yet, the first pick rides the create; the tree moves by it as it would by a send."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.START
+
+    response = client.post("/api/chats/create", json={"chat_id": chat_id, "message": "Get ideas for what to make"})
+    wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+
+    assert response.status_code == 201
+    assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.CATEGORIES
+
+
+def test_a_send_held_for_the_first_run_chats_agent_moves_its_tree_and_a_refused_one_does_not(
+    tmp_path: Path,
+) -> None:
+    """The step follows what the chat took: a send kept for the agent being created counts, since it is delivered
+    as that agent lands, and one the chat refused does not, since its user sends it again."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    chat_id = ChatId(client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"])
+
+    # Awaiting its first send, the chat has no agent to take a message through this route.
+    refused = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+    step_after_the_refusal = manager.get_first_run_tree_step(chat_id)
+    with manager._lock:
+        manager._provisional_chats[chat_id] = manager._provisional_chats[chat_id].model_copy_update(
+            to_update(manager._provisional_chats[chat_id].field_ref().phase, ProvisionalChatPhase.CREATING)
+        )
+    held = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+
+    assert refused.status_code == 404
+    assert step_after_the_refusal is FirstRunTreeStep.START
+    assert held.status_code == 202
+    assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.CATEGORIES
+
+
+def test_a_first_run_chats_tree_moves_with_a_delivered_send_and_with_an_intakes(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the first-run chat has its agent, a message reaches the tree by whichever route delivers it: the message
+    route, or an intake."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    chat_id = ChatId("agent-00000000000000000000000000000001")
+    _track_claude_agent(app, chat_id, "only", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    write_first_run_context(manager.chat_files_root / chat_id, "")
+    write_first_run_tree_step(manager.chat_files_root / chat_id, FirstRunTreeStep.START)
+
+    sent = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+    step_after_the_send = manager.get_first_run_tree_step(chat_id)
+    intake = _intake(client, message="Sales, Money, ", target="chat_selector", is_delivery_awaited=True)
+
+    assert sent.status_code == 200
+    assert step_after_the_send is FirstRunTreeStep.CATEGORIES
+    assert intake.status_code == 200
+    assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.CONNECTORS
+    assert messenger.sent == [(chat_id, "Get ideas for what to make"), (chat_id, "Sales, Money, ")]
+
+
+_NO_SUGGESTIONS: Final[dict[str, Any]] = {
+    "status": "none",
+    "after_event_id": None,
+    "source": None,
+    "suggestions": [],
+    "sets": [],
+}
+
+
+def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    response = client.get(f"/api/chats/{chat_id}/suggestions")
+
+    assert response.status_code == 200
+    assert response.get_json() == _NO_SUGGESTIONS
+
+
+def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, client: FlaskClient) -> None:
+    _register_agent(app, "agent-suggested", "Chat-1", "RUNNING")
+    none_yet = client.get("/api/chats/agent-suggested/suggestions")
+    write_chat_suggestions(
+        state_of(app).agent_manager.chat_files_root / "agent-suggested",
+        ChatSuggestions(
+            after_event_id="evt-reply-7",
+            source=SuggestionSource.GENERATED,
+            suggestions=(
+                Suggestion(suggestion_id="s1", label="Yes, go ahead", is_recommended=True),
+                Suggestion(suggestion_id="s2", label="Show me the plan first"),
+            ),
+        ),
+    )
+
+    response = client.get("/api/chats/agent-suggested/suggestions")
+
+    suggestions = [
+        {"suggestion_id": "s1", "label": "Yes, go ahead", "action": None, "is_recommended": True},
+        {"suggestion_id": "s2", "label": "Show me the plan first", "action": None, "is_recommended": False},
+    ]
+    assert none_yet.get_json() == _NO_SUGGESTIONS
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "ready",
+        "after_event_id": "evt-reply-7",
+        "source": "generated",
+        "suggestions": suggestions,
+        "sets": [{"after_event_id": "evt-reply-7", "source": "generated", "suggestions": suggestions}],
+    }
+
+
+def test_the_route_lists_every_set_stored_for_the_chat_since_the_app_started_oldest_first(
+    app: Flask, client: FlaskClient
+) -> None:
+    """A reply that has been answered keeps its set for the pages: the stored set is the last reply's alone, and
+    ``sets`` holds the earlier ones too, through the stored one's removal."""
+    _register_agent(app, "agent-suggested", "Chat-1", "RUNNING")
+    _register_agent(app, "agent-elsewhere", "Chat-2", "RUNNING")
+    store = state_of(app).agent_manager.suggestion_store
+    store.write(ChatId("agent-suggested"), make_generated_suggestions("evt-reply-1", "Yes, go ahead"))
+    store.write(ChatId("agent-suggested"), make_generated_suggestions("evt-reply-2", "Show me the app"))
+    store.write(ChatId("agent-elsewhere"), make_generated_suggestions("evt-reply-9", "Not now"))
+
+    with_the_second_stored = client.get("/api/chats/agent-suggested/suggestions").get_json()
+    store.remove(ChatId("agent-suggested"))
+    with_none_stored = client.get("/api/chats/agent-suggested/suggestions").get_json()
+
+    first = [{"suggestion_id": "generated-1", "label": "Yes, go ahead", "action": None, "is_recommended": False}]
+    second = [{"suggestion_id": "generated-1", "label": "Show me the app", "action": None, "is_recommended": False}]
+    sets = [
+        {"after_event_id": "evt-reply-1", "source": "generated", "suggestions": first},
+        {"after_event_id": "evt-reply-2", "source": "generated", "suggestions": second},
+    ]
+    assert with_the_second_stored == {
+        "status": "ready",
+        "after_event_id": "evt-reply-2",
+        "source": "generated",
+        "suggestions": second,
+        "sets": sets,
+    }
+    assert with_none_stored == {**_NO_SUGGESTIONS, "sets": sets}
+
+
+def test_a_destroyed_chats_sets_are_forgotten(tmp_path: Path) -> None:
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "agent-suggested", name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager.suggestion_store.write(
+        ChatId("agent-suggested"), make_generated_suggestions("evt-reply-1", "Yes, go ahead")
+    )
+    remembered_while_listed = manager.get_remembered_suggestions(ChatId("agent-suggested"))
+
+    destroyed = client.post("/api/chats/agent-suggested/destroy")
+
+    assert len(remembered_while_listed) == 1
+    assert destroyed.status_code == 200
+    assert manager.get_remembered_suggestions(ChatId("agent-suggested")) == ()
+
+
+def test_a_seeded_chat_deleted_before_its_first_send_has_its_sets_forgotten(app: Flask, client: FlaskClient) -> None:
+    """A first-run chat is seeded with its start suggestions, which go from the memory with the chat."""
+    agent_manager = state_of(app).agent_manager
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    remembered_while_listed = agent_manager.get_remembered_suggestions(ChatId(chat_id))
+
+    deleted = client.post(f"/api/chats/{chat_id}/destroy")
+
+    assert [suggestions.source for suggestions in remembered_while_listed] == [SuggestionSource.FIXED]
+    assert deleted.status_code == 200
+    assert agent_manager.get_remembered_suggestions(ChatId(chat_id)) == ()
+
+
+def test_a_turns_end_works_out_suggestions_the_route_reads_pending_and_then_ready(
+    app: Flask, client: FlaskClient, tmp_path: Path
+) -> None:
+    """The page reads ``pending`` while the model answers, hears one push when the set is stored, and then reads the
+    set under the reply its own transcript ends on."""
+    claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "Chat-1", claude_config_dir)
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True)
+    records = [
+        {
+            "type": "user",
+            "uuid": "uuid-asked",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Build me a plant tracker"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "uuid-replied",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-6",
+                "content": [{"type": "text", "text": "Built. Want reminders?"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+    (projects_dir / "suggested-session.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    (agent_state_dir / "claude_session_id_history").write_text("suggested-session\n")
+    state = state_of(app)
+    completion = ScriptedOneShotCompletion(['<suggestion recommended="true">Yes, add reminders</suggestion>'])
+    answers_while_asked: list[dict[str, Any]] = []
+    completion.on_call = lambda: answers_while_asked.append(client.get("/api/chats/agent-123/suggestions").get_json())
+    install_suggestion_generator(state, lambda _harness: completion, InlineExecutor())
+    reply_event_id = client.get("/api/chats/agent-123/events").get_json()["events"][-1]["event_id"]
+    pushes = state.broadcaster.register()
+    assert state.suggestion_generator is not None
+
+    state.suggestion_generator.consider_turn_end(ChatId("agent-123"))
+
+    suggestions = [
+        {"suggestion_id": "generated-1", "label": "Yes, add reminders", "action": None, "is_recommended": True}
+    ]
+    assert answers_while_asked == [
+        {"status": "pending", "after_event_id": reply_event_id, "source": None, "suggestions": [], "sets": []}
+    ]
+    assert drain_pushes(pushes) == [{"type": "suggestions_updated", "chat_id": "agent-123"}]
+    assert client.get("/api/chats/agent-123/suggestions").get_json() == {
+        "status": "ready",
+        "after_event_id": reply_event_id,
+        "source": "generated",
+        "suggestions": suggestions,
+        "sets": [{"after_event_id": reply_event_id, "source": "generated", "suggestions": suggestions}],
+    }
+    assert completion.prompts == [
+        '<turn speaker="user">\nBuild me a plant tracker\n</turn>\n'
+        '<turn speaker="assistant">\nBuilt. Want reminders?\n</turn>'
+    ]
+
+
+def test_the_suggestions_of_a_chat_the_app_does_not_know_are_not_found(app: Flask, client: FlaskClient) -> None:
+    """A folder alone is not a chat: a set left under an id the app neither lists nor holds is never answered."""
+    write_chat_suggestions(
+        state_of(app).agent_manager.chat_files_root / "agent-gone",
+        ChatSuggestions(after_event_id="evt-1", source=SuggestionSource.FIXED, suggestions=()),
+    )
+
+    assert client.get("/api/chats/agent-gone/suggestions").status_code == 404
+    assert client.get("/api/chats/agent-never/suggestions").status_code == 404
 
 
 def test_a_chats_idle_compaction_defaults_to_the_workspaces_and_is_replaced_whole(
@@ -4486,6 +5437,24 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     assert client.get("/assets/../chat.html").status_code == 404
 
 
+def test_caches_an_asset_named_from_its_content_for_good_and_revalidates_the_rest(tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "assets" / "chat-D4x_9-Qa.js").write_text("console.log('chat');")
+    (static / "assets" / "chat.js").write_text("console.log('chat');")
+    state = build_test_state()
+    state.static_directory = static
+    client = create_application(state).test_client()
+
+    hashed = client.get("/assets/chat-D4x_9-Qa.js")
+    unhashed = client.get("/assets/chat.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:
     """A request for an existing image file's absolute path streams its bytes inline."""
     image_path = tmp_path / "chart.png"
@@ -4761,6 +5730,31 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
 
 
 @pytest.mark.timeout(15)
+def test_the_chat_list_a_page_connects_to_says_whether_a_first_conversation_is_still_following_its_tree(
+    app: Flask, client: FlaskClient
+) -> None:
+    """The chat root tells the shell from this, so a page that connects mid-tree learns it without a push."""
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+
+    def replayed_chat_list() -> dict[str, Any]:
+        with serve_app(app) as served:
+            ws = open_ws(served, "/api/ws")
+            try:
+                message = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+                while message["type"] != "chats_updated":
+                    message = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            finally:
+                close_ws(ws)
+        return message
+
+    replayed_at_the_start = replayed_chat_list()
+    write_first_run_tree_step(state_of(app).agent_manager.chat_files_root / chat_id, FirstRunTreeStep.DONE)
+
+    assert replayed_at_the_start["is_first_conversation_pending"] is True
+    assert replayed_chat_list()["is_first_conversation_pending"] is False
+
+
+@pytest.mark.timeout(15)
 def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
     config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:
@@ -4958,6 +5952,51 @@ def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) 
     assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
+def test_an_interrupt_waits_out_a_landed_handoffs_deliveries_and_then_stops_the_successor(tmp_path: Path) -> None:
+    """Once the successor is the chat's agent the page offers Stop; the route holds it until the switch has
+    delivered everything it owes the successor, so the restart cannot race a delivery, then interrupts."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SWITCHING)
+    _track_claude_agent(app, successor, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    landed = record.model_copy_update(
+        to_update(
+            record.field_ref().agents,
+            (
+                make_chat_agent_entry(1, first, is_archived=True),
+                make_chat_agent_entry(2, successor, is_archived=False),
+            ),
+        )
+    )
+    manager._chat_record_store.write(landed)
+    manager.refresh_chat_records()
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["handoff"]["has_landed"], chat["active_agent"]["agent_id"]) for chat in listed] == [
+        (True, successor)
+    ]
+
+    restarted = FinishedProcess(
+        returncode=0, stdout="Restarted", stderr="", command=("mngr",), is_output_already_logged=False
+    )
+    answers: list[int] = []
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=restarted) as run:
+        interrupter = ObservableThread(
+            target=lambda: answers.append(client.post(f"/api/chats/{first}/interrupt").status_code),
+            name="interrupter",
+        )
+        interrupter.start()
+        interrupter.join(timeout=0.3)
+        assert interrupter.is_alive() and answers == [] and run.call_count == 0
+        manager._chat_record_store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        interrupter.join(timeout=10.0)
+    assert answers == [200]
+    assert run.call_args.kwargs["command"][:3] == ["mngr", "start", "Chat-1"]
+
+
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
@@ -5114,8 +6153,10 @@ def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -
     assert retried.get_json() == {"status": "converging", "phase": "switching"}
     wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
     argv = log_path.read_text().splitlines()
-    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
-    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    verbs = [line.split(" ")[0] for line in argv]
+    assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+    create = argv[verbs.index("create")]
+    assert f"--id {successor}" in create and "--type codex" in create
     listed_after = client.get("/api/chats").get_json()["chats"]
     assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
         (first, successor, [first, successor])
@@ -6584,6 +7625,31 @@ def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the
         "message": "@Josh look at this",
         "destination": {"type": "minds:focus-chat", "chatId": _LOUNGE_ID},
     }
+
+
+def test_the_owners_mention_notification_leaves_out_a_dictated_messages_note(tmp_path: Path) -> None:
+    gateway = RecordingGateway(status=200)
+    dictated = (
+        "@Josh look at this\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, RecordingMngrMessenger(), imbue_studio_gateway=access)
+        client = app.test_client()
+        try:
+            client.post(
+                f"/api/chats/{_LOUNGE_ID}/message",
+                json={"message": dictated, "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_until_true(lambda: len(gateway.received) == 1, 10.0, "the owner's notification to be posted")
+        finally:
+            state_of(app).shutdown()
+    (received,) = gateway.received
+    assert received.body["message"] == "@Josh look at this"
 
 
 def test_a_mention_in_an_agent_chat_is_a_word_the_agent_reads_and_nothing_more(tmp_path: Path) -> None:

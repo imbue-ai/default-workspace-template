@@ -17,7 +17,8 @@ function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
   return {
     window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
     app: buddy,
-    title: "Buddy",
+    // The window's own title, which names the page it is on rather than the app.
+    title: "Planning the garden",
     isMinimized: true,
     isDetached: false,
     isFocused: false,
@@ -70,6 +71,12 @@ describe("FloatingEntries", () => {
     const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     entry.dispatchEvent(rightClick);
     expect(rightClick.defaultPrevented).toBe(false);
+  });
+
+  it("names the app, not the page its window is on", () => {
+    const entry = render().querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
+    expect(entry.getAttribute("aria-label")).toBe("Buddy");
+    expect(entry.getAttribute("data-hover-tooltip")).toBe("Buddy");
   });
 
   it("marks and dims an entry whose window is shown in its own desktop window, like a minimized one", () => {

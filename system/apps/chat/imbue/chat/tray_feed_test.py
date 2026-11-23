@@ -32,6 +32,16 @@ def test_a_bubble_shows_the_first_part_of_a_message() -> None:
     assert len(bubble_text("x" * 500)) == BUBBLE_TEXT_LIMIT
 
 
+def test_a_bubble_never_shows_a_messages_dictation_note() -> None:
+    note = "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+
+    assert bubble_text(f"  hi all\n\n{note}") == "hi all"
+    # The note goes before the cut: cut first, a message just short of the limit would keep the note's opening.
+    almost_full = "x" * (BUBBLE_TEXT_LIMIT - 10)
+    assert bubble_text(f"{almost_full}\n\n{note}") == almost_full
+    assert bubble_text(f"{'x' * 500}\n\n{note}") == "x" * BUBBLE_TEXT_LIMIT
+
+
 def test_every_chat_status_and_kind_is_spelled_the_same_on_the_wire() -> None:
     assert [activity_status_of(status).name for status in ChatStatus] == [status.name for status in ChatStatus]
     assert [activity_kind_of(kind).name for kind in ChatKind] == [kind.name for kind in ChatKind]

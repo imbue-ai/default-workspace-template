@@ -91,7 +91,15 @@ Triage each conflict; the first rule that applies wins:
   --package-lock-only` for npm) and `git add` the result.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
-- **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
+- **The template's changelog -> take the target's side**: `git checkout
+  --theirs -- <path> && git add <path>` for the root `CHANGELOG.md` and
+  `UNABRIDGED_CHANGELOG.md`, and `git rm <path>` for a `changelog/` entry file
+  the target deletes (its text has moved into those two files). When the
+  workspace's side holds text the target's lacks (its own lines in a root
+  file, or its edit to an entry file), first save the workspace's version to a
+  new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
+  and name the move in your report.
+- **Mixed files (`AGENTS.md`, `CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
   "ours is a superset" is a claim you must **verify, not assert**: diff the
@@ -298,6 +306,12 @@ chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
 `references/worker-provisioning-changes.md` and report each there.
 
+**A user app on port 8090 or 8091 is moved.** Those are the Screen's service
+and neko ports, which older scaffolds could hand out, breaking the Screen. Move
+any workspace-added app on either to a free port in your branch (its program
+line's `--url` and its runner's `PORT` default), and name the move under
+**Impact analysis**.
+
 ### 4b. Validate
 
 **Validation depth is decided by rule, not by judgment**, the same way the
@@ -408,10 +422,10 @@ in your report.
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
-  app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
+  app's, the Screen's, the Style Guide's, and the Onboarding checklist's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those eight bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all seven locations in your report.
+  installed only as a set) -- name all eight locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -522,8 +536,15 @@ fallback is a restart.
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    changelog-entries --base "$BASE" --target "$TARGET_REF"
+    changelog-entries --base "$BASE" --target "$TARGET_REF" \
+    --out data/.tasks/update-self/whats-new.md
 ```
+
+`data/.tasks/update-self/whats-new.md` is what you digest: for each release
+newer than the workspace's (`release` in the printed JSON), newest first, its
+section of the target's root `CHANGELOG.md`, plus `[Unreleased]` when the target
+has unreleased changes. `sections` names each one. Repeat any `note` in your
+report. Read a long file in parts.
 
 ## 6. Report back
 
@@ -561,7 +582,8 @@ Valid `name:` values:
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`.
   The body gives the lead everything for the audit, the apply, and the results
   message:
-  - **What's new** -- a digest of the changelog entries.
+  - **What's new** -- a digest of Step 5's file, release by release, and any
+    `note`.
   - **Conflicts** -- each one and its resolution. For any side-pick, or claim
     that the kept side subsumes the other, list what the discarded side changed
     and where each change ended up, from the base-diff accounting of Step 2.
@@ -574,13 +596,14 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all seven (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all eight (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
     `<your work_dir>/system/apps/routines/src/routines_app/static`,
-    `<your work_dir>/system/apps/screen/src/screen/static`, and
-    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
+    `<your work_dir>/system/apps/screen/src/screen/static`,
+    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`, and
+    `<your work_dir>/system/apps/onboarding_checklist/src/onboarding_checklist/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,
