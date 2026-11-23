@@ -6,6 +6,10 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ## [Unreleased]
 
+## [minds-v0.10.6] - 2026-11-22
+
+This release carries chat suggestions (clickable replies after an agent's answer, and onboarding steps on a chat nobody has written in), a first conversation that opens on a short welcome with three start suggestions, the Onboarding checklist app the show-around tour ends on, a full-window provider sign-in page on a first run, long pastes as attachments, dictation that loads its speech model on demand, and compressed pages on a shared workspace.
+
 ### Added
 
 - Added: A paste of at least 4,000 characters or 80 lines into the chat composer becomes a `pasted-text-N.txt` attachment, stored in the chat's own folder, with "Paste as text" to undo it.
@@ -58,6 +62,7 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: `AGENTS.md` tells agents to say anything the user must read at a step boundary rather than mid-step, where it folds out of sight.
 - Changed: The show-around tour waits until the first conversation's scripted replies are done, starts when any page reports an agent working (so on every harness), and records `is_finished`; its last card opens the Onboarding checklist.
 - Changed: `build-app` sets the `app_build_started` onboarding marker, and `update-self` builds the Onboarding checklist's frontend too (eight bundles).
+- Changed: mngr is pinned to its `minds-v0.10.6` release, the one the 0.10.6 desktop app ships.
 
 ### Removed
 
