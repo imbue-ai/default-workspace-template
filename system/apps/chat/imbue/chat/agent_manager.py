@@ -128,7 +128,6 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
 from imbue.chat.compaction_status import shown_compaction_cause
 from imbue.chat.compaction_status import write_compaction_request
-from imbue.chat.harnesses.account_binding import AccountLaneUnavailableError
 from imbue.chat.first_run import finish_provider_step
 from imbue.chat.first_run import is_provider_step_pending
 from imbue.chat.first_run import mark_provider_step_pending
@@ -136,6 +135,7 @@ from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.first_run_tree import next_first_run_tree_step
 from imbue.chat.first_run_tree import read_first_run_tree_step
 from imbue.chat.first_run_tree import write_first_run_tree_step
+from imbue.chat.harnesses.account_binding import AccountLaneUnavailableError
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
