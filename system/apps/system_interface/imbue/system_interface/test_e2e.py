@@ -350,10 +350,11 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # installs the served element context menu as a scaffolded app's page does, so a right-click in the frame drafts
 # through the shell. A terminal-like page nests a frame (``_PTY_PAGE``) and passes both its ``shell:shown`` and the
 # shell's ``ttyd-focus`` on to it. Its ``#pic`` is a 3 by 2 image of the page's own, drawn larger in a corner, and
-# its ``#task`` has rows of its own in the menu, of every kind, whose picks it records in ``__picked``.
+# its ``#task`` has rows of its own in the menu, of every kind, whose picks it records in ``__picked``; both sit on
+# the right edge, clear of the links a test appends at the end of the body.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" /><div style="height: 4000px"></div>
-<div id="task" style="position: fixed; left: 4px; bottom: 4px">task</div>
+<div id="task" style="position: fixed; right: 4px; bottom: 32px">task</div>
 <img id="pic" alt="" style="position: fixed; right: 4px; bottom: 4px; width: 24px; height: 24px"
   src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAEUlEQVR4nGM4ISf3H4YZkDkAmxUME7OZWHkAAAAASUVORK5CYII=" />
 <script type="module">
