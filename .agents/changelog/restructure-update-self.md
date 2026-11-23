@@ -14,6 +14,8 @@
 
 - **The skill-exemption commit is not an edit of the worker's.** The worker commits what `validate_skill.py --stamp` wrote, alone, as `Record skill-check exemptions`. That commit selects no suite, and does not end the clean-pull skip of the review gates.
 
+- **Description.** It is in the third person and no longer states the default target release, which its standing instructions carry.
+
 - **Fixed**: the catch-up's "all three" frontend bundles (there are seven), and a browser README path that does not exist.
 
 `update-self` keeps an exemption for the `contents` check only, which it fails through two shared files. It links no file inside another skill: the review gates, the page-driving rules and the packaging migration guide it sends the worker to are shared references, named by their staged paths.
