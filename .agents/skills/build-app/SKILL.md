@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves, shown framed as a mock, first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Use when the user asks for one, or asks to see a mockup, sketch or design of one before it is built, whether scaffolded as a new Flask app (the canonical path) or wrapping a pre-existing third-party server. For changing an existing app use update-app."
 metadata:
   author: imbue
   crystallized: true
@@ -60,7 +60,7 @@ existing app, use the `update-app` skill.
 
 ## Steps
 
-1. Clarify and plan. *Ends the turn:* wait for approval.
+1. Clarify and plan. *Ends the turn* only when a question blocks.
 2. Choose the path, the name and the icon. Wrapping an existing server replaces
    steps 3 to 5 with `references/wrap-existing-server.md`.
 3. Scaffold the app.
@@ -75,15 +75,17 @@ existing app, use the `update-app` skill.
 
 Ask only the questions that block: a fork both genuinely uncertain and
 expensive to reverse. Most apps have none. Default to the simplest conventional
-choice and to a **single user**, state each default in one line, and move on.
-Choices that are cheap to reverse (persistence, auto-reload or
-reload-to-refresh, latest-only or history) do not block: pick the obvious
-default and let them surface in the mock loop or as a later follow-up, where
-the user reacts to something concrete.
+choice and to a **single user**. Choices that are cheap to reverse
+(persistence, auto-reload or reload-to-refresh, latest-only or history) do not
+block: pick the obvious default and let them surface in the mock loop or as a
+later follow-up, where the user reacts to something concrete.
+
+Ask a blocking question and end the turn. With none, say what you will build
+and each default in a line or two, then go on to step 2 in the same turn: the
+user approves the shape at the mock.
 
 Record the defaults you stated: they are the architecture you build once, after
-the mock converges. Build none of it yet. Propose a small plan and wait for
-approval.
+the mock converges.
 
 ## Step 2: Choose the path, the name and the icon
 
@@ -256,5 +258,3 @@ the harden worker, the poll, the merge on `done`, and the window refresh after
 it. Give it the slug (the app's name) and a task body naming the app's package
 path, its name and what it does. The app is on disk and confirmed live, so the
 worker reconstructs nothing and has no gate of its own.
-If the pass changes the look and feel, confirm with the user again before
-calling the work done.
