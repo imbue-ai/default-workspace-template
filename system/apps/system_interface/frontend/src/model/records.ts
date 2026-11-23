@@ -285,10 +285,11 @@ export interface ClientArrival {
 }
 
 /** One app's part of the answer to a message every app took (contracts.md section 5.6), as far as a page reads it:
- *  for a page shown, whether the client has only pop-outs open, so the page waits on its desktop for a desktop
- *  window (false for a posted message). */
+ *  for a page shown, the window that shows it, and whether the client has only pop-outs open, so the page waits
+ *  on its desktop for a desktop window (null and false for a posted message). */
 export interface MessageDelivery {
   readonly app: string;
+  readonly window_id: string | null;
   readonly has_no_desktop_window: boolean;
 }
 
@@ -795,6 +796,7 @@ function parseMessageDelivery(raw: unknown): MessageDelivery {
   const record = asObject(raw, "message delivery");
   return {
     app: asString(record.app, "message delivery.app"),
+    window_id: typeof record.window_id === "string" && record.window_id !== "" ? record.window_id : null,
     has_no_desktop_window: asBoolean(record.has_no_desktop_window ?? false, "message delivery.has_no_desktop_window"),
   };
 }

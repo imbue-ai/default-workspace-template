@@ -35,8 +35,10 @@ const STROKE_PATHS = {
   mic: `<path d="${MIC_CAPSULE_PATH}"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>`,
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  // Lucide "user-plus": sharing grants people access by email, so the glyph
-  // shows a person being added.
+  // Lucide "forward": sharing hands an app on to someone else, so the glyph is
+  // an arrow setting off.
+  share: '<path d="m15 17 5-5-5-5"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
+  // Lucide "user-plus": a person being added.
   "user-plus":
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
   // Lucide "user": a neutral silhouette for a person who has no name or picture to show.
