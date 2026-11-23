@@ -1032,7 +1032,8 @@ The chat root passes it to the shell (`frontend/src/root/firstConversationReport
 the answer changes, and again when a shell greets it. The root sends it, not a chat page,
 since the root is loaded whichever chat is on screen. The shell keeps the root's word until
 its frame loads again or goes, and starts the tour as the conversation ends when a reply is
-already under way, else with the next reply. With "Describe what you want to make" or "See
+already under way, else with the next reply. A shell that frames no chat root (its chat
+window not shown since the shell's page loaded) hears nothing, and holds nothing. With "Describe what you want to make" or "See
 what Studio can do" as the first pick the tree is done at that message, and the tour begins
 with its reply; with "Get ideas for what to make" it waits until an idea is picked, or
 anything but "More ideas" is said, at the list of ideas.
