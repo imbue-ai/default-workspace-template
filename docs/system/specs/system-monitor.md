@@ -161,10 +161,25 @@ A state machine driven by each sample's usage:
 
 A stretch still open when the sampler stops is lost; the next start begins calm.
 
-### 3.5 Cost
+### 3.5 Who holds the memory
 
-Calm: one `stat` read per process every 5 s, one `meminfo` read, one file rename.
+Memory is credited to the same roots as CPU (a registered agent's main pid or a supervised program's pid, every other process rolled up through its ppids), by each process's anonymous memory: the `Anonymous` lines of `/proc/<pid>/smaps_rollup`, or of `smaps` under gVisor (`meminfo.read_process_anonymous_kib`).
+That is roughly what stopping the process frees, and the figure earlyoom weighs under gVisor; resident sizes are not used, since gVisor counts the whole span of every mapping a process touched.
+Measured on gen-2 slices on 2026-11-23, reading it for every process (35 to 53 of them) takes 0.06 to 0.13 s.
+
+- **Holders.** Every `MEMORY_HOLDERS_INTERVAL_SECONDS` (600), and on the first reading after a start, the sampler appends a `memory_holders` event to `events/memory_holders/events.jsonl`: the guard's `total_bytes` and `used_bytes`, the anonymous memory of every process (`held_bytes`), what no root claims (`other_bytes`), and `top`, the five largest roots as in a stretch's `top` with `bytes` in place of `share`.
+  A slow leak shows as one holder climbing from one snapshot to the next.
+- **Memory stretches.** A second state machine over each sample's memory share (the guard's figure, section 3.2): a stretch opens once the share has stayed at or above `MEMORY_STRETCH_OPEN_USAGE` (0.85) for `MEMORY_STRETCH_OPEN_SECONDS` (60), at the time of the first such sample, and closes once it has stayed below `MEMORY_STRETCH_CLOSE_USAGE` (0.80) for 60 s, at the time of the first such sample.
+  It opens below the guard's shedding point (about 90%) so its start is on record before the guard acts, and because the guard sheds the sampler first among the built-in services, the opening is written at once: a `memory_stretch_opened` event with a fresh `stretch_id`, the share and bytes in use, and the top three holders.
+  While it is open, a reading above the one the holders were last taken at re-takes them, at most every `MEMORY_PEAK_SNAPSHOT_INTERVAL_SECONDS` (30).
+  On closing it appends a `memory_stretch` event with the same `stretch_id`: `started_at`, `ended_at`, `duration_seconds`, `peak` and `average` share over its own samples, `peak_used_bytes`, `total_bytes`, and the top three holders at the highest reading they were taken at, with `other_bytes`.
+  Both events go to `events/memory_stretches/events.jsonl`; a stretch still open when the sampler stops has only its opening event.
+
+### 3.6 Cost
+
+Calm: one `stat` read per process every 5 s, one `meminfo` read, one file rename, and every ten minutes one `smaps` read per process.
 Busy: the same, plus a registry listing and one supervisord call every 30 s.
+High memory: the same, plus one `smaps` read per process and a registry listing at most every 30 s while memory keeps climbing.
 Memory: the 10-minute ring (120 samples) and the per-pid dictionaries, under 100 KB.
 
 ## 4. Part B: the app
@@ -279,7 +294,7 @@ The workspace's own programs carry no target: nothing on the page can stop the c
 
 ## 6. Tests
 
-- `oom_priority/resource_sampler_test.py`: the stat parser; the busy-ticks sum over a fake `/proc` with a new, a gone and a reaped process; usage and per-pid shares with a fake clock and tick rate; cores from `cpu.max`, `max`, and no file; the recent file written and read back; the minute lines and the rewrite past two days; the stretch state machine (open after 60 s, not after 55 s, close with hysteresis, the 2-minute minimum, attribution with a root that exits mid-stretch).
+- `oom_priority/resource_sampler_test.py`: the stat parser; the busy-ticks sum over a fake `/proc` with a new, a gone and a reaped process; usage and per-pid shares with a fake clock and tick rate; cores from `cpu.max`, `max`, and no file; the recent file written and read back; the minute lines and the rewrite past two days; the stretch state machine (open after 60 s, not after 55 s, close with hysteresis, the 2-minute minimum, attribution with a root that exits mid-stretch); memory rolled up to its roots, largest first; the memory stretch (open after a minute at 85%, the opening event written at once, held through 82%, closed with the holders from its peak); the sampler's holders every ten minutes and a memory stretch's opening event over a fake `/proc`.
 - `oom_priority/bin/resource_sampler_test.py`: one `--once` round under a bare `python3` against a fake `/proc`, writing the recent file.
 - `oom_priority/meminfo_test.py`: the reader's cases, moved from the app's `memory_test.py`.
 - The app: `cpu_test.py` (recent file, history spans and downsampling, stretch events into plain words), `disk_test.py` (the buckets over a temporary tree, a missing bucket, the scan state), `backups_test.py` (each state from a written events file), `usage_test.py` (CPU shares rolled up by group, the System row's remainder, the stop targets, a chat's checkers by pid), `actions_test.py` (a stand-in chat app, a real process to signal, a fake supervisord socket), and `runner_test.py` for the routes and the API document.

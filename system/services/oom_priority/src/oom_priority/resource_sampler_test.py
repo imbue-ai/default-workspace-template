@@ -191,7 +191,9 @@ def test_a_stretch_opens_after_a_minute_above_the_threshold_and_not_before() -> 
     assert tracker.is_open
 
 
-def test_a_stretch_opening_at_time_zero_is_measured_from_its_first_busy_sample() -> None:
+def test_a_stretch_opening_at_time_zero_is_measured_from_its_first_busy_sample() -> (
+    None
+):
     tracker = rs.StretchTracker(lambda: {})
     ticks = _ticks({1: (0, 0, 0)})
 
@@ -338,3 +340,187 @@ def test_the_sampler_writes_the_recent_file_from_its_second_sample_and_continues
         cpu_count=2,
     )
     assert list(restarted.samples) == [rs.Sample(1_005_000, 0.2, 0.625)]
+
+
+def test_memory_rolls_up_to_the_chat_or_program_a_process_runs_under_largest_first() -> (
+    None
+):
+    chat_root, program_root = 100, 200
+    roots = {
+        chat_root: {"kind": "chat", "agent_id": "agent-m"},
+        program_root: {"kind": "program", "program": "recipe-box"},
+    }
+    # 101 and 102 run under the chat (102 through 101); 201 under the program; 300 under neither.
+    ticks = _ticks(
+        {
+            1: (0, 0, 0),
+            chat_root: (1, 0, 0),
+            101: (chat_root, 0, 0),
+            102: (101, 0, 0),
+            program_root: (1, 0, 0),
+            201: (program_root, 0, 0),
+            300: (1, 0, 0),
+        }
+    )
+    sizes = {chat_root: 50, 101: 300, 102: 150, program_root: 40, 201: 60, 300: 70}
+
+    holders = rs.memory_holders(sizes, ticks, roots, top_count=5)
+
+    assert holders.top == [
+        {"kind": "chat", "agent_id": "agent-m", "bytes": 500},
+        {"kind": "program", "program": "recipe-box", "bytes": 100},
+    ]
+    assert holders.other_bytes == 70
+    assert holders.held_bytes == 670
+    assert rs.memory_holders(sizes, ticks, roots, top_count=1).top == holders.top[:1]
+
+
+def _memory(used_fraction: float) -> dict[str, int]:
+    total = 1_000_000
+    used = int(total * used_fraction)
+    return {"total": total, "available": total - used, "used": used}
+
+
+class _CountingHolders:
+    """A holders reader that names the reading it was taken at, and counts how often it was asked."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.label = "calm"
+
+    def __call__(self) -> rs.MemoryHolders:
+        self.calls += 1
+        top: list[dict[str, object]] = [
+            {"kind": "chat", "agent_id": f"agent-{self.label}", "bytes": 1000}
+        ]
+        return rs.MemoryHolders(top, other_bytes=7, held_bytes=1007)
+
+
+def _drive_memory(
+    tracker: rs.MemoryStretchTracker,
+    holders: _CountingHolders,
+    start: float,
+    seconds: float,
+    usage: float,
+) -> tuple[float, list[dict[str, object]]]:
+    events: list[dict[str, object]] = []
+    now = start
+    while now < start + seconds:
+        events.extend(tracker.feed(now, usage, _memory(usage), holders))
+        now += 5.0
+    return now, events
+
+
+def test_a_memory_stretch_opens_after_a_minute_above_85_percent_and_records_its_holders_at_once() -> (
+    None
+):
+    tracker = rs.MemoryStretchTracker()
+    holders = _CountingHolders()
+
+    now, events = _drive_memory(tracker, holders, 0.0, 300.0, 0.84)
+    assert events == [] and holders.calls == 0
+    now, events = _drive_memory(tracker, holders, now, 55.0, 0.86)
+    assert events == [] and not tracker.is_open
+    now, events = _drive_memory(tracker, holders, now, 10.0, 0.86)
+
+    assert tracker.is_open
+    (opened,) = events
+    assert opened["type"] == "memory_stretch_opened"
+    assert opened["source"] == "memory_stretches"
+    assert opened["started_at"] == "1970-01-01T00:05:00.000000000Z"
+    assert opened["top"] == [{"kind": "chat", "agent_id": "agent-calm", "bytes": 1000}]
+    assert opened["used_bytes"] == 860_000
+    assert holders.calls == 1
+
+
+def test_a_memory_stretch_holds_through_hysteresis_and_closes_with_the_holders_at_its_peak() -> (
+    None
+):
+    tracker = rs.MemoryStretchTracker()
+    holders = _CountingHolders()
+
+    now, (opened,) = _drive_memory(tracker, holders, 0.0, 65.0, 0.86)
+    holders.label = "peak"
+    now, events = _drive_memory(tracker, holders, now, 120.0, 0.95)
+    assert events == []
+    # 82% is below the opening line but above the closing one: still the same stretch.
+    holders.label = "after-peak"
+    now, events = _drive_memory(tracker, holders, now, 120.0, 0.82)
+    assert events == [] and tracker.is_open
+    now, events = _drive_memory(tracker, holders, now, 65.0, 0.5)
+
+    (closed,) = events
+    assert not tracker.is_open
+    assert closed["type"] == "memory_stretch"
+    assert closed["stretch_id"] == opened["stretch_id"]
+    assert closed["peak"] == 0.95
+    assert closed["peak_used_bytes"] == 950_000
+    assert closed["duration_seconds"] == 305
+    # The holders came from the highest reading a snapshot was taken at, not the later, lower ones.
+    assert closed["top"] == [{"kind": "chat", "agent_id": "agent-peak", "bytes": 1000}]
+    assert 0.86 < float(str(closed["average"])) < 0.95
+
+
+def _write_smaps_rollup(proc: Path, anonymous_kib_by_pid: dict[int, int]) -> None:
+    for pid, kib in anonymous_kib_by_pid.items():
+        (proc / str(pid) / "smaps_rollup").write_text(
+            f"Rss: {kib * 2} kB\nAnonymous: {kib} kB\n"
+        )
+
+
+def _events(path: Path) -> list[dict[str, Any]]:
+    return (
+        [json.loads(line) for line in path.read_text().splitlines()]
+        if path.exists()
+        else []
+    )
+
+
+def test_the_sampler_records_the_memory_holders_every_ten_minutes_and_a_memory_stretch_as_it_opens(
+    tmp_path: Path,
+) -> None:
+    proc = tmp_path / "proc"
+    processes = {1: (0, 100, 0), 2: (1, 50, 0), 3: (2, 10, 0)}
+    _write_proc(proc, processes)
+    _write_smaps_rollup(proc, {1: 10, 2: 200, 3: 300})
+    state = tmp_path / "state"
+    clock = [1000.0]
+    sampler = rs.Sampler(
+        state_dir=state,
+        proc=proc,
+        cgroup_dir=tmp_path / "no-cgroup",
+        host_meminfo=tmp_path / "no-host-meminfo",
+        roots_reader=lambda: {2: {"kind": "program", "program": "recipe-box"}},
+        clock=lambda: clock[0],
+        clk_tck=_CLK_TCK,
+        cpu_count=2,
+    )
+    holders_path = state / "events" / "memory_holders" / "events.jsonl"
+    stretches_path = state / "events" / "memory_stretches" / "events.jsonl"
+
+    def run_for(seconds: float) -> None:
+        end = clock[0] + seconds
+        while clock[0] < end:
+            sampler.sample_once()
+            clock[0] += 5.0
+
+    run_for(10.0)
+    (first,) = _events(holders_path)
+    assert first["type"] == "memory_holders" and first["source"] == "memory_holders"
+    assert first["top"] == [
+        {"kind": "program", "program": "recipe-box", "bytes": 500 * 1024}
+    ]
+    assert first["other_bytes"] == 10 * 1024
+    assert first["used_bytes"] == 5000 * 1024
+
+    run_for(590.0)
+    assert len(_events(holders_path)) == 1
+    run_for(10.0)
+    assert len(_events(holders_path)) == 2
+    assert _events(stretches_path) == []
+
+    (proc / "meminfo").write_text("MemTotal: 8000 kB\nMemAvailable: 400 kB\n")
+    run_for(70.0)
+    (opened,) = _events(stretches_path)
+    assert opened["type"] == "memory_stretch_opened"
+    assert opened["top"] == first["top"]

@@ -1,6 +1,6 @@
-"""Overall CPU and memory every few seconds, a day of history, and the busy stretches
-with who caused them: what the system monitor app's graphs and events are drawn from
-(``docs/system/specs/system-monitor.md``, part A).
+"""Overall CPU and memory every few seconds, a day of history, the busy stretches with
+who caused them, and who holds the memory: what the system monitor app's graphs and
+events are drawn from (``docs/system/specs/system-monitor.md``, part A).
 
 CPU comes from per-process counters, the only CPU accounting that exists under gVisor
 (its ``/proc/stat`` and load average read as zero). Each process's ``/proc/<pid>/stat``
@@ -9,11 +9,18 @@ an interval is the change in the sum over every live process of own plus reaped-
 time: a process that exits between two samples drops out of the sum while its parent's
 child counters grow by its whole lifetime, and nothing is counted twice or lost.
 
+Memory is credited the same way, to the same roots: each process's anonymous memory
+(what stopping it frees, and what earlyoom weighs under gVisor) rolls up to the chat or
+program it runs under. A snapshot of the largest holders is recorded every ten minutes,
+so a slow leak shows as one holder climbing, and a memory stretch (memory held above 85%
+for a minute) records its holders when it opens and at its peak.
+
 Stdlib-only (see ``paths``): the ``resource_sampler`` supervisord program runs this under
 a plain ``python3``.
 """
 
 import collections
+import functools
 import json
 import math
 import os
@@ -25,7 +32,12 @@ from typing import Final, NamedTuple
 
 from oom_priority import registry, supervisor_rpc
 from oom_priority.cgroup_meminfo import HOST_MEMINFO_PATH, write_replacing
-from oom_priority.meminfo import PROC, read_meminfo
+from oom_priority.meminfo import (
+    KIB,
+    PROC,
+    read_meminfo,
+    read_process_anonymous_kib,
+)
 
 # Where the sampler writes and the app reads, relative to the repo root (the cwd of every
 # supervised program): machine state the app rebuilds nothing from.
@@ -34,6 +46,12 @@ RECENT_FILENAME: Final[str] = "recent.json"
 HISTORY_FILENAME: Final[str] = "history.jsonl"
 STRETCH_EVENTS_RELATIVE_PATH: Final[Path] = (
     Path("events") / "cpu_stretches" / "events.jsonl"
+)
+MEMORY_HOLDERS_EVENTS_RELATIVE_PATH: Final[Path] = (
+    Path("events") / "memory_holders" / "events.jsonl"
+)
+MEMORY_STRETCH_EVENTS_RELATIVE_PATH: Final[Path] = (
+    Path("events") / "memory_stretches" / "events.jsonl"
 )
 RECENT_FILE_VERSION: Final[int] = 1
 CGROUP_DIR: Final[Path] = Path("/sys/fs/cgroup")
@@ -59,6 +77,23 @@ STRETCH_TOP_MIN_SHARE: Final[float] = 0.05
 STRETCH_EVENT_TYPE: Final[str] = "cpu_stretch"
 STRETCH_EVENT_SOURCE: Final[str] = "cpu_stretches"
 OTHER_ROOT: Final[str] = "other"
+
+MEMORY_HOLDERS_INTERVAL_SECONDS: Final[float] = 600.0
+MEMORY_HOLDERS_TOP_COUNT: Final[int] = 5
+MEMORY_HOLDERS_EVENT_TYPE: Final[str] = "memory_holders"
+MEMORY_HOLDERS_EVENT_SOURCE: Final[str] = "memory_holders"
+# The memory guard starts shedding at about 90% in use; a stretch opens below that so its
+# start and holders are on record even when the shedding then takes the sampler down too.
+MEMORY_STRETCH_OPEN_USAGE: Final[float] = 0.85
+MEMORY_STRETCH_OPEN_SECONDS: Final[float] = 60.0
+MEMORY_STRETCH_CLOSE_USAGE: Final[float] = 0.80
+MEMORY_STRETCH_CLOSE_SECONDS: Final[float] = 60.0
+MEMORY_STRETCH_TOP_COUNT: Final[int] = 3
+# While a stretch is open, how often a reading above the last snapshot's re-takes the holders.
+MEMORY_PEAK_SNAPSHOT_INTERVAL_SECONDS: Final[float] = 30.0
+MEMORY_STRETCH_OPENED_EVENT_TYPE: Final[str] = "memory_stretch_opened"
+MEMORY_STRETCH_EVENT_TYPE: Final[str] = "memory_stretch"
+MEMORY_STRETCH_EVENT_SOURCE: Final[str] = "memory_stretches"
 # How far up a ppid chain to look for a root before giving up.
 _MAX_ANCESTRY: Final[int] = 64
 
@@ -483,12 +518,218 @@ def append_event(path: Path, event: Mapping[str, object]) -> None:
         events_file.write(json.dumps(dict(event)) + "\n")
 
 
+class MemoryHolders(NamedTuple):
+    """Who held the memory at one moment: the largest roots, what no root claims, and the sum over every process."""
+
+    top: list[dict[str, object]]
+    other_bytes: int
+    held_bytes: int
+
+
+HoldersReader = Callable[[], MemoryHolders]
+
+
+def read_anonymous_bytes(pids: Iterable[int], proc: Path = PROC) -> dict[int, int]:
+    """Each process's anonymous memory in bytes; a process that is gone or unreadable is left out."""
+    sizes: dict[int, int] = {}
+    for pid in pids:
+        kib = read_process_anonymous_kib(pid, proc)
+        if kib is not None:
+            sizes[pid] = kib * KIB
+    return sizes
+
+
+def memory_holders(
+    anonymous_bytes_by_pid: Mapping[int, int],
+    ticks: Mapping[int, ProcessTicks],
+    roots: Mapping[int, Root],
+    top_count: int,
+) -> MemoryHolders:
+    """The memory each root's processes hold, rolled up through their parents, largest first."""
+    held_by_key: dict[int | str, int] = collections.defaultdict(int)
+    for pid, size in anonymous_bytes_by_pid.items():
+        held_by_key[_root_key(pid, ticks, ticks, roots)] += size
+    ranked = sorted(
+        (
+            (key, size)
+            for key, size in held_by_key.items()
+            if isinstance(key, int) and size > 0
+        ),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    top: list[dict[str, object]] = [
+        {**roots[key], "bytes": size} for key, size in ranked[:top_count]
+    ]
+    return MemoryHolders(top, held_by_key.get(OTHER_ROOT, 0), sum(held_by_key.values()))
+
+
+def memory_holders_event(
+    now: float, memory: Mapping[str, int], holders: MemoryHolders
+) -> dict[str, object]:
+    return {
+        "timestamp": _iso_nanoseconds(datetime.fromtimestamp(now, timezone.utc)),
+        "type": MEMORY_HOLDERS_EVENT_TYPE,
+        "event_id": f"memory-holders-{uuid.uuid4().hex}",
+        "source": MEMORY_HOLDERS_EVENT_SOURCE,
+        "total_bytes": memory["total"],
+        "used_bytes": memory["used"],
+        "held_bytes": holders.held_bytes,
+        "other_bytes": holders.other_bytes,
+        "top": holders.top,
+    }
+
+
+class MemoryStretchTracker:
+    """The memory-stretch state machine: opens on memory held high for a minute, takes the holders when it opens
+    and again as it climbs, and answers an event when it opens and another when it closes.
+
+    The opening event is written at once because the memory guard may shed the sampler itself before the
+    stretch closes; the closing event repeats the stretch's id so the two pair up.
+    """
+
+    def __init__(self) -> None:
+        self._above_since: float | None = None
+        self._below_since: float | None = None
+        self._stretch_id: str | None = None
+        self._opened_at: float = 0.0
+        # Each sample's time and usage since the first one at or above the open threshold.
+        self._usages: list[tuple[float, float]] = []
+        self._peak_used_bytes: int = 0
+        # The holders at the highest reading a snapshot was taken at, and that reading.
+        self._peak_holders: MemoryHolders | None = None
+        self._snapshot_used_bytes: int = 0
+        self._last_snapshot_at: float = 0.0
+
+    @property
+    def is_open(self) -> bool:
+        return self._stretch_id is not None
+
+    def feed(
+        self,
+        now: float,
+        usage: float,
+        memory: Mapping[str, int],
+        read_holders: HoldersReader,
+    ) -> list[dict[str, object]]:
+        """Take one sample; answer the events it opened or closed a stretch with, if any."""
+        stretch_id = self._stretch_id
+        if stretch_id is None:
+            opened = self._track_opening(now, usage, memory, read_holders)
+            return [opened] if opened is not None else []
+        self._usages.append((now, usage))
+        used = memory["used"]
+        self._peak_used_bytes = max(self._peak_used_bytes, used)
+        if (
+            used > self._snapshot_used_bytes
+            and now - self._last_snapshot_at >= MEMORY_PEAK_SNAPSHOT_INTERVAL_SECONDS
+        ):
+            self._take_snapshot(now, used, read_holders)
+        if usage < MEMORY_STRETCH_CLOSE_USAGE:
+            self._below_since = now if self._below_since is None else self._below_since
+        else:
+            self._below_since = None
+        below_since = self._below_since
+        if below_since is None or now - below_since < MEMORY_STRETCH_CLOSE_SECONDS:
+            return []
+        return [self._close(now, memory, stretch_id, ended_at=below_since)]
+
+    def _take_snapshot(
+        self, now: float, used: int, read_holders: HoldersReader
+    ) -> MemoryHolders:
+        holders = read_holders()
+        self._snapshot_used_bytes = used
+        self._peak_holders = holders
+        self._last_snapshot_at = now
+        return holders
+
+    def _track_opening(
+        self,
+        now: float,
+        usage: float,
+        memory: Mapping[str, int],
+        read_holders: HoldersReader,
+    ) -> dict[str, object] | None:
+        if usage < MEMORY_STRETCH_OPEN_USAGE:
+            self._above_since = None
+            self._usages = []
+            return None
+        if self._above_since is None:
+            self._above_since = now
+        self._usages.append((now, usage))
+        if now - self._above_since < MEMORY_STRETCH_OPEN_SECONDS:
+            return None
+        stretch_id = uuid.uuid4().hex
+        self._stretch_id = stretch_id
+        self._opened_at = self._above_since
+        self._above_since = None
+        self._below_since = None
+        self._peak_used_bytes = memory["used"]
+        holders = self._take_snapshot(now, memory["used"], read_holders)
+        return {
+            "timestamp": _iso_nanoseconds(datetime.fromtimestamp(now, timezone.utc)),
+            "type": MEMORY_STRETCH_OPENED_EVENT_TYPE,
+            "event_id": f"memory-stretch-opened-{stretch_id}",
+            "source": MEMORY_STRETCH_EVENT_SOURCE,
+            "stretch_id": stretch_id,
+            "started_at": _iso_nanoseconds(
+                datetime.fromtimestamp(self._opened_at, timezone.utc)
+            ),
+            "usage": round(usage, 4),
+            "used_bytes": memory["used"],
+            "total_bytes": memory["total"],
+            "top": holders.top[:MEMORY_STRETCH_TOP_COUNT],
+            "other_bytes": holders.other_bytes,
+        }
+
+    def _close(
+        self,
+        now: float,
+        memory: Mapping[str, int],
+        stretch_id: str,
+        ended_at: float,
+    ) -> dict[str, object]:
+        # The stretch's own samples: from its first high one up to the one that began its closing minute.
+        usages = [usage for at, usage in self._usages if at < ended_at]
+        peak_holders = self._peak_holders
+        event: dict[str, object] = {
+            "timestamp": _iso_nanoseconds(datetime.fromtimestamp(now, timezone.utc)),
+            "type": MEMORY_STRETCH_EVENT_TYPE,
+            "event_id": f"memory-stretch-{stretch_id}",
+            "source": MEMORY_STRETCH_EVENT_SOURCE,
+            "stretch_id": stretch_id,
+            "started_at": _iso_nanoseconds(
+                datetime.fromtimestamp(self._opened_at, timezone.utc)
+            ),
+            "ended_at": _iso_nanoseconds(
+                datetime.fromtimestamp(ended_at, timezone.utc)
+            ),
+            "duration_seconds": round(ended_at - self._opened_at),
+            "peak": round(max(usages), 4),
+            "average": round(sum(usages) / len(usages), 4),
+            "peak_used_bytes": self._peak_used_bytes,
+            "total_bytes": memory["total"],
+            "top": peak_holders.top[:MEMORY_STRETCH_TOP_COUNT]
+            if peak_holders is not None
+            else [],
+            "other_bytes": peak_holders.other_bytes if peak_holders is not None else 0,
+        }
+        self._stretch_id = None
+        self._below_since = None
+        self._usages = []
+        self._peak_used_bytes = 0
+        self._snapshot_used_bytes = 0
+        self._peak_holders = None
+        return event
+
+
 def _wall_clock() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
 class Sampler:
-    """The whole loop's state: the previous walk, the recent ring, the minute aggregator and the stretch tracker."""
+    """The whole loop's state: the previous walk, the recent ring, the minute aggregator, the stretch trackers and
+    when the holders were last recorded."""
 
     def __init__(
         self,
@@ -508,8 +749,11 @@ class Sampler:
         self.clock = clock
         self.clk_tck = clk_tck if clk_tck is not None else os.sysconf("SC_CLK_TCK")
         self.cpu_count = cpu_count
+        self.roots_reader = roots_reader
         self.stretches = StretchTracker(roots_reader)
+        self.memory_stretches = MemoryStretchTracker()
         self.minutes = MinuteAggregator()
+        self._last_holders_at: float | None = None
         self.samples: collections.deque[Sample] = collections.deque()
         self._previous_ticks: dict[int, ProcessTicks] | None = None
         self._previous_at: float = 0.0
@@ -559,4 +803,40 @@ class Sampler:
         event = self.stretches.feed(now, reading.usage, ticks, cores)
         if event is not None:
             append_event(self.state_dir / STRETCH_EVENTS_RELATIVE_PATH, event)
+        self._record_memory(now, sample.memory, memory, ticks)
         return event
+
+    def _record_memory(
+        self,
+        now: float,
+        usage: float,
+        memory: Mapping[str, int],
+        ticks: Mapping[int, ProcessTicks],
+    ) -> None:
+        """Record the holders when they are due, and step the memory stretch; the holders are read at most once."""
+
+        @functools.cache
+        def read_holders() -> MemoryHolders:
+            return memory_holders(
+                read_anonymous_bytes(ticks.keys(), self.proc),
+                ticks,
+                self.roots_reader(),
+                MEMORY_HOLDERS_TOP_COUNT,
+            )
+
+        last_holders_at = self._last_holders_at
+        if (
+            last_holders_at is None
+            or now - last_holders_at >= MEMORY_HOLDERS_INTERVAL_SECONDS
+        ):
+            append_event(
+                self.state_dir / MEMORY_HOLDERS_EVENTS_RELATIVE_PATH,
+                memory_holders_event(now, memory, read_holders()),
+            )
+            self._last_holders_at = now
+        for memory_event in self.memory_stretches.feed(
+            now, usage, memory, read_holders
+        ):
+            append_event(
+                self.state_dir / MEMORY_STRETCH_EVENTS_RELATIVE_PATH, memory_event
+            )

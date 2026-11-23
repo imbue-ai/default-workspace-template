@@ -577,3 +577,17 @@ System Monitor app's Quit for one of the user's apps goes through (a program
 that is not running already counts as stopped). The memory figure beside each
 reading is the guard's own (`meminfo`, the headroom file while it is fresh,
 else `/proc/meminfo`). The design is `docs/system/specs/system-monitor.md`.
+
+Memory is credited to the same roots. Every ten minutes the sampler reads each
+process's anonymous memory (`meminfo.read_process_anonymous_kib`, the figure
+earlyoom weighs under gVisor), rolls it up to the chat or program it runs
+under, and appends the five largest holders to
+`events/memory_holders/events.jsonl`, so a slow leak shows as one holder
+climbing across snapshots. A memory stretch opens once the guard's figure has
+stayed at or above 85% for a minute and closes once it has stayed below 80%
+for a minute (`resource_sampler.MemoryStretchTracker`): it appends a
+`memory_stretch_opened` event with the holders at once, since shedding may
+take the sampler itself down before the stretch ends, re-reads the holders
+every 30 s while memory keeps climbing, and appends a `memory_stretch` event
+with the holders at the highest reading when it closes
+(`events/memory_stretches/events.jsonl`; both events carry the stretch's id).
