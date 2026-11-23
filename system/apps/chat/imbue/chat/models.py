@@ -6,6 +6,7 @@ from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import model_validator
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterParticipant
 
@@ -28,9 +29,17 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
+from imbue.chat.suggestions import SuggestionsStatus
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+
+
+class EmptySeedError(ValueError):
+    """A seed that is not a first-run arrival came with no turns."""
 
 
 class AgentCreationError(ValueError):
@@ -237,9 +246,77 @@ class PoweredByResponse(FrozenModel):
 
 
 class ChatSettingsResponse(FrozenModel):
-    """Response from GET and PUT /api/settings: the workspace-wide chat settings as they stand."""
+    """Response from GET and PUT /api/settings and PUT /api/settings/suggestions: the workspace-wide chat settings
+    as they stand."""
 
     settings: ChatSettings = Field(description="The settings")
+
+
+class ReplySuggestionSet(FrozenModel):
+    """The next-step suggestions offered under one assistant message, as the read route lists them."""
+
+    after_event_id: str = Field(description="The event id of the assistant message the set follows")
+    source: SuggestionSource = Field(description="Where the set came from")
+    suggestions: tuple[Suggestion, ...] = Field(description="The suggestions, in the order they are drawn")
+
+    @classmethod
+    def of(cls, suggestions: ChatSuggestions) -> "ReplySuggestionSet":
+        return cls(
+            after_event_id=suggestions.after_event_id, source=suggestions.source, suggestions=suggestions.suggestions
+        )
+
+
+class ChatSuggestionsResponse(FrozenModel):
+    """Response from GET /api/chats/<chat_id>/suggestions: the next-step suggestions stored for the chat, and
+    every set the app remembers for it."""
+
+    status: SuggestionsStatus = Field(
+        description="ready when the chat has a stored set, pending while one is being worked out, else none"
+    )
+    after_event_id: str | None = Field(
+        description="The event id of the assistant message the set follows, or the one a pending set is being "
+        "worked out for; None when there is no set"
+    )
+    source: SuggestionSource | None = Field(description="Where the set came from; None when there is no set")
+    suggestions: tuple[Suggestion, ...] = Field(description="The suggestions in order; empty when there is no set")
+    sets: tuple[ReplySuggestionSet, ...] = Field(
+        description="Every set the app remembers for the chat, the stored one included, oldest first: a page draws "
+        "the set of a reply that has been answered under that reply"
+    )
+
+    @classmethod
+    def of(cls, stored: ChatSuggestions | None, remembered: tuple[ChatSuggestions, ...]) -> "ChatSuggestionsResponse":
+        """The answer for a chat's stored set, or for a chat that has none, with what is remembered for it."""
+        sets = tuple(ReplySuggestionSet.of(suggestions) for suggestions in remembered)
+        if stored is None:
+            return cls(status=SuggestionsStatus.NONE, after_event_id=None, source=None, suggestions=(), sets=sets)
+        return cls(
+            status=SuggestionsStatus.READY,
+            after_event_id=stored.after_event_id,
+            source=stored.source,
+            suggestions=stored.suggestions,
+            sets=sets,
+        )
+
+    @classmethod
+    def pending(cls, after_event_id: str, remembered: tuple[ChatSuggestions, ...]) -> "ChatSuggestionsResponse":
+        """The answer while a set for the reply ``after_event_id`` is being worked out."""
+        return cls(
+            status=SuggestionsStatus.PENDING,
+            after_event_id=after_event_id,
+            source=None,
+            suggestions=(),
+            sets=tuple(ReplySuggestionSet.of(suggestions) for suggestions in remembered),
+        )
+
+
+class NewChatSuggestionsResponse(FrozenModel):
+    """Response from GET /api/suggestions/new-chat: the things to try that are offered to the requester."""
+
+    suggestions: tuple[Suggestion, ...] = Field(
+        description="Every onboarding item the owner has not done, in the items' order; empty when every one is "
+        "done, and when none is offered to this requester or in this chat"
+    )
 
 
 class FastModeStateResponse(FrozenModel):
@@ -866,6 +943,11 @@ class CreateChatRequest(FrozenModel):
         description="What to create: an agent chat on the account, or a room (the multiplayer spec, section 7.3), "
         "which runs on no account and takes no model",
     )
+    client_id: str = Field(
+        default="",
+        description="Per-browser client id of the page a person asked for the chat from; empty for a create no "
+        "person asked for (a script's), which is never counted as a person starting a chat",
+    )
 
 
 class ChatCreationOutcome(FrozenModel):
@@ -953,7 +1035,19 @@ class SeedChatRequest(FrozenModel):
 
     # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
     title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
-    turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
+    turns: tuple[SeedTurn, ...] = Field(default=(), description="The turns, in order")
+    is_first_run: bool = Field(
+        default=False, description="A first-run arrival: the chat opens on ``FIRST_RUN_WELCOME`` instead of turns"
+    )
+    # CLEANUP: drop ``context`` once no supported Imbue Studio app sends it (the ones that ask what type of
+    # studio the user wants to make); the app then sends ``{"turns": [], "is_first_run": true}`` alone.
+    context: str = Field(default="", description="What the user told the first run, for the agent; never shown")
+
+    @model_validator(mode="after")
+    def _require_turns_unless_first_run(self) -> "SeedChatRequest":
+        if not self.is_first_run and len(self.turns) == 0:
+            raise EmptySeedError("A seeded chat needs at least one turn unless it is a first-run arrival")
+        return self
 
 
 class IntakeTarget(LowerCaseStrEnum):

@@ -189,6 +189,7 @@ def test_run_events_fold_into_records_with_a_blocked_run_still_going() -> None:
 
     assert len(records) == 1
     assert records[0].outcome is None
+    assert records[0].trigger is RunTrigger.MANUAL
     assert records[0].is_blocked
     assert records[0].outcome_text == "Waiting for you"
     assert records[0].when_text == "2 minutes ago"

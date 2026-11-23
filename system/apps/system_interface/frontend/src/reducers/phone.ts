@@ -125,6 +125,8 @@ export function focusTargetOf(state: DesktopState, appName: string): WindowRecor
 /** What the pill says: the workspace on the home grid, else the shown window (the pinned one as its app). */
 export type PhonePill =
   | { readonly kind: "home"; readonly title: string }
+  /** The page has not landed yet: nothing is shown, so the pill names nothing and Home is offered. */
+  | { readonly kind: "opening"; readonly title: string }
   | {
       readonly kind: "window";
       readonly window: WindowRecord;
@@ -136,6 +138,7 @@ export type PhonePill =
 export const DEFAULT_WORKSPACE_NAME = "Workspace";
 
 export function phonePillOf(state: DesktopState): PhonePill {
+  if (state.phone.shown === null) return { kind: "opening", title: "Opening…" };
   const window = shownWindowOf(state);
   if (window === null) return { kind: "home", title: state.workspaceName || DEFAULT_WORKSPACE_NAME };
   const app = appByName(state, window.app);

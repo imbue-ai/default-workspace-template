@@ -171,6 +171,11 @@ def test_chats_and_code_checkers_are_recognised_by_their_command_lines() -> None
         programs.chat_agent_id("claude /home/user/.mngr/agents/agent-abc --resume")
         == "agent-abc"
     )
+    # A Modal sandbox keeps mngr's host dir at /mngr rather than under a home directory.
+    assert (
+        programs.chat_agent_id("claude --settings /mngr/agents/agent-abc/x.json")
+        == "agent-abc"
+    )
     assert programs.chat_agent_id("claude --print hi") is None
     for checker in (
         "node /usr/lib/node_modules/pyright/langserver.index.js --stdio",
@@ -252,3 +257,8 @@ def test_program_names_come_from_the_name_table_then_the_registry_then_the_progr
     assert programs.program_names({"chat": 1}, tmp_path / "missing.toml") == {
         "chat": "chat"
     }
+
+
+def test_agent_records_are_read_from_the_host_dir_the_environment_names() -> None:
+    assert programs.mngr_agents_dir({"MNGR_HOST_DIR": "/mngr"}) == Path("/mngr/agents")
+    assert programs.mngr_agents_dir({}) == Path("/home/user/.mngr/agents")

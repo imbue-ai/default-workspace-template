@@ -163,8 +163,8 @@ unrecognized. The `oom_tag_service.py <key>` prefix passes band keys by name.
 It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
-(earlyoom, the listener itself, publish_cgroup_meminfo, and the one-shots
-env-converge and vm-exec-register) are never demoted. Because this path *raises*, a built-in
+(earlyoom, the listener itself, publish_cgroup_meminfo, and the one-shot
+env-converge) are never demoted. Because this path *raises*, a built-in
 missing from either band map is not merely left alone but actively pushed to
 `USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`

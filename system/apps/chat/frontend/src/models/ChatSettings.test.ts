@@ -104,3 +104,113 @@ describe("updateChatSettings", () => {
     warn.mockRestore();
   });
 });
+
+describe("the suggestion switches", () => {
+  it("are unknown before the settings load, and on when the backend does not send them", async () => {
+    vi.resetModules();
+    mockRequest.mockReset();
+    const unloaded = await import("./ChatSettings");
+    expect(unloaded.isSuggestionSwitchOn("is_next_step_suggestions_enabled")).toBeNull();
+
+    // STORED names none of the switches, as an older backend's answer does.
+    const chatSettings = await loadWithSettings();
+    expect(chatSettings.isSuggestionSwitchOn("is_next_step_suggestions_enabled")).toBe(true);
+    expect(chatSettings.isSuggestionSwitchOn("is_new_chat_suggestions_enabled")).toBe(true);
+  });
+
+  it("change alone through their own route, at once on the page, and keep what the backend answers", async () => {
+    const chatSettings = await loadWithSettings();
+    const answered = { ...STORED, is_next_step_suggestions_enabled: false, is_new_chat_suggestions_enabled: true };
+    mockRequest.mockResolvedValueOnce({ settings: answered });
+
+    const pending = chatSettings.updateSuggestionSwitches({ is_next_step_suggestions_enabled: false });
+    expect(chatSettings.isSuggestionSwitchOn("is_next_step_suggestions_enabled")).toBe(false);
+    await pending;
+
+    expect(mockRequest).toHaveBeenLastCalledWith({
+      method: "PUT",
+      url: "/api/settings/suggestions",
+      body: { is_next_step_suggestions_enabled: false },
+    });
+    expect(chatSettings.getChatSettings()).toEqual(answered);
+  });
+
+  it("go back to what they were when the write fails", async () => {
+    const chatSettings = await loadWithSettings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockRequest.mockRejectedValueOnce(new Error("400"));
+
+    await chatSettings.updateSuggestionSwitches({ is_next_step_suggestions_enabled: false });
+
+    expect(chatSettings.isSuggestionSwitchOn("is_next_step_suggestions_enabled")).toBe(true);
+    expect(chatSettings.getChatSettings()).toEqual(STORED);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("ride every write of the whole settings as they were last read, so that write resets none", async () => {
+    const chatSettings = await loadWithSettings();
+    const switchedOff = { ...STORED, is_next_step_suggestions_enabled: false };
+    mockRequest.mockResolvedValueOnce({ settings: switchedOff });
+    await chatSettings.updateSuggestionSwitches({ is_next_step_suggestions_enabled: false });
+    const held = chatSettings.getChatSettings();
+    if (held === null) throw new Error("the settings were loaded");
+    mockRequest.mockResolvedValueOnce({ settings: { ...switchedOff, is_fast_mode_notice_shown: true } });
+
+    await chatSettings.updateChatSettings({ ...held, is_fast_mode_notice_shown: true });
+
+    expect(mockRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "PUT",
+        url: "/api/settings",
+        body: { ...STORED, is_next_step_suggestions_enabled: false, is_fast_mode_notice_shown: true },
+      }),
+    );
+  });
+});
+
+describe("rereadChatSettings", () => {
+  it("asks nothing of the backend for a page that holds no settings", async () => {
+    vi.resetModules();
+    mockRequest.mockReset();
+    const chatSettings = await import("./ChatSettings");
+
+    chatSettings.rereadChatSettings();
+
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("replaces the page's copy with what the backend holds now, and tells the listeners", async () => {
+    const chatSettings = await loadWithSettings();
+    const listener = vi.fn();
+    chatSettings.addChatSettingsUpdatedListener(listener);
+    const changed = { ...STORED, is_next_step_suggestions_enabled: false };
+    mockRequest.mockResolvedValueOnce({ settings: changed });
+
+    chatSettings.rereadChatSettings();
+    expect(listener).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockRequest).toHaveBeenLastCalledWith({ method: "GET", url: "/api/settings" });
+    expect(chatSettings.getChatSettings()).toEqual(changed);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the copy read before when the read fails", async () => {
+    const chatSettings = await loadWithSettings();
+    const listener = vi.fn();
+    chatSettings.addChatSettingsUpdatedListener(listener);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockRequest.mockRejectedValueOnce(new Error("503"));
+
+    chatSettings.rereadChatSettings();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatSettings.getChatSettings()).toEqual(STORED);
+    expect(listener).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+});

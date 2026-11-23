@@ -102,6 +102,10 @@ kbd {
 [data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]):active {
   box-shadow: var(--theme-thin-pressed);
 }
+/* Share is a button with a word on it, which a box this size cannot hold: the window menu offers it instead. */
+[data-part="window-control"][data-control="share"] {
+  display: none;
+}
 
 /* Push buttons: win95.css's raised face; pressed, they sink without the library's dither. The default
    (primary) button wears the black ring Enter would press. */

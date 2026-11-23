@@ -633,6 +633,9 @@ def _parse_queued_command_attachment(
         "role": "user",
         "content": prompt,
         "message_uuid": uuid,
+        # Claude writes this attachment only for a message it took into the turn it was
+        # running; one flushed at a turn's end or after an interrupt is a plain ``user`` line.
+        "delivered_mid_turn": True,
     }
     # The queued path emits user messages too, so it stamps the same render decision as
     # the normal path -- a /model parked mid-turn must stay hidden (and non-turn), a fleet

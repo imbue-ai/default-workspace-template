@@ -98,6 +98,8 @@ export class FakeDesktopApi implements DesktopApi {
     });
     return answer;
   }
+  /** While set, a layout read alone answers only once this settles: a test sees what happens before it does. */
+  layoutReadGate: Promise<void> | null = null;
   /** While set, a placements save is recorded at once but answers only once this settles: a test holds a save
    *  open to see what happens before it lands. */
   writeGate: Promise<void> | null = null;
@@ -504,6 +506,7 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`fetchPlacements:${desktopId}`);
     this.refuse();
     if (this.readGate !== null) await this.readGate;
+    if (this.layoutReadGate !== null) await this.layoutReadGate;
     return this.layoutOf(desktopId, clientId);
   }
 
@@ -637,6 +640,8 @@ export class FakeDesktopSocket implements DesktopSocket {
   readonly reports: ClientStateReport[] = [];
   /** How many times the store registered the socket as a pop-out's. */
   popOutReports = 0;
+  /** How many times the store asked the socket to make sure it is live now. */
+  reviveRequests = 0;
 
   connect(handlers: SocketHandlers): void {
     this.handlers = handlers;
@@ -648,6 +653,10 @@ export class FakeDesktopSocket implements DesktopSocket {
 
   reportPopOut(): void {
     this.popOutReports += 1;
+  }
+
+  reviveNow(): void {
+    this.reviveRequests += 1;
   }
 
   /** The handlers the store registered; a test delivers events through them. */

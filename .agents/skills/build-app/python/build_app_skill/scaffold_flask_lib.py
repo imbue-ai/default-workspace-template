@@ -20,6 +20,11 @@ than being appended to a config shared with every other creation, and the root
 `pyproject.toml` and `uv.lock` are not touched. That is what lets two agents
 scaffold two apps concurrently without editing the same file.
 
+Every run also sets the workspace's `app_build_started` onboarding marker (an
+empty file under `data/.state/onboarding_activity/`, whose time is that of the
+latest run), which keeps the chat from suggesting "Build an app" while a build
+is under way. A marker that cannot be written is a warning, never a failure.
+
 Usage:
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
@@ -32,6 +37,7 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 
 import argparse
 import json
+import os
 import re
 import shutil
 import socket
@@ -44,6 +50,12 @@ from typing import Callable, Iterable
 
 import tomlkit
 from app_registration import forward_port
+from onboarding_activity.markers import (
+    Marker,
+    MarkerNotWrittenError,
+    mark,
+    marker_dir,
+)
 from workspace_bare_scripts import venv_links
 
 # The template's own app and service names, which forward_port.py has no reason
@@ -947,6 +959,16 @@ def _find_repo_root(start: Path) -> Path:
     )
 
 
+def _note_app_build_started(repo_root: Path) -> None:
+    """Set the `app_build_started` onboarding marker of the workspace checked out at `repo_root`."""
+    try:
+        mark(Marker.APP_BUILD_STARTED, marker_dir(os.environ, repo_root))
+    except MarkerNotWrittenError as error:
+        sys.stderr.write(
+            f"warning: could not record that an app build started: {error}\n"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
@@ -1001,6 +1023,7 @@ def main() -> None:
         if args.repo_root
         else _find_repo_root(Path.cwd())
     )
+    _note_app_build_started(repo_root)
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port, _is_port_bound)
     program_path = _reserve_supervisord_program_path(repo_root, args.name)
