@@ -1,3 +1,33 @@
+The chat now offers suggestions: short replies above the composer that the user can click instead of typing.
+
+- When a chat has suggested replies to its last message, they appear as a list of pills above the composer. Clicking one sends it as a message; with text already in the composer, that text is sent with the suggestion on a new line, along with any attachments. Once a message is sent, they stay with the reply they were made for. A chat room shows none.
+
+- A new workspace's first chat opens on a shorter welcome that ends in "How do you want to start?", over two suggestions: "Describe what you want to make" and "See what Studio can do". Once a provider is connected the agent no longer speaks first: it waits for a pick or a typed message, and answers a pick with a prepared reply (the second also opens the Getting Started app beside the chat). What an older Imbue Studio app says the user wants Studio for still reaches the agent.
+
+- The workspace's owner can turn the suggestions off with the "disable suggestions" link beside them, with "Undo" offered for a few seconds. The chat settings gain two switches, both on by default: `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`. `PUT /api/settings/suggestions` changes either or both and leaves every other setting as it is, and every settings change is pushed to the open pages as `settings_updated` on `/api/ws`.
+
+- `GET /api/chats/<chat-id>/suggestions` answers the suggestions stored for a chat (`suggestions.json` in the chat's folder), or `none`.
+
+The chat now works out its own suggested replies.
+
+- When an agent finishes a reply, the chat suggests two or three replies to it a few seconds later, as the pills above the composer. One may be marked as the recommended one, in green. Nothing is suggested when no reply would make sense, under a reply that is a provider failure, in a chat room, or in a chat an agent started.
+
+- The suggestions come from one call per finished reply to a mid-sized model (Sonnet for Claude, the account's newest "terra" model for Codex) on the account the chat already runs on, sent the last few turns of the conversation. The call stays outside the chat's transcript. Every chat gets them, whether or not it is on screen; switching "Next step suggestions" off stops the calls. Chats on Pi, Antigravity and OpenCode get none.
+
+- A chat's suggestions never outlive the reply they were made for: the stored set is replaced or removed each time a turn ends.
+
+- `GET /api/chats/<chat-id>/suggestions` answers `pending` while a set is being worked out, and `/api/ws` pushes `suggestions_updated` with the `chat_id` when a chat's stored set is replaced or removed.
+
+A new workspace's first conversation can now help its user find something to build.
+
+- The welcome offers a third start suggestion, "Get ideas for what to make", between "Describe what you want to make" and "See what Studio can do". Picking it has the agent ask what the workspace is for and which apps the user has, and then list ideas that fit both answers.
+
+- The two questions come with pickers drawn in the agent's message: three columns of categories (Work, Life, Creative), and a row of fifteen apps, each with its logo where the workspace has one for it. Clicking a pill adds its name to the message box, and clicking it again takes it out; the user sends the message themselves and can type anything of their own. A picker in a message that has been answered is greyed out. The first category picked in a workspace points a bubble at the send button, "Click this button to send your message", which goes once the message is sent.
+
+- The replies offered under these messages are the chat's own, with no model asked, so they appear the moment the reply ends and work with every AI provider: "Show me some ideas" under the question about apps, and one per idea, then "More ideas" and "Something else", under a list of ideas. Typing anything else at the start or under the ideas ends the scripted conversation, after which the chat gets suggested replies like any other.
+
+- An assistant message that carries `<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own draws that picker. The chat's folder holds the conversation's step in `first_run_tree.json`, and the chat settings gain `is_picker_send_hint_shown`.
+
 - New route `GET /api/suggestions/new-chat?chat_id=<chat-id>`: the things worth trying in Studio that the workspace's owner has not done yet (start a second chat, open Studio on a phone, build an app, connect some data), each an action suggestion. They are the four onboarding items the `onboarding_activity` library names, which the onboarding checklist shows too. It answers nothing to a visitor, with new chat suggestions switched off, before the tour has finished, or in the first-run chat while its first conversation follows its tree.
 
 - A suggestion gains `action`, null for a reply suggestion, which every next-step suggestion is.

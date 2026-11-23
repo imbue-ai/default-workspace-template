@@ -152,7 +152,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   name, nothing happens when no app registered it, and a relay that fails is
   logged to the console with no notice.
 - A coach card for a page that asks (`shell:show-coach-card`, with exactly one
-  place): the page's words and a Got it button, under the control of the Imbue
+  place): the page's words (a paragraph per blank line, bold between a pair
+  of `**`) and a Got it button, under the control of the Imbue
   Studio chrome it names (`chromeAnchor`), which the chrome rings until the
   card goes, or popping out of the agent's avatar (`target: "avatar"`), whose
   window the shell first brings forward. It is drawn in the tour's box: while

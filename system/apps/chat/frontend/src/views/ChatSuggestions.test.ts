@@ -461,7 +461,7 @@ describe("a click on a new-chat suggestion", () => {
 
     expect(mocks.showCoachCard).toHaveBeenCalledTimes(2);
     expect(mocks.showCoachCard).toHaveBeenLastCalledWith(
-      "Your connections live here. Ask me to connect any of these services, or any other data you want to pull in.",
+      "**Just ask your agent to connect anything!**\n\nYou can always see your existing connections settings as well.",
       "permissions",
     );
     expect(requests).toEqual([]);

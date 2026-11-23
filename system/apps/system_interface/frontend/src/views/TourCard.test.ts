@@ -107,6 +107,20 @@ describe("TourCard", () => {
     expect(card()).toBeNull();
   });
 
+  it("draws the words a card's text puts between asterisk pairs in bold, and the rest plain", () => {
+    const { tour } = controller();
+    tour.showCoachCard("**Just ask!** Any time.\n\nSee your **settings** as well.", { chromeAnchor: "permissions" });
+    mountCard(tour);
+    const paragraphs = [...(card()?.querySelectorAll("p") ?? [])];
+    expect(paragraphs.map((paragraph) => paragraph.textContent)).toEqual([
+      "Just ask! Any time.",
+      "See your settings as well.",
+    ]);
+    expect(
+      paragraphs.map((paragraph) => [...paragraph.querySelectorAll("strong")].map((run) => run.textContent)),
+    ).toEqual([["Just ask!"], ["settings"]]);
+  });
+
   it("shows a page's coach card as its words and one button, which Got it dismisses and clears the ring", () => {
     const { tour, highlights } = controller();
     tour.showCoachCard("Your connections live here.\n\nAsk me to connect any of them.", {

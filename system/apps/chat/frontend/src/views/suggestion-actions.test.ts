@@ -130,7 +130,7 @@ describe("a click on an action suggestion", () => {
     expect(mocks.showCoachCard).toHaveBeenCalledTimes(1);
     expect(mocks.showCoachCard).toHaveBeenCalledWith(CONNECT_DATA_COACH_TEXT, "permissions");
     expect(CONNECT_DATA_COACH_TEXT).toBe(
-      "Your connections live here. Ask me to connect any of these services, or any other data you want to pull in.",
+      "**Just ask your agent to connect anything!**\n\nYou can always see your existing connections settings as well.",
     );
   });
 });

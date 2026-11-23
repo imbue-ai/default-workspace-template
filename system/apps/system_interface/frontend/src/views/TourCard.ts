@@ -68,12 +68,20 @@ export function chromeSideOf(anchor: ChromeAnchor): "left" | "right" {
   return anchor === "help" ? "right" : "left";
 }
 
+/** A paragraph's words, each run between a pair of ``**`` in bold. */
+function boldRuns(paragraph: string): m.Children[] {
+  return paragraph
+    .split(/\*\*(.+?)\*\*/)
+    .map((run, index) => (index % 2 === 1 ? m("strong", run) : run))
+    .filter((run) => run !== "");
+}
+
 /** A card's text as paragraphs: one per blank-line break, each after the first a step down from the last. */
 export function textParagraphs(text: string): m.Children[] {
   return text
     .split("\n\n")
     .map((paragraph, index) =>
-      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-primary` }, paragraph),
+      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-primary` }, boldRuns(paragraph)),
     );
 }
 

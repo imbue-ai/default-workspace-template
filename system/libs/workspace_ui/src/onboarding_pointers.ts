@@ -7,4 +7,4 @@
 export const BUILD_APP_COACH_TEXT =
   "Provide some context on a problem you're facing and tell the agent to build an app to help with it.";
 export const CONNECT_DATA_COACH_TEXT =
-  "Your connections live here. Ask me to connect any of these services, or any other data you want to pull in.";
+  "**Just ask your agent to connect anything!**\n\nYou can always see your existing connections settings as well.";

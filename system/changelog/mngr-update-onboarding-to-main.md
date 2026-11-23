@@ -1,3 +1,9 @@
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list the `opensWorkspaceSettings` flag the shell now puts in `shell:handshake`.
+
+The shared frontend library (`system/libs/workspace_ui`) gains a coach mark component, `components/CoachMark.ts`: a bubble with an arrow and a "Got it" button that a page points at one of its own controls. Its README lists it with the other shared components.
+
+The check that keeps the retired word "application" out of prose (`system/test_meta_ratchets.py`) no longer counts "job application", which names no app.
+
 The new `onboarding_activity` library joins the uv workspace and the root project's dependencies, and `docs/system/blueprint/desktop-interface/contracts.md` describes the tour record's `is_finished` field and the `data/.state/onboarding_activity/` marker directory.
 
 The same contracts (section 7) list the new page message `shell:show-coach-card` with its two places (a chrome control, or the agent's avatar), the coach card it shows, and the `showsCoachMarks` flag of `shell:handshake`. In the shared `workspace_ui` library the app contract gains that message and that flag, `embed.ts` the `coachMark` of `minds:open-share-settings`, and the new `onboarding_pointers.ts` the words two onboarding pointers show.
