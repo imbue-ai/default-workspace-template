@@ -31,7 +31,6 @@ import urllib.request
 import xmlrpc.client
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
 
 from workspace_layout.cli import (
     LayoutCliContext,
@@ -84,7 +83,7 @@ def _find_repo_root() -> Path:
 
 def _resolve_target(
     target: str, repo_root: Path
-) -> tuple[int, Optional[str], Optional[Path]]:
+) -> tuple[int, str | None, Path | None]:
     """Resolves target (name, port, or URL) to (port, app_name, runner_path)."""
     # 1. URL input
     if target.startswith("http://") or target.startswith("https://"):
@@ -201,7 +200,7 @@ def _stderr_tail(name: str, lines: int = 20) -> str:
     return f"--- last {len(tail)} lines of {log_path} ---\n" + "\n".join(tail)
 
 
-def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
+def _restart_program(sup, name: str) -> Callable[[], str | None]:
     """Bounce ``name`` without waiting out ``startsecs``; return a check that reports an early death.
 
     supervisorctl's ``restart`` blocks until the program has been up ``startsecs``
@@ -248,7 +247,7 @@ def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
             f"error: lost supervisord at {supervisor_socket_path()} while starting {name} ({error})"
         )
 
-    def early_death() -> Optional[str]:
+    def early_death() -> str | None:
         try:
             statename = sup.getProcessInfo(name)["statename"]
         except (OSError, xmlrpc.client.Fault) as error:
@@ -269,7 +268,7 @@ def _surface(name: str, mode: str, context: LayoutCliContext) -> None:
 
 
 def _poll_health_for_reload(
-    port: int, runner_path: Optional[Path], timeout: float, interval: float
+    port: int, runner_path: Path | None, timeout: float, interval: float
 ) -> None:
     """If runner_path was recently modified, ensure the server has reloaded with started_at >= mtime."""
     if not runner_path or not runner_path.exists():
@@ -307,10 +306,10 @@ def _poll_health_for_reload(
 
 def _poll_http(
     url: str,
-    marker: Optional[str],
+    marker: str | None,
     timeout: float,
     interval: float,
-    abort_check: Optional[Callable[[], Optional[str]]] = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> tuple[int, str]:
     """Actively polls the target URL until 200 OK and optional marker is found.
 
@@ -361,8 +360,8 @@ def _poll_http(
 
 def _run_playwright_check(
     url: str,
-    marker: Optional[str],
-    screenshot_path: Optional[Path],
+    marker: str | None,
+    screenshot_path: Path | None,
     timeout: float,
 ) -> None:
     """Run headless Playwright check with fast launch flags and domcontentloaded."""
