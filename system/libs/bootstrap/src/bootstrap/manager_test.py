@@ -1079,9 +1079,12 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
 # _write_routines_tick_cron_entry
 
 
-def test_routines_tick_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
+def test_routines_tick_cron_entry_is_rewritten_every_boot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     # Like the recovery guard: /etc/cron.d does not survive container recreation, and a stale
     # entry from an older image has to be replaced rather than left alone.
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     target = tmp_path / "etc-cron-d"
     target.mkdir()
     installed = target / ROUTINES_TICK_CRON_NAME
@@ -1100,10 +1103,12 @@ def test_routines_tick_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> Non
 
 
 def test_routines_tick_cron_entry_runs_through_the_env_wrapper_and_logs_to_the_supervisor_dir(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     # cron hands a drop-in a bare environment; the wrapper restores the services agent's and runs
     # from the repo root, which is what lets `uv run` find the venv and the library find its files.
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     target = tmp_path / "etc-cron-d"
     target.mkdir()
     _write_routines_tick_cron_entry(target_dir=target)
@@ -1119,6 +1124,24 @@ def test_routines_tick_cron_entry_runs_through_the_env_wrapper_and_logs_to_the_s
     wrapper = Path(__file__).resolve().parents[5] / ROUTINES_ENV_WRAPPER
     assert wrapper.is_file()
     assert os.access(wrapper, os.X_OK)
+
+
+def test_routines_tick_cron_entry_states_the_boot_host_dir_for_the_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The wrapper finds the agent environment inside mngr's host dir, and a host need not keep
+    # that at the container's path. cron scrubs the variable, so the entry carries the boot's own.
+    monkeypatch.setenv("MNGR_HOST_DIR", "/mngr")
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _write_routines_tick_cron_entry(target_dir=target)
+
+    lines = (target / ROUTINES_TICK_CRON_NAME).read_text().splitlines()
+    assert lines[0] == "MNGR_HOST_DIR=/mngr"
+    assert lines[1].startswith(f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} ")
+    assert len(lines) == 2
 
 
 def test_routines_tick_cron_entry_tolerates_an_unwritable_target(

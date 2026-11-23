@@ -24,19 +24,37 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected
   (opened bare, or after the chat on screen is deleted) it shows the main chat
-  (below), else the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  (below), else the most recent chat, and with no chats and an account signed in
+  one awaiting its first send (`POST /api/chats/awaiting`, held in memory until
+  that send launches it). With nothing signed in it starts no chat for an empty
+  list: the empty list says "Connect an AI provider to start chatting." with a
+  "Choose a provider" button, so a new workspace's welcome chat lands alone.
   A chat leaves the list the moment its delete is confirmed and comes back if
   the delete is refused, and with no chats left the one awaiting its first send
   is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
-  composer, which stays in view (holding any draft) but disabled, and opens the
-  provider chooser as that notice appears; this is the one place the chooser
-  opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). The sign-in
-  that chooser produces launches the awaiting chat at once, with no message, so
-  its agent is up before the user has typed. Whether
+  composer, which stays in view (holding any draft) but disabled. The root opens
+  the provider chooser over everything it frames as soon as the chat it shows is
+  in that state, once per chat, and also once with no chat to show while nothing
+  is signed in (a new workspace before its welcome chat is seeded or its agents
+  are first listed); the first chat it shows after that counts as opened for, so
+  a chooser the user closed stays closed when the welcome chat arrives. The
+  notice's button, and the empty list's, open the root's chooser again
+  (`frontend/src/models/firstSendChooser.ts`; a chat page no root frames
+  opens its own as the notice appears). This is the one place the chooser opens
+  for a missing provider (the New chat button opens the awaiting chat, and an
+  intake's first message goes into its composer, with no dialog). Being the
+  root's, the chooser stays up, with any sign-in under way, when the selection
+  moves (the seeded welcome chat arriving). The sign-in it produces launches the
+  chat awaiting its first send on screen when it finishes, with no message, so
+  its agent is up before the user has typed; one that finishes with no such chat
+  on screen launches the first the root shows after it, and the root starts no
+  chat for an empty list meanwhile. Once per page load, when a chooser of the
+  root's is drawn with its providers listed while the shell shows the root and
+  its frame is laid out, the root posts `minds:provider-chooser-on-screen {}` to
+  the Imbue Studio chrome (forwarded up by the shell), which lifts its cover over
+  a new workspace on it. Whether
   anything is signed in is decided from a fresh read of the account list; the
   New chat button then names no account, so the chat app picks it as the create
   runs and an account signed out since the page read the list is never the one
@@ -80,20 +98,22 @@ observe`, its own supervised service) writes, and serves:
   (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
   one module the embed ratchet allows, hands them the shell's handshake and
   forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
-  `shell:message`, and `shell:open-link` messages, and passes the desktop
+  `shell:show-coach-card`, `shell:message`, and `shell:open-link` messages, and passes the desktop
   app's answers to them (`minds:provider-sign-in-ack`,
-  `minds:permission-resolutions`) back down.
+  `minds:permission-resolutions`) back down. Their `shell:agent-working` it keeps, and sends
+  the shell one of its own for all of them (see "Telling the shell a reply is under way").
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, a notification's desktop bubble, destroy, rename, make-main, start,
-  stop; the subagent reads under
+  the queue actions, presence and watchers, a notification's desktop bubble, the next-step suggestions,
+  destroy, rename, make-main, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
+  `/api/harnesses`, `/api/suggestions/new-chat` (the things to try in Studio on a chat nobody
+  has spoken in), `/api/uploads` (and a chat's own uploads under
   `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
@@ -103,21 +123,36 @@ observe`, its own supervised service) writes, and serves:
   the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
-  its last message as `last_messaged_at`, which the chat root's list orders on)
+  its last message as `last_messaged_at`, which the chat root's list orders on;
+  beside them the main chat's id, and `is_first_conversation_pending`, see
+  "Telling the shell the first conversation is under way")
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`; a discard's carries the messages the chat held,
   dropped with it, and is replayed for 15 minutes to a page that connects later,
   so the page that sent them puts them back in the box; a failed create's
-  carries its `failure_kind` when it is one the page words itself), and `accounts_updated`
-  whenever the account index changes, whichever process wrote it.
+  carries its `failure_kind` when it is one the page words itself),
+  `accounts_updated` whenever the account index changes, whichever process wrote
+  it, `settings_updated` whenever a settings route writes the workspace's chat
+  settings, and `suggestions_updated` (`{"chat_id"}`) whenever a chat's stored
+  next-step suggestions are replaced or removed.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
-  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  and a chat root window (`/`) on screen allowed to be moved to it. With no `chatId` (the Imbue Studio app
+  entering a new workspace) it shows the chat root as it stands: a chat root window at `/` or on any chat
+  the app lists or holds provisionally counts as already showing it, no window is moved, and with none the
+  pinned window comes up at `/`. The shell picks the window. It
   answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
+- `POST /api/show-new-chat-pointer`: what the shell posts for `onboarding:show-new-chat-pointer`, which
+  another app's page sends to have the user pointed at the chat list's New chat button (the onboarding
+  checklist's first entry). It takes the `client_id` the shell adds and asks the shell's `show` op
+  (`new_chat_pointer.py`) to put the chat root on that client's screen at `/?open=new-chat-pointer`: a
+  chat root window on screen is pointed at it and comes forward, else the pinned window comes up. The
+  root draws its coach mark at the button and keeps the chat it shows. It answers as `/api/focus-chat`
+  does, with the same refusals.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
@@ -150,7 +185,8 @@ opening snapshot replaces the folded view and the health recovers.
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake, and a clicked link's
 `shell:open-link`); the shell calls the chat only to post the
-messages its manifest registers for (`minds:focus-chat`).
+messages its manifest registers for (`minds:focus-chat`,
+`onboarding:show-new-chat-pointer`).
 
 The chat has no link code of its own: a click on a message's link follows the
 app contract's link rule, as a click in any app does. Rendering a message
@@ -386,7 +422,10 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
@@ -574,6 +613,30 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
+app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
+(the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the
+workspace's owner the provider page (`first_run.py`), and writes the chat's start suggestions
+(below), "Describe what you want to make", "Get ideas for what to make" and "See what Studio can
+do", under the welcome's last turn, with the step its first conversation stands at (the tree,
+below). The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
+under its lanes; the first account connected there is pinned as the workspace's default (see
+"Provider accounts"), and with two or more connected the page marks the default's row "Default"
+and makes every other row a button that pins that account instead. Leaving the provider page with
+a provider connected starts the chat's agent at once, on the default account and with no
+message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
+types, and that first send carries the welcome. For this chat the context block also says that
+this is the user's first conversation in a new workspace and that the agent reads
+`.agents/skills/first-run-onboarding/SKILL.md` before replying; the skill holds the reply to each
+start suggestion word for word, the questions and idea lists that follow "Get ideas for what to
+make", and has the agent treat anything else as an ordinary request. An
+Imbue Studio app that still asks what type of studio the user wants sends the answer as `context`:
+it is kept beside the seed in `first_run_context.txt` (the file that marks the chat as the first
+run's, empty when nothing was said), rides the same block without being shown, and is taken again
+from a first-run seed posted before the chat's first agent is launched, which answers the same
+chat rather than opening a second. Earlier versions started this chat's agent with a note of the
+chat app's own (`<first-run-kickoff>`); the page still hides it in the transcripts that hold one.
+
 The workspace has one **main chat**, where a text with no chat of its own goes
 (`main_chat.py`). It is a pointer, like a star on one chat, kept in
 `data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a
@@ -623,6 +686,383 @@ fast row states the chat's mode and opens a submenu where the mode, auto's turn
 limit and the default for new chats are set; `/fast on` and `/fast off` typed
 in the composer choose the mode too. The first time auto switches a chat in a
 workspace, a one-time notice over the model bar explains it.
+
+## Suggestions
+
+Suggestions are short entries the user can click instead of typing, above the composer and,
+for a reply that has been answered, in the transcript under it
+(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). They are offered at two
+placements: under an agent's reply (`next_step`), and on a chat with no message yet
+(`new_chat`). A reply suggestion sends its label when clicked. An action suggestion carries an
+`action` and sends nothing: its click does what the action names. Only the new-chat placement
+offers those, and a next-step set never does.
+
+A chat's next-step
+suggestions are the replies offered under one assistant message, kept whole as one file in the
+chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
+
+```json
+{
+  "version": 1,
+  "after_event_id": "<the event id of the assistant message these follow>",
+  "source": "fixed",
+  "suggestions": [
+    {"suggestion_id": "start-describe", "label": "Describe what you want to make", "action": null, "is_recommended": false}
+  ]
+}
+```
+
+`source` is `fixed` for a set the chat app wrote itself (the first-run seed's start suggestions,
+and the tree's below) and `generated` for one a model worked out. `action` is null in every
+stored suggestion, and a file written without the field reads the same.
+
+The file holds one set, the last reply's: it is replaced when a later reply's set is ready and
+removed when a turn ends with none, and it is all that a restart of the app finds. So that a
+reply keeps its suggestions once it has been answered, the app also remembers, in memory alone,
+every set it has stored for a chat, by the reply the set follows (`suggestion_store.py`, a
+`ChatSuggestionStore` the agent manager owns and every read and write of the file goes
+through). A set is remembered when it is stored, by the seed or at a turn's end, and the file's
+own set when the app first reads it after a start. A set stored again for the same reply
+replaces the one remembered. What is remembered for a chat goes when the app stops and when the
+chat is deleted, and only the newest 200 sets of a chat are kept. Nothing of it is written to
+disk.
+
+`GET /api/chats/<chat-id>/suggestions`
+answers `{"status", "after_event_id", "source", "suggestions", "sets"}`: `ready` with the stored
+set, `pending` while a set is being worked out (naming the reply it is for, with an empty list),
+or `none` with nulls and an empty list. `sets` is every set the app remembers for the chat, the
+stored one included, oldest first, each as `{"after_event_id", "source", "suggestions"}`; it is
+empty for a chat with none. The route answers for a seeded chat still awaiting its first agent
+as for any listed chat, and 404 for a chat the app does not know.
+
+When a turn ends, the chat app works out replies to suggest under the agent's last message
+(`suggestion_generation.py`). The agent manager reports the end once the harness has closed the
+turn (for Claude, after its Stop hooks have run), and the generator settles the stored set off
+that thread, one chat at a time. It asks a model only when all of these hold: next-step
+suggestions are switched on; the chat is an agent chat a person talks to (not a room, and not
+one an agent started); the chat is idle, with no permission request, background task, or switch
+pending and nothing queued; the transcript ends on an assistant message that has text and is not
+a provider failure; the stored set is not already for that message; and the chat's harness has a
+`OneShotCompletion`. Whether a page is showing the chat plays no part, so a chat's suggestions
+are there when its user comes back to it.
+
+The question goes to the account the chat runs on, as chat naming's does, and never enters the
+chat's transcript. It runs on a mid-sized model (the one-shot call's `medium` tier: the `sonnet`
+alias for Claude, the newest "terra" model of the account's list for Codex, each falling back to
+the account's default model) with an allowance for thinking (for Codex, a `medium` reasoning
+effort where the model offers one). The system prompt asks for a draft,
+a critique, and a shorter second list, usually two or three suggestions, each as a
+`<suggestion>` element with `recommended="true"` on a clear best one; a reply whose one main
+question has a few possible answers gets those answers themselves. The prompt is the end of
+the conversation as tagged turns: the reply, always whole, under up to five turns before it,
+cut from the oldest end to 12,000 characters. A turn is what one side said in a row, as the page
+shows it: a person's own words without the context sent along with them, and the agent's text
+without its tool calls or thinking.
+
+Only the `<suggestion>` elements of the answer are read. A label is kept when it is one line of
+1 to 80 characters that no earlier one repeats, up to ten, and only the first kept one may be
+recommended. Before storing, the chat is read again: an answer is dropped when the reply is no
+longer the chat's last word, a turn is in flight, or the switch went off meanwhile. A set that
+is kept replaces the stored file; an answer with no suggestions, a failed or timed-out call, and
+a turn's end at which nothing is asked all remove it, so the file never holds the set of a
+reply the chat has moved past. A failed call is logged and not tried again for the same message. Each change to the
+file is pushed as `suggestions_updated`, and a page showing the chat reads the route again. A
+chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no generated sets.
+
+A strip's suggestions are drawn as pills in a list on the user's side of the transcript's column
+(`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group set
+in 16px from the column's right edge, and a label too long for the column wrapping inside its
+pill. A pill has a dashed outline, small corners, the body text size, a light shadow and a solid
+fill, the chat's own background (`--c-bg-chat`), and the recommended one (at most one, and the
+first) is green. The pills rise into place over 150 ms.
+
+The pills of the strip above the composer float over the end of the transcript, directly above
+the footer, which holds the strip's line and nothing else of it: the footer's height and the
+composer's place are the same with pills shown, hidden or absent. They are drawn in a layer
+(`views/SuggestionLayer.ts`, `suggestion-layer`) that is the last thing in the transcript's
+scroll element and sticks to its bottom edge. So the transcript keeps its full height and scrolls
+underneath, the layer's own height is the room at the transcript's end that lets the last reply
+be scrolled clear of the pills, and a wheel or a finger on a pill scrolls the transcript. The
+layer takes no pointer events and each pill takes its own, so a click or a selection beside and
+between the pills reaches the transcript. It is at most 60% of the scroll element's height, and
+a longer list scrolls inside it. The scroll engine is told which element the layer is
+(`getEndOverlayEl`, `views/transcript-scroll-engine.ts`): a reader following the end of the chat
+is put at the new end in the same frame as the pills appear, so the reply ends just above them
+with nothing of it underneath; a reader who is at the end without following (they pressed on the
+transcript there) is carried along too; a reader who has scrolled up sees nothing move; and a
+press on a pill does not count as one on the transcript.
+
+A chat's transcript ends with no padding of its own. What it ends on (the last reply's "Done"
+mark, a person's bubble, the status row) brings a 20px margin, which is all that separates it
+from the footer's line, and the first pill of a shown strip sits 4px under that.
+
+Next-step suggestions wait on one quiet line directly above the composer
+(`views/NextStepSuggestions.ts`). In a chat with an agent the line's height is always kept,
+with or without a set, so a set that arrives moves nothing; it is given up only in a room and
+once next-step suggestions are known to be switched off. The line is empty while a reply is
+under way and while no set is ready. The page takes a set up there only when the answer's
+`after_event_id` is the id of the last assistant message the page holds, no user message follows
+that message, the page holds the transcript's end, and the chat's turn is done; so a set left
+from an earlier turn never shows above the composer. A chat nobody has spoken in has no turn to
+be in and counts as done: a seeded chat awaiting its first agent, and one whose first agent is
+starting with nothing sent to it (no message brought by its launch, held for it, or on its way
+from the page), which is how a first-run chat's start suggestions stay shown while the agent the
+provider page started comes up. A generated set arrives a few seconds after its reply, with the
+push. Once a set is taken up, the line says "See N suggestions" ("See 1 suggestion" for one) at
+its right end, as quietly as a strip's disable link. A click shows the pills above the line and
+turns the words into "Hide suggestions", which hides them again; while they are shown the line
+carries "disable suggestions" immediately left of that, 16px away, for the workspace's owner.
+A fixed set
+starts shown, so the first conversation's choices are never behind a click, and a generated set
+starts hidden. Every suggestion of a shown set is drawn.
+
+Clicking a suggestion sends its label
+through the composer, so the transcript shows exactly what the pill said: the label alone with
+an empty draft, else the draft's text, a newline, and the label, with the draft's attachments;
+it queues behind a running turn, launches a chat awaiting its first message, and carries out an
+armed switch, as a typed message does. With no provider signed in, or the chat's account signed
+out, the click opens the provider chooser and sends nothing, and the suggestions stay for a
+second click; while a switch is being prepared or dictation owns the box it does nothing.
+
+The suggestions belong to the reply they were made for. When a message is sent, by a suggestion
+or by typing, or a turn starts from anywhere else, the set leaves the composer at once and is
+drawn in the transcript under the assistant message it follows
+(`views/AnsweredReplySuggestions.ts`): the same line, "See N suggestions", always hidden to
+begin with, whose click shows the pills under it and turns it into "Hide suggestions". A pill
+clicked there is sent now, through the composer like any other, and the line stays. It offers
+no way to switch the placement off. Every answered reply the page knows a set for keeps its
+line: the page keeps each set it is sent by the reply it follows (`sets`, and the stored set it
+drew above the composer, so the line is there the moment the message is sent), and draws one
+under its reply unless that reply is the one the chat now waits on, whose set belongs above the
+composer. Whether a line's pills are shown is the page's own memory, gone with a reload. Since
+the chat app remembers the sets in memory alone, a restart of the app leaves a newly loaded
+page with the line of the last reply only. The line is a part of its own in the reply's stretch
+of the transcript, after the message (`views/conversation-rows.ts`), not inside the message,
+which is drawn once and kept. A room shows neither the line above the composer nor any in its
+transcript, and nor does a chat while next-step suggestions are switched off.
+
+A first-run chat's first conversation is a small tree (`first_run_tree.py`), and the
+suggestions under its scripted replies are the chat app's own. The chat's folder holds the step
+the conversation stands at, `first_run_tree.json` (`{"version": 1, "step": "start"}`), written
+with the seed and moved by each message the chat takes from its user, whether delivered to its
+agent or held for one still being created; a send the chat refuses and a slash command move
+nothing:
+
+| From | Message | To |
+|---|---|---|
+| `start` | "Get ideas for what to make" | `categories` |
+| `start` | anything else | `done` |
+| `categories` | anything | `connectors` |
+| `connectors` | anything | `ideas` |
+| `ideas` | "More ideas" | `ideas` |
+| `ideas` | anything else | `done` |
+
+The message is compared trimmed, so a click and the same words typed are one thing. A first-run
+chat with no step file (one seeded before the tree was recorded) is at `start` until its first
+agent joins it and `done` afterwards. While the step is not `done`, a turn's end stores the
+tree's set under the reply with no model asked, as `source: fixed`: none at `categories` (the
+reply asks what the workspace is for), "Show me some ideas" at `connectors` (it asks which apps
+the user has), and at `ideas` one suggestion per idea the reply lists, then "More ideas" and
+"Something else". An idea's name is the bold text that opens a list item (`- **<name>**: ...`),
+the form the skill has the agent write; up to ten are read, each one line of at most 80
+characters, in order and without repeats. A fixed set needs neither the switch (the page hides
+it while the switch is off) nor a harness with a one-shot call, but like any set it is stored
+only under a reply the agent wrote, in a chat that is idle with nothing queued. A reply at
+`ideas` that lists no idea in that form is left to a model: the generator runs with a "Fixed
+onboarding suggestions" section added to its system prompt, and the set is stored as
+`generated`. A reply at `start` (the answer to a slash command, which moves nothing) and every
+reply once the step is `done` get suggestions as in any other chat.
+
+The tree's two questions come with pickers. An assistant message that carries
+`<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own, outside a code
+fence, is drawn with the picker in the tag's place (`studio-widgets.ts`, `views/StudioPickers.ts`):
+three columns of category pills (Work, Life, Creative), or a wrapping row of fifteen apps, each
+with its bundled service mark (`views/service-marks.ts`) or its name alone when no mark is
+bundled for it. A click on a pill adds its label and a comma to the composer's draft, or takes
+them out again (`models/ComposerDraft.ts`), and the pill reads as pressed while the draft holds
+them, so a picker has no state of its own and the user sends the draft themselves, with anything
+of their own typed in. Each picker ends in an "Other" pill (the category picker's at the end of
+its Creative column) that says so: it works as every pill does, but what it puts in the draft is
+a prompt to write over in place of its label, "Write whatever you want!" from the category picker
+and "Write whatever data you want here!" from the connector picker. It is no category and no
+app, so the skill's lists leave it out and name the two prompts instead. A picker takes clicks only in the reply the chat waits on its user to
+answer (its last assistant message, with nothing said since and its turn done); in an earlier
+message it is drawn disabled. The first category picked in a workspace points a coach mark
+(`@imbue/workspace-ui`'s `components/CoachMark.ts`) at the composer's send button, "Click this
+button to send your message", recorded as `is_picker_send_hint_shown` in the chat settings so it
+shows once; it goes on "Got it", on a click of the button, and when a message is sent any other
+way.
+
+New-chat suggestions are things worth trying in Studio that this workspace's owner has not done
+yet, offered on a chat nobody has spoken in (`new_chat_suggestions.py`). They are the
+workspace's four onboarding items, whose order, labels and rule for when one is done are kept
+in `system/libs/onboarding_activity` (`items.py`). Each is an action suggestion, offered until
+its item is done:
+
+| Id | Label | Action | Done when |
+|---|---|---|---|
+| `new_chat` | Work in parallel by starting a new chat | `new_chat_coach` | `second_chat_started` is set |
+| `phone_access` | Access Studio from your phone | `phone_access` | `phone_layout_used` is set |
+| `build_app` | Build an app | `build_app_coach` | the registry holds an app the user built |
+| `connect_data` | Connect some data | `connect_data_coach` | `permission_request_filed` is set |
+
+`build_app` is also held back while a build may be under way, which is while
+`app_build_started` was last set within the past hour. The onboarding checklist app
+(`system/apps/onboarding_checklist`) shows the same four items from the same library. A click
+on its `new_chat` entry reaches the same coach mark from outside the chat: the checklist sends
+`onboarding:show-new-chat-pointer` through the shell, which posts it to
+`POST /api/show-new-chat-pointer` (`new_chat_pointer.py`), and the chat app has the shell bring
+the chat root forward at `/?open=new-chat-pointer`, which the root reads as an ask to draw the
+mark at its New chat button and drops from the path it reports, keeping the chat it shows.
+
+The names in the last column are onboarding markers: empty files under
+`data/.state/onboarding_activity/` that are only ever set, so a fact stays true after what
+proved it is gone (a deleted chat, a phone put away). The chat app sets two of them
+(`onboarding_markers.py`):
+
+- `second_chat_started`, when a person starts an agent chat while another chat a person talks
+  to exists. A person starts one through `POST /api/chats/create`, or through an intake
+  (`POST /api/chats/intake`, the shell launcher's "New Chat" and a window's "Chat about this
+  app") that makes a chat rather than finds one, whether the chat is created at once or minted
+  to await its first send. Either request counts as a person's when it names the client it came
+  from in `client_id`, as the page's own create and the shell's intake do and a script's
+  (`message_chat.py --create`) does not. An intake that sends or drafts into a chat that exists
+  makes none, and a room is never one. A chat a person talks to is a listed agent chat that no
+  agent started, or one not on an agent yet, a seeded chat awaiting its first message included.
+  The chat being made never counts as the other one, so the first message that launches the
+  chat a workspace opened on starts no second chat.
+- `permission_request_filed`, when the agent manager reads a tool result that files a permission
+  request, in any chat it follows, whether or not the request has been settled since. It is
+  written once per run of the app, so a transcript read again does not write it again. A request
+  filed in a chat the app follows no transcript of is not seen.
+
+The shell sets `tour_finished` and `phone_layout_used`, and the build-app skill's scaffolder sets
+`app_build_started` on every run. An app the user built is what `app_manifest.has_user_built_app`
+says it is: a registry row that is neither `system` nor `internal`, registered by a package the
+root `pyproject.toml` does not list as its own, which leaves out the template's apps, a new
+app's mock frame, and a preview.
+
+`GET /api/suggestions/new-chat?chat_id=<chat-id>` answers `{"suggestions": [...]}`: every
+suggestion that is offered, in the table's order, each as
+`{"suggestion_id", "label", "action", "is_recommended": false}`. The list is empty when none is
+offered here at all, which is when any of these holds: the requester is not the workspace's
+owner (`X-Imbue-Identity`; a request with no header is the owner's); new-chat suggestions are
+switched off; `tour_finished` is not set; or `chat_id` names the first-run chat while its
+tree's step is not `done`. `chat_id` may be left out or name a chat the app does not know yet,
+and then no tree holds anything back. The route answers every suggestion that is offered and
+leaves it to the page to drop the ones it cannot carry out and to decide how many to draw.
+
+The page draws them as one strip (`frontend/src/models/NewChatSuggestions.ts`,
+`views/NewChatStrip.ts`), named "Things to try" to a screen reader. It is there on a chat
+nobody has said anything in, as soon as the chat is on screen, with what the route answers. On
+the chat's first message, one of this page's still on its way included, the strip goes for
+good, and nothing is left to open it by. The first-run chat never shows it: the route answers
+that chat nothing while its tree is in progress, and its first strip is the tree's. The strip
+shows the first three suggestions the page can act on and is absent when there are none. The
+page keeps only a suggestion whose action it knows, so a newer backend never produces a dead
+pill.
+
+The strips of the two placements read alike: the pills (`suggestion-strip-pills`), in the layer
+over the transcript's end, over one quiet line (`suggestion-line`), in a column at the
+composer's width in the footer (`views/ChatSuggestions.ts`). The new-chat strip's line holds its
+disable link alone, at its right end, and stands where the next-step line would, at the same
+height, so the column holds one quiet line directly above the composer whichever strip is drawn
+and the strip's going moves nothing. The two strips are
+never drawn together: a chat nobody has spoken in has no reply to suggest answers to, and the
+first-run chat is offered no new-chat suggestions. Should both ever be there, the next-step
+strip is the one drawn.
+
+A click on a new-chat suggestion sends nothing and records nothing. It points the user at a
+control, every time it is clicked, and the layer that owns the control draws the bubble
+(`views/suggestion-actions.ts`); every bubble has one button, "Got it". The words of the
+`build_app_coach` and `connect_data_coach` bubbles are the shared library's
+(`system/libs/workspace_ui/src/onboarding_pointers.ts`), which the onboarding checklist shows
+too:
+
+| Action | Who draws | What the page does |
+|---|---|---|
+| `new_chat_coach` | the chat list | calls `showNewChatCoachMark()` on the chat root that frames it (`window.parent.chatRootEmbed`); the root points a coach mark at its New chat button, which pulses, and in the phone layout opens the list's drawer first (`root/newChatCoachMark.ts`) |
+| `build_app_coach` | the chat page | points a coach mark at the composer's text area, and focuses it |
+| `connect_data_coach` | the shell | posts `shell:show-coach-card {text, chromeAnchor: "permissions"}`, which the chat root forwards; the shell shows the words as a card under the right end of the Imbue Studio app's title bar and rings the Settings button there, which holds a workspace's permissions |
+| `phone_access` | the Imbue Studio app | posts `minds:open-share-settings {coachMark: "mobile-access"}`, naming no app; the Imbue Studio app opens its share panel on the workspace with a bubble at its phone-access control |
+
+Before it takes the first three, the page drops the suggestions whose click needs a layer it
+cannot reach: `new_chat` in a chat page no chat list frames, and `phone_access` and
+`connect_data` unless the shell's handshake says `showsCoachMarks`, which is what an Imbue
+Studio app that draws coach marks announces (the chat root keeps the handshake it hands its
+pages up to date when the app speaks after the shell did).
+
+Every create a person presses a button for names the browser it came from (`client_id`, the
+per-browser id a send carries too): the New chat button's, the one "Start a new chat" makes in
+the switch dialog and the failed-switch notice, and the launch of a chat that was waiting for
+its first send. That is what lets the chat app count each as a chat a person started; a
+script's create names none.
+
+A marker or a registry that cannot be read counts against the suggestions that read it, so
+nothing is offered rather than everything: an unreadable `tour_finished` closes the whole gate.
+A marker that cannot be written is logged, and the request or the transcript read that noticed
+the fact goes on as it would have; the suggestion it would have retired may then be offered
+again.
+
+Two workspace-wide switches say which suggestions are offered, each on unless changed:
+`is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled` in the chat settings
+(`chat_settings.py`, `GET /api/settings`). The next-step switch governs the line above the
+composer and the lines in the transcript, and the new-chat switch what
+`GET /api/suggestions/new-chat` answers. `PUT /api/settings` replaces the settings whole, so a
+writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions` takes
+either switch or both, changes only those (one left out or null stays as it is), and answers
+the settings as `GET /api/settings` does. The settings file and both routes drop a field the
+settings do not hold, so a file or a writer that carries one keeps every other value. Each
+placement's strip shows the workspace's owner its own link on its line ("disable suggestions"
+on the next-step line while its pills are shown, "disable new chat suggestions" on the
+new-chat strip's), which switches that placement off through that route: the strip goes, a
+notice with "Undo" takes its place for a few seconds, and where the Imbue Studio app says it
+opens workspace settings the link opens them on their Suggestions group, whose switches write
+through the same route. Every write through either settings route is pushed to every page as
+`settings_updated` on `/api/ws`, and each page reads the settings again, so a strip switched
+off on one page goes at once on all of them.
+
+## Telling the shell a reply is under way
+
+A chat page tells the shell whether a reply is under way in the chat it shows
+(`frontend/src/views/AgentWorkingReport.ts`, which the chat panel draws in every chat, whatever
+suggestions are drawn or switched off): `shell:agent-working {isWorking}` when a reply starts
+or stops being under way in its chat (never for a room, nor for a first agent starting with
+nothing sent to it), again when a shell greets it while one is, and `false` when the page stops
+showing the chat. While the page cannot tell, the chat or its transcript not having arrived,
+it says nothing new. A chat whose agent is stopped, or whose create or switch to another agent
+failed, has no reply on its way, so no turn is under way in it until a message is sent. The
+shell hears every page the chat root frames as the root, so the root does not pass the message
+on: it keeps each page's last word (`frontend/src/root/agentWorkingReports.ts`) and tells the
+shell `isWorking: true` while any page it holds says so and `false` once none does, when that
+changes and again when the shell greets the root while one does. A page whose frame is
+evicted, removed, or loads again takes its word with it, so a chat that finishes while another
+still works does not read as stopped, and one deleted mid-turn leaves nothing behind. The
+shell's show-around tour begins on the message, since the avatar's status is prompt only for a
+harness that reports its activity to mngr.
+
+## Telling the shell the first conversation is under way
+
+The shell's tour does not begin while a new workspace's first conversation is still following
+its tree (`first_run_tree.py`), so the user is not shown around on top of the scripted first
+replies. The chat app holds the one fact (`AgentManager.is_first_conversation_pending`): true
+exactly while a chat it lists is a first-run chat whose step is not `done`, by the same reading
+of the step as everywhere else (a chat with no step file is at `start` until its first agent
+joins it). A workspace with no first-run chat, or one whose first-run chat was deleted, has
+none. Every `chats_updated` push carries it as `is_first_conversation_pending`, so a page learns
+it as it connects, and the message that moves the tree to `done` pushes the chat list at once
+rather than leaving the news to the next change of a chat.
+
+The chat root passes it to the shell (`frontend/src/root/firstConversationReport.ts`) as
+`shell:first-conversation-step {isPending}`: once its first chat list has arrived, each time
+the answer changes, and again when a shell greets it. The root sends it, not a chat page,
+since the root is loaded whichever chat is on screen. The shell keeps the root's word until
+its frame loads again or goes, and starts the tour as the conversation ends when a reply is
+already under way, else with the next reply. A shell that frames no chat root (its chat
+window not shown since the shell's page loaded) hears nothing, and holds nothing. With "Describe what you want to make" or "See
+what Studio can do" as the first pick the tree is done at that message, and the tour begins
+with its reply; with "Get ideas for what to make" it waits until an idea is picked, or
+anything but "More ideas" is said, at the list of ideas.
 
 ## Chat names
 
@@ -1017,10 +1457,14 @@ signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
 binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
-launcher, a desktop shortcut, `workspace-layout open chat`) goes to the account the user
-pinned as the default in a chat's provider menu, else to the most recently used
-one (the account of the latest sign-in, chat create, or switch); pressing
-another account in that menu switches the chat to it (through the dialog, or at
+launcher, a desktop shortcut, `workspace-layout open chat`) goes to the account
+pinned as the default, else to the most recently used
+one (the account of the latest sign-in, chat create, or switch). The user pins one in a chat's
+provider menu, and a sign-in pins its own account when it lands while the first run's provider
+page is still owed and nothing is pinned (`commit_account`'s `is_default_when_none_pinned`), so
+the provider connected first on that page stays the default whatever is connected after it;
+removing the pinned account clears the pin. Pressing
+another account in a chat's provider menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
 
 Removing (signing out of) an account deletes its credential files and its index
@@ -1046,6 +1490,14 @@ into the page the browser ends on. The CLI's own answer is not passed back,
 since claude sends the browser to its success page before its token exchange
 has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
 so the desktop app frees the port.
+
+Claude's CLI draws its callback port at random, so the desktop app may find
+something on the user's machine already answering there (a Docker container's
+published SSH port, say). It then answers `reason: "port_taken"`, and the
+chooser starts the same sign-in again for a fresh port, trying up to three
+ports in all before it falls back as below. A fresh sign-in that lands on a
+port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
+fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While

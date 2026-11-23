@@ -6,9 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providers = vi.hoisted(() => ({ loadAccounts: vi.fn(async () => undefined) }));
+const chatSettings = vi.hoisted(() => ({ rereadChatSettings: vi.fn() }));
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("./Providers", () => ({ loadAccounts: providers.loadAccounts }));
+vi.mock("./ChatSettings", () => ({ rereadChatSettings: chatSettings.rereadChatSettings }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
@@ -57,6 +59,7 @@ function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | 
     account_id: "acct-1",
     kind: "agent",
     phase,
+    message: "",
     error,
     failure_kind: null,
     is_seeded: false,
@@ -112,6 +115,21 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
   });
 
+  it("tells the held-send listeners which message never reached its agent, and why", () => {
+    const failures: [string, string, string, string][] = [];
+    manager.addHeldSendFailedListener((chatId, messageId, detail, kind) =>
+      failures.push([chatId, messageId, detail, kind]),
+    );
+    push({
+      type: "held_send_failed",
+      chat_id: "agent-1",
+      message_id: "m-1",
+      detail: "Claude is waiting on something in its terminal",
+      kind: "input_blocked",
+    });
+    expect(failures).toEqual([["agent-1", "m-1", "Claude is waiting on something in its terminal", "input_blocked"]]);
+  });
+
   it("tells the active-agent listeners when a chat runs on a different agent than before", () => {
     const changes: [string, string, string][] = [];
     manager.addActiveAgentChangedListener((chatId, previous, current) => changes.push([chatId, previous, current]));
@@ -138,6 +156,38 @@ describe("the provisional chats over the socket", () => {
     push({ type: "chats_updated", chats: [chat("agent-1"), chat("agent-2")], main_chat_id: "agent-2" });
 
     expect(manager.getMainChatId()).toBe("agent-2");
+  });
+
+  it("takes from the list whether the first conversation is still following its tree, even when only that changed", () => {
+    expect(manager.isFirstConversationPending()).toBe(false);
+
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: true,
+    });
+    expect(manager.isFirstConversationPending()).toBe(true);
+
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: false,
+    });
+    expect(manager.isFirstConversationPending()).toBe(false);
+  });
+
+  it("reads a list that does not say as no first conversation following its tree", () => {
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1")],
+      main_chat_id: "agent-1",
+      is_first_conversation_pending: true,
+    });
+    push({ type: "chats_updated", chats: [chat("agent-1")], main_chat_id: "agent-1" });
+
+    expect(manager.isFirstConversationPending()).toBe(false);
   });
 
   it("resolves at once for a chat the app already lists", async () => {
@@ -385,5 +435,52 @@ describe("the account list over the socket", () => {
     open();
 
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the settings over the socket", () => {
+  let manager: ChatsModule;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    chatSettings.rereadChatSettings.mockClear();
+    manager = await import("./Chats");
+    manager.initChats();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeSocket.latest = null;
+  });
+
+  it("reads the settings again when the app says they changed", () => {
+    open();
+    expect(chatSettings.rereadChatSettings).not.toHaveBeenCalled();
+
+    push({ type: "settings_updated" });
+
+    expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
+  });
+
+  it("tells its listeners which chat's stored suggestions changed, until they stop listening", () => {
+    const listener = vi.fn();
+    manager.addSuggestionsUpdatedListener(listener);
+    open();
+    expect(listener).not.toHaveBeenCalled();
+
+    push({ type: "suggestions_updated", chat_id: "agent-suggested" });
+    expect(listener).toHaveBeenCalledExactlyOnceWith("agent-suggested");
+
+    manager.removeSuggestionsUpdatedListener(listener);
+    push({ type: "suggestions_updated", chat_id: "agent-suggested" });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("reads the settings again on a reconnect, since a change while it was down reached no one", () => {
+    open();
+    open();
+
+    expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
   });
 });

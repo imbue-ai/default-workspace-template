@@ -1,1 +1,0 @@
-`ClientRecord` (and so `ClientView` and the inventory's clients) carries the client's `desktop_revision`, which counts the moves of its stored active desktop and orders the shell's `active_desktop_changed` news, so the shell's clients answer keeps the field it now reports.

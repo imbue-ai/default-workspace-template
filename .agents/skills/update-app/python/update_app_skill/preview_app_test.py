@@ -14,11 +14,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from agents_shared.testing import add_linked_worktree
 
 from update_app_skill import preview_app as mod
 from update_app_skill import preview_boot as boot
@@ -116,8 +118,20 @@ class _RecordingInstances(mod.Instances):
         state_path = self._state_path(spec.name)
         state_path.parent.mkdir(parents=True, exist_ok=True)
         self.next_port += 1
+        window = spec.window
+        services = (
+            [window.service_name, window.preview_service_name]
+            if window is not None
+            else []
+        )
         state_path.write_text(
-            json.dumps({"cwd": str(spec.cwd), "inner_port": self.next_port})
+            json.dumps(
+                {
+                    "cwd": str(spec.cwd),
+                    "inner_port": self.next_port,
+                    "services": services,
+                }
+            )
         )
         return 0
 
@@ -176,9 +190,11 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         },
         copy_sources={"data": "data/.apps/chat"},
         health_path="/api/health",
-        service_name="chat-preview-app",
-        preview_service_name="chat-preview",
-        preview_title="Chat (worktree)",
+        window=mod.PreviewWindow(
+            service_name="chat-preview-app",
+            preview_service_name="chat-preview",
+            title="Chat (preview)",
+        ),
         inner_path="/?chat=agent-1",
         theming_mode=None,
         project=None,
@@ -258,6 +274,147 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     assert spec.health_path == "/health"
     assert spec.inner_path == "/"
     assert spec.command == [*boot.LAUNCHER, "notes"]
+
+
+def _worktree_of_a_live_checkout(tmp_path: Path) -> Path:
+    """A linked git worktree of a checkout at ``tmp_path / "live"``, holding the fixture apps."""
+    add_linked_worktree(tmp_path / "live", tmp_path / "worktree")
+    return _write_worktree(tmp_path)
+
+
+def _up_from_worktree(
+    app_name: str,
+    worktree: Path,
+    instances: _RecordingInstances,
+    *,
+    is_private: bool = True,
+    with_apps: Sequence[str] = (),
+    instance_key: str | None = None,
+) -> int:
+    """``up`` run inside ``worktree``, so the worktree is its own repo root."""
+    return boot.up(
+        app_name,
+        worktree,
+        worktree,
+        with_apps=with_apps,
+        instance_key=instance_key,
+        is_private=is_private,
+        instances=instances,
+        dump_registry=_dump_registry,
+    )
+
+
+def test_a_preview_booted_from_a_worktree_is_refused_unless_private(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    with pytest.raises(mod.PreviewError, match="pass --private"):
+        _up_from_worktree("notes", worktree, instances, is_private=False)
+
+    assert instances.specs == []
+
+
+def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live_secrets(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    (worktree / "system" / "apps" / "notes" / "app.toml").write_text(
+        _NOTES_MANIFEST
+        + '\n[[secrets]]\nfile = "notes-api"\nvariables = ["NOTES_API_KEY"]\n'
+    )
+    instances = _RecordingInstances(worktree)
+
+    assert _up_from_worktree("notes", worktree, instances) == 0
+
+    spec = instances.up_spec("notes-preview")
+    assert spec.window is None
+    live = (tmp_path / "live").resolve()
+    assert spec.command == [
+        *boot.LAUNCHER,
+        "python3",
+        str(live / "system" / "scripts" / "with_secrets.py"),
+        str(live / "data" / ".secrets" / "notes-api.env"),
+        "--",
+        "notes",
+    ]
+
+
+def test_a_private_chat_from_a_worktree_boots_without_an_instance_key(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    assert _up_from_worktree("chat", worktree, instances) == 0
+
+    assert instances.up_spec("chat-preview").window is None
+
+
+def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    monkeypatch.chdir(worktree)
+    live_registry = tmp_path / "live" / "data" / ".state" / "apps.toml"
+    live_registry.parent.mkdir(parents=True)
+    live_registry.write_text(
+        _dump_registry(
+            [{"name": "chat", "url": "http://localhost:8010", "label": "chat-live"}]
+        )
+    )
+
+    assert (
+        _up_from_worktree("system_interface", worktree, _RecordingInstances(worktree))
+        == 0
+    )
+
+    assert _shell_registry_rows(worktree)["chat"]["url"] == "http://localhost:8010"
+
+
+def test_a_private_up_refuses_to_replace_a_preview_with_a_window_but_replaces_a_private_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    instances = _RecordingInstances(tmp_path)
+
+    def _up_notes(*, is_private: bool) -> int:
+        return boot.up(
+            "notes",
+            worktree,
+            tmp_path,
+            is_private=is_private,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+
+    assert _up_notes(is_private=False) == 0
+    assert _up_notes(is_private=True) == 1
+    assert "closing the user's window" in capsys.readouterr().err
+    assert instances.ups() == ["notes-preview"]
+
+    assert mod.down("notes", tmp_path, instances=instances) == 0
+    assert _up_notes(is_private=True) == 0
+    assert _up_notes(is_private=True) == 0
+    assert instances.ups() == ["notes-preview"] * 3
+
+
+def test_a_private_instance_cannot_frame_siblings(tmp_path: Path) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    with pytest.raises(mod.PreviewError, match="registers none"):
+        _up_from_worktree(
+            "system_interface",
+            worktree,
+            instances,
+            with_apps=["chat"],
+            instance_key="agent-1",
+        )
+
+    assert instances.specs == []
 
 
 def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
@@ -548,6 +705,33 @@ def test_main_routes_the_verbs(tmp_path: Path) -> None:
     )
 
 
+def test_a_refusal_from_the_script_run_directly_is_a_message_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """Run as a script, the module is ``__main__``, which must still catch the refusals the
+    modules it imports raise."""
+    refused = subprocess.run(
+        [
+            sys.executable,
+            mod.__file__,
+            "up",
+            "--app",
+            "notes",
+            "--worktree",
+            str(tmp_path / "nowhere"),
+            "--repo-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert refused.returncode == 1
+    assert refused.stderr.startswith("preview: ")
+    assert "Traceback" not in refused.stderr
+
+
 def _up_shell_with_chat(
     tmp_path: Path, worktree: Path, instances: _RecordingInstances
 ) -> None:
@@ -614,14 +798,77 @@ def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_wi
         mod.down("chat", tmp_path, instances=instances, dump_registry=_dump_registry)
         == 0
     )
-    rows = _shell_registry_rows(tmp_path)
-    assert rows["chat"] == {
+    live_chat_row = {
         "name": "chat",
         "url": "http://localhost:8010",
         "label": "chat-live",
     }
+    assert _shell_registry_rows(tmp_path)["chat"] == live_chat_row
+
+    # Re-upped as a private instance, the chat has no origin the shell could frame it at.
+    assert (
+        boot.up(
+            "chat",
+            worktree,
+            tmp_path,
+            instance_key="agent-1",
+            is_private=True,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+    assert _shell_registry_rows(tmp_path)["chat"] == live_chat_row
+    assert mod.down("chat", tmp_path, instances=instances) == 0
     # The shell's own record still names the chat, so a later ``down`` of the shell is unchanged.
     assert mod._recorded_siblings(tmp_path, "system_interface") == ["chat"]
+
+
+def test_a_framed_siblings_re_up_rewrites_the_shells_copy_from_the_live_registry_whatever_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    live_registry = tmp_path / "data" / ".state" / "apps.toml"
+    live_registry.parent.mkdir(parents=True)
+    live_registry.write_text(
+        _dump_registry(
+            [
+                {"name": "chat", "url": "http://localhost:8010", "label": "chat-live"},
+                {
+                    "name": "terminal",
+                    "url": "http://localhost:7681",
+                    "label": "terminal-live",
+                },
+                {
+                    "name": "chat-preview-app",
+                    "url": "http://localhost:1",
+                    "label": "chat-preview-x1y2",
+                },
+            ]
+        )
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    instances = _RecordingInstances(tmp_path)
+    _up_shell_with_chat(tmp_path, worktree, instances)
+
+    assert (
+        boot.up(
+            "chat",
+            worktree,
+            tmp_path,
+            instance_key="agent-1",
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    rows = _shell_registry_rows(tmp_path)
+    assert rows["chat"]["url"] == mod.live_preview_url(tmp_path, "chat")
+    assert rows["terminal"]["url"] == "http://localhost:7681"
 
 
 def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) -> None:

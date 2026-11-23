@@ -284,12 +284,15 @@ class SendFailedError(Exception):
 
     ``kind`` is mngr's classification of the failure, or the chat app's own for a failure it met itself, which is
     what lets the chat decide what to offer: trying again can clear a blocked input, where only a restart is left for
-    a pane that is gone. Unknown when mngr did not classify it.
+    a pane that is gone. Unknown when mngr did not classify it. ``is_delivered`` marks a send the agent took before a
+    dialog blocked it, which carries the same kind as one refused before anything was typed but must never be sent
+    again.
     """
 
-    def __init__(self, detail: str, kind: str = "unknown") -> None:
+    def __init__(self, detail: str, kind: str = "unknown", is_delivered: bool = False) -> None:
         self.detail = detail
         self.kind = kind
+        self.is_delivered = is_delivered
         super().__init__(detail)
 
 
@@ -327,6 +330,9 @@ class SendFailure(FrozenModel):
 
     reason: str
     kind: str
+    is_delivered: bool = Field(
+        default=False, description="Whether the agent took the message before a dialog blocked it"
+    )
 
 
 def delivered_or_raise(result: SendDelivery | SendFailure) -> SendDelivery:
@@ -337,7 +343,7 @@ def delivered_or_raise(result: SendDelivery | SendFailure) -> SendDelivery:
     request fail with the draft kept), and the endpoint turns it into the failure the composer shows.
     """
     if isinstance(result, SendFailure):
-        raise SendFailedError(result.reason, result.kind)
+        raise SendFailedError(result.reason, result.kind, result.is_delivered)
     return result
 
 
@@ -360,7 +366,9 @@ def _first_failure(result: MessageResult) -> SendFailure:
     for agent_name, blocked_message in result.blocked_agents:
         if blocked_message:
             return SendFailure(
-                reason=_without_send_prefix(blocked_message, agent_name), kind=str(SendFailureKind.INPUT_BLOCKED)
+                reason=_without_send_prefix(blocked_message, agent_name),
+                kind=str(SendFailureKind.INPUT_BLOCKED),
+                is_delivered=True,
             )
     # mngr reported no reason, so nothing says the agent is gone: unclassified, as mngr's own default is.
     return SendFailure(reason=NO_REASON_SEND_FAILURE, kind=str(SendFailureKind.UNKNOWN))
