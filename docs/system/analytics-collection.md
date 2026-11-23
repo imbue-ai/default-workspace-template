@@ -64,7 +64,7 @@ template's System Monitor sampler and memory guard already record
   agent's name are never collected;
 - one reading per collection run: CPU cores, memory total and available (as
   the machine and as the container see them), disk quota and free space,
-  `/tmp` usage, and uptime.
+  `/tmp` usage, uptime, and the kernel version.
 
 What is collected and how it is redacted is specified in the mngr repo:
 `specs/minds-analytics/disclosure.md` (the plain-language description) and
