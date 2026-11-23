@@ -14,6 +14,12 @@ function mountMarkdown(content: string, requestedAt?: string): HTMLImageElement 
   return root.querySelector("img")!;
 }
 
+function renderedMarkdown(source: string): HTMLElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderMarkdown(source);
+  return container;
+}
+
 describe("requestedAtUrl", () => {
   it("appends the per-message post time to an absolute on-disk path", () => {
     expect(requestedAtUrl("/home/user/workspace/data/images/chart.png", "2026-07-24T00:00:00Z")).toBe(
@@ -69,9 +75,7 @@ describe("renderMarkdown embeds", () => {
 
 describe("renderMarkdown tables", () => {
   function renderedTables(source: string): HTMLTableElement[] {
-    const container = document.createElement("div");
-    container.innerHTML = renderMarkdown(source);
-    return Array.from(container.querySelectorAll("table"));
+    return Array.from(renderedMarkdown(source).querySelectorAll("table"));
   }
 
   it("puts each table in a box of its own that scrolls, carrying its column count", () => {
@@ -101,14 +105,8 @@ describe("renderMarkdown tables", () => {
 });
 
 describe("renderMarkdown links", () => {
-  function render(source: string): HTMLElement {
-    const container = document.createElement("div");
-    container.innerHTML = renderMarkdown(source);
-    return container;
-  }
-
   it("opens every web link in a new browsing context, with no opener or referrer, should nothing route it", () => {
-    const anchors = render(
+    const anchors = renderedMarkdown(
       "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [local call](tel:5551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
@@ -125,7 +123,7 @@ describe("renderMarkdown links", () => {
   });
 
   it("keeps a custom-scheme link, which an app of the workspace or of the user's system opens", () => {
-    const anchors = render(
+    const anchors = renderedMarkdown(
       "[channel](slack://channel?team=T1&id=C1), [text me](sms:+15551234) and [settings](x-apple.systempreferences:com.apple.preference.security)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
@@ -137,7 +135,7 @@ describe("renderMarkdown links", () => {
   });
 
   it("names a file by its file URL, whether written as an absolute path or as a file URL", () => {
-    const anchors = render(
+    const anchors = renderedMarkdown(
       "[Q4 report](/home/user/workspace/data/my%20docs/q4.pdf), [folder](/home/user/workspace/data/), [plan](/home/user/my%20notes/plan%23.md?requested_at=2026-09-29#top), [root](/) and [notes](file:///home/user/workspace/notes.md)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
@@ -167,7 +165,7 @@ describe("renderMarkdown links", () => {
     "[cdn](//cdn.example.com/lib.js)",
     "[broken](/home/user/%zz)",
   ])("renders %s as its label text with no link", (source) => {
-    const container = render(source);
+    const container = renderedMarkdown(source);
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent!.trim()).toBe(source.slice(1, source.indexOf("]")));
   });
@@ -180,13 +178,15 @@ describe("renderMarkdown links", () => {
     '<a href="/&#9;/[bad/x">other host</a>',
     '<a href="/&#10;/evil.example/x">other host</a>',
   ])("renders the raw link %s, which a browser takes to another host, as its text", (source) => {
-    const container = render(source);
+    const container = renderedMarkdown(source);
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent!.trim()).toBe("other host");
   });
 
   it("keeps the markup and image inside an unwrapped link", () => {
-    const container = render("[**bold** ![Chart](/home/user/workspace/data/images/chart.png)](data/images/chart.png)");
+    const container = renderedMarkdown(
+      "[**bold** ![Chart](/home/user/workspace/data/images/chart.png)](data/images/chart.png)",
+    );
     expect(container.querySelector("a")).toBeNull();
     expect(container.querySelector("strong")!.textContent).toBe("bold");
     expect(container.querySelector("img")!.getAttribute("src")).toBe("/home/user/workspace/data/images/chart.png");
