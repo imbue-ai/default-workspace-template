@@ -58,10 +58,11 @@ template's System Monitor sampler and memory guard already record
   program";
 - the memory guard's record of each process it stopped
   (`data/.state/oom_priority/events/shed.jsonl`): when, how much memory it
-  held, its shedding priority, and whether it was an agent. The process name
-  is reported only when it is a common runtime (`claude`, `node`, `python3`,
-  `chromium`, and the like), otherwise as `other`; the process id and the
-  agent's name are never collected;
+  held, its shedding priority, and whether it was an agent (and if so,
+  whether that agent was a background worker). The process name is reported
+  only when it is a common runtime (`claude`, `node`, `python3`, `chromium`,
+  and the like), otherwise as `other`; the process id and the agent's name
+  are never collected;
 - one reading per collection run: CPU cores, memory total and available (as
   the machine and as the container see them), disk quota and free space,
   `/tmp` usage, uptime, and the kernel version.
