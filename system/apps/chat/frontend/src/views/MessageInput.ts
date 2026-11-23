@@ -15,6 +15,7 @@ import {
 } from "../models/ComposerAttachments";
 import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
+import { messageTextKey, readComposerDraft, takeComposerDraftChange } from "../models/ComposerDraft";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import {
@@ -49,6 +50,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
+  dropOutgoingByMessageId,
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
@@ -58,15 +60,18 @@ import {
   describeRequestErrorKind,
   describeRequestFailure,
   isUnansweredRequest,
+  sendFailureKindOf,
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
-  areAccountsLoaded,
   isAccountSignedOut,
+  isFirstRunProviderStepPending,
   loadAccounts,
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { isAwaitingProvider, openFirstSendChooser } from "../models/firstSendChooser";
+import { framingChatRoot } from "../embedApi";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -76,6 +81,7 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  addHeldSendFailedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -164,7 +170,6 @@ const TOOLBAR_CLASS =
 
 const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px] leading-[1.3]";
 
-const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
 // The kind of the server's refusal of a send to a chat whose account was signed out.
@@ -188,10 +193,6 @@ function withoutNulCharacters(draft: string): string {
 function noticeKindOf(sendError: unknown): SendFailureKind {
   const isUnanswered = isUnansweredRequest(sendError) || describeRequestFailure(sendError).cause === "not_answered";
   return isUnanswered ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
-}
-
-function messageTextKey(chatId: string): string {
-  return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
 function composerHintKey(chatId: string): string {
@@ -235,6 +236,8 @@ const pendingComposerFocuses = new Set<string>();
 interface PendingFailureNotice {
   title: string;
   detail: string;
+  /** What goes behind the notice's "See details". */
+  details?: string | null;
   /** mngr's classification, so a sibling's failure earns the same buttons the composer's would. */
   kind?: SendFailureKind;
   /** Repeated by Retry. Omitted when the operation cannot be repeated. */
@@ -315,6 +318,34 @@ export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft):
   if (taken.mayContainDictatedSpeech) markDictatedSpeech(chatId);
 }
 
+// The sends this page posted that the chat app held for an agent still coming up, by send-time id: the draft each
+// was sent from, for handing back if the chat app reports it never reached the agent. Page memory, like the
+// "Sending…" bubble it stands behind.
+const heldSendDrafts = new Map<string, { chatId: string; draft: TakenComposerDraft }>();
+
+/** Note a send the chat app answered "held", so a later report that it never landed can hand it back. */
+function rememberHeldSend(chatId: string, messageId: string, draft: TakenComposerDraft): void {
+  heldSendDrafts.set(messageId, { chatId, draft });
+}
+
+// Only the page that sent a held send holds its draft, so only that page answers.
+addHeldSendFailedListener((chatId, messageId, detail, kind) => {
+  const held = heldSendDrafts.get(messageId);
+  if (held === undefined || held.chatId !== chatId) {
+    return;
+  }
+  heldSendDrafts.delete(messageId);
+  dropOutgoingByMessageId(chatId, [messageId]);
+  restoreComposerDraft(chatId, held.draft);
+  const told = failureSentence(describeRequestFailure(detail), "Your message wasn't delivered");
+  raiseFailureNotice(chatId, {
+    title: "Couldn't send your message",
+    detail: told.message,
+    details: told.details,
+    kind: sendFailureKindOf(kind),
+  });
+});
+
 /**
  * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
  *
@@ -385,6 +416,21 @@ export function prependToComposer(chatId: string, block: string): void {
   localStorage.setItem(messageTextKey(chatId), merged);
   if (returned.hadNote) markDictatedSpeech(chatId);
   pendingComposerPrepends.set(chatId, merged);
+  m.redraw();
+}
+
+// A suggestion picked from a strip above the composer (views/SuggestionStrip.ts), by chat, waiting for the mounted
+// composer to send it on its next view pass, as the prepends above wait to be taken in.
+const pendingSuggestionSubmits = new Map<string, string>();
+
+/**
+ * Send a picked suggestion as ``chatId``'s composer sends a typed message: ``label`` alone when the draft is empty,
+ * else the draft, a newline, and the label, with whatever is attached. It goes through the composer's own submit, so
+ * it launches a chat awaiting its first send, carries an armed switch out, and opens the provider chooser for a chat
+ * with no provider. A composer that cannot submit right now leaves the draft as it is and sends nothing.
+ */
+export function submitSuggestion(chatId: string, label: string): void {
+  pendingSuggestionSubmits.set(chatId, label);
   m.redraw();
 }
 
@@ -1296,6 +1342,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         clearActionFailureNotice();
         actionFailureTitle = pendingNotice.title;
         actionFailureDetail = pendingNotice.detail;
+        actionFailureDetails = pendingNotice.details ?? null;
         actionFailureKind = pendingNotice.kind ?? "unknown";
         externalRetry = pendingNotice.retry ?? null;
       }
@@ -1309,6 +1356,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
+      }
+      // A picker in a message added or removed one of its labels in the saved draft.
+      if (takeComposerDraftChange(chatId)) {
+        messageText = readComposerDraft(chatId);
       }
       if (pendingComposerFocuses.delete(chatId)) {
         // After this pass has drawn the textarea the hint is for.
@@ -1501,7 +1552,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              if (firstStatus === "held") rememberHeldSend(chatId, messageId, prepared);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1529,6 +1582,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
+          if (status === "held") rememberHeldSend(chatId, messageId, prepared);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
@@ -2268,42 +2322,34 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /**
-       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
-       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
-       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
-       * refuses lands on the page as a failed create, with its "Try again".
-       */
+      /** The chooser for a chat with no provider to start on (``models/firstSendChooser.ts``): the chat root's, when
+       *  one frames this page, else this page's own. */
       function openProviderChooserForFirstSend(awaitingChatId: string): void {
-        openProviderChooser({
-          onSignedIn: (accountId) => {
-            const awaiting = getProvisionalChat(awaitingChatId);
-            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
-            if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
-              console.error(
-                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
-              );
-            });
-          },
-          onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId),
-        });
+        const root = framingChatRoot();
+        if (root !== null) {
+          root.chooseProviderForFirstSend();
+          return;
+        }
+        openFirstSendChooser(
+          () => awaitingChatId,
+          (chatId) => void launchAwaitingChatAsRoom(chatId),
+        );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
-       *  notice appears, and its button opens it again once dismissed. */
+      /** In place of the composer while nothing is signed in that a new chat could start on; its button opens the
+       *  chooser again once dismissed. A page no chat root frames opens it as the notice appears; under a root, the
+       *  root has opened it already, over the whole list. On a first-run workspace the shell's cover is asking the
+       *  same thing over the whole desktop, so nothing opens by itself. */
       function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
           () => openProviderChooserForFirstSend(awaitingChatId),
-          () => openProviderChooserForFirstSend(awaitingChatId),
+          framingChatRoot() === null && !isFirstRunProviderStepPending()
+            ? () => openProviderChooserForFirstSend(awaitingChatId)
+            : undefined,
         );
       }
-
-      const attachments = getComposerAttachments(chatId);
-      const hasMessageText = messageText.trim().length > 0;
-      const canSend = hasMessageText || hasReadyAttachments(chatId);
 
       const chat = getChatById(chatId);
       // The switch the chat is in the middle of, if any, and the one the next send would start.
@@ -2320,16 +2366,35 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
       // Until the account list has loaded the composer shows as usual: most pages have an account.
-      const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
-      const isBlockedByNoProvider =
-        awaitingFirstSend?.phase === "awaiting_first_send" &&
-        areAccountsLoaded() &&
-        accountForFirstSend(awaitingFirstSend.account_id) === null;
+      const isBlockedByNoProvider = chatId !== null && isAwaitingProvider(chatId);
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
       isComposerDisabledNow = isComposerDisabled;
-      const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
+
+      // A suggestion picked above the composer joins the draft and goes out by the submit a press of Send runs,
+      // after this pass has drawn it. With no provider to send to, the pick asks for one as the notice's button
+      // does; while the box is not the user's to send from, it is dropped and the draft stays as it was.
+      const pickedSuggestion = pendingSuggestionSubmits.get(chatId);
+      if (pickedSuggestion !== undefined) {
+        pendingSuggestionSubmits.delete(chatId);
+        const isSubmitInTheWay =
+          isSendHeldForSwitch || isDictating || isSendPendingAfterDictation || switchPreparingChatId === chatId;
+        if (isBlockedByNoProvider) {
+          queueMicrotask(() => openProviderChooserForFirstSend(chatId));
+        } else if (isBlockedBySignedOutAccount) {
+          queueMicrotask(() => chooseProviderToContinue(chatId));
+        } else if (!isSubmitInTheWay) {
+          messageText = messageText.trim() === "" ? pickedSuggestion : `${messageText}\n${pickedSuggestion}`;
+          localStorage.setItem(messageTextKey(chatId), messageText);
+          queueMicrotask(() => void handleSubmit());
+        }
+      }
+
+      const attachments = getComposerAttachments(chatId);
+      const hasMessageText = messageText.trim().length > 0;
+      const canSend = hasMessageText || hasReadyAttachments(chatId);
+      const canSendNow = canSend && !isComposerDisabled;
       // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
       if (isSendPendingAfterDictation && !isDictating) {
         isSendPendingAfterDictation = false;

@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { EntryLook } from "../reducers/desktopState";
 import { appRecord } from "../testing/records";
 import type { ActionRow, MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { enableThemingPrompt, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import {
+  enableThemingPrompt,
+  isAppShareable,
+  phoneWindowMenuRows,
+  taskbarEntryMenuRows,
+  windowMenuRows,
+} from "./WindowMenu";
 
 function keysOf(rows: MenuRow[]): string[] {
   return rows.map((row) => (row.kind === "divider" ? "|" : (row.key ?? "")));
@@ -17,6 +23,16 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
 
 const size = { setState: vi.fn(), setFrame: vi.fn() };
 const fullscreen = { isFullscreen: false, toggleFullscreen: vi.fn(), isImmersive: false, immersive: null };
+
+describe("isAppShareable", () => {
+  it("takes every app the shell lists but an internal one, the critical ones included", () => {
+    expect(isAppShareable(appRecord("docs"))).toBe(true);
+    expect(isAppShareable(appRecord("chat", { critical: true }))).toBe(true);
+    expect(isAppShareable(appRecord("gateway", { internal: true }))).toBe(false);
+    expect(isAppShareable(appRecord("gateway", { internal: true, critical: true }))).toBe(false);
+    expect(isAppShareable(undefined)).toBe(false);
+  });
+});
 
 describe("windowMenuRows", () => {
   it("offers Move and resize, Share, Quit, and Close for an ordinary running app", () => {
@@ -57,7 +73,44 @@ describe("windowMenuRows", () => {
     ).toEqual(["size", "fullscreen", "|", "quit", "|", "close"]);
   });
 
-  it("offers neither Share nor Quit where the caller gives none (a critical app, one the workspace cannot stop)", () => {
+  it("names the app on the Share row, draws it with the share glyph, and runs the caller's share", () => {
+    const share = vi.fn();
+    const rows = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen,
+      share,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme: null,
+    });
+    const shareRow = rowOf(rows, "share");
+    expect(shareRow.label).toBe("Share Docs");
+    expect(shareRow.icon).toBe("share");
+    shareRow.onSelect();
+    expect(share).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Share without Quit for an app that can be shared and not stopped (a critical one)", () => {
+    const chat = appRecord("chat", { critical: true });
+    expect(
+      keysOf(
+        windowMenuRows(chat, {
+          size,
+          onSized: vi.fn(),
+          fullscreen,
+          share: vi.fn(),
+          quit: null,
+          popOut: null,
+          close: vi.fn(),
+          theme: null,
+        }),
+      ),
+    ).toEqual(["size", "fullscreen", "|", "share", "|", "close"]);
+  });
+
+  it("offers neither Share nor Quit where the caller gives none (an internal app, one the workspace cannot stop)", () => {
     expect(
       keysOf(
         windowMenuRows(appRecord("docs"), {
@@ -384,5 +437,18 @@ describe("the window menu's Theming submenu", () => {
     expect(enableThemingPrompt("Notes")).toContain(
       "Make the Notes app themeable, following docs/system/themeable-apps.md",
     );
+  });
+});
+
+describe("phoneWindowMenuRows", () => {
+  it("offers Refresh, then Share and Quit where the caller gives them", () => {
+    const share = vi.fn();
+    const rows = phoneWindowMenuRows(appRecord("docs"), { refresh: vi.fn(), share, quit: vi.fn() });
+    expect(keysOf(rows)).toEqual(["refresh", "share", "quit"]);
+    rowOf(rows, "share").onSelect();
+    expect(share).toHaveBeenCalledTimes(1);
+    expect(keysOf(phoneWindowMenuRows(appRecord("docs"), { refresh: vi.fn(), share: null, quit: null }))).toEqual([
+      "refresh",
+    ]);
   });
 });

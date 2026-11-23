@@ -50,6 +50,7 @@ from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.send_ledger import SendLedger
+from imbue.chat.suggestion_generation import SuggestionGenerator
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
@@ -121,6 +122,11 @@ class ChatAppState(MutableModel):
         default=None,
         description="Names new chats from their first messages; None where chats are not named (a secondary "
         "chat, whose renames would be the live chat's)",
+    )
+    suggestion_generator: SuggestionGenerator | None = Field(
+        default=None,
+        description="Works out chats' next-step suggestions as their turns end; None where none are worked out "
+        "(a secondary chat, whose chats are the live chat's)",
     )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService
@@ -524,6 +530,8 @@ class ChatAppState(MutableModel):
         self._is_shut_down = True
         if self.chat_namer is not None:
             self.chat_namer.stop()
+        if self.suggestion_generator is not None:
+            self.suggestion_generator.stop()
         if self._reply_draft_publisher is not None:
             self._reply_draft_publisher.stop()
         if self.lounge is not None:

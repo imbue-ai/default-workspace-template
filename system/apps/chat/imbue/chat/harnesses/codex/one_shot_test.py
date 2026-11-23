@@ -10,6 +10,7 @@ from imbue.chat.harnesses.codex.one_shot import CodexOneShotCompletion
 from imbue.chat.harnesses.codex.one_shot import choose_codex_one_shot_model
 from imbue.chat.harnesses.codex.one_shot import codex_one_shot_argv
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.testing import put_stand_in_cli_on_path
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -33,17 +34,58 @@ def test_the_newest_luna_model_is_chosen_at_its_lowest_effort() -> None:
         _model("gpt-6-astra"),
     )
 
-    assert choose_codex_one_shot_model(models) == CodexOneShotChoice(model="gpt-6-luna", effort="low")
+    assert choose_codex_one_shot_model(models, OneShotModelTier.SMALL, None) == CodexOneShotChoice(
+        model="gpt-6-luna", effort="low"
+    )
+
+
+def test_the_medium_tier_takes_the_newest_terra_model() -> None:
+    models = (
+        _model("gpt-6.2-sol", is_default=True),
+        _model("gpt-5.6-terra"),
+        _model("gpt-6.1-terra", efforts=("low", "medium", "high")),
+        _model("gpt-6-luna"),
+    )
+
+    assert choose_codex_one_shot_model(models, OneShotModelTier.MEDIUM, None) == CodexOneShotChoice(
+        model="gpt-6.1-terra", effort="low"
+    )
+
+
+def test_a_call_allowed_to_think_runs_at_medium_effort_where_the_model_offers_it() -> None:
+    models = (_model("gpt-6.1-terra", efforts=("low", "medium", "high")),)
+
+    assert choose_codex_one_shot_model(models, OneShotModelTier.MEDIUM, 4000) == CodexOneShotChoice(
+        model="gpt-6.1-terra", effort="medium"
+    )
+
+
+def test_a_call_allowed_to_think_keeps_the_lowest_effort_of_a_model_with_no_medium_one() -> None:
+    models = (_model("gpt-6.1-terra", efforts=("high", "minimal")),)
+
+    assert choose_codex_one_shot_model(models, OneShotModelTier.MEDIUM, 4000) == CodexOneShotChoice(
+        model="gpt-6.1-terra", effort="minimal"
+    )
+
+
+def test_an_account_with_no_terra_model_runs_the_medium_tier_on_its_default_model() -> None:
+    models = (_model("gpt-6-luna"), _model("gpt-6.2-sol", is_default=True))
+
+    assert choose_codex_one_shot_model(models, OneShotModelTier.MEDIUM, 4000) == CodexOneShotChoice(
+        model=None, effort="medium"
+    )
 
 
 def test_an_account_with_no_luna_model_keeps_its_default_model_at_that_models_lowest_effort() -> None:
     models = (_model("gpt-6-astra"), _model("gpt-6-sol", efforts=("medium", "high"), is_default=True))
 
-    assert choose_codex_one_shot_model(models) == CodexOneShotChoice(model=None, effort="medium")
+    assert choose_codex_one_shot_model(models, OneShotModelTier.SMALL, None) == CodexOneShotChoice(
+        model=None, effort="medium"
+    )
 
 
 def test_an_account_whose_models_are_unknown_runs_entirely_on_its_defaults() -> None:
-    assert choose_codex_one_shot_model(()) == CodexOneShotChoice()
+    assert choose_codex_one_shot_model((), OneShotModelTier.SMALL, None) == CodexOneShotChoice()
 
 
 def test_codex_one_shot_argv_reads_the_prompt_from_stdin_and_keeps_nothing() -> None:
@@ -76,13 +118,20 @@ def _account_offering(tmp_path: Path, *models: CodexModel) -> Path:
     return account_dir
 
 
+def _name_a_chat(account_dir: Path) -> str:
+    """The call chat naming makes: the small tier, with no thinking."""
+    return CodexOneShotCompletion().complete(
+        account_dir, "Name this chat.", "Plan Rome", model_tier=OneShotModelTier.SMALL, thinking_token_allowance=None
+    )
+
+
 def test_complete_answers_on_the_luna_model_the_account_offers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     account_dir = _account_offering(tmp_path, _model("gpt-6-sol", is_default=True), _model("gpt-6-luna"))
     log_path = put_stand_in_cli_on_path(tmp_path, "codex", _ANSWERING_BODY, monkeypatch)
 
-    answer = CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
+    answer = _name_a_chat(account_dir)
 
     assert answer == "Rome trip: plan five days"
     assert '--model gpt-6-luna -c model_reasoning_effort="low"' in log_path.read_text()
@@ -95,7 +144,7 @@ def test_complete_falls_back_to_the_default_model_when_the_chosen_one_is_refused
     body = 'case " $* " in *" --model "*) echo "model is not supported" >&2; exit 1;; esac\n' + _ANSWERING_BODY
     log_path = put_stand_in_cli_on_path(tmp_path, "codex", body, monkeypatch)
 
-    answer = CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
+    answer = _name_a_chat(account_dir)
 
     assert answer == "Rome trip: plan five days"
     calls = log_path.read_text().splitlines()
@@ -109,7 +158,7 @@ def test_complete_raises_when_codex_writes_no_answer(tmp_path: Path, monkeypatch
     put_stand_in_cli_on_path(tmp_path, "codex", "cat > /dev/null", monkeypatch)
 
     with pytest.raises(OneShotCompletionError, match="no answer"):
-        CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
+        _name_a_chat(account_dir)
 
 
 def test_complete_raises_with_both_models_failures_when_neither_answers(
@@ -119,4 +168,4 @@ def test_complete_raises_with_both_models_failures_when_neither_answers(
     put_stand_in_cli_on_path(tmp_path, "codex", 'cat > /dev/null; echo "401 Unauthorized" >&2; exit 1', monkeypatch)
 
     with pytest.raises(OneShotCompletionError, match="gpt-6-luna: .*401.*default model: .*401"):
-        CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
+        _name_a_chat(account_dir)

@@ -105,5 +105,5 @@ Before continuing, declare your plan as step records (each prints \`Created <id>
   ...
 Then start the first step with its literal id: tk start <id>
 
-See CLAUDE.md > Task management for the full protocol.
+See AGENTS.md > Task management for the full protocol.
 "

@@ -23,13 +23,13 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``uses_microphone``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
-``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
+``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode), ``seeds_shortcuts``,
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
-``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
-when the manifest has one); the icon is read from the file the manifest names, relative to the manifest. Every manifest
-field is authoritative on every call, so a re-registration with a changed manifest updates the row.
+default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show with showing and
+reload_when_raised), ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]``
+table's mode, when the manifest has one); the icon is read from the file the manifest names, relative to the manifest.
+Every manifest field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -201,6 +201,7 @@ _MANIFEST_BOOL_KEYS = (
     "system",
     "stop_when_no_windows",
     "uses_microphone",
+    "seeds_shortcuts",
 )
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
@@ -232,6 +233,7 @@ _MANIFEST_OWNED_KEYS = (
     "launcher_rank",
     "default_shortcut",
     "default_shortcuts",
+    "seeds_shortcuts",
     "actions",
     "launch_paths",
     "pin",
@@ -834,8 +836,9 @@ def _copied_message_handler(
     handler: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
     """One manifest message handler as the registry row carries it: ``type`` and either ``path`` (the route the
-    shell posts the message to) or ``show`` (the page it shows) with ``showing`` when the manifest gives it. Returns
-    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    shell posts the message to) or ``show`` (the page it shows) with ``showing`` and ``reload_when_raised`` when the
+    manifest gives them. Returns ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest
+    requires."""
     if not (isinstance(handler, dict) and isinstance(handler.get("type"), str)):
         return (
             None,
@@ -849,12 +852,17 @@ def _copied_message_handler(
             f"manifest {str(path)!r}: every message handler needs exactly one of a string 'path' or 'show'",
         )
     showing = handler.get("showing")
+    reload_when_raised = handler.get("reload_when_raised")
     if is_path_given:
-        if showing is not None:
-            return (
-                None,
-                f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'",
-            )
+        for name, value in (
+            ("showing", showing),
+            ("reload_when_raised", reload_when_raised),
+        ):
+            if value is not None:
+                return (
+                    None,
+                    f"manifest {str(path)!r}: a message handler gives '{name}' only beside 'show'",
+                )
         return {"type": handler["type"], "path": handler["path"]}, None
     copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
     if showing is not None:
@@ -866,6 +874,13 @@ def _copied_message_handler(
                 f"manifest {str(path)!r}: a message handler's showing must be an array of strings",
             )
         copied["showing"] = list(showing)
+    if reload_when_raised is not None:
+        if not isinstance(reload_when_raised, bool):
+            return (
+                None,
+                f"manifest {str(path)!r}: a message handler's reload_when_raised must be a boolean",
+            )
+        copied["reload_when_raised"] = reload_when_raised
     return copied, None
 
 

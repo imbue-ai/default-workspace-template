@@ -211,7 +211,8 @@ installs the stack on the first boot after the update, the service answering
 
 ## Bands
 
-The stack's four programs and the watcher sit at `SCREEN_STACK` (850): above every agent,
+The stack's four programs and the watcher sit at `SCREEN_STACK` (850): above every worker
+and every fresh chat (a chat left for hours climbs past it),
 since the desktop is something an agent or the user launched, and below the programs on it,
 since ending the X server takes all of them along. Programs started from the Screen itself
 (the XFCE menu, a terminal on it) inherit the
@@ -220,7 +221,7 @@ seconds (`band_sweep.py`, spec section 9.4): every descendant of `screen-session
 executable is not one of the session's own (`startxfce4`, `xfce4-session`, `xfwm4`,
 `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon) is raised to
 `AGENT_SUBPROCESS` (900), and Chromium's processes, under the session or under the
-Chromium the fleet launched, are remapped into the shared-browser band (910 to 1000,
+Chromium the fleet launched, are remapped into the shared-browser band (910 to 960,
 renderers at the ceiling) as the browser app's `oom_retag` did; a launch or a new tab
 kicks a short burst of sweeps, since Chromium's processes self-write their values over
 the seconds after. The sweep only ever raises, so repeating it writes nothing more.

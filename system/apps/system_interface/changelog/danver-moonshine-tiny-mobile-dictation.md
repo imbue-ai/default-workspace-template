@@ -1,1 +1,0 @@
-The shell adds `screen-wake-lock` beside `microphone` to the frames of an app whose manifest declares `uses_microphone`, so the chat's dictation can keep a phone's screen awake while it listens. Frames of other apps are handed neither.
