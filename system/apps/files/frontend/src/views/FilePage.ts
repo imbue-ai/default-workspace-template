@@ -28,6 +28,7 @@ import { Dialogs } from "./dialogs";
 import { FailureActions } from "./FailureActions";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
+import { ZoomableImage } from "./ZoomableImage";
 
 export interface FilePageOptions {
   path: string;
@@ -180,15 +181,7 @@ function body(page: FilePageModel): m.Children {
   }
   switch (preview) {
     case "image":
-      return m(
-        "div",
-        { class: centred },
-        m("img.files-file-image", {
-          src: url,
-          alt: name,
-          class: "max-h-full max-w-full object-contain",
-        }),
-      );
+      return m(ZoomableImage, { src: url, alt: name, frameClass: "h-full bg-page" });
     case "video":
       return m("div", { class: centred }, m("video", { src: url, controls: true, class: "max-h-full max-w-full" }));
     case "audio":

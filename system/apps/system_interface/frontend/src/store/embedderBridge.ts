@@ -7,12 +7,25 @@
 
 import {
   EMBEDDER_CAPABILITIES,
+  FIRST_RUN_EXIT_COVER_MS,
+  FIRST_RUN_PROVIDER_STEP,
   IMMERSIVE_CHANGED,
   IMMERSIVE_REQUEST,
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 import type { DesktopStore, ImmersiveBridge } from "./DesktopStore";
+import { noteChromeWashesExit } from "../model/firstRunCover";
+import type { FirstRunChrome } from "../model/firstRunCover";
+
+/** The first run's provider step, as the embedding chrome hears of it. */
+export const firstRunChrome: FirstRunChrome = {
+  report: (isPending) => sendToEmbedder(FIRST_RUN_PROVIDER_STEP, { isPending }),
+  coverMs: FIRST_RUN_EXIT_COVER_MS,
+  schedule: (run, delayMs) => {
+    setTimeout(run, delayMs);
+  },
+};
 
 /** The shell's side of the immersive conversation: every ask goes to the embedding chrome. */
 export const immersiveBridge: ImmersiveBridge = {
@@ -28,9 +41,12 @@ export function connectEmbedderToStore(store: DesktopStore): void {
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
     store.setOpensLocalFiles(message.opensLocalFiles === true);
+    store.setOpensWorkspaceSettings(message.opensWorkspaceSettings === true);
+    store.setShowsCoachMarks(message.showsCoachMarks === true);
     store.setCanImmerse(message.immersive === true);
     store.setCanReportBug(message.opensHelp === true);
     store.setEmbedderPresent(true);
+    noteChromeWashesExit(message.washesFirstRunExit === true, firstRunChrome);
   });
   setEmbedderMessageHandler(IMMERSIVE_CHANGED, (message) => {
     store.onImmersiveChanged({

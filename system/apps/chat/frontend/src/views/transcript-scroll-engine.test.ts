@@ -10,6 +10,7 @@ vi.hoisted(() => {
     clearTimeout(id)) as typeof globalThis.cancelAnimationFrame;
 });
 
+import m from "mithril";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import type { TranscriptScrollDataSource, TranscriptScrollEngine } from "./transcript-scroll-engine";
 import type { RowDescriptor } from "./conversation-rows";
@@ -228,5 +229,171 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     fireResizeObserverOf(element);
 
     expect(element.scrollTop).toBe(BOTTOM_PX - 100);
+  });
+});
+
+describe("transcript scroll engine with an overlay over the transcript's end", () => {
+  const OVERLAY_PX = 120;
+  let engine: TranscriptScrollEngine | undefined;
+  let layout: ScrollLayout;
+  let element: HTMLElement;
+  let overlay: HTMLElement;
+  let overlayHeightPx: number;
+
+  // The overlay ends the scroll content, so growing or shrinking it changes the scroll height by as much, in the
+  // redraw's patch.
+  function redrawWithOverlay(heightPx: number, scrollEngine: TranscriptScrollEngine): void {
+    scrollEngine.computeRenderPlan();
+    layout.scrollHeightPx += heightPx - overlayHeightPx;
+    overlayHeightPx = heightPx;
+    // The browser clamps the view when the content under it ends sooner.
+    element.scrollTop = Math.min(element.scrollTop, layout.scrollHeightPx - layout.clientHeightPx);
+    scrollEngine.afterRender(element);
+  }
+
+  async function open(rowCount: number): Promise<TranscriptScrollEngine> {
+    const opened = createTranscriptScrollEngine({
+      dataSource: makeDataSource(rowCount),
+      getEndOverlayEl: () => overlay,
+    });
+    opened.setChat("agent-1");
+    opened.computeRenderPlan();
+    opened.afterRender(element);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+    return opened;
+  }
+
+  /** A reader who scrolls up by ``upPx`` with the wheel, which leaves FOLLOW. */
+  async function wheelUp(upPx: number): Promise<void> {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -upPx }));
+    element.scrollTop = element.scrollTop - upPx;
+    element.dispatchEvent(new Event("scroll"));
+    await flushMicrotasks();
+  }
+
+  beforeEach(() => {
+    // A chat opens where its reader left it, which an engine writes down as it goes.
+    localStorage.clear();
+    layout = { scrollHeightPx: SCROLL_HEIGHT_PX, clientHeightPx: CLIENT_HEIGHT_PX };
+    element = makeScrollElement(layout);
+    overlay = document.createElement("div");
+    overlay.appendChild(document.createElement("button"));
+    element.appendChild(overlay);
+    overlayHeightPx = 0;
+    Object.defineProperty(overlay, "offsetHeight", { configurable: true, get: () => overlayHeightPx });
+  });
+
+  afterEach(() => {
+    engine?.detach();
+    engine = undefined;
+  });
+
+  it("moves a following reader to the new end in the same frame as the overlay appears", async () => {
+    engine = await open(0);
+
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+
+    // No glide: the transcript's end would sit under the overlay for its frames.
+    expect(element.scrollTop).toBe(BOTTOM_PX + OVERLAY_PX);
+  });
+
+  it("glides to the new end, as it does for a reply growing, when the content grows with no overlay change", async () => {
+    engine = await open(0);
+
+    engine.computeRenderPlan();
+    layout.scrollHeightPx += OVERLAY_PX;
+    engine.afterRender(element);
+    await flushMicrotasks();
+
+    expect(element.scrollTop).toBeGreaterThan(BOTTOM_PX);
+    expect(element.scrollTop).toBeLessThan(BOTTOM_PX + OVERLAY_PX);
+  });
+
+  it("keeps a following reader at the end as the overlay goes", async () => {
+    engine = await open(0);
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+
+    redrawWithOverlay(0, engine);
+    await flushMicrotasks();
+
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+  });
+
+  it("moves nothing for a reader who has scrolled up, as the overlay comes and goes", async () => {
+    engine = await open(200);
+    await wheelUp(1000);
+    expect(element.scrollTop).toBe(BOTTOM_PX - 1000);
+
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX - 1000);
+
+    redrawWithOverlay(0, engine);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX - 1000);
+  });
+
+  it("carries a reader who is at the end without following to the new end, and leaves them not following", async () => {
+    engine = await open(200);
+    // A press on the transcript leaves FOLLOW where the view stands: at the end.
+    element.dispatchEvent(new Event("pointerdown"));
+    window.dispatchEvent(new Event("pointerup"));
+    await flushMicrotasks();
+
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX + OVERLAY_PX);
+
+    // Content that grows now is not followed.
+    engine.computeRenderPlan();
+    layout.scrollHeightPx += 300;
+    engine.afterRender(element);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX + OVERLAY_PX);
+  });
+
+  it("leaves a reader at the end alone while they hold the pointer down on the transcript", async () => {
+    engine = await open(200);
+    element.dispatchEvent(new Event("pointerdown"));
+
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+  });
+
+  it("takes a press on the overlay for none on the transcript: the reader goes on following", async () => {
+    engine = await open(200);
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+
+    overlay.firstElementChild!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    window.dispatchEvent(new Event("pointerup"));
+    await flushMicrotasks();
+    redrawWithOverlay(0, engine);
+    await flushMicrotasks();
+    redrawWithOverlay(OVERLAY_PX, engine);
+    await flushMicrotasks();
+
+    expect(element.scrollTop).toBe(BOTTOM_PX + OVERLAY_PX);
+    // Still following: content that grows is pinned to, which it is not for a reader who pressed on the transcript.
+    engine.computeRenderPlan();
+    layout.scrollHeightPx += 5000;
+    engine.afterRender(element);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX + OVERLAY_PX + 5000);
+  });
+
+  it("redraws when the overlay resizes outside a redraw", async () => {
+    engine = await open(0);
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+
+    fireResizeObserverOf(overlay);
+
+    expect(redraw).toHaveBeenCalled();
+    redraw.mockRestore();
   });
 });

@@ -11,6 +11,7 @@ import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot
 import { badgeClass, type BadgeTone } from "@imbue/workspace-ui/src/components/Badge";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { Button, type ButtonVariant } from "@imbue/workspace-ui/src/components/Button";
+import { showCoachMark } from "@imbue/workspace-ui/src/components/CoachMark";
 import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, spinnerIcon } from "@imbue/workspace-ui/src/components/icons";
@@ -390,6 +391,33 @@ function tooltipsSection(): CatalogSection {
   };
 }
 
+function coachMarksSection(): CatalogSection {
+  return {
+    id: "coach-marks",
+    toc: "Coach marks",
+    title: "Coach marks",
+    desc: [
+      code("showCoachMark({ anchor, text })"),
+      ' points a bubble with an arrow and a "Got it" button at one control, the first time the user is led to it. It sits below, above, right or left of the control, whichever has room, and goes on "Got it", on a click of the control, or when the control leaves the page. One is up at a time.',
+    ],
+    body: () =>
+      m("div", { class: "flex flex-wrap items-center gap-3" }, [
+        m(
+          Button,
+          {
+            id: "show-coach-mark",
+            onclick: () => {
+              const anchor = document.getElementById("coach-mark-anchor");
+              if (anchor !== null) showCoachMark({ anchor, text: "Click this button to send your message" });
+            },
+          },
+          "Show a coach mark",
+        ),
+        m(Button, { id: "coach-mark-anchor", variant: "primary" }, "The control it points at"),
+      ]),
+  };
+}
+
 function badgesSection(): CatalogSection {
   return {
     id: "badges",
@@ -613,6 +641,7 @@ export function componentsGroup(demos: ComponentDemos): CatalogGroup {
       pickersSection(demos),
       menuSection(demos),
       tooltipsSection(),
+      coachMarksSection(),
       badgesSection(),
       statusSection(),
       overlaysSection(demos),

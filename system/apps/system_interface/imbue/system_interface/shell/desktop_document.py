@@ -731,8 +731,10 @@ def _laid_out_in_reading_order(shortcuts: Sequence[DesktopShortcut]) -> tuple[De
 
 @pure
 def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut, ...]:
-    """A new desktop's shortcuts: every app's default shortcuts (``_default_shortcut_choices``), in launcher order and
-    each app's own order, laid out in reading order from the grid origin."""
+    """A new desktop's shortcuts: the default shortcuts (``_default_shortcut_choices``) of every app but one whose
+    manifest keeps them off the desktop (``seeds_shortcuts = false``: the launcher lists the app, and the user adds
+    its shortcut there), in launcher order and each app's own order, laid out in reading order from the grid
+    origin."""
     return _laid_out_in_reading_order(
         [
             DesktopShortcut(
@@ -741,6 +743,7 @@ def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut
                 cell=GridCell(column=0, row=0),
             )
             for row in launcher_order(rows)
+            if row.seeds_shortcuts
             for choice in _default_shortcut_choices(row)
         ]
     )

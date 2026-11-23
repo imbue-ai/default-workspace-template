@@ -7,6 +7,7 @@ import {
   describeRequestErrorKind,
   describeRequestFailure,
   isUnansweredRequest,
+  sendFailureKindOf,
 } from "./request-error";
 
 const FALLBACK = "The workspace couldn't do that. Try again. If this persists, report a bug.";
@@ -139,5 +140,13 @@ describe("isUnansweredRequest", () => {
     expect(isUnansweredRequest(Object.assign(new Error("{}"), { code: 500, response: { detail: "x" } }))).toBe(false);
     expect(isUnansweredRequest(null)).toBe(false);
     expect(isUnansweredRequest("a plain string")).toBe(false);
+  });
+});
+
+describe("sendFailureKindOf", () => {
+  it("keeps a kind it knows and reads anything else as unknown", () => {
+    expect(sendFailureKindOf("input_blocked")).toBe("input_blocked");
+    expect(sendFailureKindOf("failed")).toBe("unknown");
+    expect(sendFailureKindOf(undefined)).toBe("unknown");
   });
 });

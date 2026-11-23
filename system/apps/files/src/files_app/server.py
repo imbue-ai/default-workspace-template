@@ -13,7 +13,6 @@
 
 import base64
 import json
-import re
 import urllib.parse
 from collections.abc import Iterator
 from pathlib import Path
@@ -35,6 +34,7 @@ from workspace_profile.snapshot import load_workspace_profile_snapshot
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
+from app_manifest.built_assets import send_built_asset
 from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
@@ -70,9 +70,6 @@ REMOTE_PREFIX: Final[str] = "/__remote"
 
 _METHODS: Final[list[str]] = ["GET", "HEAD", "PUT", "DELETE", "MKCOL", "MOVE"]
 _CHUNK: Final[int] = 64 * 1024
-# A name vite gives a build file from its content, so the file at it never changes.
-_HASHED_ASSET: Final[re.Pattern[str]] = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)$")
-_A_YEAR_IN_SECONDS: Final[int] = 365 * 24 * 60 * 60
 _NO_MOVE_TO_COMPUTER: Final[str] = "Moving isn't supported on files shared from your computer."
 _NO_GATEWAY: Final[str] = "This workspace isn't connected to Imbue Studio, so it can't reach your computers."
 # A move refused for want of write access, by the end that refused it, so the page can say which folder that was.
@@ -256,11 +253,7 @@ def create_app(
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:
         """A file of the frontend's build; one named from its content is cached for good."""
-        is_hashed = _HASHED_ASSET.search(name) is not None
-        response = send_from_directory(static_directory, name, max_age=_A_YEAR_IN_SECONDS if is_hashed else None)
-        if not is_hashed:
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+        return send_built_asset(static_directory, name)
 
     @app.get(f"{API_PREFIX}/connections")
     def connections() -> Response:

@@ -164,6 +164,17 @@ describe("StyleGuidePage", () => {
     expect(button?.getAttribute("data-hover-tooltip-detail")).toBe("data/reports/q4-summary.md");
   });
 
+  it("points a coach mark at its control on request, which goes when the control is clicked", () => {
+    const root = mountPage();
+    click(root.querySelector("#show-coach-mark"));
+    const bubble = document.querySelector(".coach-mark");
+    expect(bubble?.querySelector(".coach-mark-text")?.textContent).toBe("Click this button to send your message");
+    expect(bubble?.querySelector(".coach-mark-dismiss")?.textContent).toBe("Got it");
+
+    click(root.querySelector("#coach-mark-anchor"));
+    expect(document.querySelector(".coach-mark")).toBeNull();
+  });
+
   it("frames the plain page kit sample, taking the page's theme, and names sections by their contents label", () => {
     const root = mountPage();
     const frameElement = root.querySelector("#page-kit-frame");

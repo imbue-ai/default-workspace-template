@@ -53,8 +53,12 @@ export class FakeTourApi implements TourApi {
   readonly writes: TourRecord[] = [];
   private deferredFetch: (() => void) | null = null;
 
-  constructor(options: { isSeen?: boolean; resumeIndex?: number | null } = {}) {
-    this.record = { isSeen: options.isSeen ?? false, resumeIndex: options.resumeIndex ?? null };
+  constructor(options: { isSeen?: boolean; resumeIndex?: number | null; isFinished?: boolean } = {}) {
+    this.record = {
+      isSeen: options.isSeen ?? false,
+      resumeIndex: options.resumeIndex ?? null,
+      isFinished: options.isFinished ?? false,
+    };
   }
 
   async fetch(): Promise<TourRecord> {
