@@ -162,7 +162,7 @@ Only when the update touches any of these:
 Then take the `editing critical app <name>` lease for each critical app the
 update touches, as the `update-app` skill's careful flow does, and hold
 them through the apply. `<name>` is the app's `app.toml` name, so
-`system/apps/terminal_pty/` is `terminal-pty`. The five frontends above,
+`system/apps/terminal_pty/` is `terminal-pty`. The six frontends above,
 `workspace_ui` and the npm files count as both `system_interface` and `chat`.
 `workspace_layout` and `workspace_themes` each count as `system_interface`,
 `chat` and `terminal`.
