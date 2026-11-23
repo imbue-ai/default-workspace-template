@@ -177,7 +177,7 @@ Measured on gen-2 slices on 2026-11-23, reading it for every process (35 to 53 o
 
 ### 3.6 Cost
 
-Calm: one `stat` read per process every 5 s, one `meminfo` read, one file rename, and every ten minutes one `smaps` read per process.
+Calm: one `stat` read per process every 5 s, one `meminfo` read, one file rename, and every ten minutes one `smaps` read per process, a registry listing and one supervisord call.
 Busy: the same, plus a registry listing and one supervisord call every 30 s.
 High memory: the same, plus one `smaps` read per process and a registry listing at most every 30 s while memory keeps climbing.
 Memory: the 10-minute ring (120 samples) and the per-pid dictionaries, under 100 KB.
