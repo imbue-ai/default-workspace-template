@@ -370,7 +370,7 @@ class PresenceSweep(MutableModel):
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
-    store: PresenceStore = Field(frozen=True, description="The presence files the sweep reads")
+    store: PresenceStore = Field(frozen=True, description="The presence files it reads, and records each heartbeat in")
     interval_seconds: float = Field(
         default=PRESENCE_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
     )
