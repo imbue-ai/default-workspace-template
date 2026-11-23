@@ -143,7 +143,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   the desktop (30% of its width, 85% of its height), in front, with no other
   window moved (`frontend/src/store/tourActions.ts`, and the store's
   `showRegisteredPageAt`); the shell holds the message's type, never an app's
-  name, and nothing happens when no app registered it.
+  name, nothing happens when no app registered it, and a relay that fails is
+  logged to the console with no notice.
 - A coach card for a page that asks (`shell:show-coach-card`, with exactly one
   place): the page's words and a Got it button, under the control of the Imbue
   Studio chrome it names (`chromeAnchor`), which the chrome rings until the
@@ -288,9 +289,11 @@ message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
 route's `show` below, in-process; when the handler sets `reload_when_raised`
 and the show raised a window already at that page, the shell then refreshes
-that window. A message some app did not take becomes a notice carrying that
-app's reason, and a page shown while the client has only
-pop-outs open becomes a notice to reopen the main window. The shell's page
+that window. The page saves a layout change still waiting to be saved (the
+raise of the window whose page was clicked) before it hands a message on, so a
+window a handler brings forward ends in front of it. A message some app did
+not take becomes a notice carrying that app's reason, and a page shown while
+the client has only pop-outs open becomes a notice to reopen the main window. The shell's page
 announces `reportsChatOnScreen` to the chrome, promising the
 `minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
 a window on screen, and `reportsProviderChooserOnScreen`, promising the

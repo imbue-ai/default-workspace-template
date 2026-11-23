@@ -1760,6 +1760,28 @@ describe("embedder messages", () => {
     ]);
   });
 
+  it("saves a raise still waiting before it relays, so what the message raises is raised over it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-2")],
+    });
+    const store = await startedStore();
+    // The press on a lower window's page raises it, and the page's message follows within the save's debounce.
+    store.raiseWindow("win-1");
+    expect(isLayoutDirty(store.getState())).toBe(true);
+
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "docs")).toBe(true);
+
+    const saveAt = api.calls.findIndex((call) => call.startsWith("savePlacements:home:"));
+    const relayAt = api.calls.indexOf(`relayEmbedderMessage:open:file:${CLIENT}:docs`);
+    expect(saveAt).toBeGreaterThanOrEqual(0);
+    expect(relayAt).toBeGreaterThan(saveAt);
+    expect(api.layoutOf("home", CLIENT).placements.map((placement) => placement.window_id)).toEqual([
+      "win-2",
+      "win-1",
+    ]);
+  });
+
   it("tells the user to reopen the main window when what an app's message showed waits on the desktop", async () => {
     api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
@@ -1919,10 +1941,14 @@ describe("a page the shell asks for by a message's type, and places", () => {
     await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
     expect(store.getState().layout.placements).toEqual(layoutBefore);
 
+    // Nobody asked for the page by hand, so a relay that fails is logged and the user is told nothing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = "notes did not take it: could not be reached";
     await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
     expect(store.getState().layout.placements).toEqual(layoutBefore);
-    expect(notices()).toEqual(["notes did not take it: could not be reached"]);
+    expect(notices()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(`[si] could not show the page registered for ${SHOW_TYPE}`, expect.any(Error));
+    warn.mockRestore();
   });
 });
 

@@ -2041,10 +2041,9 @@ export class DesktopStore {
    *  reach every one, or when a page it showed waits for a desktop window; answers what each app did with it, or
    *  null when it did not reach every app. */
   private async deliverMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay | null> {
-    const { type, ...payload } = message;
     let relay: MessageRelay;
     try {
-      relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+      relay = await this.relayMessage(message, sender);
     } catch (error) {
       this.toast((error as Error).message);
       return null;
@@ -2055,18 +2054,32 @@ export class DesktopStore {
     return relay;
   }
 
+  /** The relay itself; throws with the shell's detail when the message did not reach every app. An app that takes
+   *  the message may have the shell raise a window, which the shell does over the stored layout: a gesture still
+   *  waiting in the debounce (the raise of the window whose page was clicked) goes into the file first, or the
+   *  shell raises over a stack that already has that window on top, changes nothing, and the gesture then puts
+   *  the clicked window back in front of the one the message was for. */
+  private async relayMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay> {
+    const { type, ...payload } = message;
+    await this.flushPendingSave();
+    return this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+  }
+
   /** Send the apps registered for ``type`` a message of the shell's own, and put each window a ``show`` handler
    *  answered it with at ``frame``: normal, shown, and on top of the stack, with no other window touched. The shell
    *  names no app: whichever registered the type takes the message. Nothing happens when none did, in a preview
    *  shell (whose backend refuses the relay), or in a solo shell (which leaves the desktop's arrangement to the
-   *  client's main window). */
+   *  client's main window). Nobody asked for the page by hand, so a relay that fails is logged and the user is
+   *  told nothing. */
   async showRegisteredPageAt(type: string, frame: Frame): Promise<void> {
     if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, type)) return;
-    // The show writes a placement over the stored layout: a gesture still waiting in the debounce goes into the
-    // file first or it is lost.
-    await this.flushPendingSave();
-    const relay = await this.deliverMessage({ type }, SHELL_APP_NAME);
-    if (relay === null) return;
+    let relay: MessageRelay;
+    try {
+      relay = await this.relayMessage({ type }, SHELL_APP_NAME);
+    } catch (error) {
+      console.warn(`[si] could not show the page registered for ${type}`, error);
+      return;
+    }
     for (const delivery of relay.deliveries) {
       if (delivery.window_id !== null) await this.placeShownWindow(delivery.window_id, frame);
     }

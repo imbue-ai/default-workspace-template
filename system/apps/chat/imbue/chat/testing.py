@@ -1553,6 +1553,8 @@ def running_workspace(
     extra_rows: Sequence[str] = (),
     is_first_listing_running: bool = False,
     is_chat_pinned: bool = False,
+    # The chat row's message handlers, each as ``(type, path)``, for a test that has the shell relay one to the chat.
+    chat_message_handlers: Sequence[tuple[str, str]] = (),
 ) -> Generator[RunningWorkspace, None, None]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -1570,6 +1572,7 @@ def running_workspace(
     agent list has not finished: the chat lists no agent until the test hands it a listing
     (``AgentManager._adopt_initial_listing``). ``is_chat_pinned`` registers the chat with its ``[pin]`` as
     ``app.toml`` declares it, so every desktop holds one chat root window, minimized until something shows it.
+    ``chat_message_handlers`` registers the chat for those message types, which the shell then posts to it.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1635,6 +1638,7 @@ def running_workspace(
                 "app-chat": "POST",
             },
             pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
+            message_handlers=chat_message_handlers,
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},

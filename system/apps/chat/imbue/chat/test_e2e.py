@@ -23,14 +23,21 @@ from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.manifest import load_manifest
+from app_manifest.registry_location import registry_path
+from app_manifest.user_apps import has_user_built_app
 from onboarding_activity.markers import Marker
 from onboarding_activity.markers import mark
+from onboarding_checklist.items import read_checklist_items
+from onboarding_checklist.server import STATIC_DIR as CHECKLIST_STATIC_DIRECTORY
+from onboarding_checklist.server import create_app as create_checklist_app
 from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
@@ -111,6 +118,9 @@ pytestmark = [
 ]
 
 _TRIGGER_TIMEOUT_MS = 20000
+
+# imbue/chat/test_e2e.py -> the template's root.
+_TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
 
 # The default desktop every shell starts with, where the chat's seeded shortcut and every window here live.
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
@@ -4108,3 +4118,382 @@ def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWo
     expect(_shown_chat_of_root(page).locator(".message-input-textbox")).to_have_value(
         "Half a thought, typed on a phone", timeout=15000
     )
+
+
+# the onboarding checklist, opened by the shell's tour and asking the shell and the chat for its pointers
+
+_CHECKLIST_APP_NAME = "onboarding-checklist"
+_CHECKLIST_LABELS = [
+    "Work in parallel by starting a new chat",
+    "Access Studio from your phone",
+    "Build an app",
+    "Connect some data",
+]
+_TOUR_CARD_IDS_BEFORE_THE_LAST = [
+    "intro",
+    "agent",
+    "workspace",
+    "chat-window",
+    "apps",
+    "connect",
+    "security",
+    "share",
+    "devices",
+    "feedback",
+    "providers",
+    "durable",
+]
+_TOUR_LAST_CARD_PARAGRAPHS = [
+    "That\u2019s the tour.",
+    "You can take it again anytime from the launcher.",
+    "Click on any of the entries in the onboarding checklist to learn more!",
+]
+_BUILD_APP_COACH_TEXT = (
+    "Provide some context on a problem you're facing and tell the agent to build an app to help with it."
+)
+_NEW_CHAT_COACH_TEXT = (
+    "Start a new chat here any time. Each chat has its own agent, so several can work for you at once."
+)
+_DESKTOP_VIEWPORT: ViewportSize = {"width": 1440, "height": 900}
+# Where the tour's end puts the checklist's window, and where the tour's chat card snaps the avatar's, in fractions
+# of the backdrop.
+_CHECKLIST_FRAME = {"x": 0.0, "y": 0.0, "width": 0.3, "height": 0.85}
+_SNAPPED_RIGHT_FRAME = {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}
+
+# Whether the window is drawn at the frame, given in fractions of the backdrop, to within two pixels.
+_WINDOW_IS_AT_FRAME_JS = """
+([windowId, frame]) => {
+  const backdrop = document.querySelector('[data-backdrop-area]')?.getBoundingClientRect();
+  const box = document.querySelector(`[data-window-id="${windowId}"]`)?.getBoundingClientRect();
+  if (backdrop === undefined || box === undefined) return false;
+  const near = (actual, expected) => Math.abs(actual - expected) <= 2;
+  return (
+    near(box.x, backdrop.x + frame.x * backdrop.width) &&
+    near(box.y, backdrop.y + frame.y * backdrop.height) &&
+    near(box.width, frame.width * backdrop.width) &&
+    near(box.height, frame.height * backdrop.height)
+  );
+}
+"""
+
+# Whether the window is the focused one and drawn over every other window on the desktop.
+_WINDOW_IS_IN_FRONT_JS = """
+(windowId) => {
+  const stackLevel = (element) => Number(getComputedStyle(element).zIndex);
+  const own = document.querySelector(`[data-window-id="${windowId}"]`);
+  if (own === null || own.getAttribute('data-focused') !== 'true') return false;
+  return [...document.querySelectorAll('[data-window-id]')].every(
+    (other) => other === own || stackLevel(other) < stackLevel(own),
+  );
+}
+"""
+
+# Every window's box by its id.
+_WINDOW_BOXES_JS = """
+() => Object.fromEntries([...document.querySelectorAll('[data-window-id]')].map((element) => {
+  const box = element.getBoundingClientRect();
+  return [element.getAttribute('data-window-id'), [box.x, box.y, box.width, box.height]];
+}))
+"""
+
+
+def _is_checklist_frontend_built() -> bool:
+    return (CHECKLIST_STATIC_DIRECTORY / "index.html").is_file()
+
+
+_needs_the_checklist_frontend = pytest.mark.skipif(
+    not _is_checklist_frontend_built(),
+    reason="The onboarding checklist's frontend is not built (run `npm run build` in system/); skipping e2e.",
+)
+
+
+@contextmanager
+def _running_onboarding_workspace(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
+    """The shell, the chat (pinned, as its manifest pins it) and the onboarding checklist served together, the
+    checklist and the chat registered for the onboarding messages their manifests declare."""
+    checklist_manifest = load_manifest(_TEMPLATE_ROOT / "system/apps/onboarding_checklist/app.toml")
+    chat_manifest = load_manifest(_TEMPLATE_ROOT / "system/apps/chat/app.toml")
+    checklist = create_checklist_app(
+        CHECKLIST_STATIC_DIRECTORY,
+        lambda: read_checklist_items(lambda: has_user_built_app(_TEMPLATE_ROOT, registry_path()), None),
+    )
+    with serve_app(checklist) as served:
+        checklist_row = registry_row_toml(
+            str(checklist_manifest.name),
+            served.http_url,
+            is_system=checklist_manifest.system,
+            display_name=str(checklist_manifest.display_name),
+            seeds_shortcuts=checklist_manifest.seeds_shortcuts,
+            default_shortcuts=[("open", "focus")],
+            shown_message_handlers=[
+                (str(handler.type), str(handler.show), [str(page) for page in handler.showing])
+                for handler in checklist_manifest.message_handlers
+                if handler.show is not None
+            ],
+        )
+        with running_workspace(
+            tmp_path,
+            find_free_port(),
+            find_free_port(),
+            extra_rows=(checklist_row,),
+            is_chat_pinned=True,
+            chat_message_handlers=[
+                (str(handler.type), str(handler.path))
+                for handler in chat_manifest.message_handlers
+                if str(handler.type).startswith("onboarding:") and handler.path is not None
+            ],
+        ) as server:
+            yield server
+
+
+def _size_the_page_for_the_tour(page: Page) -> None:
+    """Give the page a desktop's size, and refuse the tour's pictures, the one thing a card loads from outside the
+    workspace."""
+    page.set_viewport_size(_DESKTOP_VIEWPORT)
+    page.route("https://onboarding-media.imbueminds.com/**", lambda route: route.abort())
+
+
+def _land_on_the_desktop(page: Page, server: RunningWorkspace) -> None:
+    _size_the_page_for_the_tour(page)
+    _land(page, server)
+
+
+def _start_the_tour(page: Page) -> Locator:
+    """Run the tour from the launcher's row; the tour's box, on its first card."""
+    page.locator("[data-launcher-field] textarea").click()
+    page.locator("[data-launcher-overlay] [data-tour-row]").click()
+    card = page.locator("[data-tour-card]")
+    expect(card).to_have_attribute("data-tour-card", "intro", timeout=10000)
+    return card
+
+
+def _press_next_through_the_tour(page: Page, card: Locator, until_card_id: str) -> None:
+    """Press Next on each card in turn until the card with ``until_card_id`` is the one shown."""
+    for card_id in [*_TOUR_CARD_IDS_BEFORE_THE_LAST, "done"]:
+        expect(card).to_have_attribute("data-tour-card", card_id)
+        if card_id == until_card_id:
+            return
+        card.locator("[data-tour-next]").click()
+    raise AssertionError(f"the tour has no card {until_card_id}")
+
+
+def _pinned_chat_window_id(server: RunningWorkspace) -> str:
+    (window,) = [window for window in _chat_windows(server) if window["is_pinned"]]
+    return str(window["id"])
+
+
+def _checklist_window_id(server: RunningWorkspace) -> str:
+    wait_until_true(
+        lambda: len(_app_windows(server, _CHECKLIST_APP_NAME)) == 1, 15.0, "the checklist's one window opening"
+    )
+    return str(_app_windows(server, _CHECKLIST_APP_NAME)[0]["id"])
+
+
+def _page_of_window(page: Page, window_id: str) -> FrameLocator:
+    return page.frame_locator(f'iframe[data-live-page="{window_id}"]')
+
+
+def _wait_for_window_at_frame(page: Page, window_id: str, frame: Mapping[str, float]) -> None:
+    page.wait_for_function(_WINDOW_IS_AT_FRAME_JS, arg=[window_id, dict(frame)], timeout=15000)
+
+
+def _wait_for_window_in_front(page: Page, window_id: str) -> None:
+    page.wait_for_function(_WINDOW_IS_IN_FRONT_JS, arg=window_id, timeout=15000)
+
+
+def _gap_between(first: Locator, second: Locator) -> float:
+    """How far apart the two elements' boxes are, zero when they touch or overlap."""
+    a, b = _box(first), _box(second)
+    across = max(a["left"] - b["right"], b["left"] - a["right"], 0.0)
+    down = max(a["top"] - b["bottom"], b["top"] - a["bottom"], 0.0)
+    return max(across, down)
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_tours_last_card_opens_the_onboarding_checklist_down_the_left_in_front_of_the_other_windows(
+    tmp_path: Path, page: Page
+) -> None:
+    """Next on the tour's last-but-one card shows the card that says to click the checklist's entries, and the
+    checklist's window opens with it: a column down the left of the desktop, in front, with every other window
+    where and as large as it was, and nothing said about it in a notice."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _size_the_page_for_the_tour(page)
+        # A chat window of the user's own beside the pinned one, so two windows stand where the checklist opens.
+        _open_fixture_chat(page, server)
+        card = _start_the_tour(page)
+        _press_next_through_the_tour(page, card, "durable")
+        # The chat card's Next snapped the avatar's window aside; it has arrived before the boxes are read.
+        _wait_for_window_at_frame(page, _pinned_chat_window_id(server), _SNAPPED_RIGHT_FRAME)
+        boxes_before = page.evaluate(_WINDOW_BOXES_JS)
+        assert len(boxes_before) == 2
+        assert _app_windows(server, _CHECKLIST_APP_NAME) == []
+        page.screenshot(path=str(tmp_path / "tour-last-but-one-card.png"))
+
+        card.locator("[data-tour-next]").click()
+
+        expect(card).to_have_attribute("data-tour-card", "done")
+        expect(card.locator("p")).to_have_text(_TOUR_LAST_CARD_PARAGRAPHS)
+        expect(card.locator("[data-tour-next]")).to_have_text("Done")
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        expect(_page_of_window(page, checklist_id).locator("[data-checklist-item]")).to_have_text(_CHECKLIST_LABELS)
+        boxes_after = page.evaluate(_WINDOW_BOXES_JS)
+        assert set(boxes_after) == {*boxes_before, checklist_id}
+        for window_id, box in boxes_before.items():
+            assert boxes_after[window_id] == pytest.approx(box, abs=0.5), f"{window_id} moved or changed size"
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "tour-last-card.png"))
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is_done(
+    tmp_path: Path, page: Page
+) -> None:
+    """The checklist is an app in the launcher with no shortcut on the desktop. Its page lists the four onboarding
+    items in order under its title, none checked in a workspace where none is done; the two whose pointers need the
+    Imbue Studio chrome are plain rows here, where no chrome frames the workspace. An item that becomes done is
+    checked the next time the page reads."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        expect(page.locator(f'[data-shortcut^="{_CHECKLIST_APP_NAME}:"]')).to_have_count(0)
+        page.locator("[data-launcher-field] textarea").click()
+        page.locator(f'[data-launcher-overlay] [data-launch="{_CHECKLIST_APP_NAME}:open"]').click()
+        checklist_id = _checklist_window_id(server)
+        checklist = _page_of_window(page, checklist_id)
+
+        expect(checklist.locator("[data-checklist-title]")).to_have_text("Onboarding checklist", timeout=15000)
+        items = checklist.locator("[data-checklist-item]")
+        expect(items).to_have_text(_CHECKLIST_LABELS)
+        for item_id in ("new_chat", "phone_access", "build_app", "connect_data"):
+            expect(checklist.locator(f'[data-checklist-item="{item_id}"]')).to_have_attribute("data-done", "false")
+        expect(checklist.locator("[data-checklist-item] svg")).to_have_count(0)
+        expect(checklist.locator("button[data-checklist-item]")).to_have_text(
+            [_CHECKLIST_LABELS[0], _CHECKLIST_LABELS[2]]
+        )
+        expect(checklist.locator("div[data-checklist-item]")).to_have_text(
+            [_CHECKLIST_LABELS[1], _CHECKLIST_LABELS[3]]
+        )
+        page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-none-done.png"))
+
+        mark(Marker.SECOND_CHAT_STARTED)
+        # Putting the window away and bringing it back has the page read again; its slow timer would too.
+        _taskbar_entry(page, checklist_id).click()
+        expect(page.locator(f'[data-window-id="{checklist_id}"]')).to_have_count(0)
+        _taskbar_entry(page, checklist_id).click()
+
+        new_chat = checklist.locator('[data-checklist-item="new_chat"]')
+        expect(new_chat).to_have_attribute("data-done", "true", timeout=20000)
+        expect(new_chat.locator("svg")).to_have_count(1)
+        expect(checklist.locator('[data-checklist-item][data-done="true"]')).to_have_count(1)
+        expect(items).to_have_text(_CHECKLIST_LABELS)
+        page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-one-done.png"))
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_checklists_build_an_app_and_new_chat_entries_point_from_the_tours_last_card(
+    tmp_path: Path, page: Page
+) -> None:
+    """A click on "Build an app" while the tour's last card is up closes that card as Done would and pops a card
+    out of the avatar with the avatar's window in front; Got it removes it, and a second click shows it again. A
+    click on "Work in parallel by starting a new chat" then has the chat list point at its New chat button, with
+    the chat's window in front again although the click raised the checklist's, and does so again once that mark
+    is dismissed."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        chat_id = _pinned_chat_window_id(server)
+        card = _start_the_tour(page)
+        _press_next_through_the_tour(page, card, "done")
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        checklist = _page_of_window(page, checklist_id)
+        build_app = checklist.locator('button[data-checklist-item="build_app"]')
+        coach = page.locator('[data-tour-coach="avatar"]')
+        avatar = page.locator('[data-floating-entries] [data-pinned-entry][data-entry-style="avatar"]')
+
+        build_app.click()
+
+        expect(page.locator("[data-tour-card]")).to_have_count(0)
+        expect(coach.locator("p")).to_have_text([_BUILD_APP_COACH_TEXT])
+        expect(coach.get_by_role("button")).to_have_text(["Got it"])
+        _wait_for_window_in_front(page, chat_id)
+        expect(coach).to_be_visible()
+        assert _gap_between(coach, avatar) < 24
+        wait_until_true(
+            lambda: get_json(f"{server.shell_url}/api/tour")["is_finished"] is True, 10.0, "the tour being finished"
+        )
+        page.screenshot(path=str(tmp_path / "build-app-card.png"))
+
+        coach.get_by_role("button", name="Got it").click()
+        expect(coach).to_have_count(0)
+
+        build_app.click()
+        expect(coach.locator("p")).to_have_text([_BUILD_APP_COACH_TEXT])
+        _wait_for_window_in_front(page, chat_id)
+
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+
+        chat_root = _page_of_window(page, chat_id)
+        mark_text = chat_root.locator(".coach-mark .coach-mark-text")
+        expect(mark_text).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        expect(chat_root.locator(".chat-rail-new")).to_have_class(re.compile(r"\bcoach-pulse\b"))
+        _wait_for_window_in_front(page, chat_id)
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "new-chat-pointer.png"))
+
+        chat_root.locator(".coach-mark .coach-mark-dismiss").click()
+        expect(mark_text).to_have_count(0)
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+        expect(mark_text).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        _wait_for_window_in_front(page, chat_id)
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_leaving_the_tour_on_its_first_card_opens_the_onboarding_checklist_down_the_left(
+    tmp_path: Path, page: Page
+) -> None:
+    """ "Exit walkthrough" on the tour's first card leaves the badge at the launcher and opens the checklist's
+    window down the left of the desktop, in front. Its new-chat entry brings up the chat list, which nothing had
+    shown yet, pointing at its New chat button, and its build-an-app entry takes the badge's place."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        card = _start_the_tour(page)
+        assert _app_windows(server, _CHECKLIST_APP_NAME) == []
+
+        card.locator("[data-tour-exit]").click()
+
+        badge = page.locator("[data-tour-badge]")
+        expect(badge).to_be_visible()
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        checklist = _page_of_window(page, checklist_id)
+        expect(checklist.locator("[data-checklist-item]")).to_have_text(_CHECKLIST_LABELS)
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "tour-left-early.png"))
+
+        chat_id = _pinned_chat_window_id(server)
+        expect(page.locator(f'[data-window-id="{chat_id}"]')).to_have_count(0)
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+
+        chat_root = _page_of_window(page, chat_id)
+        expect(chat_root.locator(".coach-mark .coach-mark-text")).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        _wait_for_window_in_front(page, chat_id)
+        expect(badge).to_be_visible()
+        page.screenshot(path=str(tmp_path / "new-chat-pointer-from-a-hidden-chat.png"))
+
+        # The chat's window, never snapped aside by the tour, came up over the checklist: its bar entry brings the
+        # checklist back.
+        _taskbar_entry(page, checklist_id).click()
+        _wait_for_window_in_front(page, checklist_id)
+        checklist.locator('button[data-checklist-item="build_app"]').click()
+
+        expect(badge).to_have_count(0)
+        expect(page.locator('[data-tour-coach="avatar"] p')).to_have_text([_BUILD_APP_COACH_TEXT])
+        _wait_for_window_in_front(page, chat_id)
+        expect(page.locator("[data-toast]")).to_have_count(0)
