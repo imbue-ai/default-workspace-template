@@ -4365,6 +4365,12 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
         checklist = _page_of_window(page, checklist_id)
 
         expect(checklist.locator("[data-checklist-title]")).to_have_text("Onboarding checklist", timeout=15000)
+        # The page reports its title once the shell has greeted it.
+        wait_until_true(
+            lambda: _app_windows(server, _CHECKLIST_APP_NAME)[0]["title"] == "Onboarding checklist",
+            15.0,
+            "the checklist's page reporting its title to the shell",
+        )
         items = checklist.locator("[data-checklist-item]")
         expect(items).to_have_text(_CHECKLIST_LABELS)
         for item_id in ("new_chat", "phone_access", "build_app", "connect_data"):
