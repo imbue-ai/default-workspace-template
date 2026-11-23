@@ -1046,12 +1046,12 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
         bob_path = state.presence.users_directory / "user-bob-4471.json"
         stale_at = utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1)
         os.utime(bob_path, (stale_at.timestamp(), stale_at.timestamp()))
-        assert state.presence_sweep.sweep_once(utc_now()) is True
+        assert state.presence_announcer.sweep_once(utc_now()) is True
 
         (departed,) = _presence_messages(drain_messages(client_queue))
         assert [user["user_id"] for user in departed["users"]] == ["user-owner-9c21"]
         assert bob_path.exists()
-        assert state.presence_sweep.sweep_once(utc_now()) is False
+        assert state.presence_announcer.sweep_once(utc_now()) is False
     finally:
         state.shell.broadcaster.unregister(client_queue)
 

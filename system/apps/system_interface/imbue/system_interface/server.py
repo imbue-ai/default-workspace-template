@@ -563,7 +563,7 @@ def _presence_heartbeat_endpoint() -> Response:
         return Response(status=204)
     now = utc_now()
     try:
-        get_state().presence_sweep.record_heartbeat(
+        get_state().presence_announcer.record_heartbeat(
             identity, now, reported_input_moment(now, heartbeat.input_age_seconds, heartbeat.last_input_at)
         )
     except (InvalidShellValueError, InvalidLayoutValueError) as e:

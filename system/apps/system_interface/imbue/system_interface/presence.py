@@ -116,18 +116,11 @@ class _StoredPresence(FrozenModel):
     )
 
 
-class PresenceOutcome(FrozenModel):
-    """What a heartbeat or a sweep found: the connected set now, whether it differs from the last one announced, and
-    whether the heartbeat moved the requester's newest input time."""
+class HeartbeatOutcome(FrozenModel):
+    """What a heartbeat left: the connected set now, and whether it moved the requester's newest input time."""
 
     users: tuple[PresentUser, ...] = Field(description="Every connected user now, by user id")
-    is_membership_changed: bool = Field(
-        description="Whether the connected set differs from the one last reported as changed (what the shell broadcasts on)"
-    )
-    is_input_changed: bool = Field(
-        default=False,
-        description="Whether the heartbeat moved the requester's stored newest input time (a sweep never does)",
-    )
+    is_input_changed: bool = Field(description="Whether the heartbeat moved the requester's stored newest input time")
 
 
 @pure
@@ -180,8 +173,6 @@ class PresenceStore(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a user outlives their last heartbeat"
     )
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
-    # The connected set as last reported, so every announcement agrees on what the windows know.
-    _announced_user_ids: frozenset[str] = PrivateAttr(default=frozenset())
 
     @property
     def users_directory(self) -> Path:
@@ -189,7 +180,7 @@ class PresenceStore(MutableModel):
 
     def heartbeat(
         self, identity: RequestIdentity, now: datetime, last_input_at: datetime | None = None
-    ) -> PresenceOutcome:
+    ) -> HeartbeatOutcome:
         """Record one heartbeat: write the user's file on first sight (or when their email, owner flag, or newest
         input changed), and touch its mtime to ``now``. The owner of a workspace that has not shared is recorded
         under the ``owner`` key. The input time is taken no later than ``now`` (a page's clock is not the shell's)
@@ -209,12 +200,7 @@ class PresenceStore(MutableModel):
                 write_json_atomic(path, snapshot.model_dump())
             self._touch(path, now)
             is_input_changed = snapshot.last_input_at != (existing.last_input_at if existing is not None else None)
-            return self._outcome(now, is_input_changed)
-
-    def sweep(self, now: datetime) -> PresenceOutcome:
-        """The connected set now, flagged changed when someone has silently gone (or come) since the last report."""
-        with self._lock:
-            return self._outcome(now)
+            return HeartbeatOutcome(users=tuple(self.connected_users(now)), is_input_changed=is_input_changed)
 
     def connected_users(self, now: datetime) -> list[PresentUser]:
         """Every user whose last heartbeat is within the connected window, by user id."""
@@ -250,16 +236,6 @@ class PresenceStore(MutableModel):
                 if user is not None:
                     users.append(user)
             return users
-
-    def _outcome(self, now: datetime, is_input_changed: bool = False) -> PresenceOutcome:
-        connected = tuple(self.connected_users(now))
-        connected_user_ids = frozenset(user.user_id for user in connected)
-        is_membership_changed = connected_user_ids != self._announced_user_ids
-        if is_membership_changed:
-            self._announced_user_ids = connected_user_ids
-        return PresenceOutcome(
-            users=connected, is_membership_changed=is_membership_changed, is_input_changed=is_input_changed
-        )
 
     def _user_path(self, user_id: str) -> Path:
         return self.users_directory / f"{user_id}.json"
@@ -362,11 +338,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class PresenceSweep(MutableModel):
-    """Every announcement of the connected set: the periodic check that notices a silent departure, a heartbeat that
-    changes who is connected, and the announcement a background profile fetch asks for when it changed what the
-    connected users carry. One at a time, each read and pushed under the one lock: they run on threads of their own,
-    and a set read earlier must never go out after a newer one."""
+class PresenceAnnouncer(MutableModel):
+    """How the connected set reaches every window: a heartbeat that changes who is connected, the periodic sweep that
+    notices a silent departure, and the announcement a background profile fetch asks for when it changed what the
+    connected users carry. One announcement at a time, read, pushed, and remembered under the one lock: they run on
+    threads of their own, a set read earlier must never go out after a newer one, and each decides whether to push by
+    comparing against the set last pushed."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -375,14 +352,15 @@ class PresenceSweep(MutableModel):
         default=PRESENCE_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
     )
     announce: Callable[[Sequence[PresentUser]], None] = Field(
-        frozen=True, description="How a changed connected set reaches the windows"
+        frozen=True, description="How a connected set reaches the windows"
     )
     announce_roster: Callable[[], None] = Field(
         frozen=True,
         description="How the roster, which a changed connected set or input time changes too, reaches the windows",
     )
 
-    _announce_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _announced_user_ids: frozenset[str] = PrivateAttr(default=frozenset())
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
@@ -403,41 +381,45 @@ class PresenceSweep(MutableModel):
 
     def sweep_once(self, now: datetime) -> bool:
         """One pass: announce the connected set when it differs from the last announced one; answers whether it did."""
-        with self._announce_lock:
-            outcome = self.store.sweep(now)
-            if outcome.is_membership_changed:
-                self.announce(outcome.users)
-        if outcome.is_membership_changed:
+        with self._lock:
+            is_announced = self._announce_if_changed(self.store.connected_users(now))
+        if is_announced:
             self.announce_roster()
-        return outcome.is_membership_changed
+        return is_announced
 
     def record_heartbeat(
         self, identity: RequestIdentity, now: datetime, last_input_at: datetime | None = None
-    ) -> PresenceOutcome:
+    ) -> None:
         """Record one heartbeat (``PresenceStore.heartbeat``), announcing the connected set when who is connected
         changed since the last announcement (someone came, or went without the sweep having noticed yet) and the
         roster when that or the requester's newest input time changed (the multiplayer spec, section 4.3), since
         every other window reads "Active" or "Idle" off the roster it was last pushed."""
-        with self._announce_lock:
+        with self._lock:
             outcome = self.store.heartbeat(identity, now, last_input_at)
-            if outcome.is_membership_changed:
-                self.announce(outcome.users)
-        if outcome.is_membership_changed or outcome.is_input_changed:
+            is_announced = self._announce_if_changed(outcome.users)
+        if is_announced or outcome.is_input_changed:
             self.announce_roster()
-        return outcome
 
     def announce_connected(self) -> None:
         """Announce the connected set and the roster now, whether or not its membership changed: a profile a
         background fetch changed changes what each connected user carries."""
         # Runs on the profile-refresh thread, where nothing else would log it.
         try:
-            with self._announce_lock:
-                # Read through the sweep, which records the set as announced, so a heartbeat that differs from what
-                # this pushes announces again.
-                self.announce(self.store.sweep(utc_now()).users)
+            with self._lock:
+                self._announce(self.store.connected_users(utc_now()))
             self.announce_roster()
         except (OSError, ValueError) as e:
             logger.opt(exception=e).error("Failed to announce a refreshed profile; the next announcement carries it")
+
+    def _announce_if_changed(self, users: Sequence[PresentUser]) -> bool:
+        if frozenset(user.user_id for user in users) == self._announced_user_ids:
+            return False
+        self._announce(users)
+        return True
+
+    def _announce(self, users: Sequence[PresentUser]) -> None:
+        self.announce(users)
+        self._announced_user_ids = frozenset(user.user_id for user in users)
 
     def _run(self) -> None:
         while not self._stop.wait(timeout=self.interval_seconds):
@@ -448,15 +430,15 @@ class PresenceSweep(MutableModel):
                 logger.opt(exception=e).error("The presence sweep failed; the next run will retry")
 
 
-def build_presence_sweep(
+def build_presence_announcer(
     store: PresenceStore,
     profiles: ProfileResolver,
     broadcaster: WebSocketBroadcaster,
     announce_roster: Callable[[], None],
-) -> PresenceSweep:
-    """A sweep that announces the connected set to every window, each user carrying their profile, and the roster
+) -> PresenceAnnouncer:
+    """An announcer that pushes the connected set to every window, each user carrying their profile, and the roster
     after it."""
-    return PresenceSweep(
+    return PresenceAnnouncer(
         store=store,
         announce=lambda users: broadcaster.broadcast_presence_updated(
             present_users_wire_json(users, profiles, utc_now())
