@@ -1760,15 +1760,37 @@ describe("embedder messages", () => {
     ]);
   });
 
+  it("saves a raise still waiting before it relays, so what the message raises is raised over it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-2")],
+    });
+    const store = await startedStore();
+    // The press on a lower window's page raises it, and the page's message follows within the save's debounce.
+    store.raiseWindow("win-1");
+    expect(isLayoutDirty(store.getState())).toBe(true);
+
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "docs")).toBe(true);
+
+    const saveAt = api.calls.findIndex((call) => call.startsWith("savePlacements:home:"));
+    const relayAt = api.calls.indexOf(`relayEmbedderMessage:open:file:${CLIENT}:docs`);
+    expect(saveAt).toBeGreaterThanOrEqual(0);
+    expect(relayAt).toBeGreaterThan(saveAt);
+    expect(api.layoutOf("home", CLIENT).placements.map((placement) => placement.window_id)).toEqual([
+      "win-2",
+      "win-1",
+    ]);
+  });
+
   it("tells the user to reopen the main window when what an app's message showed waits on the desktop", async () => {
     api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
-    api.relayDeliveries = [{ app: "files", has_no_desktop_window: false }];
+    api.relayDeliveries = [{ app: "files", window_id: "win-1", has_no_desktop_window: false }];
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/a.md" }, "chat")).toBe(true);
     expect(notices()).toEqual([]);
 
-    api.relayDeliveries = [{ app: "files", has_no_desktop_window: true }];
+    api.relayDeliveries = [{ app: "files", window_id: "win-1", has_no_desktop_window: true }];
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/b.md" }, "chat")).toBe(true);
 
     expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
@@ -1796,6 +1818,137 @@ describe("embedder messages", () => {
       "Nothing in this workspace handles 'open:url'",
       "buddy did not take it: could not be reached",
     ]);
+  });
+});
+
+describe("a page the shell asks for by a message's type, and places", () => {
+  const SHOW_TYPE = "onboarding:show-checklist";
+  const LEFT_COLUMN = { x: 0, y: 0, width: 0.3, height: 0.85 };
+  /** An app that shows a page for the message, as its manifest's ``[[message_handlers]]`` declares. */
+  const SHOWING_APP = appRecord("notes", { message_handlers: [{ type: SHOW_TYPE, path: null, show: "/" }] });
+
+  /** A started store over the two-window home desktop, with ``notes`` registered for the message. */
+  async function storeWithShowingApp(): Promise<DesktopStore> {
+    api.apps = [appRecord("docs"), SHOWING_APP];
+    return startedStore();
+  }
+
+  it("relays the message as the shell's own and puts the window that shows the page at the frame, on top", async () => {
+    const store = await storeWithShowingApp();
+    api.relayDeliveries = [{ app: "notes", window_id: "win-2", has_no_desktop_window: false }];
+    const before = placementOf(store.getState().layout, "win-1");
+
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+
+    expect(api.relayedMessages).toEqual([
+      { type: SHOW_TYPE, clientId: CLIENT, payload: {}, sender: "system_interface" },
+    ]);
+    expect(placementOf(store.getState().layout, "win-2")).toEqual({
+      window_id: "win-2",
+      frame: LEFT_COLUMN,
+      state: "NORMAL",
+      is_minimized: false,
+      is_detached: false,
+    });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    // No other window is moved or resized for it.
+    expect(placementOf(store.getState().layout, "win-1")).toEqual(before);
+    // The frame is saved over the layout the shell holds after its show.
+    await store.flushPendingSave();
+    expect(placementOf(api.layoutOf("home", CLIENT), "win-2").frame).toEqual(LEFT_COLUMN);
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
+  it("places a window the show opened that this window had not heard of yet, after reading the desktops again", async () => {
+    const store = await storeWithShowingApp();
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-2", "notes", "/b"),
+          windowRecord("win-7", "notes", "/"),
+        ],
+      }),
+      desktopRecord("work"),
+    ];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-7")],
+    });
+    api.relayDeliveries = [{ app: "notes", window_id: "win-7", has_no_desktop_window: false }];
+
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+
+    expect(placementOf(store.getState().layout, "win-7").frame).toEqual(LEFT_COLUMN);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-7");
+  });
+
+  it("places the window over the shell's layout even when the show's broadcast starts a read of its own meanwhile", async () => {
+    const store = await storeWithShowingApp();
+    api.relayDeliveries = [{ app: "notes", window_id: "win-2", has_no_desktop_window: false }];
+    // The show wrote the window's placement: the stored layout moved under this window.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-2")],
+    });
+    const answerReads = api.holdReads();
+
+    const shown = store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+    await settle();
+    // The broadcast of the show's own write lands while the read is out, and starts another.
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-0000000000000000" });
+    answerReads();
+    await shown;
+    await settle();
+
+    expect(placementOf(store.getState().layout, "win-2").frame).toEqual(LEFT_COLUMN);
+    await store.flushPendingSave();
+    expect(placementOf(api.layoutOf("home", CLIENT), "win-2").frame).toEqual(LEFT_COLUMN);
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
+  it("leaves a window the show found on another desktop as it is placed there", async () => {
+    const store = await storeWithShowingApp();
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")] }),
+      desktopRecord("work", { windows: [windowRecord("win-8", "notes", "/")] }),
+    ];
+    api.relayDeliveries = [{ app: "notes", window_id: "win-8", has_no_desktop_window: false }];
+    const layoutBefore = store.getState().layout.placements;
+
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+
+    expect(store.getState().layout.placements).toEqual(layoutBefore);
+  });
+
+  it("does nothing when no app registered the type, and from a solo shell", async () => {
+    const store = await startedStore();
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+    expect(api.relayedMessages).toEqual([]);
+    expect(notices()).toEqual([]);
+
+    api.apps = [appRecord("docs"), SHOWING_APP];
+    const solo = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await solo.start(NO_LINK);
+    await solo.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("places nothing when the relay is refused, and for an app that took the message at a route", async () => {
+    const store = await storeWithShowingApp();
+    const layoutBefore = store.getState().layout.placements;
+    api.relayDeliveries = [{ app: "notes", window_id: null, has_no_desktop_window: false }];
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+    expect(store.getState().layout.placements).toEqual(layoutBefore);
+
+    // Nobody asked for the page by hand, so a relay that fails is logged and the user is told nothing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "notes did not take it: could not be reached";
+    await store.showRegisteredPageAt(SHOW_TYPE, LEFT_COLUMN);
+    expect(store.getState().layout.placements).toEqual(layoutBefore);
+    expect(notices()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(`[si] could not show the page registered for ${SHOW_TYPE}`, expect.any(Error));
+    warn.mockRestore();
   });
 });
 

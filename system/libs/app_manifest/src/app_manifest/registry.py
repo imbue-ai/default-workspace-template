@@ -154,6 +154,10 @@ class RegistryRow(FrozenModel):
         description="The shortcuts a new desktop is seeded with, in order; an older row's one ``default_shortcut`` "
         "reads as a list of one",
     )
+    seeds_shortcuts: bool = Field(
+        default=True,
+        description="Whether a desktop is given the app's shortcuts by itself; absent reads as true",
+    )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
     )

@@ -15,6 +15,7 @@ record as its second member when the user's first message launches it.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -27,10 +28,15 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.first_run_tree import START_DESCRIBE_LABEL
+from imbue.chat.first_run_tree import START_FEATURES_LABEL
+from imbue.chat.first_run_tree import START_IDEAS_LABEL
 from imbue.chat.harnesses.harness_type import HarnessType
-from imbue.chat.harnesses.message_display import FIRST_RUN_KICKOFF_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.primitives import ChatId
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -47,8 +53,11 @@ SEED_AGENT_NAME: Final[str] = "welcome"
 # pointed at the seed file instead, the way a long handoff summary is, and for the same
 # delivery limits (measured at ``chat_handoffs.INLINE_SUMMARY_MAX_BYTES``).
 INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
-# What the user told Imbue Studio's first run about themselves, beside the seed; read only into the first send.
+# The file that marks a chat as the one a first-run workspace opened on. It holds what the user told Imbue
+# Studio's first run about themselves (nothing, from an app that does not ask), read only into the first send.
 FIRST_RUN_CONTEXT_FILENAME: Final[str] = "first_run_context.txt"
+# The skill a first-run chat's first agent is told to follow: it holds the reply to each suggestion of the tree.
+FIRST_RUN_SKILL_PATH: Final[str] = ".agents/skills/first-run-onboarding/SKILL.md"
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -65,18 +74,31 @@ class SeedTurn(FrozenModel):
     text: str = Field(description="The turn's text, as markdown")
 
 
-# The Main chat a first-run workspace opens on (specs/ftue-onboarding-v2 in mngr): the agent introducing itself and
-# Studio, then asking how the user wants to start.
+# The Main chat a first-run workspace opens on (specs/chat-suggestions in mngr): the agent introducing itself and
+# Studio, then asking how the user wants to start, over the start suggestions.
 FIRST_RUN_WELCOME: Final[tuple[SeedTurn, ...]] = (
     SeedTurn(role=SeedRole.ASSISTANT, text="Hi, I'm your Studio agent. I'll be with you from here on."),
     SeedTurn(role=SeedRole.ASSISTANT, text="You can chat with me any time by clicking my avatar on the desktop."),
-    SeedTurn(role=SeedRole.ASSISTANT, text="Welcome! Studio is a collaborative space for building your digital life."),
     SeedTurn(
         role=SeedRole.ASSISTANT,
         text="With Studio you can:\n\n- Build apps\n- Run agents\n- Automate workflows\n- Consolidate your data",
     ),
-    SeedTurn(role=SeedRole.ASSISTANT, text="How would you like to get started?"),
+    SeedTurn(role=SeedRole.ASSISTANT, text="**How do you want to start?**"),
 )
+
+
+@pure
+def first_run_start_suggestions(chat_id: ChatId, turns: tuple[SeedTurn, ...]) -> ChatSuggestions:
+    """The suggestions a first-run chat opens with, offered under the last of the ``turns`` it was seeded on."""
+    return ChatSuggestions(
+        after_event_id=seed_event_id(chat_id, len(turns) - 1),
+        source=SuggestionSource.FIXED,
+        suggestions=(
+            Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL),
+            Suggestion(suggestion_id="start-ideas", label=START_IDEAS_LABEL),
+            Suggestion(suggestion_id="start-features", label=START_FEATURES_LABEL),
+        ),
+    )
 
 
 def write_first_run_context(chat_dir: Path, context: str) -> None:
@@ -94,45 +116,6 @@ def is_first_run_seed(chat_dir: Path) -> bool:
 def read_first_run_context(chat_dir: Path) -> str:
     path = chat_dir / FIRST_RUN_CONTEXT_FILENAME
     return path.read_text().strip() if path.is_file() else ""
-
-
-def first_run_kickoff_message(chat_dir: Path) -> str:
-    """What a first-run chat's first agent is started with when nobody has typed yet, so it speaks first: the
-    conversation the chat opened on, what the user said they want Studio for (if anything), and what to open
-    with. The page hides the whole message (``harnesses/message_display.py``)."""
-    transcript = seed_transcript(read_seed_events(chat_dir))
-    context = read_first_run_context(chat_dir).replace(f"</{FIRST_RUN_KICKOFF_TAG}>", f"</ {FIRST_RUN_KICKOFF_TAG}>")
-    about_user = (
-        "While the workspace was being set up, the user was asked what type of studio they want to make and "
-        f"answered:\n<about-user>\n{context}\n</about-user>\n"
-        "Open with one short, warm sentence that speaks to what they picked."
-        if context != ""
-        else (
-            "The user was not asked, or did not say, what they want Studio for. Open with one short, warm sentence "
-            "saying you are here and ready to help."
-        )
-    )
-    offer = (
-        "Then offer exactly three things you could build or do for them here, as a numbered list (1., 2., 3.), one "
-        "short line each, each a concrete thing rather than a category"
-        + (
-            ", drawn from what they picked (still three when they named fewer)"
-            if context != ""
-            else ", spread across what Studio is good for"
-        )
-        + ". End with one line saying they can reply with a number, or tell you something else. Nothing after that."
-    )
-    return (
-        f"<{FIRST_RUN_KICKOFF_TAG}>\n"
-        "This chat did not begin with you. The user has just arrived in their new Imbue Studio workspace for the "
-        "first time, and the chat already shows them the welcome this note carries, written before any agent "
-        "joined; you are the first agent to join it, and they have not typed anything yet.\n\n"
-        f"<conversation>\n{transcript}\n</conversation>\n\n"
-        f"{about_user}\n{offer}\n"
-        "Do not repeat the welcome above, do not use any tools, and do not mention this note or that you were "
-        "told anything: just write the message.\n"
-        f"</{FIRST_RUN_KICKOFF_TAG}>"
-    )
 
 
 @pure
@@ -238,6 +221,12 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
 
 
 @pure
+def tagged_turns(turns: Sequence[SeedTurn]) -> str:
+    """Turns of a conversation as a model is handed them: one tagged block per turn, in order."""
+    return "\n".join(f'<turn speaker="{turn.role}">\n{turn.text.strip()}\n</turn>' for turn in turns)
+
+
+@pure
 def seed_transcript(events: list[dict[str, Any]]) -> str:
     """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
 
@@ -245,14 +234,14 @@ def seed_transcript(events: list[dict[str, Any]]) -> str:
     A closing context tag inside a turn is broken up, so the block the page strips always ends
     where this builder put its end.
     """
-    blocks: list[str] = []
+    turns: list[SeedTurn] = []
     for event in events:
-        role = "user" if event.get("type") == "user_message" else "assistant"
-        text = event.get("content") if role == "user" else event.get("text")
+        role = SeedRole.USER if event.get("type") == "user_message" else SeedRole.ASSISTANT
+        text = event.get("content") if role is SeedRole.USER else event.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
-        blocks.append(f'<turn speaker="{role}">\n{text.strip()}\n</turn>')
-    return "\n".join(blocks).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
+        turns.append(SeedTurn(role=role, text=text))
+    return tagged_turns(turns).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
 
 
 def is_slash_command(message: str) -> bool:
@@ -291,12 +280,19 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
         )
     else:
         conversation = f"<conversation>\n{transcript}\n</conversation>"
+    # CLEANUP: drop this passage, ``read_first_run_context`` and the text ``write_first_run_context`` keeps (the
+    # file stays, empty, as the first-run mark) once no supported Imbue Studio app sends ``context`` with its seed.
     first_run_context = read_first_run_context(chat_dir)
     if first_run_context != "":
         safe_context = first_run_context.replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
         conversation += (
             "\n\nBefore the workspace existed, the user told Imbue Studio this about what they want it for "
             f"(they did not say it in this chat):\n<about-user>\n{safe_context}\n</about-user>"
+        )
+    if is_first_run_seed(chat_dir):
+        conversation += (
+            "\n\nThis is the user's first conversation in a new workspace. Before replying, read "
+            f"{FIRST_RUN_SKILL_PATH} and follow it."
         )
     return (
         f"<{SEED_CONTEXT_TAG}>\n"

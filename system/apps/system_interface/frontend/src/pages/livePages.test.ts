@@ -25,9 +25,13 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -53,6 +57,7 @@ import {
   WATCHER_RAISE_HOLD_TICKS,
   pageFrameAllow,
 } from "./livePages";
+import type { LivePagesOptions } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -68,6 +73,21 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
+/** The coach cards the pages asked the layer for, as a text and the place each names. */
+let coachCards: [string, ShellCoachCardPlace][] = [];
+/** What the layers said, each time they said it, of whether any page has an agent working in it. */
+let pagesAgentWorking: boolean[] = [];
+/** What the layers said, each time they said it, of whether any page says the workspace's first conversation is
+ *  still following its script, and whether a page's own report brought the answer. */
+let pagesFirstConversation: { isPending: boolean; isSaidByPage: boolean }[] = [];
+const PAGE_OPTIONS: LivePagesOptions = {
+  host: "127.0.0.1:8000",
+  protocol: "http:",
+  showCoachCard: (text, place) => coachCards.push([text, place]),
+  notePagesAgentWorking: (isWorking) => pagesAgentWorking.push(isWorking),
+  notePagesFirstConversationPending: (isPending, isSaidByPage) =>
+    pagesFirstConversation.push({ isPending, isSaidByPage }),
+};
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
 const FOCUS_GRANT_SCHEDULE_MS = 2000;
 
@@ -129,6 +149,15 @@ function spyOnFrame(windowId: string): ReturnType<typeof vi.fn> {
 /** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
 function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
   return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
+}
+
+/** What the layers last said of whether any page has an agent working in it. */
+function lastToldOfPages(): boolean | undefined {
+  return pagesAgentWorking[pagesAgentWorking.length - 1];
+}
+
+function lastToldOfFirstConversation(): { isPending: boolean; isSaidByPage: boolean } | undefined {
+  return pagesFirstConversation[pagesFirstConversation.length - 1];
 }
 
 function load(windowId: string): void {
@@ -244,7 +273,10 @@ beforeEach(async () => {
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
-  layer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+  coachCards = [];
+  pagesAgentWorking = [];
+  pagesFirstConversation = [];
+  layer = new LivePagesLayer(host, store, PAGE_OPTIONS);
   layer.start();
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([docs, notes]);
@@ -777,7 +809,7 @@ describe("the contract", () => {
     ]);
 
     spy.mockClear();
-    new LivePagesLayer(document.createElement("div"), store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
     void wearTheme({ id: "windows-2000", revision: "r2" });
     expect(spy).not.toHaveBeenCalled();
   });
@@ -818,6 +850,8 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        opensWorkspaceSettings: false,
+        showsCoachMarks: false,
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
@@ -838,6 +872,8 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        opensWorkspaceSettings: false,
+        showsCoachMarks: false,
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -879,6 +915,20 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
+  });
+
+  it("tells a page in its handshake whether the embedder opens its workspace settings", () => {
+    store.setOpensWorkspaceSettings(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensWorkspaceSettings: true });
+  });
+
+  it("tells a page in its handshake whether the embedder draws coach marks on its own controls", () => {
+    store.setShowsCoachMarks(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, showsCoachMarks: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {
@@ -1333,6 +1383,195 @@ describe("the contract", () => {
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:draft-text ignored"));
     warn.mockRestore();
+  });
+
+  it("shows a page's shell:show-coach-card as the page's words under the chrome control it names", () => {
+    messageFromPage("win-1", {
+      type: SHELL_SHOW_COACH_CARD,
+      text: "Your connections live here.",
+      chromeAnchor: "permissions",
+    });
+    expect(coachCards).toEqual([["Your connections live here.", { chromeAnchor: "permissions" }]]);
+  });
+
+  it("shows a page's shell:show-coach-card as the page's words at the agent's avatar when it names that target", () => {
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Tell me what to build.", target: "avatar" });
+    expect(coachCards).toEqual([["Tell me what to build.", { target: "avatar" }]]);
+  });
+
+  it("drops a shell:show-coach-card that names both places, or a target that is not the avatar", () => {
+    messageFromPage("win-1", {
+      type: SHELL_SHOW_COACH_CARD,
+      text: "Look here.",
+      chromeAnchor: "permissions",
+      target: "avatar",
+    });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", target: "launcher" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", target: 3 });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "", target: "avatar" });
+    expect(coachCards).toEqual([]);
+  });
+
+  it("drops a shell:show-coach-card whose anchor is not one of the chrome's, or whose text is missing, empty or too long", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", chromeAnchor: "taskbar" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here." });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", chromeAnchor: 3 });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "", chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: ["Look here."], chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(501), chromeAnchor: "share" });
+    expect(coachCards).toEqual([]);
+    // Dropped without a word: a page newer than this shell may name an anchor it does not know.
+    expect(warn).not.toHaveBeenCalled();
+
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(500), chromeAnchor: "share" });
+    expect(coachCards).toEqual([["x".repeat(500), { chromeAnchor: "share" }]]);
+    warn.mockRestore();
+  });
+
+  it("takes a page's shell:agent-working as that page's last word, and counts an agent as working while any page says so", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    // A layer starts from no page having said anything.
+    expect(pagesAgentWorking).toEqual([false]);
+
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+    const toldAfterFirst = pagesAgentWorking.length;
+    // The same word again changes nothing, and is not passed on.
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(pagesAgentWorking).toHaveLength(toldAfterFirst);
+
+    messageFromPage("win-2", { type: SHELL_AGENT_WORKING, isWorking: true });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: false });
+    expect(lastToldOfPages()).toBe(true);
+
+    messageFromPage("win-2", { type: SHELL_AGENT_WORKING, isWorking: false });
+    expect(lastToldOfPages()).toBe(false);
+  });
+
+  it("drops a shell:agent-working that carries no boolean", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: "true" });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: 1 });
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: null });
+
+    expect(pagesAgentWorking).toEqual([false]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("forgets what a page said of an agent working when its window closes", async () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+
+    await store.closeWindow("win-1");
+    layer.reconcile();
+
+    expect(lastToldOfPages()).toBe(false);
+  });
+
+  it("forgets it when the page's frame loads again, before greeting the fresh page", () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    const spy = spyOnFrame("win-1");
+    const toldBeforeGreeting: boolean[] = [];
+    spy.mockImplementation((message: { type?: string }) => {
+      if (message.type === SHELL_HANDSHAKE) toldBeforeGreeting.push(lastToldOfPages() ?? true);
+    });
+
+    load("win-1");
+
+    expect(lastToldOfPages()).toBe(false);
+    // A page that still has an agent working answers the greeting by saying so again, which must come after.
+    expect(toldBeforeGreeting).toEqual([false]);
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+  });
+
+  it("forgets it when the layer stops, and a layer that replaces another starts from nobody working", () => {
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: true });
+    expect(lastToldOfPages()).toBe(true);
+
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
+    expect(lastToldOfPages()).toBe(false);
+
+    pagesAgentWorking = [];
+    messageFromPage("win-1", { type: SHELL_AGENT_WORKING, isWorking: false });
+    // The replaced layer no longer hears its pages.
+    expect(pagesAgentWorking).toEqual([]);
+    layer.stop();
+    expect(pagesAgentWorking).toEqual([false]);
+  });
+
+  it("takes a page's shell:first-conversation-step as that page's last word, and holds while any page says pending", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    // A layer starts from no page having said anything, which is no page's word.
+    expect(pagesFirstConversation).toEqual([{ isPending: false, isSaidByPage: false }]);
+
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    // The same word again changes nothing, and is not passed on.
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    messageFromPage("win-2", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+    messageFromPage("win-2", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+
+    expect(pagesFirstConversation.slice(1)).toEqual([
+      { isPending: true, isSaidByPage: true },
+      { isPending: true, isSaidByPage: true },
+      { isPending: true, isSaidByPage: true },
+      { isPending: false, isSaidByPage: true },
+    ]);
+  });
+
+  it("drops a shell:first-conversation-step that carries no boolean", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: "true" });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: 1 });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: null });
+
+    expect(pagesFirstConversation).toHaveLength(1);
+  });
+
+  it("stops holding on a page's word when its window closes, as a word dropped rather than said", async () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+
+    await store.closeWindow("win-1");
+    layer.reconcile();
+
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+  });
+
+  it("drops it when the page's frame loads again, before greeting the fresh page, which says it again", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    const spy = spyOnFrame("win-1");
+    const toldBeforeGreeting: (boolean | undefined)[] = [];
+    spy.mockImplementation((message: { type?: string }) => {
+      if (message.type === SHELL_HANDSHAKE) toldBeforeGreeting.push(lastToldOfFirstConversation()?.isPending);
+    });
+
+    load("win-1");
+
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+    expect(toldBeforeGreeting).toEqual([false]);
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: true, isSaidByPage: true });
+  });
+
+  it("drops it when the layer stops, and a layer that replaces another starts from no page holding", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+
+    pagesFirstConversation = [];
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+    // The replaced layer no longer hears its pages.
+    expect(pagesFirstConversation).toEqual([]);
+    layer.stop();
+    expect(pagesFirstConversation).toEqual([{ isPending: false, isSaidByPage: false }]);
   });
 
   it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {
@@ -1856,7 +2095,7 @@ describe("raising the window the document's focus lands in", () => {
     const timers = vi.getTimerCount();
     tick(2);
     expect(vi.getTimerCount()).toBe(timers);
-    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(host, store, PAGE_OPTIONS).start();
     expect(vi.getTimerCount()).toBe(timers);
     // The newer layer has no pages yet, so only the replaced layer's watcher could raise for this landing.
     frameOf("win-1").focus();
@@ -1877,7 +2116,7 @@ describe("raising the window the document's focus lands in", () => {
   it("leaves the watcher of the layer that replaced it running when a replaced layer is stopped", () => {
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     const timers = vi.getTimerCount();
-    const newer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+    const newer = new LivePagesLayer(host, store, PAGE_OPTIONS);
     newer.start();
     layer.stop();
     expect(vi.getTimerCount()).toBe(timers);
@@ -1923,7 +2162,7 @@ describe("the focus grants a raised window's page is sent", () => {
   it("drops the pending grants of a layer that a newer one replaces", () => {
     const grants = spyOnFrame("win-2");
     vi.advanceTimersByTime(100);
-    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(host, store, PAGE_OPTIONS).start();
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
   });

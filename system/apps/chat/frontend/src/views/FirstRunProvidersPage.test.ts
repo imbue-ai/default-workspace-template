@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   accounts: [] as { id: string; lane: string; provider: string; harness_label: string }[],
+  // The account a new chat starts on: the pinned one, else the one the account list would pick.
+  selectedAccountId: null as string | null,
+  setDefaultAccount: vi.fn((_accountId: string, _isDefault: boolean) => Promise.resolve()),
+  loadAccounts: vi.fn(() => Promise.resolve()),
   isPending: true,
   finish: vi.fn(() => Promise.resolve()),
   open: vi.fn(),
@@ -19,6 +23,9 @@ vi.mock("../models/Providers", () => ({
     { id: "anthropic", provider_name: "Anthropic", subtitle: "long", methods: [] },
     { id: "made-up", provider_name: "Made Up", subtitle: "Its own line", methods: [] },
   ],
+  getSelectedAccount: () => mocks.accounts.find((account) => account.id === mocks.selectedAccountId) ?? null,
+  loadAccounts: mocks.loadAccounts,
+  setDefaultAccount: mocks.setDefaultAccount,
   isFirstRunProviderStepPending: () => mocks.isPending,
   isProviderChooserOpen: () => false,
   loadLanesAndAccountsWithRetry: () => Promise.resolve(),
@@ -27,10 +34,16 @@ vi.mock("../models/Providers", () => ({
 vi.mock("./ProviderChooserModal", () => ({ ProviderChooserModal: { view: () => null } }));
 
 import {
+  FIRST_RUN_ADD_ANOTHER_HEADING,
   FIRST_RUN_CONNECTED_HEADING,
+  FIRST_RUN_DEFAULT_TAG,
+  FIRST_RUN_MAKE_DEFAULT_HINT,
   FIRST_RUN_PROVIDERS_TITLE,
   FirstRunProvidersPage,
 } from "./FirstRunProvidersPage";
+
+const ANTHROPIC = { id: "acct-1", lane: "anthropic", provider: "Anthropic", harness_label: "Claude Code" };
+const OPENAI = { id: "acct-2", lane: "openai", provider: "OpenAI", harness_label: "Codex" };
 
 type Node = m.Vnode<Record<string, unknown>>;
 
@@ -55,6 +68,12 @@ function byId(tree: unknown, id: string): Node {
   return found;
 }
 
+function accountRow(tree: unknown, accountId: string): Node {
+  const found = nodes(tree).find((node) => node.attrs?.["data-first-run-account"] === accountId);
+  if (found === undefined) throw new Error(`no row for account ${accountId}`);
+  return found;
+}
+
 function render(shell = { firstRunProviderStep: vi.fn() }) {
   const page = FirstRunProvidersPage();
   const view = () => page.view!({ attrs: { shell } } as never);
@@ -64,6 +83,10 @@ function render(shell = { firstRunProviderStep: vi.fn() }) {
 describe("FirstRunProvidersPage", () => {
   afterEach(() => {
     mocks.accounts = [];
+    mocks.selectedAccountId = null;
+    mocks.setDefaultAccount.mockReset();
+    mocks.setDefaultAccount.mockImplementation(() => Promise.resolve());
+    mocks.loadAccounts.mockClear();
     mocks.isPending = true;
     mocks.finish.mockClear();
     mocks.open.mockClear();
@@ -102,14 +125,77 @@ describe("FirstRunProvidersPage", () => {
   });
 
   it("lists a connected account and lets Next leave", () => {
-    mocks.accounts = [{ id: "acct-1", lane: "anthropic", provider: "Anthropic", harness_label: "Claude Code" }];
+    mocks.accounts = [ANTHROPIC];
+    mocks.selectedAccountId = ANTHROPIC.id;
     const tree = render().view();
 
     expect(text(tree)).toContain(FIRST_RUN_CONNECTED_HEADING);
-    expect(nodes(tree).some((node) => node.attrs?.["data-first-run-account"] === "acct-1")).toBe(true);
+    expect(text(tree)).toContain(FIRST_RUN_ADD_ANOTHER_HEADING);
+    // The one account is the default by being alone: its row says nothing of it and takes no click.
+    const row = accountRow(tree, ANTHROPIC.id);
+    expect(row.tag).toBe("div");
+    expect(row.attrs.onclick).toBeUndefined();
+    expect(text(tree)).not.toContain(FIRST_RUN_DEFAULT_TAG);
+    expect(text(tree)).not.toContain(FIRST_RUN_MAKE_DEFAULT_HINT);
     expect(byId(tree, "first-run-next").attrs.disabled).toBe(false);
     // With a provider connected there is nothing to skip.
     expect(nodes(tree).some((node) => node.attrs?.id === "first-run-skip")).toBe(false);
+  });
+
+  it("marks the default of two connected accounts, and offers to make the other one the default", () => {
+    mocks.accounts = [ANTHROPIC, OPENAI];
+    mocks.selectedAccountId = ANTHROPIC.id;
+    const tree = render().view();
+
+    const defaultRow = accountRow(tree, ANTHROPIC.id);
+    expect(defaultRow.tag).toBe("div");
+    expect(defaultRow.attrs.onclick).toBeUndefined();
+    expect(text(defaultRow)).toContain(FIRST_RUN_DEFAULT_TAG);
+    expect(text(defaultRow)).not.toContain(FIRST_RUN_MAKE_DEFAULT_HINT);
+    const otherRow = accountRow(tree, OPENAI.id);
+    expect(otherRow.tag).toBe("button");
+    expect(text(otherRow)).toContain(FIRST_RUN_MAKE_DEFAULT_HINT);
+    expect(text(otherRow)).not.toContain(FIRST_RUN_DEFAULT_TAG);
+  });
+
+  it("follows the default to whichever account holds it", () => {
+    mocks.accounts = [ANTHROPIC, OPENAI];
+    mocks.selectedAccountId = OPENAI.id;
+    const tree = render().view();
+
+    expect(text(accountRow(tree, OPENAI.id))).toContain(FIRST_RUN_DEFAULT_TAG);
+    expect(accountRow(tree, ANTHROPIC.id).tag).toBe("button");
+  });
+
+  it("pins the account whose row is clicked, and draws again once that has landed", async () => {
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    mocks.accounts = [ANTHROPIC, OPENAI];
+    mocks.selectedAccountId = ANTHROPIC.id;
+
+    (accountRow(render().view(), OPENAI.id).attrs.onclick as () => void)();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.setDefaultAccount.mock.calls).toEqual([[OPENAI.id, true]]);
+    expect(mocks.loadAccounts).not.toHaveBeenCalled();
+    expect(redraw).toHaveBeenCalled();
+  });
+
+  it("reads the accounts again when the pin does not go through, so the tag stays where the default is", async () => {
+    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.setDefaultAccount.mockImplementation(() => Promise.reject(new Error("404")));
+    mocks.accounts = [ANTHROPIC, OPENAI];
+    mocks.selectedAccountId = ANTHROPIC.id;
+
+    (accountRow(render().view(), OPENAI.id).attrs.onclick as () => void)();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.loadAccounts).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("finishes the step once on Skip and tells the shell to take its cover down", async () => {

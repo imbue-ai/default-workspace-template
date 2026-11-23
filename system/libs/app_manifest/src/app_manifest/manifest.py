@@ -539,6 +539,11 @@ class AppManifest(FrozenModel):
         description="The shortcuts a new desktop is seeded with, in order: the ``default_shortcut`` table, or an "
         "array of them; none declared leaves the choice to the shell",
     )
+    seeds_shortcuts: bool = Field(
+        default=True,
+        description="Whether a desktop is given the app's shortcuts by itself; false keeps them off every desktop "
+        "until the user adds one from the launcher, which lists the app either way",
+    )
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(),
         description="The paths the desktop interface opens windows at, with their labels and params",

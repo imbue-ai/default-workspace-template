@@ -9,7 +9,13 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
+import {
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
+  SHELL_SHOW_COACH_CARD,
+} from "@imbue/workspace-ui/src/app_contract";
 import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
+import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -47,6 +53,9 @@ let store: DesktopStore;
 let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
+/** What the App passed on, each time, of whether any page says an agent is working in it. */
+let pagesAgentWorking: boolean[] = [];
+const notePagesAgentWorking = (isWorking: boolean): void => void pagesAgentWorking.push(isWorking);
 
 function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -71,6 +80,7 @@ async function mountApp(
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   openedOutside = [];
+  pagesAgentWorking = [];
   const laterWindowIds = options.laterWindowIds ?? [];
   api.desktops = [
     desktopRecord("home", {
@@ -108,9 +118,10 @@ async function mountApp(
     api: new FakeTourApi({ isSeen: true }),
     highlightChrome: () => undefined,
     isAutoStartAllowed: () => false,
+    isViewerOwner: () => true,
     redraw: () => m.redraw(),
   });
-  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+  mountView(() => m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -1418,7 +1429,9 @@ describe("the switch to the phone layout", () => {
       },
     });
     const starting = store.start(NO_LINK);
-    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
     expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
     expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
     // The bar says the page is opening, not that home is on screen, and offers Home.
@@ -1452,7 +1465,9 @@ describe("the switch to the phone layout", () => {
       },
     });
     await store.start(NO_LINK);
-    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
     expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
     expect(document.querySelector("[data-phone-pill]")?.getAttribute("data-phone-pill")).toBe("home");
   });
@@ -1489,6 +1504,115 @@ describe("a fullscreen window", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});
+
+describe("a page's word that an agent is working in it", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("is passed on from the page's shell:agent-working, for the tour to begin on", () => {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isWorking of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_AGENT_WORKING, isWorking },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(pagesAgentWorking.slice(-2)).toEqual([true, false]);
+  });
+});
+
+describe("a page's word that the workspace's first conversation is following its script", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("reaches the tour from the page's shell:first-conversation-step, as the page's own word", () => {
+    initEmbedderRelay();
+    const heard = vi.spyOn(tour, "noteFirstConversationPending");
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isPending of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_FIRST_CONVERSATION_STEP, isPending },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(heard.mock.calls).toEqual([
+      [true, true],
+      [false, true],
+    ]);
+  });
+});
+
+describe("a page's coach card", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  /** Post win-1's page's ``shell:show-coach-card`` to the shell, at ``place``, and draw what it made of it. */
+  function askForCoachCard(place: Record<string, string> = { chromeAnchor: "permissions" }): void {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", ...place },
+        source: frame.contentWindow,
+        origin: window.location.origin,
+      }),
+    );
+    m.redraw.sync();
+  }
+
+  it("is drawn over the desktop from the page's shell:show-coach-card, and goes on Got it", () => {
+    askForCoachCard();
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("permissions");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is drawn at the avatar when the page names that target, and goes on Got it", () => {
+    askForCoachCard({ target: "avatar" });
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("avatar");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+  });
+
+  it("is dropped by a solo shell, which draws no card: nothing is left up that no button could take down", async () => {
+    unmountViews();
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
+  });
+
+  it("is dropped by the phone layout, which draws no card either", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+
+    askForCoachCard();
+
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
+    expect(tour.getState()).toEqual({ phase: "idle" });
   });
 });
 

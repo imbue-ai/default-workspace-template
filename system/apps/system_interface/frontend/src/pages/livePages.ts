@@ -21,7 +21,8 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, ``shell:show-coach-card``, and ``shell:agent-working``. Messages cross
+ * through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -35,6 +36,9 @@
 
 import {
   INPUT_REPORT_INTERVAL_MS,
+  MAX_COACH_CARD_TEXT_LENGTH,
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -48,10 +52,13 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  coachCardPlaceOf,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -174,6 +181,11 @@ interface LivePage {
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
   greetedIsViewing: boolean;
+  /** Whether the page's last ``shell:agent-working`` since its load said an agent is working in it. */
+  isAgentWorking: boolean;
+  /** Whether the page's last ``shell:first-conversation-step`` since its load said the workspace's first
+   *  conversation is still following its script. */
+  isFirstConversationPending: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -204,6 +216,16 @@ export interface LivePagesOptions {
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
+  /** Shows a page's coach card: its words under a control of the Imbue Studio chrome, or popping out of the agent's
+   *  avatar (``shell:show-coach-card``). */
+  readonly showCoachCard: (text: string, place: ShellCoachCardPlace) => void;
+  /** Told whether the last ``shell:agent-working`` of any page the layer holds says an agent is working: when a
+   *  page's report changes, when a page that said so loads again or goes away, and when the layer starts or stops. */
+  readonly notePagesAgentWorking: (isWorking: boolean) => void;
+  /** Told whether the last ``shell:first-conversation-step`` of any page the layer holds says the workspace's first
+   *  conversation is still following its script, at the same moments. ``isSaidByPage`` is whether a page's own
+   *  report brought the answer, rather than a report dropped with its page. */
+  readonly notePagesFirstConversationPending: (isPending: boolean, isSaidByPage: boolean) => void;
 }
 
 /** The phone's pages: the shown window's, and the ones it keeps beside it. */
@@ -275,6 +297,14 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_SHOW_COACH_CARD, (frame, payload) => this.takeShowCoachCard(frame, payload));
+    setChildFrameMessageHandler(SHELL_AGENT_WORKING, (frame, payload) => this.takeAgentWorking(frame, payload));
+    setChildFrameMessageHandler(SHELL_FIRST_CONVERSATION_STEP, (frame, payload) =>
+      this.takeFirstConversationStep(frame, payload),
+    );
+    // The newest layer takes these seats too: whatever the pages of a layer it replaces said went with them.
+    this.tellPagesAgentWorking();
+    this.tellPagesFirstConversationPending(false);
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -308,9 +338,11 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** Stop hearing theme changes and watching focus land in a frame, once the layer's view is gone: the watcher is
-   *  a timer, and would go on reading a document that is no longer there. */
+   *  a timer, and would go on reading a document that is no longer there. The pages went with the view, and what
+   *  they said of an agent working and of the first conversation with them. */
   stop(): void {
     this.stopStarted();
+    for (const page of this.pages.values()) this.forgetPageReports(page);
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -894,6 +926,8 @@ export class LivePagesLayer implements PageDriver {
       lastFocusPromptTick: null,
       greetedDesktopId: null,
       greetedIsViewing: false,
+      isAgentWorking: false,
+      isFirstConversationPending: false,
       lastSentVisibility: null,
       isHeldForStop: false,
       isHidden: true,
@@ -907,6 +941,8 @@ export class LivePagesLayer implements PageDriver {
       page.isCloseChordCapable = false;
       page.hasCapabilities = false;
       page.lastSentVisibility = null;
+      // Before the greeting, which a page answers by saying again what still holds.
+      this.forgetPageReports(page);
       this.greet(page);
       this.syncVisibility(page, this.isShown(page));
     });
@@ -919,6 +955,7 @@ export class LivePagesLayer implements PageDriver {
   private destroy(page: LivePage): void {
     this.pages.delete(page.windowId);
     page.wrapper.remove();
+    this.forgetPageReports(page);
   }
 
   private position(page: LivePage, box: HostRect): void {
@@ -1007,6 +1044,8 @@ export class LivePagesLayer implements PageDriver {
       app: page.app,
       path,
       opensLocalFiles: this.store.getOpensLocalFiles(),
+      opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
+      showsCoachMarks: this.store.getShowsCoachMarks(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;
@@ -1160,6 +1199,73 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void this.store.openLink(url, window.location.host, page.app);
+  }
+
+  /** ``shell:show-coach-card {text, chromeAnchor}`` or ``{text, target}`` from a page: the page's words as a
+   *  one-button card under a control of the Imbue Studio chrome, or popping out of the agent's avatar. The frame
+   *  has to be one the shell created; a text that is empty or too long, or a payload that does not name exactly
+   *  one place this shell knows, is dropped without a word, since the page that sent it may be newer than this
+   *  shell. */
+  private takeShowCoachCard(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const text = payload.text;
+    if (typeof text !== "string" || text === "" || text.length > MAX_COACH_CARD_TEXT_LENGTH) return;
+    const place = coachCardPlaceOf(payload);
+    if (place === null) return;
+    this.options.showCoachCard(text, place);
+  }
+
+  /** ``shell:agent-working {isWorking}`` from a page: whether an agent is working in what the page shows, kept as
+   *  the page's last word until it loads again or goes away. The frame has to be one the shell created; a message
+   *  that carries no boolean is dropped without a word, since the page that sent it may be newer than this shell. */
+  private takeAgentWorking(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    const isWorking = payload.isWorking;
+    if (page === undefined || typeof isWorking !== "boolean" || page.isAgentWorking === isWorking) return;
+    page.isAgentWorking = isWorking;
+    this.tellPagesAgentWorking();
+  }
+
+  /** Drop what a page said of an agent working: the page that said it is gone, or is a fresh page now. */
+  private forgetAgentWorking(page: LivePage): void {
+    if (!page.isAgentWorking) return;
+    page.isAgentWorking = false;
+    this.tellPagesAgentWorking();
+  }
+
+  private tellPagesAgentWorking(): void {
+    this.options.notePagesAgentWorking([...this.pages.values()].some((page) => page.isAgentWorking));
+  }
+
+  /** ``shell:first-conversation-step {isPending}`` from a page: whether the workspace's first conversation is still
+   *  following its script, kept as the page's last word until it loads again or goes away, so a page that is gone
+   *  never holds the tour. The frame has to be one the shell created; a message that carries no boolean is dropped. */
+  private takeFirstConversationStep(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    const isPending = payload.isPending;
+    if (page === undefined || typeof isPending !== "boolean" || page.isFirstConversationPending === isPending) return;
+    page.isFirstConversationPending = isPending;
+    this.tellPagesFirstConversationPending(true);
+  }
+
+  private forgetFirstConversationStep(page: LivePage): void {
+    if (!page.isFirstConversationPending) return;
+    page.isFirstConversationPending = false;
+    this.tellPagesFirstConversationPending(false);
+  }
+
+  private tellPagesFirstConversationPending(isSaidByPage: boolean): void {
+    this.options.notePagesFirstConversationPending(
+      [...this.pages.values()].some((page) => page.isFirstConversationPending),
+      isSaidByPage,
+    );
+  }
+
+  /** Drop what a page said that the shell keeps as its last word: the page that said it is gone, or is a fresh page
+   *  now. */
+  private forgetPageReports(page: LivePage): void {
+    this.forgetAgentWorking(page);
+    this.forgetFirstConversationStep(page);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

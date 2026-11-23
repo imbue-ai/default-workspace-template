@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   intakeTokenFromSearch,
+  isNewChatPointerRequested,
   isProviderChooserRequested,
   rootPathFor,
   selectionFromSearch,
@@ -31,6 +32,15 @@ describe("selection", () => {
     expect(isProviderChooserRequested("?chat=agent-0123abc")).toBe(false);
     // The path the root reports and writes into its own URL drops the request, so it is honored once.
     expect(rootPathFor(selectionFromSearch(search))).toBe("/?chat=agent-0123abc");
+  });
+
+  it("reads a request for the New chat pointer, which names no chat and is dropped from the path written back", () => {
+    expect(isNewChatPointerRequested("?open=new-chat-pointer")).toBe(true);
+    expect(isNewChatPointerRequested("?chat=agent-0123abc&open=new-chat-pointer")).toBe(true);
+    expect(isNewChatPointerRequested("?open=providers")).toBe(false);
+    expect(isNewChatPointerRequested("")).toBe(false);
+    expect(selectionFromSearch("?open=new-chat-pointer")).toBeNull();
+    expect(rootPathFor(selectionFromSearch("?chat=agent-0123abc&open=new-chat-pointer"))).toBe("/?chat=agent-0123abc");
   });
 
   it("writes the selection back as the root's path, with no token", () => {

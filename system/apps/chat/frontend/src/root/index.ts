@@ -8,12 +8,16 @@
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
  * chat through the picker, or a first message that launches a chat) exactly once and then
  * reports the selection alone, opens the provider chooser once when its URL carries
- * ``open=providers`` (the Imbue Studio app's sign-in button), whenever the chat it shows awaits
+ * ``open=providers`` (the Imbue Studio app's sign-in button), draws the coach mark at its New chat
+ * button when its URL carries ``open=new-chat-pointer`` (another app's page asked the chat app for
+ * it, and the chat on screen stays as it is), opens the chooser whenever the chat it shows awaits
  * its first send with nothing signed in, and once with no chat to show while nothing is signed in
  * (``models/firstSendChooser.ts``), tells the Imbue Studio chrome once when a chooser of its is on
- * screen (``minds:provider-chooser-on-screen``), and drives its inner pages
+ * screen (``minds:provider-chooser-on-screen``), tells the shell whether the workspace's first conversation is still
+ * following its tree (``firstConversationReport.ts``), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
- * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
+ * reports key on the chat it shows. A page calls back the same way for what is the root's to draw: the
+ * provider chooser, and a coach mark at the New chat button. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
  * kinds; a page asking for a sibling chat is answered here, by selecting it.
  */
@@ -45,6 +49,7 @@ import {
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
+  isFirstConversationPending,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -65,6 +70,7 @@ import {
 } from "../models/Providers";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { reportProviderChooserOnScreenOnce } from "../shell";
+import { EMBEDDER_CAPABILITIES, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
@@ -76,18 +82,22 @@ import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
+import { makeNewChatPointerAsk, showNewChatCoachMark } from "./newChatCoachMark";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import type { InnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { FirstRunProvidersPage } from "../views/FirstRunProvidersPage";
+import { makeFirstConversationReport } from "./firstConversationReport";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
   isFirstRunProvidersViewRequested,
+  isNewChatPointerRequested,
   isProviderChooserRequested,
   rootPathFor,
   selectionFromSearch,
@@ -104,6 +114,7 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+let relay: InnerFrameRelay | null = null;
 // The intake the root's URL named and has not yet applied or given up (waiting for the chats, fetched, offered
 // through the picker); null otherwise. While one is pending the shell holds the window at the token path it put it
 // at, and the root reports no other location, so a reload or another client finds the token too.
@@ -242,6 +253,16 @@ async function openNewChat(): Promise<void> {
   select(outcome.chatId);
 }
 
+/** Put the chat list on screen where it is not: the phone layout keeps it in a drawer, opened and drawn here. */
+function revealChatList(): void {
+  if (!compactQuery.matches || isDrawerOpen) return;
+  isDrawerOpen = true;
+  m.redraw.sync();
+}
+
+// The pointer at the New chat button that the root's path asks for (``open=new-chat-pointer``).
+const newChatPointerAsk = makeNewChatPointerAsk(() => void showNewChatCoachMark(revealChatList));
+
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
  *  reported before the token path: the shell holds that path as this window's location until the root reports
  *  another. */
@@ -370,6 +391,11 @@ function reportFirstRunProviderStep(shell: ShellConnection): void {
   shell.firstRunProviderStep(isPending);
 }
 
+// Whether the workspace's first conversation is still following its tree, as the shell was last told.
+const firstConversationReport = makeFirstConversationReport((isPending) =>
+  connection?.firstConversationStep(isPending),
+);
+
 /** The chooser's room row: the chat on screen, awaiting its first send, becomes a room with nothing said yet; with no
  *  chat on screen, a new one does. */
 async function makeRoom(chatId: string | null): Promise<void> {
@@ -467,7 +493,10 @@ const ChatRoot: m.Component = {
     afterRootDraw();
   },
   view() {
-    if (connection !== null) reportFirstRunProviderStep(connection);
+    if (connection !== null) {
+      reportFirstRunProviderStep(connection);
+      firstConversationReport.note(hasReceivedChatList() ? isFirstConversationPending() : null);
+    }
     const rows = railRows();
     const isCompact = compactQuery.matches;
     const rail = railAttrs(rows, isCompact);
@@ -497,13 +526,15 @@ const ChatRoot: m.Component = {
             class: "chat-root-frames absolute inset-0",
             // The frames are the pool's DOM, not mithril's: never reconciled.
             oncreate: ({ dom }: m.VnodeDOM) => {
-              pool = new InnerFramePool(dom as HTMLElement);
+              pool = new InnerFramePool(dom as HTMLElement, (inner) => relay?.forgetAgentWorking(inner));
               pool.setCompact(isCompact);
               if (handshake !== null) pool.setHandshake(handshake);
               pool.setRootShown(isRootShown);
               pool.show(selectedChatId);
             },
             onremove: () => {
+              // The frames go with their container, and what their pages said of an agent working with them.
+              for (const inner of pool?.innerWindows() ?? []) relay?.forgetAgentWorking(inner);
               pool = null;
             },
             onbeforeupdate: () => false,
@@ -592,6 +623,8 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       reportedLocation = null;
       reportLocation();
       reportedFirstRunProviderStep = null;
+      firstConversationReport.forgetTold();
+      relay?.repeatAgentWorking();
       m.redraw();
     },
     onShown: () => {
@@ -600,6 +633,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       if (selectedChatId !== null) markRead(selectedChatId);
       fillSlot();
       m.redraw();
+      newChatPointerAsk.noteShown();
     },
     onHidden: () => {
       isRootShown = false;
@@ -611,6 +645,16 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
       if (isProviderChooserRequested(target.search)) openRequestedProviderChooser(accountsLoaded);
+      if (isNewChatPointerRequested(target.search)) {
+        newChatPointerAsk.ask(isRootShown);
+        if (requested === null && token === null) {
+          // The ask names no chat, so the chat on screen stays. The shell holds this window at the path it asked
+          // with until the root reports another, and is told the one the root is still at.
+          reportedLocation = null;
+          reportLocation();
+          return;
+        }
+      }
       if (token !== null) {
         // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
         pendingToken = token;
@@ -622,6 +666,17 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
     },
   });
   connection = shell;
+  // The chrome can say what it does after the shell greeted the root. The pages the root frames hear the chrome
+  // only through the handshake the root hands them, so the root keeps that up to date.
+  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
+    if (handshake === null) return;
+    handshake = {
+      ...handshake,
+      opensWorkspaceSettings: message.opensWorkspaceSettings === true,
+      showsCoachMarks: message.showsCoachMarks === true,
+    };
+    pool?.setHandshake(handshake);
+  });
   // Hidden until the shell says shown: the root can load into a background tab.
   if (shell.isFramed) isRootShown = false;
   window.addEventListener("focus", () => shell.focused());
@@ -658,12 +713,15 @@ function bootstrap(): void {
     return;
   }
   const shell = connectRootToShell(accountsLoaded);
-  startInnerFrameRelay(
+  relay = startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
-  window.chatRootEmbed = { chooseProviderForFirstSend: () => firstSendChooser.open() };
+  window.chatRootEmbed = {
+    chooseProviderForFirstSend: () => firstSendChooser.open(),
+    showNewChatCoachMark: () => void showNewChatCoachMark(revealChatList),
+  };
   selectedChatId = selectionFromSearch(window.location.search);
   isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);
@@ -684,6 +742,7 @@ function bootstrap(): void {
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
   if (isProviderChooserRequested(window.location.search)) openRequestedProviderChooser(accountsLoaded);
+  if (isNewChatPointerRequested(window.location.search)) newChatPointerAsk.ask(isRootShown);
 }
 
 window.addEventListener("load", bootstrap);

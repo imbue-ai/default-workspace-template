@@ -203,6 +203,8 @@ export interface AppAttrs {
   readonly gestures: GestureSource;
   /** The show-around tour: what it shows, and the row that runs it. */
   readonly tour: TourController;
+  /** Told whether any page the shell frames says an agent is working in it (``shell:agent-working``). */
+  readonly notePagesAgentWorking: (isWorking: boolean) => void;
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
@@ -397,7 +399,19 @@ export function App(): m.Component<AppAttrs> {
   /** Build the live-pages layer over ``host`` once the render that made the host is over (the window chrome is
    *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
   function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
-    pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    pages = new LivePagesLayer(host, current, {
+      host: attrs.host,
+      protocol: attrs.protocol,
+      showCoachCard: (text, place) => {
+        // Only the desktop layout draws the tour's box. A card taken anywhere else would ring the chrome's control
+        // with no words beside it and no button to take the ring down.
+        if (current.isPhoneLayout() || current.getSoloWindowId() !== null) return;
+        attrs.tour.showCoachCard(text, place);
+      },
+      notePagesAgentWorking: attrs.notePagesAgentWorking,
+      notePagesFirstConversationPending: (isPending, isSaidByPage) =>
+        attrs.tour.noteFirstConversationPending(isPending, isSaidByPage),
+    });
     // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
     // window its layout shows, only for the next pass to destroy them.
     pages.setMountPolicy(mountPolicyOf(current));
@@ -1283,7 +1297,7 @@ export function App(): m.Component<AppAttrs> {
     }
   }
 
-  /** The tour's card or exit badge over the desktop, while one is shown. */
+  /** The tour's card, its exit badge or pause notice, or a page's coach card over the desktop, while one is shown. */
   function tourCardView(current: DesktopStore, shownTour: TourController): m.Children {
     if (shownTour.getState().phase === "idle") return null;
     return m(TourCard, {

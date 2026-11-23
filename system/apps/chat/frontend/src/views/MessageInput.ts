@@ -15,6 +15,7 @@ import {
 } from "../models/ComposerAttachments";
 import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
+import { messageTextKey, readComposerDraft, takeComposerDraftChange } from "../models/ComposerDraft";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import {
@@ -167,7 +168,6 @@ const TOOLBAR_CLASS =
 
 const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px] leading-[1.3]";
 
-const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
 // The kind of the server's refusal of a send to a chat whose account was signed out.
@@ -194,10 +194,6 @@ function sendFailureKind(sendError: unknown): unknown {
  *  before its answer was lost, so it is handled as one mngr could not confirm. */
 function noticeKindOf(sendError: unknown): SendFailureKind {
   return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
-}
-
-function messageTextKey(chatId: string): string {
-  return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
 function composerHintKey(chatId: string): string {
@@ -413,6 +409,21 @@ export function prependToComposer(chatId: string, block: string): void {
   localStorage.setItem(messageTextKey(chatId), merged);
   if (returned.hadNote) markDictatedSpeech(chatId);
   pendingComposerPrepends.set(chatId, merged);
+  m.redraw();
+}
+
+// A suggestion picked from a strip above the composer (views/SuggestionStrip.ts), by chat, waiting for the mounted
+// composer to send it on its next view pass, as the prepends above wait to be taken in.
+const pendingSuggestionSubmits = new Map<string, string>();
+
+/**
+ * Send a picked suggestion as ``chatId``'s composer sends a typed message: ``label`` alone when the draft is empty,
+ * else the draft, a newline, and the label, with whatever is attached. It goes through the composer's own submit, so
+ * it launches a chat awaiting its first send, carries an armed switch out, and opens the provider chooser for a chat
+ * with no provider. A composer that cannot submit right now leaves the draft as it is and sends nothing.
+ */
+export function submitSuggestion(chatId: string, label: string): void {
+  pendingSuggestionSubmits.set(chatId, label);
   m.redraw();
 }
 
@@ -1334,6 +1345,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
+      }
+      // A picker in a message added or removed one of its labels in the saved draft.
+      if (takeComposerDraftChange(chatId)) {
+        messageText = readComposerDraft(chatId);
       }
       if (pendingComposerFocuses.delete(chatId)) {
         // After this pass has drawn the textarea the hint is for.
@@ -2315,10 +2330,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      const attachments = getComposerAttachments(chatId);
-      const hasMessageText = messageText.trim().length > 0;
-      const canSend = hasMessageText || hasReadyAttachments(chatId);
-
       const chat = getChatById(chatId);
       // The switch the chat is in the middle of, if any, and the one the next send would start.
       const handoff = chat?.handoff ?? null;
@@ -2337,9 +2348,32 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const isBlockedByNoProvider = chatId !== null && isAwaitingProvider(chatId);
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
       isComposerDisabledNow = isComposerDisabled;
-      const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
+
+      // A suggestion picked above the composer joins the draft and goes out by the submit a press of Send runs,
+      // after this pass has drawn it. With no provider to send to, the pick asks for one as the notice's button
+      // does; while the box is not the user's to send from, it is dropped and the draft stays as it was.
+      const pickedSuggestion = pendingSuggestionSubmits.get(chatId);
+      if (pickedSuggestion !== undefined) {
+        pendingSuggestionSubmits.delete(chatId);
+        const isSubmitInTheWay =
+          isSendHeldForSwitch || isDictating || isSendPendingAfterDictation || switchPreparingChatId === chatId;
+        if (isBlockedByNoProvider) {
+          queueMicrotask(() => openProviderChooserForFirstSend(chatId));
+        } else if (isBlockedBySignedOutAccount) {
+          queueMicrotask(() => chooseProviderToContinue(chatId));
+        } else if (!isSubmitInTheWay) {
+          messageText = messageText.trim() === "" ? pickedSuggestion : `${messageText}\n${pickedSuggestion}`;
+          localStorage.setItem(messageTextKey(chatId), messageText);
+          queueMicrotask(() => void handleSubmit());
+        }
+      }
+
+      const attachments = getComposerAttachments(chatId);
+      const hasMessageText = messageText.trim().length > 0;
+      const canSend = hasMessageText || hasReadyAttachments(chatId);
+      const canSendNow = canSend && !isComposerDisabled;
       // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
       if (isSendPendingAfterDictation && !isDictating) {
         isSendPendingAfterDictation = false;

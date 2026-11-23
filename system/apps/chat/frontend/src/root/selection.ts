@@ -4,8 +4,9 @@
  * ``intake`` parameter names a pending intake the root applies once (post-launch-paths plan
  * section 3.6): a draft for a composer, a choice of chat, or a first message that needs an
  * account; the root then reports the selection alone. ``open=providers`` asks the root to open the
- * provider chooser once on arrival (the Imbue Studio app's sign-in button); it too is dropped from
- * the path the root reports.
+ * provider chooser once on arrival (the Imbue Studio app's sign-in button), and
+ * ``open=new-chat-pointer`` to draw the coach mark at its New chat button (another app's page asked
+ * the chat app for it); each too is dropped from the path the root reports.
  */
 
 // A chat id is its first agent's id (the backend's ``AGENT_ID_PATTERN`` in ``primitives.py``).
@@ -15,6 +16,7 @@ export const CHAT_QUERY_KEY = "chat";
 export const INTAKE_QUERY_KEY = "intake";
 export const OPEN_QUERY_KEY = "open";
 export const OPEN_PROVIDERS = "providers";
+export const OPEN_NEW_CHAT_POINTER = "new-chat-pointer";
 const VIEW_QUERY_KEY = "view";
 const VIEW_FIRST_RUN = "first-run";
 
@@ -34,6 +36,11 @@ export function intakeTokenFromSearch(search: string): string | null {
 /** Whether the URL asks the root to open the provider chooser on arrival. */
 export function isProviderChooserRequested(search: string): boolean {
   return new URLSearchParams(search).get(OPEN_QUERY_KEY) === OPEN_PROVIDERS;
+}
+
+/** Whether the URL asks the root to point its coach mark at the New chat button. */
+export function isNewChatPointerRequested(search: string): boolean {
+  return new URLSearchParams(search).get(OPEN_QUERY_KEY) === OPEN_NEW_CHAT_POINTER;
 }
 
 /** Whether the URL asks for the first run's provider page in place of the chats (the shell's cover frames it). */

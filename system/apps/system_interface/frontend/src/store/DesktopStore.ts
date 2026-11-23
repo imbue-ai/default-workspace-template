@@ -90,7 +90,7 @@ import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
-import { noticeFromWire } from "../model/UpdateNotice";
+import { SHELL_APP_NAME, noticeFromWire } from "../model/UpdateNotice";
 import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
@@ -198,6 +198,9 @@ export type SwitchCause = "user" | "landing" | "follow";
 // writing the detach itself: the main window's shell writes it as the window leaves, and that save is on its
 // way while the solo shell boots, so a first load that beats it is followed by the broadcast within this.
 const SOLO_HEAL_GRACE_MS = 1000;
+/** How many times the layout is read for a window the shell just showed before the wait for a read of its own is
+ *  given up: each further read is one a broadcast's read displaced. */
+const HELD_LAYOUT_READ_ATTEMPTS = 3;
 
 /** The routes the store calls, injectable so the store is tested against a fake shell. */
 export interface DesktopApi {
@@ -586,6 +589,10 @@ export class DesktopStore {
   private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
   /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
   private opensLocalFiles = false;
+  /** Whether the embedder opens its workspace settings when a page asks; off until it says so. */
+  private opensWorkspaceSettings = false;
+  /** Whether the embedder draws coach marks on its own controls when a page asks; off until it says so. */
+  private showsCoachMarks = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -722,6 +729,29 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether the embedder opens its workspace settings when a page asks, which each page is told in its handshake. */
+  getOpensWorkspaceSettings(): boolean {
+    return this.opensWorkspaceSettings;
+  }
+
+  /** The embedder said whether it opens its workspace settings (``minds:embedder-capabilities``). Pages already
+   *  greeted hear it as the shell's rebroadcast of that message. */
+  setOpensWorkspaceSettings(opensWorkspaceSettings: boolean): void {
+    this.opensWorkspaceSettings = opensWorkspaceSettings;
+  }
+
+  /** Whether the embedder draws coach marks on its own controls when a page asks, which each page is told in its
+   *  handshake. */
+  getShowsCoachMarks(): boolean {
+    return this.showsCoachMarks;
+  }
+
+  /** The embedder said whether it draws coach marks (``minds:embedder-capabilities``). Pages already greeted hear it
+   *  as the shell's rebroadcast of that message. */
+  setShowsCoachMarks(showsCoachMarks: boolean): void {
+    this.showsCoachMarks = showsCoachMarks;
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -1726,7 +1756,7 @@ export class DesktopStore {
       return false;
     }
     this.setBubbles(withoutChat(this.bubbles, chatId));
-    return this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER);
+    return (await this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER)) !== null;
   }
 
   /** A click on a person's tray entry (the multiplayer spec, section 7.5): a mention of them is drafted through the
@@ -2004,24 +2034,79 @@ export class DesktopStore {
     ) {
       return false;
     }
-    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
+    return (await this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER)) !== null;
   }
 
   /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
-   *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
-  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
-    const { type, ...payload } = message;
+   *  reach every one, or when a page it showed waits for a desktop window; answers what each app did with it, or
+   *  null when it did not reach every app. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay | null> {
     let relay: MessageRelay;
     try {
-      relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+      relay = await this.relayMessage(message, sender);
     } catch (error) {
       this.toast((error as Error).message);
-      return false;
+      return null;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
       this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
-    return true;
+    return relay;
+  }
+
+  /** The relay itself; throws with the shell's detail when the message did not reach every app. An app that takes
+   *  the message may have the shell raise a window, which the shell does over the stored layout: a gesture still
+   *  waiting in the debounce (the raise of the window whose page was clicked) goes into the file first, or the
+   *  shell raises over a stack that already has that window on top, changes nothing, and the gesture then puts
+   *  the clicked window back in front of the one the message was for. */
+  private async relayMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay> {
+    const { type, ...payload } = message;
+    await this.flushPendingSave();
+    return this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+  }
+
+  /** Send the apps registered for ``type`` a message of the shell's own, and put each window a ``show`` handler
+   *  answered it with at ``frame``: normal, shown, and on top of the stack, with no other window touched. The shell
+   *  names no app: whichever registered the type takes the message. Nothing happens when none did, in a preview
+   *  shell (whose backend refuses the relay), or in a solo shell (which leaves the desktop's arrangement to the
+   *  client's main window). Nobody asked for the page by hand, so a relay that fails is logged and the user is
+   *  told nothing. */
+  async showRegisteredPageAt(type: string, frame: Frame): Promise<void> {
+    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, type)) return;
+    let relay: MessageRelay;
+    try {
+      relay = await this.relayMessage({ type }, SHELL_APP_NAME);
+    } catch (error) {
+      console.warn(`[si] could not show the page registered for ${type}`, error);
+      return;
+    }
+    for (const delivery of relay.deliveries) {
+      if (delivery.window_id !== null) await this.placeShownWindow(delivery.window_id, frame);
+    }
+  }
+
+  /** Put a window the shell just showed this client at ``frame``. The show wrote the window's placement, so the
+   *  shell's desktops and layout are taken first: a frame set over the layout from before the show would be
+   *  refused as stale when saved, and thrown away by the read the show's broadcast starts. A window the show found
+   *  on another desktop is left as it is placed there. */
+  private async placeShownWindow(windowId: string, frame: Frame): Promise<void> {
+    if (findWindow(this.state, windowId) === null) await this.refreshInventory();
+    if (!(await this.readLayoutUntilHeld())) return;
+    if (findWindow(this.state, windowId)?.desktop.id !== this.state.activeDesktopId) return;
+    this.setWindowFrame(windowId, frame);
+  }
+
+  /** Read the shell's layout, again while another read that began meanwhile (a broadcast's) has taken its place:
+   *  a read is dropped when a later one began, and what that later one brings would land over a change made in
+   *  between. Answers whether a read made here is the one this window holds. */
+  private async readLayoutUntilHeld(): Promise<boolean> {
+    for (let attempt = 0; attempt < HELD_LAYOUT_READ_ATTEMPTS; attempt += 1) {
+      const read = this.refetchLayout();
+      const sequence = this.layoutFetchSequence;
+      await read;
+      if (sequence === this.layoutFetchSequence) return true;
+    }
+    return false;
   }
 
   /** Open a link where it belongs in this workspace: a file in Files (``open:file``), a local URL on an
@@ -3023,7 +3108,7 @@ export class DesktopStore {
 
   /** Put a window on screen without ever putting it away: for a pulled-out window, its own desktop window; otherwise
    *  restore and raise when minimized, raise otherwise. */
-  private showWindow(windowId: string): void {
+  showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       this.showDetachedWindow(windowId);

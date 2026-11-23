@@ -60,6 +60,29 @@
   }
 }
 
+/* The chat list's New chat button pulses while a coach mark points at it (root/newChatCoachMark.ts): a ring in
+   the accent colour that spreads and fades. Reduced motion holds the ring steady. */
+@keyframes coach-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+.coach-pulse {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+  animation: coach-pulse 1.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-pulse {
+    animation: none;
+  }
+}
+
 /* The phone layout's drawer (root/ChatDrawer.ts) comes in from the left, a short slide rather
    than the panel's whole width, so it reads as arriving rather than travelling. */
 @keyframes chat-drawer-in {
@@ -824,6 +847,145 @@
   }
 }
 
+/* The pills of a strip of suggestions (views/SuggestionStrip.ts) rise into place above the composer as they
+   appear. They are dashed, to read as offers rather than as controls of the page, under a shadow light enough to
+   lift them off the chat without boxing them; the recommended one is the success green. Reduced motion shows them
+   in place. A pill is filled with the chat's own background, since the open pills of the strip above the composer
+   float over the transcript's text; its hover tint is laid over that fill rather than replacing it, the tint being
+   translucent. */
+@keyframes suggestion-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.suggestion-rise {
+  animation: suggestion-rise 150ms ease-out;
+}
+
+.suggestion-pill {
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background-color: var(--c-bg-chat);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.045),
+    0 1px 1px rgba(0, 0, 0, 0.03);
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.suggestion-pill:hover {
+  background-image: linear-gradient(var(--c-fill-hover), var(--c-fill-hover));
+}
+
+.suggestion-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.suggestion-pill--recommended {
+  border-color: var(--c-success);
+  color: var(--c-success);
+}
+
+.suggestion-pill--recommended:hover {
+  background-color: var(--c-success-bg);
+  background-image: none;
+}
+
+/* The layer the open pills float in over the transcript's end (views/SuggestionLayer.ts). It takes no pointer
+   events, so a click or a selection beside and between the pills reaches the transcript underneath; each pill
+   takes its own. A list taller than the layer scrolls inside it with no scrollbar of its own, which would need
+   the pointer the layer gives up. */
+.suggestion-layer {
+  pointer-events: none;
+  user-select: none;
+}
+
+.suggestion-layer .suggestion-pill {
+  pointer-events: auto;
+}
+
+.suggestion-layer-scroll {
+  scrollbar-width: none;
+}
+
+.suggestion-layer-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suggestion-rise {
+    animation: none;
+  }
+}
+
+/*
+ * The pickers an agent's message draws in a new workspace's first conversation (views/StudioPickers.ts): pills
+ * that toggle their label in the composer's draft, filled while the draft holds it.
+ */
+.studio-picker-heading {
+  color: var(--c-text-faint);
+  font-size: var(--font-size-helper);
+  line-height: 1.4;
+}
+
+.studio-picker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.studio-picker-pill:hover:not(:disabled) {
+  background: var(--c-fill-hover);
+}
+
+.studio-picker-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.studio-picker-pill--pressed,
+.studio-picker-pill--pressed:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  background: var(--c-accent-light);
+  color: var(--c-accent);
+}
+
+.studio-picker-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.studio-picker-mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 /*
  * The first run's provider page (views/FirstRunProvidersPage.ts): the warm cream ground and brown ink of
  * Imbue Studio's first-run pages, whatever theme the workspace wears, since it continues them.
@@ -888,6 +1050,24 @@
   align-items: center;
   justify-content: center;
 }
+/* A connected account that is not the default: the whole row is the button that makes it one, and says so at its
+ * right edge only under the pointer or the keyboard's focus. */
+.first-run-account-choice {
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.first-run-account-choice:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+}
+.first-run-account-hint {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.first-run-account-choice:hover .first-run-account-hint,
+.first-run-account-choice:focus-visible .first-run-account-hint {
+  opacity: 1;
+}
 .first-run-skip {
   color: var(--first-run-ink-muted);
   font-size: 14px;
@@ -916,6 +1096,7 @@
   cursor: default;
 }
 .first-run-tile:focus-visible,
+.first-run-account-choice:focus-visible,
 .first-run-skip:focus-visible,
 .first-run-next:focus-visible {
   outline: 2px solid var(--first-run-ink);

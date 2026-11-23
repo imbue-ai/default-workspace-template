@@ -229,6 +229,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Onboarding checklist page: one small page over the onboarding markers,
+    # which stores nothing, so a shed costs one reload.
+    "onboarding-checklist": 82,
     # The Style Guide page: one static page cataloguing the design system, which
     # stores nothing, so a shed costs one reload; shed right before System Monitor
     # and its sampler.

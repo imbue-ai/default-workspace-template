@@ -29,10 +29,13 @@ import * as embedContract from "@minds/embed-contract";
 // not know at its validator.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
   "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
-// Workspace -> embedder: open the Imbue Studio shell's Share tab focused on one app.
-// Payload: { serviceName }.
+// Workspace -> embedder: open the Imbue Studio shell's Share tab, focused on one app when it names one.
+// Payload: { serviceName?, coachMark? }. ``coachMark`` (contract v19) asks the chrome to point a coach mark at one
+// control of the tab, and is sent only to an embedder that said ``showsCoachMarks`` with EMBEDDER_CAPABILITIES.
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
+/** The controls of the chrome's Share tab an OPEN_SHARE_SETTINGS can ask for a coach mark at. */
+export type ShareSettingsCoachMark = "mobile-access";
 // Embedder -> workspace: the user opened a chat's notification in the Imbue
 // Studio shell; show that chat. Payload: { chatId } (the chat's id, which is its
 // first agent's id). No page handles it here: the shell relays it to the app
@@ -89,8 +92,9 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive? }: whether it takes
-// OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, and IMMERSIVE_REQUEST.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive?, opensWorkspaceSettings?,
+// showsCoachMarks? }: whether it takes OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, IMMERSIVE_REQUEST,
+// and OPEN_WORKSPACE_SETTINGS, and whether it draws a coach mark an OPEN_SHARE_SETTINGS asks for.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -134,6 +138,11 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 // EMBEDDER_CAPABILITIES.
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
+// Workspace -> embedder (contract v18): open the chrome's workspace settings at one of their groups. Payload:
+// { group? }, a group's name ("suggestions"); absent, or one the chrome does not know, opens General. Sent only to
+// an embedder that said ``opensWorkspaceSettings`` with EMBEDDER_CAPABILITIES.
+export const OPEN_WORKSPACE_SETTINGS: "minds:open-workspace-settings" =
+  "OPEN_WORKSPACE_SETTINGS" in embedContract ? embedContract.OPEN_WORKSPACE_SETTINGS : "minds:open-workspace-settings";
 
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
