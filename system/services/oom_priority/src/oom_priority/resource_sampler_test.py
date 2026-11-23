@@ -472,6 +472,26 @@ def test_a_memory_stretch_holds_through_hysteresis_and_closes_with_the_holders_a
     assert 0.86 < float(str(closed["average"])) < 0.95
 
 
+def test_a_memory_stretch_counts_a_dip_it_climbed_back_from_but_not_its_closing_minute() -> (
+    None
+):
+    tracker = rs.MemoryStretchTracker()
+    holders = _CountingHolders()
+
+    now, (_opened,) = _drive_memory(tracker, holders, 0.0, 65.0, 0.86)
+    # Half a minute under the closing line, then back up: the dip is part of the stretch.
+    now, events = _drive_memory(tracker, holders, now, 30.0, 0.5)
+    now, more_events = _drive_memory(tracker, holders, now, 30.0, 0.9)
+    assert events == [] and more_events == [] and tracker.is_open
+    now, (closed,) = _drive_memory(tracker, holders, now, 65.0, 0.5)
+
+    assert closed["duration_seconds"] == 125
+    # 13 samples at 86% up to the opening, 6 in the dip, 6 back at 90%; the closing minute's are left out.
+    assert closed["average"] == round((13 * 0.86 + 6 * 0.5 + 6 * 0.9) / 25, 4)
+    assert closed["peak"] == 0.9
+    assert closed["peak_used_bytes"] == 900_000
+
+
 def test_a_memory_stretch_whose_peak_came_before_it_opened_reports_that_peak_in_bytes_too() -> (
     None
 ):
