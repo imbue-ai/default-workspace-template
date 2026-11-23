@@ -44,8 +44,8 @@ class SystemInterfaceState(MutableModel):
     shell: ShellState
     # Who is connected right now: the per-user files under data/.state/presence.
     presence: PresenceStore
-    # How the connected set reaches the windows, one announcement at a time: the heartbeat route, the periodic
-    # check that notices a silent departure, and a landed profile fetch all push through it.
+    # How the connected set reaches the windows, one announcement at a time, and the periodic check that notices a
+    # silent departure.
     presence_sweep: PresenceSweep
     # Each account's display name and avatar, from imbue_cloud through the on-disk cache.
     profiles: ProfileResolver

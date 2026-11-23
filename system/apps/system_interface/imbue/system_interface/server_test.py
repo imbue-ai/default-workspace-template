@@ -1001,8 +1001,7 @@ class _BroadcasterHoldingBobsNamedPresence(WebSocketBroadcaster):
 def test_a_profile_announcement_read_before_a_heartbeat_never_goes_out_after_it(tmp_path: Path) -> None:
     """The announcement a landed profile fetch makes reads the connected set and pushes it as one step, so a
     heartbeat that brings the owner in while that announcement is on its way pushes after it, and the windows are
-    left with the owner connected. Each read and push was a step of its own: the fetch read Bob alone, the owner's
-    heartbeat pushed Bob and the owner, and the fetch then pushed its Bob alone last."""
+    left with the owner connected."""
 
     def connector(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/users/user-bob-4471/profile":
