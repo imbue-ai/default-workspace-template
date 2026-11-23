@@ -11,8 +11,10 @@ is within ``PRESENCE_CONNECTED_WINDOW``, and the mtime is their "last seen". Fil
 are never removed: a user who is gone is still the record of who was last here.
 
 The shell pushes the connected set over its WebSocket whenever it changes: a
-heartbeat that brings someone in announces it at once, and a periodic sweep
-notices a silent departure (a closed tab whose heartbeats stopped).
+heartbeat that changes who is connected announces it at once, a periodic sweep
+notices a silent departure (a closed tab whose heartbeats stopped), and a
+background profile fetch that lands announces it again with the new profile.
+``PresenceAnnouncer`` makes these one at a time, so the newest set arrives last.
 
 A request whose identity has no user id is the owner of a workspace that has not
 shared (or one that came through no proxy at all, which is read the same way):
