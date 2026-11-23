@@ -6,16 +6,33 @@
  * content-addressed names; nothing is bundled.
  */
 
+import type { ShellChromeAnchor, ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
+import type { Frame } from "./records";
+
 /** What the shell draws that a card can sit beside: the agent's avatar, the desktop's shortcuts, or the launcher. */
 export type TourTarget = "avatar" | "shortcuts" | "launcher";
 
 /** A control of the Imbue Studio chrome a card talks about, as the embed contract names it (minds:highlight-chrome). */
-export type ChromeAnchor = "workspace-switcher" | "permissions" | "settings" | "share" | "help";
+export type ChromeAnchor = ShellChromeAnchor;
 
-/** What the shell does as a card's Next is pressed: snap the window the avatar's pinned entry stands for to the
- *  right half of the desktop. The shell names no app; the avatar's window is the pinned one whose pin declares
- *  the avatar style (``reducers/desktopState.ts`` ``avatarPinnedWindow``). */
-export type TourAction = "snap-avatar-window-right";
+/** Where a page's coach card goes, as the app contract spells it: under a control of the chrome, or popping out
+ *  of the agent's avatar. */
+export type CoachPlace = ShellCoachCardPlace;
+
+/** What the shell does for the tour, naming no app. ``snap-avatar-window-right``, as a card's Next is pressed:
+ *  snap the window the avatar's pinned entry stands for to the right half of the desktop (the avatar's window is
+ *  the pinned one whose pin declares the avatar style, ``reducers/desktopState.ts`` ``avatarPinnedWindow``).
+ *  ``show-avatar-window``, as a coach card pops out of the avatar: put that window on screen, in front.
+ *  ``show-onboarding-checklist``, as the tour ends: send ``ONBOARDING_CHECKLIST_MESSAGE_TYPE`` to whichever app
+ *  registered it, and put the window that opens at ``ONBOARDING_CHECKLIST_FRAME``. */
+export type TourAction = "snap-avatar-window-right" | "show-avatar-window" | "show-onboarding-checklist";
+
+/** The message the tour's end sends: the app that lists the onboarding items registers its type and shows them. */
+export const ONBOARDING_CHECKLIST_MESSAGE_TYPE = "onboarding:show-checklist";
+
+/** Where the window that message opens is put, in fractions of the backdrop: a narrow column down the left of the
+ *  desktop, in front of the other windows, none of which is moved for it. */
+export const ONBOARDING_CHECKLIST_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 0.3, height: 0.85 });
 
 export interface TourImage {
   readonly url: string;
@@ -138,8 +155,8 @@ export const TOUR_CARDS: readonly TourCard[] = [
   card({
     id: "done",
     text:
-      "That’s the tour.\n\nIf you have questions about anything, just ask me in the chat.\n\n" +
-      "You can take it again anytime from the launcher.",
+      "That’s the tour.\n\nYou can take it again anytime from the launcher.\n\n" +
+      "Click on any of the entries in the onboarding checklist to learn more!",
     target: "launcher",
     buttonLabel: "Done",
   }),
@@ -153,6 +170,9 @@ export const TOUR_EXIT_BADGE_BUTTON_LABEL = "Got it";
 /** What the card after an interrupted one says: the agent answered while the tour was on, so it waits. */
 export const TOUR_PAUSED_TEXT = "Looks like I’m done.\n\nLet’s go take a look, and we’ll finish the tour later.";
 export const TOUR_PAUSED_BUTTON_LABEL = "OK";
+
+/** The one button of a coach card, whose words come from the page that asked for it. */
+export const COACH_CARD_BUTTON_LABEL = "Got it";
 
 /** The launcher row that runs the tour, and the words it matches. */
 export const TOUR_LAUNCHER_LABEL = "Show me around";

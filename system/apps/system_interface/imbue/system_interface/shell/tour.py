@@ -1,16 +1,22 @@
-"""What the workspace's show-around tour has done (the new-onboarding spec, section 3.4): whether it has started, and
-the card it resumes at when the agent's reply interrupted it, in ``tour.json`` under the shell's state directory.
+"""What the workspace's show-around tour has done (the new-onboarding spec, section 3.4): whether it has started, the
+card it resumes at when the agent's reply interrupted it, and whether it has nothing left to show, in ``tour.json``
+under the shell's state directory.
 Absent or unusable means it has not run and nothing waits to resume in a workspace the bootstrap marked new on its
 first boot (``offer_tour`` beside it), so a new workspace offers the tour once; in any other (one that already existed
-when an update brought the tour in) it reads as seen."""
+when an update brought the tour in) it reads as seen.
+
+Whether a tour is finished is the page's to decide and to write. A write that says so also sets the ``tour_finished``
+marker, which outlives the record and is what the rest of the workspace reads."""
 
 from pathlib import Path
 from typing import Final
 
+from onboarding_activity.markers import Marker
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.system_interface.shell.onboarding_markers import set_onboarding_marker
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -38,6 +44,11 @@ class TourProgress(FrozenModel):
         ge=0,
         description="The card the tour resumes at (its position in the card list) once the agent is working again, "
         "after its reply interrupted the tour; None when nothing waits to resume",
+    )
+    is_finished: bool = Field(
+        default=False,
+        description="Whether the tour has nothing left to show: it was seen to its end or left, or it was seen and "
+        "nothing waits to resume. A tour that waits to resume is not finished",
     )
 
 
@@ -67,11 +78,19 @@ class TourStore(MutableModel):
         document = parse_versioned_document(raw, _TourDocument, TOUR_FILE_VERSION, self._path())
         if document is None:
             return UNSEEN_TOUR if (self.state_directory / OFFER_TOUR_FILENAME).exists() else UNOFFERED_TOUR
-        return TourProgress(is_seen=document.is_seen, resume_index=document.resume_index)
+        return TourProgress(
+            is_seen=document.is_seen, resume_index=document.resume_index, is_finished=document.is_finished
+        )
 
     def write(self, progress: TourProgress) -> None:
+        """Store the record, and set the ``tour_finished`` marker when it says the tour is finished."""
         document = _TourDocument(
-            version=TOUR_FILE_VERSION, is_seen=progress.is_seen, resume_index=progress.resume_index
+            version=TOUR_FILE_VERSION,
+            is_seen=progress.is_seen,
+            resume_index=progress.resume_index,
+            is_finished=progress.is_finished,
         )
         with STATE_FILES_LOCK:
             write_json_atomic(self._path(), document.model_dump(mode="json"))
+        if progress.is_finished:
+            set_onboarding_marker(Marker.TOUR_FINISHED)
