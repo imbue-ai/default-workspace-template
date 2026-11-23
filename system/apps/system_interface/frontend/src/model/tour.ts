@@ -4,9 +4,10 @@
  * the user learns the product while they wait for a reply (after ``startAfterWorkingMs`` of work, for a start on
  * the first message or only on a task that is taking a while); the agent answering interrupts it, so that Next
  * then shows a pause notice and the tour resumes from the card that would have come next the next time the agent
- * works. The controller reads and writes the workspace's tour record through ``/api/tour``, runs the tour again
- * from the launcher's "Show me around" row, does a card's action as its Next is pressed, and tells the Imbue Studio
- * chrome which of its controls to ring while a card is about one.
+ * works. It neither begins nor resumes by itself while a page says the workspace's first conversation is still
+ * following its script (``shell:first-conversation-step``). The controller reads and writes the workspace's tour
+ * record through ``/api/tour``, runs the tour again from the launcher's "Show me around" row, does a card's action
+ * as its Next is pressed, and tells the Imbue Studio chrome which of its controls to ring while a card is about one.
  *
  * The record also says whether the tour is finished, which the rest of the workspace reads as "nothing of the tour is
  * left to show": written when the last card's Done or Exit is pressed, and on the owner's page for a record that is
@@ -188,6 +189,7 @@ export class TourController {
   /** The workspace's record once read; null until then, so nothing starts by itself before it is known. */
   private record: TourRecord | null = null;
   private isAgentWorking = false;
+  private isFirstConversationPending = false;
   /** Bumped whenever a scheduled start is no longer wanted, so a stale callback does nothing. */
   private startGeneration = 0;
   private readonly cards: readonly TourCard[];
@@ -259,9 +261,23 @@ export class TourController {
     if (this.state.phase === "card") this.apply(interruptTour(this.state));
   }
 
+  /** Whether a page the shell frames says the workspace's first conversation is still following its script
+   *  (``shell:first-conversation-step``). While one does, the tour neither begins nor resumes by itself, so it never
+   *  runs on top of that conversation; the launcher's row starts it all the same. ``isSaidByPage`` tells a page's
+   *  own word from one dropped with its page (it went away, or loaded again). A page saying the conversation is
+   *  over lets the tour begin right then when an agent is already at work, since the reply to the message that
+   *  ended it is the first the tour may run beside. A dropped word only stops holding, so a page that loads again
+   *  in the middle of that conversation, and says so again, starts nothing in between. */
+  noteFirstConversationPending(isPending: boolean, isSaidByPage: boolean): void {
+    const wasPending = this.isFirstConversationPending;
+    this.isFirstConversationPending = isPending;
+    if (wasPending && !isPending && isSaidByPage && this.isAgentWorking) this.considerStart();
+  }
+
   /** Begin after the configured stretch of work, from the card that waits to resume, or the first on a workspace
-   *  where the tour has never run; nothing when the record is unknown or says there is nothing to start, or when
-   *  the card to resume at is past the list (a record from a build with more cards). */
+   *  where the tour has never run; nothing when the record is unknown or says there is nothing to start, when
+   *  the card to resume at is past the list (a record from a build with more cards), or while the workspace's first
+   *  conversation is still following its script. */
   private considerStart(): void {
     if (this.record === null || !isOpenToTour(this.state)) return;
     const index = this.record.resumeIndex ?? (this.record.isSeen ? null : 0);
@@ -269,7 +285,7 @@ export class TourController {
     const generation = (this.startGeneration += 1);
     this.schedule(() => {
       if (generation !== this.startGeneration || !this.isAgentWorking || !isOpenToTour(this.state)) return;
-      if (!this.deps.isAutoStartAllowed()) return;
+      if (this.isFirstConversationPending || !this.deps.isAutoStartAllowed()) return;
       this.begin(index);
     }, this.startAfterWorkingMs);
   }

@@ -199,8 +199,9 @@ function bootstrap(): void {
     desktopStore.setTearOut(windowId, phase);
   });
   // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
-  // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
-  // row any time. An agent is at work while the avatar's status says so or a page the shell frames does. A card
+  // looking at the whole desktop, resumed the same way after the agent's reply interrupted it, and never while a
+  // page says the workspace's first conversation is still following its script; from the launcher's row any
+  // time. An agent is at work while the avatar's status says so or a page the shell frames does. A card
   // about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's window aside, a
   // coach card at the avatar brings that window forward, and the tour's end has the onboarding checklist opened
   // down the left of the desktop by whichever app registered its message. The owner's page also records as

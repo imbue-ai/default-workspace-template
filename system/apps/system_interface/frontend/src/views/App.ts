@@ -408,6 +408,8 @@ export function App(): m.Component<AppAttrs> {
         attrs.tour.showCoachCard(text, place);
       },
       notePagesAgentWorking: attrs.notePagesAgentWorking,
+      notePagesFirstConversationPending: (isPending, isSaidByPage) =>
+        attrs.tour.noteFirstConversationPending(isPending, isSaidByPage),
     });
     // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
     // window its layout shows, only for the next pass to destroy them.

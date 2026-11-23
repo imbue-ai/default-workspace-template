@@ -27,6 +27,7 @@ import {
   SHELL_SHOWN,
   SHELL_SHOW_COACH_CARD,
   SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -76,11 +77,16 @@ let layer: LivePagesLayer;
 let coachCards: [string, ShellCoachCardPlace][] = [];
 /** What the layers said, each time they said it, of whether any page has an agent working in it. */
 let pagesAgentWorking: boolean[] = [];
+/** What the layers said, each time they said it, of whether any page says the workspace's first conversation is
+ *  still following its script, and whether a page's own report brought the answer. */
+let pagesFirstConversation: { isPending: boolean; isSaidByPage: boolean }[] = [];
 const PAGE_OPTIONS: LivePagesOptions = {
   host: "127.0.0.1:8000",
   protocol: "http:",
   showCoachCard: (text, place) => coachCards.push([text, place]),
   notePagesAgentWorking: (isWorking) => pagesAgentWorking.push(isWorking),
+  notePagesFirstConversationPending: (isPending, isSaidByPage) =>
+    pagesFirstConversation.push({ isPending, isSaidByPage }),
 };
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
 const FOCUS_GRANT_SCHEDULE_MS = 2000;
@@ -148,6 +154,10 @@ function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
 /** What the layers last said of whether any page has an agent working in it. */
 function lastToldOfPages(): boolean | undefined {
   return pagesAgentWorking[pagesAgentWorking.length - 1];
+}
+
+function lastToldOfFirstConversation(): { isPending: boolean; isSaidByPage: boolean } | undefined {
+  return pagesFirstConversation[pagesFirstConversation.length - 1];
 }
 
 function load(windowId: string): void {
@@ -265,6 +275,7 @@ beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   coachCards = [];
   pagesAgentWorking = [];
+  pagesFirstConversation = [];
   layer = new LivePagesLayer(host, store, PAGE_OPTIONS);
   layer.start();
   await store.start(NO_LINK);
@@ -1492,6 +1503,75 @@ describe("the contract", () => {
     expect(pagesAgentWorking).toEqual([]);
     layer.stop();
     expect(pagesAgentWorking).toEqual([false]);
+  });
+
+  it("takes a page's shell:first-conversation-step as that page's last word, and holds while any page says pending", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    // A layer starts from no page having said anything, which is no page's word.
+    expect(pagesFirstConversation).toEqual([{ isPending: false, isSaidByPage: false }]);
+
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    // The same word again changes nothing, and is not passed on.
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    messageFromPage("win-2", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+    messageFromPage("win-2", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+
+    expect(pagesFirstConversation.slice(1)).toEqual([
+      { isPending: true, isSaidByPage: true },
+      { isPending: true, isSaidByPage: true },
+      { isPending: true, isSaidByPage: true },
+      { isPending: false, isSaidByPage: true },
+    ]);
+  });
+
+  it("drops a shell:first-conversation-step that carries no boolean", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: "true" });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: 1 });
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: null });
+
+    expect(pagesFirstConversation).toHaveLength(1);
+  });
+
+  it("stops holding on a page's word when its window closes, as a word dropped rather than said", async () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+
+    await store.closeWindow("win-1");
+    layer.reconcile();
+
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+  });
+
+  it("drops it when the page's frame loads again, before greeting the fresh page, which says it again", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    const spy = spyOnFrame("win-1");
+    const toldBeforeGreeting: (boolean | undefined)[] = [];
+    spy.mockImplementation((message: { type?: string }) => {
+      if (message.type === SHELL_HANDSHAKE) toldBeforeGreeting.push(lastToldOfFirstConversation()?.isPending);
+    });
+
+    load("win-1");
+
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+    expect(toldBeforeGreeting).toEqual([false]);
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: true, isSaidByPage: true });
+  });
+
+  it("drops it when the layer stops, and a layer that replaces another starts from no page holding", () => {
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: true });
+
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
+    expect(lastToldOfFirstConversation()).toEqual({ isPending: false, isSaidByPage: false });
+
+    pagesFirstConversation = [];
+    messageFromPage("win-1", { type: SHELL_FIRST_CONVERSATION_STEP, isPending: false });
+    // The replaced layer no longer hears its pages.
+    expect(pagesFirstConversation).toEqual([]);
+    layer.stop();
+    expect(pagesFirstConversation).toEqual([{ isPending: false, isSaidByPage: false }]);
   });
 
   it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {

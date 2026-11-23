@@ -128,7 +128,13 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   there, and a page says `shell:agent-working {isWorking}` when an agent
   starts or stops working in what it shows. The shell keeps each page's last
   word, and drops it when the page's frame loads again or its window goes;
-  a message with no boolean is dropped. The
+  a message with no boolean is dropped. The tour neither begins nor resumes
+  by itself while a page says the workspace's first conversation is still
+  following its script (`shell:first-conversation-step {isPending}`, kept and
+  dropped per page the same way): when a page says that conversation is over
+  the tour begins right then if an agent is already at work, and with the
+  next work otherwise, while a word dropped with its page only stops holding
+  it. The
   launcher's "Show me around" row runs it again from the first card any time.
   A card about a control of the Imbue Studio chrome asks the chrome to ring it
   (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the

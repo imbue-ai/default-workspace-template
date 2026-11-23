@@ -38,6 +38,7 @@ import {
   INPUT_REPORT_INTERVAL_MS,
   MAX_COACH_CARD_TEXT_LENGTH,
   SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -182,6 +183,9 @@ interface LivePage {
   greetedIsViewing: boolean;
   /** Whether the page's last ``shell:agent-working`` since its load said an agent is working in it. */
   isAgentWorking: boolean;
+  /** Whether the page's last ``shell:first-conversation-step`` since its load said the workspace's first
+   *  conversation is still following its script. */
+  isFirstConversationPending: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -218,6 +222,10 @@ export interface LivePagesOptions {
   /** Told whether the last ``shell:agent-working`` of any page the layer holds says an agent is working: when a
    *  page's report changes, when a page that said so loads again or goes away, and when the layer starts or stops. */
   readonly notePagesAgentWorking: (isWorking: boolean) => void;
+  /** Told whether the last ``shell:first-conversation-step`` of any page the layer holds says the workspace's first
+   *  conversation is still following its script, at the same moments. ``isSaidByPage`` is whether a page's own
+   *  report brought the answer, rather than a report dropped with its page. */
+  readonly notePagesFirstConversationPending: (isPending: boolean, isSaidByPage: boolean) => void;
 }
 
 /** The phone's pages: the shown window's, and the ones it keeps beside it. */
@@ -291,8 +299,12 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
     setChildFrameMessageHandler(SHELL_SHOW_COACH_CARD, (frame, payload) => this.takeShowCoachCard(frame, payload));
     setChildFrameMessageHandler(SHELL_AGENT_WORKING, (frame, payload) => this.takeAgentWorking(frame, payload));
-    // The newest layer takes this seat too: whatever the pages of a layer it replaces said went with them.
+    setChildFrameMessageHandler(SHELL_FIRST_CONVERSATION_STEP, (frame, payload) =>
+      this.takeFirstConversationStep(frame, payload),
+    );
+    // The newest layer takes these seats too: whatever the pages of a layer it replaces said went with them.
     this.tellPagesAgentWorking();
+    this.tellPagesFirstConversationPending(false);
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -327,10 +339,10 @@ export class LivePagesLayer implements PageDriver {
 
   /** Stop hearing theme changes and watching focus land in a frame, once the layer's view is gone: the watcher is
    *  a timer, and would go on reading a document that is no longer there. The pages went with the view, and what
-   *  they said of an agent working with them. */
+   *  they said of an agent working and of the first conversation with them. */
   stop(): void {
     this.stopStarted();
-    for (const page of this.pages.values()) this.forgetAgentWorking(page);
+    for (const page of this.pages.values()) this.forgetPageReports(page);
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -915,6 +927,7 @@ export class LivePagesLayer implements PageDriver {
       greetedDesktopId: null,
       greetedIsViewing: false,
       isAgentWorking: false,
+      isFirstConversationPending: false,
       lastSentVisibility: null,
       isHeldForStop: false,
       isHidden: true,
@@ -928,8 +941,8 @@ export class LivePagesLayer implements PageDriver {
       page.isCloseChordCapable = false;
       page.hasCapabilities = false;
       page.lastSentVisibility = null;
-      // Before the greeting, which a page that has an agent working answers by saying so again.
-      this.forgetAgentWorking(page);
+      // Before the greeting, which a page answers by saying again what still holds.
+      this.forgetPageReports(page);
       this.greet(page);
       this.syncVisibility(page, this.isShown(page));
     });
@@ -942,7 +955,7 @@ export class LivePagesLayer implements PageDriver {
   private destroy(page: LivePage): void {
     this.pages.delete(page.windowId);
     page.wrapper.remove();
-    this.forgetAgentWorking(page);
+    this.forgetPageReports(page);
   }
 
   private position(page: LivePage, box: HostRect): void {
@@ -1222,6 +1235,37 @@ export class LivePagesLayer implements PageDriver {
 
   private tellPagesAgentWorking(): void {
     this.options.notePagesAgentWorking([...this.pages.values()].some((page) => page.isAgentWorking));
+  }
+
+  /** ``shell:first-conversation-step {isPending}`` from a page: whether the workspace's first conversation is still
+   *  following its script, kept as the page's last word until it loads again or goes away, so a page that is gone
+   *  never holds the tour. The frame has to be one the shell created; a message that carries no boolean is dropped. */
+  private takeFirstConversationStep(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    const isPending = payload.isPending;
+    if (page === undefined || typeof isPending !== "boolean" || page.isFirstConversationPending === isPending) return;
+    page.isFirstConversationPending = isPending;
+    this.tellPagesFirstConversationPending(true);
+  }
+
+  private forgetFirstConversationStep(page: LivePage): void {
+    if (!page.isFirstConversationPending) return;
+    page.isFirstConversationPending = false;
+    this.tellPagesFirstConversationPending(false);
+  }
+
+  private tellPagesFirstConversationPending(isSaidByPage: boolean): void {
+    this.options.notePagesFirstConversationPending(
+      [...this.pages.values()].some((page) => page.isFirstConversationPending),
+      isSaidByPage,
+    );
+  }
+
+  /** Drop what a page said that the shell keeps as its last word: the page that said it is gone, or is a fresh page
+   *  now. */
+  private forgetPageReports(page: LivePage): void {
+    this.forgetAgentWorking(page);
+    this.forgetFirstConversationStep(page);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

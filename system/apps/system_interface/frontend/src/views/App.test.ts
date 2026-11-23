@@ -9,7 +9,11 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
-import { SHELL_AGENT_WORKING, SHELL_SHOW_COACH_CARD } from "@imbue/workspace-ui/src/app_contract";
+import {
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
+  SHELL_SHOW_COACH_CARD,
+} from "@imbue/workspace-ui/src/app_contract";
 import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { DesktopStore } from "../store/DesktopStore";
@@ -1399,6 +1403,31 @@ describe("a page's word that an agent is working in it", () => {
     }
 
     expect(pagesAgentWorking.slice(-2)).toEqual([true, false]);
+  });
+});
+
+describe("a page's word that the workspace's first conversation is following its script", () => {
+  recordResizeObservers();
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("reaches the tour from the page's shell:first-conversation-step, as the page's own word", () => {
+    initEmbedderRelay();
+    const heard = vi.spyOn(tour, "noteFirstConversationPending");
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    for (const isPending of [true, false]) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_FIRST_CONVERSATION_STEP, isPending },
+          source: frame.contentWindow,
+          origin: window.location.origin,
+        }),
+      );
+    }
+
+    expect(heard.mock.calls).toEqual([
+      [true, true],
+      [false, true],
+    ]);
   });
 });
 

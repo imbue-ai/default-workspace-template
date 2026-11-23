@@ -22,6 +22,7 @@ import {
 import type { TourRecord } from "./tour";
 import type { TourAction } from "./tourCards";
 import { TOUR_CARDS } from "./tourCards";
+import { makeAgentWorkingSignal } from "./agentWorking";
 import { FAKE_TOUR_CARDS as CARDS, FakeTourApi } from "../testing/fakeTour";
 
 describe("the tour's state machine", () => {
@@ -303,6 +304,166 @@ describe("TourController", () => {
     await Promise.resolve();
     // The launcher's start clears the card that waited to resume, and leaving the tour finishes it.
     expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+  });
+});
+
+describe("the tour while the workspace's first conversation is following its script", () => {
+  it("does not begin while a page says so, whether the avatar or a page says an agent works", async () => {
+    for (const noteWork of ["noteAvatar", "notePages"] as const) {
+      const api = new FakeTourApi();
+      const { tour, scheduled } = controller(api);
+      const agentWorking = makeAgentWorkingSignal((isWorking) => tour.noteAgentWorking(isWorking));
+      await tour.load();
+      tour.noteFirstConversationPending(true, true);
+
+      agentWorking[noteWork](true);
+      fire(scheduled);
+      agentWorking[noteWork](false);
+      agentWorking[noteWork](true);
+      fire(scheduled);
+
+      expect(tour.getState()).toEqual(IDLE_TOUR);
+      expect(api.writes).toEqual([]);
+    }
+  });
+
+  it("begins at once when a page says the conversation is over while an agent is at work", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteFirstConversationPending(false, true);
+    expect(scheduled.map((entry) => entry.delayMs)).toEqual([0]);
+    fire(scheduled);
+
+    expect(tour.shownCard()?.id).toBe("a");
+    await Promise.resolve();
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+  });
+
+  it("begins the next time an agent works when the conversation ends while none is", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    tour.noteAgentWorking(false);
+
+    tour.noteFirstConversationPending(false, true);
+    expect(scheduled).toEqual([]);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("a");
+  });
+
+  it("holds back a start that was waiting out its stretch of work when a page says so", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi(), { startAfterWorkingMs: 15000 });
+    await tour.load();
+    tour.noteAgentWorking(true);
+    tour.noteFirstConversationPending(true, true);
+    fire(scheduled);
+
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+  });
+
+  it("holds a tour that waits to resume the same way, and resumes it as the conversation ends", async () => {
+    const api = new FakeTourApi({ isSeen: true, resumeIndex: 2 });
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(api.writes).toEqual([]);
+
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("c");
+  });
+
+  it("holds a pause that is acknowledged while an agent works until the conversation ends", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.start();
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+
+    tour.dismissPause();
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("b");
+  });
+
+  it("starts from the launcher all the same, and leaves that tour on screen as the conversation ends", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+
+    tour.start();
+    expect(tour.shownCard()?.id).toBe("a");
+    tour.next();
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+
+    expect(tour.shownCard()?.id).toBe("b");
+    await Promise.resolve();
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+  });
+
+  it("starts nothing when the word is dropped with its page while an agent works, and stops holding", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+
+    // The page loaded again in the middle of a reply: it says the same once it is up, and nothing starts between.
+    tour.noteFirstConversationPending(false, false);
+    expect(scheduled).toEqual([]);
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(false);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    // A page that never comes back holds nothing: the next work begins the tour.
+    tour.noteFirstConversationPending(false, false);
+    tour.noteAgentWorking(false);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("a");
+  });
+
+  it("neither finishes a tour that was never offered nor keeps a cut-off one from being settled", async () => {
+    const unseen = new FakeTourApi();
+    const { tour: fresh } = controller(unseen);
+    fresh.noteFirstConversationPending(true, true);
+    await fresh.load();
+    fresh.noteViewerChanged();
+    fresh.noteFirstConversationPending(false, true);
+    expect(unseen.writes).toEqual([]);
+
+    const cutOff = new FakeTourApi({ isSeen: true });
+    const { tour: reloaded } = controller(cutOff);
+    reloaded.noteFirstConversationPending(true, true);
+    await reloaded.load();
+    expect(cutOff.writes).toEqual([seenRecord(null, true)]);
   });
 });
 
