@@ -43,6 +43,10 @@ README for details.
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
   the live mngr command tree.
+- `onboarding_activity/` - One-way marker files recording what the workspace's
+  owner has already done (finished the tour, used the phone layout, started a
+  second chat), and the four onboarding items the chat's new-chat suggestions
+  and the onboarding checklist show from them.
 - `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
   temporary files where a stub executable written there can run, or stops
   the session before any test starts.

@@ -436,7 +436,8 @@ def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its
     service.fleet.checkpoint()
     manifest = service.fleet.manifest_store.read()
     assert manifest is not None
-    assert manifest.browsers[0].tabs == (page_url,)
+    # The module's browser outlives each test, so a browser test that ran first left its tabs to be restored here.
+    assert manifest.browsers[0].tabs.count(page_url) == 1, manifest.browsers[0].tabs
     assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
     assert wait_until(lambda: chromium_window() is None, 30.0)
     assert client.get("/api/state").get_json()["chromium"]["state"] == "stopped"

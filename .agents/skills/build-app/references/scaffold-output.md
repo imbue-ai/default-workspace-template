@@ -116,6 +116,13 @@ packages), so the app's dependencies never move the chat's or another app's.
   `test_no_type_errors`, which fails on any `ty` error in the app.
 - `README.md` -- the one-line description.
 
+Outside the app's directory, every run sets one marker in the workspace's
+state: `data/.state/onboarding_activity/app_build_started`, an empty file
+carrying that run's time. The chat reads it so that it does not suggest
+building an app while one is being built. It is not a tracked file, setting it
+twice is harmless, and a run that cannot write it prints a warning and carries
+on.
+
 ## The supervisord program
 
 The scaffolder writes the app's own program block to

@@ -22,14 +22,21 @@ import { liveArrivalOfAgentWork, type TranscriptEvent } from "../models/Response
 import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { formatElapsed, latestTurnSpan } from "./turnTiming";
 
-/** What the mark says for the transcript's latest turn, or null when it shows nothing. */
-export function turnDoneLabel(chatId: string, events: readonly TranscriptEvent[]): string | null {
+/** Whether the agent's turn is over, as far as the chat's own state says: its activity idle, nothing queued or
+ *  connecting, no send of this page's on the way, and the chat not waiting on a background task, a permission or a
+ *  switch. */
+export function isChatTurnOver(chatId: string): boolean {
   const chat = getChatById(chatId);
   if (chat === undefined || (chat.status !== "idle" && chat.status !== "working") || chat.handoff !== null)
-    return null;
+    return false;
   const agent = chat.active_agent;
-  if (agent.activity_state !== "IDLE" || agent.queued_messages.length > 0 || agent.is_connecting) return null;
-  if (getOutgoingMessages(chatId).length > 0) return null;
+  if (agent.activity_state !== "IDLE" || agent.queued_messages.length > 0 || agent.is_connecting) return false;
+  return getOutgoingMessages(chatId).length === 0;
+}
+
+/** What the mark says for the transcript's latest turn, or null when it shows nothing. */
+export function turnDoneLabel(chatId: string, events: readonly TranscriptEvent[]): string | null {
+  if (!isChatTurnOver(chatId)) return null;
   const last = events.length === 0 ? undefined : events[events.length - 1];
   // A turn that ended on a provider failure shows that failure's notice, not a finish.
   if (last === undefined || (last.type === "assistant_message" && (last.is_api_error || last.is_auth_error))) {
