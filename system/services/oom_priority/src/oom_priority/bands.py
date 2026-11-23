@@ -229,6 +229,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Onboarding checklist page: one small page over the onboarding markers,
+    # which stores nothing, so a shed costs one reload.
+    "onboarding-checklist": 82,
     # The Style Guide page: one static page cataloguing the design system, which
     # stores nothing, so a shed costs one reload; shed right before System Monitor
     # and its sampler.
@@ -297,10 +300,6 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     # earlyoom cannot see the workspace's cap at all.
     "publish_cgroup_meminfo": PROTECTED,
     "env-converge": PROTECTED,
-    # A one-shot (autorestart=false) that registers the VM-resident owner-exec
-    # service origin and exits; shedding it mid-run would leave the registration
-    # half-done, and it holds no memory worth reclaiming.
-    "vm-exec-register": PROTECTED,
     # The Screen's stack and its watcher: the group ends together, so every member
     # shares the one band, and it is the stack's own rather than the Screen service's
     # (see SCREEN_STACK). Each program passes its own name to the tagging wrapper.

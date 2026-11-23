@@ -24,7 +24,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### The bar
 
 - A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and steps aside while the soft keyboard is up, so the shown page reaches down to the keyboard. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px of padding above the controls and only the safe-area inset below them (none in a browser tab, where the browser's toolbar sits under the bar).
-- Home is disabled on the home grid. Tapping it shows the home grid and records "home" as the phone's shown state.
+- Home is disabled on the home grid. Tapping it shows the home grid and records "home" as the phone's shown state. Before the page lands, the pill reads "Opening…" and Home is enabled.
 - The pill shows the shown window's app icon and title, or the avatar and "Chat" for the pinned chat window; on the home grid it shows the workspace name. It carries a count of open windows excluding the pinned chat, and shows none when that is zero. Tapping it opens the windows sheet; long-pressing it opens the shown window's menu.
 - Plus opens the start sheet.
 
@@ -56,7 +56,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### Showing windows, landing, and switching
 
 - Showing a window is a per-client act: the phone records it through a new client route and mounts the page. It never restores, raises or writes a placement, so laptop clients see nothing move.
-- On load the phone lands on the last thing it recorded: a window still open, "home", or when nothing is recorded, the pinned chat window. Deep links (`?open=`, `?launch=`) open as today, on the first desktop, and are then shown.
+- On load the phone lands on the last thing it recorded: a window still open, "home", or when nothing is recorded, the pinned chat window. It lands as soon as its desktop is known, before that desktop's layout is read, and draws nothing in the page area until then (no home grid, which would flash before the window it lands on). With nothing to land on (the startup read failed, or there is no desktop), it shows home provisionally: never recorded, and replaced by a proper landing once a later read or push brings a desktop. Deep links (`?open=`, `?launch=`) open as today, on the first desktop, and are then shown.
 - The phone switches to a window that an action of its own opened (a tap, a launch row, Getting Started's `shell:start-with-text`, a chat's `shell:open` of a sub-agent view) and to the window an agent op shows or opens when the op targets this client. It ignores `shell:focused` from pages and ops targeting other clients.
 - When the window it shows is removed from the desktops, it goes home. When the pinned chat window is shown, the chat app's own per-client selection decides which chat is visible, as today.
 
@@ -68,7 +68,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### Mounting, background, and resync
 
 - Only the shown window's page is mounted, plus the pinned chat window's page, which stays mounted while another window is shown. Switching to any other window creates its page afresh; the browser app's stream stops while hidden; a terminal session is unaffected, since the terminal collects sessions by windows existing in the shell, not by frames.
-- On return from the background (`visibilitychange` to visible), the shell refetches the inventory; if the socket had dropped while hidden, it also reloads the shown page.
+- On return from the background (`visibilitychange` to visible), the shell refetches the inventory and makes its socket live at once rather than waiting out the reconnect backoff: one that is not open (closed, or still connecting) is replaced, and an open one is pinged and replaced if it does not answer within 4 seconds, since a connection the network dropped can still read as open. If the socket reconnects after the page was hidden, the shell also reloads the shown page, whose own connections most likely went down with it; a socket that answers the ping held, so a later reconnect does not reload the page.
 
 ### Banners, toasts, and installing
 
