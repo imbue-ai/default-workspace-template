@@ -1,0 +1,1 @@
+The comment on the reserved app names says `vm` stays reserved from the retired `vm-exec-register` program, whose `vm-exec` row a workspace's registry may still hold. The reserved names themselves are unchanged.

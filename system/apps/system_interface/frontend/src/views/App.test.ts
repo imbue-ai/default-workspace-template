@@ -661,6 +661,128 @@ describe("the window menu's Theming submenu", () => {
   });
 });
 
+describe("sharing a window's app", () => {
+  const GUEST = {
+    owner: false,
+    user_id: "user-alice-0001",
+    email: "alice@example.com",
+    participant: "user:user-alice-0001",
+  };
+
+  function titleBarShare(): HTMLElement | null {
+    return document.querySelector('[data-window-id="win-1"] [data-window-control="share"]');
+  }
+
+  /** Open win-1's window menu and answer its Share row. */
+  function windowMenuShare(): HTMLElement | null {
+    (document.querySelector('[data-window-id="win-1"] [data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    return document.querySelector('[data-menu-row="share"]');
+  }
+
+  /** Stand a spy in as the chrome framing the page, which is where a message to the embedder goes. */
+  function framedUnderChrome(): { postMessage: ReturnType<typeof vi.fn> } {
+    const chrome = { postMessage: vi.fn() };
+    Object.defineProperty(window, "parent", { value: chrome, configurable: true });
+    return chrome;
+  }
+
+  // A backdrop of a real size, so the window is one whose title leaves Share room.
+  beforeEach(() => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "parent", { value: window, configurable: true });
+  });
+
+  it("offers Share in the title bar once a chrome has said what it can do, and asks it for the app's share settings", () => {
+    m.redraw.sync();
+    expect(titleBarShare()).toBeNull();
+
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    const chrome = framedUnderChrome();
+    (titleBarShare() as HTMLElement).click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
+  it("offers the title bar's Share to the workspace's owner alone", () => {
+    store.setEmbedderPresent(true);
+    // The guest's own desktop, so the window is theirs to focus and its bar draws its actions.
+    api.desktops = [
+      desktopRecord("home", { owner: GUEST.participant, windows: [windowRecord("win-1", "docs", "/a")] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    setOwnIdentityForTesting(GUEST);
+    m.redraw.sync();
+    expect(document.querySelector('[data-window-id="win-1"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(titleBarShare()).toBeNull();
+
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    setOwnIdentityForTesting({ ...GUEST, owner: true });
+    m.redraw.sync();
+    expect(titleBarShare()).not.toBeNull();
+  });
+
+  it("offers Share in the title bar and the window menu for a critical app, and sends the app's name from the menu", () => {
+    offerApps(api, socket, [appRecord("docs", { critical: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    expect(titleBarShare()).not.toBeNull();
+
+    const chrome = framedUnderChrome();
+    const row = windowMenuShare() as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
+  it("offers Share in neither the title bar nor the window menu for an internal app", () => {
+    offerApps(api, socket, [appRecord("docs", { internal: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+
+    expect(titleBarShare()).toBeNull();
+    expect(windowMenuShare()).toBeNull();
+    expect(document.querySelector('[data-menu-row="close"]')).not.toBeNull();
+  });
+
+  it("offers Share on the phone's window menu by the same rule, under a chrome", () => {
+    const openPhoneWindowMenu = (): void => {
+      store.openPhoneSheet("windows");
+      m.redraw.sync();
+      (document.querySelector('[data-phone-window-menu="win-1"]') as HTMLElement).click();
+      m.redraw.sync();
+    };
+    offerApps(api, socket, [appRecord("docs", { critical: true })]);
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    openPhoneWindowMenu();
+    // No chrome frames the page, so there is nowhere to share from.
+    expect(document.querySelector('.phone-window-menu [data-menu-row="refresh"]')).not.toBeNull();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="share"]')).toBeNull();
+    pressEscape();
+
+    const chrome = framedUnderChrome();
+    openPhoneWindowMenu();
+    const row = document.querySelector('.phone-window-menu [data-menu-row="share"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+    pressEscape();
+
+    offerApps(api, socket, [appRecord("docs", { internal: true })]);
+    m.redraw.sync();
+    openPhoneWindowMenu();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="refresh"]')).not.toBeNull();
+    expect(document.querySelector('.phone-window-menu [data-menu-row="share"]')).toBeNull();
+  });
+});
+
 describe("the element menu", () => {
   function menuRowKeys(): string[] {
     return Array.from(document.body.querySelectorAll('[data-menu-part="menu"] [data-menu-row]')).map(

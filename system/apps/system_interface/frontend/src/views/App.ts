@@ -106,6 +106,7 @@ import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import {
+  isAppShareable,
   MENU_MIN_WIDTH,
   openShareSettings,
   enableThemingPrompt,
@@ -691,7 +692,7 @@ export function App(): m.Component<AppAttrs> {
           ? () => (isImmersive ? current.leaveImmersive(windowId) : current.requestImmersive(windowId))
           : null,
       },
-      share: app === undefined || app.critical ? null : () => openShareSettings(app),
+      share: isAppShareable(app) ? () => openShareSettings(app) : null,
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
@@ -1340,6 +1341,13 @@ export function App(): m.Component<AppAttrs> {
       case "app-chat":
         void current.openAppChat(windowId);
         return;
+      case "share": {
+        const state = current.getState();
+        const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
+        const app = window === undefined ? undefined : appByName(state, window.app);
+        if (isAppShareable(app)) openShareSettings(app);
+        return;
+      }
       case "menu":
         // A press while this menu is up lands on the menu's own sheet and closes it there, so the
         // click that reaches the kebab is almost always the opening one; the toggle stands for the
@@ -1527,6 +1535,7 @@ export function App(): m.Component<AppAttrs> {
                     onEntryClick,
                     onEntryContextMenu,
                     isOverlayOpen: isShieldingOverlayOpen(),
+                    isAppShareOffered: current.getIsEmbedderPresent() && isViewerOwner(),
                     onSelectShortcut: (key) => {
                       selectedShortcutKey = key;
                     },

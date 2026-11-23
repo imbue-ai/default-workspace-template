@@ -1,1 +1,0 @@
-New `built_assets` module: `send_built_asset` serves a file of an app's frontend build. A flat, content-hashed script or stylesheet is cached for a year and marked immutable; anything else is revalidated on every load. The shell, chat, Files, Routines and style guide apps now share it, in place of five copies of the same rule.
