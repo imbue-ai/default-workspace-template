@@ -89,9 +89,11 @@ export const SHELL_OPEN_LINK = "shell:open-link";
  *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
 export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
 
-/** App to shell: show a one-button card with the page's words under a control of the Imbue Studio chrome, and ring
- *  that control while the card is up. The shell shows it only while it has nothing else of the kind on screen, and
- *  drops a text that is empty or longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and an anchor it does not know. */
+/** App to shell: show a one-button card with the page's words in one place (``ShellCoachCardPlace``): under a
+ *  control of the Imbue Studio chrome, which is ringed while the card is up, or popping out of the agent's avatar,
+ *  whose window the shell brings forward. The shell shows it only while it has nothing else of the kind on screen
+ *  (the end of its tour gives way to it), and drops a text that is empty or longer than
+ *  ``MAX_COACH_CARD_TEXT_LENGTH`` and a place it does not know. */
 export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
 
 /** App to shell: whether an agent is working in what the page shows (a reply under way in a chat), sent when that
@@ -103,6 +105,28 @@ export const SHELL_AGENT_WORKING = "shell:agent-working";
  *  (``minds:highlight-chrome``). */
 export const SHELL_CHROME_ANCHORS = ["workspace-switcher", "permissions", "settings", "share", "help"] as const;
 export type ShellChromeAnchor = (typeof SHELL_CHROME_ANCHORS)[number];
+
+/** What the shell draws that a coach card can pop out of: the agent's avatar. */
+export const SHELL_COACH_CARD_TARGETS = ["avatar"] as const;
+export type ShellCoachCardTarget = (typeof SHELL_COACH_CARD_TARGETS)[number];
+
+/** Where a coach card goes: under a control of the chrome (``chromeAnchor``), or at something the shell draws
+ *  (``target``). A message names exactly one. */
+export type ShellCoachCardPlace =
+  { readonly chromeAnchor: ShellChromeAnchor } | { readonly target: ShellCoachCardTarget };
+
+/** The place a ``shell:show-coach-card`` payload names, or null when it names none, both, or one this build does
+ *  not know. */
+export function coachCardPlaceOf(payload: Readonly<Record<string, unknown>>): ShellCoachCardPlace | null {
+  const { chromeAnchor, target } = payload;
+  if ((chromeAnchor === undefined) === (target === undefined)) return null;
+  if (chromeAnchor !== undefined) {
+    const anchor = SHELL_CHROME_ANCHORS.find((known) => known === chromeAnchor);
+    return anchor === undefined ? null : { chromeAnchor: anchor };
+  }
+  const known = SHELL_COACH_CARD_TARGETS.find((candidate) => candidate === target);
+  return known === undefined ? null : { target: known };
+}
 
 /** The longest text a coach card carries. */
 export const MAX_COACH_CARD_TEXT_LENGTH = 500;
@@ -238,9 +262,9 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
-  /** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the Imbue Studio
-   *  chrome, ringed while the card is up. */
-  showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void;
+  /** Ask the shell to show ``text`` as a one-button card at ``place``: under a control of the Imbue Studio chrome,
+   *  ringed while the card is up, or popping out of the agent's avatar. */
+  showCoachCard(text: string, place: ShellCoachCardPlace): void;
   /** Say whether an agent is working in what this page shows. */
   agentWorking(isWorking: boolean): void;
   /** Say whether the first run's provider page is still owed to this workspace's owner. */
@@ -543,8 +567,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
-    showCoachCard: (text: string, chromeAnchor: ShellChromeAnchor) =>
-      send(SHELL_SHOW_COACH_CARD, { text, chromeAnchor }),
+    showCoachCard: (text: string, place: ShellCoachCardPlace) => send(SHELL_SHOW_COACH_CARD, { text, ...place }),
     agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
     firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>

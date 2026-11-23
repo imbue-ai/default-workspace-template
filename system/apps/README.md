@@ -15,8 +15,9 @@ Built-in apps:
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
   8010, and owns the provider accounts. Its frontend, the shell's, the
-  Getting Started app's and Files' are builds of one npm workspace (`system/package.json`)
-  sharing the `system/libs/workspace_ui` library.
+  Getting Started app's, the Onboarding checklist's and Files' are builds of
+  one npm workspace (`system/package.json`) sharing the
+  `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
   fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`, see `catalog/README.md`),
@@ -25,6 +26,13 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
+- `onboarding_checklist/` - The Onboarding checklist: the four things worth
+  trying in a new workspace on one small page, the done ones checked (read
+  from the `onboarding_activity` library, `system/libs/onboarding_activity/`),
+  each showing where it is when clicked. In the launcher, with no desktop
+  shortcut (`seeds_shortcuts = false`); the desktop's tour opens it as it ends,
+  by the message type its manifest registers. Served on port 8070 by the
+  `onboarding-checklist` package; it stores nothing.
 - `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
   serves the wrapper pages (each frames one session's ttyd page) over the
@@ -65,7 +73,8 @@ Built-in apps:
 
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, the launch paths the
-desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, whether it
+desktop opens windows at, whether a desktop is given its shortcuts by itself
+(`seeds_shortcuts`), its memory-shedding `priority`, whether it is `critical`, whether it
 stops once no window shows it (`stop_when_no_windows`), whether its pages
 listen to the microphone (`uses_microphone`), and the
 supervisord `program` that runs it (the schema is the `app_manifest` library

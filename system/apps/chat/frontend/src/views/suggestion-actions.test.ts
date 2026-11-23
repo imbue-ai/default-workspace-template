@@ -17,12 +17,8 @@ vi.mock("../shell", () => ({
 vi.mock("./MessageInput", () => ({ focusComposer: mocks.focusComposer }));
 
 import type { ChatRootEmbedApi } from "../embedApi";
-import {
-  BUILD_APP_COACH_TEXT,
-  CONNECT_DATA_COACH_TEXT,
-  canRunSuggestionAction,
-  runSuggestionAction,
-} from "./suggestion-actions";
+import { BUILD_APP_COACH_TEXT, CONNECT_DATA_COACH_TEXT } from "@imbue/workspace-ui/src/onboarding_pointers";
+import { canRunSuggestionAction, runSuggestionAction } from "./suggestion-actions";
 
 /** Frame this page under ``parent`` for the length of a test: a chat root, or the shell, which exposes nothing. */
 function framedBy(parent: { chatRootEmbed?: Partial<ChatRootEmbedApi> }): void {

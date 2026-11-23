@@ -54,6 +54,7 @@ members = [
     "mngr-cli-contract",
     "notify-user-skill",
     "onboarding-activity",
+    "onboarding-checklist",
     "oom-priority",
     "publish-template-skill",
     "pytest-executable-tmp",
@@ -1080,6 +1081,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "litellm" },
     { name = "onboarding-activity" },
+    { name = "onboarding-checklist" },
     { name = "playwright" },
     { name = "routines" },
     { name = "routines-app" },
@@ -1132,6 +1134,7 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ff878061b67d863b0b8d2fd655ad5fa48c9b62a5" },
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
+    { name = "onboarding-checklist", editable = "system/apps/onboarding_checklist" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "routines", editable = "system/libs/routines" },
     { name = "routines-app", editable = "system/apps/routines" },
@@ -2714,6 +2717,55 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "ty", specifier = "==0.0.87" }]
+
+[[package]]
+name = "onboarding-checklist"
+version = "0.1.0"
+source = { editable = "system/apps/onboarding_checklist" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "flask" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "onboarding-activity" },
+    { name = "pydantic" },
+    { name = "werkzeug" },
+    { name = "workspace-themes" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ff878061b67d863b0b8d2fd655ad5fa48c9b62a5" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-themes", editable = "system/libs/workspace_themes" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.87" },
+]
 
 [[package]]
 name = "oom-priority"

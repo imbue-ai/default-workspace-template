@@ -24,6 +24,7 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
+  coachCardPlaceOf,
   connectToShell,
   followShellTheme,
 } from "./app_contract";
@@ -234,7 +235,8 @@ describe("connectToShell", () => {
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
     connection.draftText("Explain this element:");
-    connection.showCoachCard("Your connections live here.", "permissions");
+    connection.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    connection.showCoachCard("Tell the agent what to build.", { target: "avatar" });
     connection.agentWorking(true);
     connection.agentWorking(false);
     connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
@@ -247,6 +249,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" }, "*"],
+      [{ type: SHELL_SHOW_COACH_CARD, text: "Tell the agent what to build.", target: "avatar" }, "*"],
       [{ type: SHELL_AGENT_WORKING, isWorking: true }, "*"],
       [{ type: SHELL_AGENT_WORKING, isWorking: false }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
@@ -610,5 +613,21 @@ describe("a framed page's scripted popups", () => {
     connection.disconnect();
     connection = null;
     expect(window.open).toBe(nativeOpen);
+  });
+});
+
+describe("the place a coach card names", () => {
+  it("is the chrome control or the shell's own target it names, one of them and no more", () => {
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "permissions" })).toEqual({ chromeAnchor: "permissions" });
+    expect(coachCardPlaceOf({ text: "x", target: "avatar" })).toEqual({ target: "avatar" });
+  });
+
+  it("is none for a payload naming no place, both, or one this build does not know", () => {
+    expect(coachCardPlaceOf({ text: "x" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "permissions", target: "avatar" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "nowhere" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", target: "launcher" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", target: 7 })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: null, target: "avatar" })).toBeNull();
   });
 });

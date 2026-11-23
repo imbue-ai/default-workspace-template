@@ -8,15 +8,12 @@
  */
 
 import { showCoachMark } from "@imbue/workspace-ui/src/components/CoachMark";
+import { BUILD_APP_COACH_TEXT, CONNECT_DATA_COACH_TEXT } from "@imbue/workspace-ui/src/onboarding_pointers";
 import { framingChatRoot } from "../embedApi";
 import type { SuggestionAction } from "../models/Suggestions";
 import { openShareSettingsWithCoachMark, showCoachCard, showsCoachMarks } from "../shell";
 import { focusComposer } from "./MessageInput";
 
-export const BUILD_APP_COACH_TEXT =
-  "Provide some context on a problem you're facing and tell the agent to build an app to help with it.";
-export const CONNECT_DATA_COACH_TEXT =
-  "Your connections live here. Ask me to connect any of these services, or any other data you want to pull in.";
 // The composer's text area (``views/MessageInput.ts``), of which a page has one.
 const COMPOSER_TEXTBOX_SELECTOR = ".message-input-textbox";
 

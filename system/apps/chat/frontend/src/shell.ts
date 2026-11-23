@@ -78,7 +78,7 @@ export function openShareSettingsWithCoachMark(coachMark: ShareSettingsCoachMark
 
 /** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the chrome. */
 export function showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void {
-  connection?.showCoachCard(text, chromeAnchor);
+  connection?.showCoachCard(text, { chromeAnchor });
 }
 
 // What this page last told the shell of its chat's agent. No to begin with, which is what a shell that has not heard
