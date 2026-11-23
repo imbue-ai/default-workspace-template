@@ -245,15 +245,11 @@
   cursor: zoom-in;
 }
 
-/* Media a message carries as raw HTML fits the column the same way, whatever width it asks for. */
-.markdown-content video,
+/* An audio player or SVG a message carries as raw HTML fits the column the same way, whatever width it asks for
+   (Tailwind's base styles already cap a video). */
 .markdown-content audio,
 .markdown-content svg {
   max-width: 100%;
-}
-
-.markdown-content video {
-  height: auto;
 }
 
 /* Keeps an image's space while it loads: a picture outline under a slow sweep of light. The
