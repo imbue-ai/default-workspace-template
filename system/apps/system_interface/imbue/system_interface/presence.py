@@ -364,8 +364,8 @@ def utc_now() -> datetime:
 
 class PresenceSweep(MutableModel):
     """Every announcement of the connected set: the periodic check that notices a silent departure, a heartbeat that
-    brings someone in, and the announcement a background profile fetch asks for when it changed what the connected
-    users carry. One at a time, each read and pushed under the one lock: they run on threads of their own, and a set
+    changes who is connected, and the announcement a background profile fetch asks for when it changed what the
+    connected users carry. One at a time, each read and pushed under the one lock: they run on threads of their own, and a set
     read earlier must never go out after a newer one."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
