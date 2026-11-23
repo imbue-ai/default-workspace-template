@@ -69,6 +69,18 @@ function draw(): void {
   m.render(root, m(AgentWorkingReport, { chatId: CHAT }));
 }
 
+/** The footer of a chat page, as far as the report and the suggestions go. */
+function drawFooter(): void {
+  m.render(root, [m(AgentWorkingReport, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
+}
+
+/** Draw the footer, let the page's requests answer, then draw what they brought. */
+async function drawFooterAndSettle(): Promise<void> {
+  drawFooter();
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  drawFooter();
+}
+
 /** What the shell was told at the last look: the page tells it on every look, and only a change is passed on
  *  (``reportAgentWorking``). */
 function lastTold(): boolean | undefined {
@@ -268,12 +280,7 @@ describe("what the page tells the shell of a reply under way", () => {
       is_next_step_suggestions_enabled: false,
       is_new_chat_suggestions_enabled: false,
     };
-    // The footer of a chat page, as far as these two go.
-    const drawFooter = (): void =>
-      m.render(root, [m(AgentWorkingReport, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
-    drawFooter();
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    drawFooter();
+    await drawFooterAndSettle();
     expect(lastTold()).toBe(false);
 
     working();
@@ -291,11 +298,7 @@ describe("what the page tells the shell of a reply under way", () => {
   it("says so on a new chat's first message, with new chat suggestions switched off", async () => {
     settings = { ...DEFAULT_CHAT_SETTINGS, is_new_chat_suggestions_enabled: false };
     newAndEmpty();
-    const drawFooter = (): void =>
-      m.render(root, [m(AgentWorkingReport, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
-    drawFooter();
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    drawFooter();
+    await drawFooterAndSettle();
     expect(lastTold()).toBe(false);
     expect(root.querySelector(".suggestion-strip")).toBeNull();
 
