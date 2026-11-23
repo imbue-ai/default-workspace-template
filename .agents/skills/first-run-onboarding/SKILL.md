@@ -47,6 +47,8 @@ Reply with exactly this message:
 
 Describe something your current apps don't quite do, a task that takes too long, or any other problem you're facing right now.
 
+*Example: I feel scattered. My todos are in a million different places, and I can never find things when I need them. I want a command center that pulls everything into one place and tells me what to do next.*
+
 **Prefer to talk? Tap the mic and think out loud.**
 ```
 
