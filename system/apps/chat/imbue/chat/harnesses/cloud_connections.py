@@ -15,7 +15,8 @@ agents alike. An agent that was already running keeps what it started with, whic
 one agent loads the connectors is read off the switch and the time the agent's process started.
 
 A harness with such connectors registers a ``CloudConnections`` on its ``HarnessSpec``, which also
-answers which connectors an account has connected (asked once, when the account signs in).
+answers which connectors an account has connected (asked once, when the account signs in): each
+by its display name, and by the address of the MCP server behind it where the provider tells it.
 """
 
 from abc import ABC
@@ -26,13 +27,26 @@ from typing import Final
 
 from imbue.chat.harnesses.agent_env import host_env_path_of
 from imbue.chat.harnesses.agent_env import read_env_file
+from pydantic import Field
+
 from imbue.chat.harnesses.agent_env import rewrite_env_var
+from imbue.imbue_common.frozen_model import FrozenModel
 
 # Claude Code's own name for it; codex is handed the same variable through its command line.
 CLOUD_CONNECTIONS_ENV_VAR: Final = "ENABLE_CLAUDEAI_MCP_SERVERS"
 # The values Claude Code reads as "off".
 _DISABLING_VALUES: Final = frozenset(("0", "false", "no", "off"))
 _ENABLING_VALUE: Final = "true"
+
+
+class CloudConnector(FrozenModel):
+    """One connector an account has connected on its provider's side."""
+
+    name: str = Field(description="The connector's display name, as the provider spells it")
+    url: str | None = Field(
+        default=None,
+        description="The address of the MCP server behind the connector; None when the provider does not tell it",
+    )
 
 
 class CloudConnectionsError(RuntimeError):
@@ -48,8 +62,8 @@ class CloudConnections(ABC):
     is_on_when_unset: ClassVar[bool]
 
     @abstractmethod
-    def list_connected(self, account_dir: Path) -> tuple[str, ...]:
-        """The display names of the connectors the account has connected. Raises ``CloudConnectionsError``."""
+    def list_connected(self, account_dir: Path) -> tuple[CloudConnector, ...]:
+        """The connectors the account has connected, one per display name. Raises ``CloudConnectionsError``."""
 
     def is_enabled(self, agent_state_dir: Path) -> bool:
         """Whether the agent's running process loaded its account's connectors. Raises ``CloudConnectionsError``.

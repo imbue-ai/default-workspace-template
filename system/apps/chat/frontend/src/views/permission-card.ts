@@ -19,7 +19,7 @@ import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { getEventDetailState, requestEventDetail } from "../models/Response";
-import type { CloudConnectionsOffer } from "./cloud-connections-offer";
+import type { CloudConnectionsOffer, RequestedService } from "./cloud-connections-offer";
 import {
   enableCloudConnections,
   getCloudConnectionsOffer,
@@ -50,6 +50,10 @@ export interface PermissionRequestDetails {
   /** File-sharing requests: the path and access mode (READ/WRITE). */
   path: string | null;
   access: string | null;
+  /** Custom service requests: the domain to connect, and the endpoint of the
+   *  service's own MCP server when the request signs in to one. */
+  domain: string | null;
+  mcpEndpoint: string | null;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -68,6 +72,7 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
   const permissions = Array.isArray(payload.permissions)
     ? payload.permissions.filter((p): p is string => typeof p === "string")
     : [];
+  const flowParams = asObject(asObject(payload.login)?.flow_params) ?? {};
   return {
     requestId: obj.request_id,
     requestType: typeof obj.request_type === "string" ? obj.request_type : null,
@@ -76,6 +81,8 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
     permissions,
     path: typeof payload.path === "string" ? payload.path : null,
     access: typeof payload.access === "string" ? payload.access : null,
+    domain: typeof payload.domain === "string" && payload.domain ? payload.domain : null,
+    mcpEndpoint: typeof flowParams.mcpEndpoint === "string" && flowParams.mcpEndpoint ? flowParams.mcpEndpoint : null,
   };
 }
 
@@ -382,11 +389,22 @@ function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
   );
 }
 
+/** The service a request names, as the backend is asked whether the account
+ *  already has a connection to it: a predefined request's scope, or a custom
+ *  service request's domain. Null for a request that names no service. */
+export function requestedServiceOf(details: PermissionRequestDetails | null): RequestedService | null {
+  if (details?.scope) return { scope: details.scope };
+  if (details?.domain) return { domain: details.domain, mcpEndpoint: details.mcpEndpoint };
+  return null;
+}
+
 /** The offer of the account's own cloud connections, as the live component
- *  hands it to the renderer: whose account, whether the warning is showing,
- *  and the enable request's progress. */
+ *  hands it to the renderer: whose account, which of its connections is taken
+ *  to be for the requested service, whether the warning is showing, and the
+ *  enable request's progress. */
 export interface CloudConnectionsOfferView {
   providerName: string;
+  connectorName: string | null;
   isOpen: boolean;
   isBusy: boolean;
   error: string | null;
@@ -412,7 +430,10 @@ function renderCloudConnectionsOffer(offer: CloudConnectionsOfferView): m.Vnode 
           offer.onToggle();
         },
       },
-      `Alternatively, you could enable the existing connections associated with your ${offer.providerName} account.`,
+      offer.connectorName !== null
+        ? `Your ${offer.providerName} account already has a ${offer.connectorName} connection. Alternatively, you ` +
+            "could enable the existing connections associated with that account."
+        : `Alternatively, you could enable the existing connections associated with your ${offer.providerName} account.`,
     ),
     offer.isOpen
       ? m("div", { class: "permission-request-cloud-offer-detail mt-2 flex flex-col items-start gap-2" }, [
@@ -579,7 +600,7 @@ export function renderPermissionCard(
  * disclosure's open/closed state, and delegates to `renderPermissionCard`.
  * Predefined requests have a scope to resolve; file-sharing requests don't.
  * It also asks whether the backend offers the account's own cloud connections
- * for that scope, and owns the offer's open state and its enable request.
+ * for the service the request names (a scope, or a custom service's domain), and owns the offer's open state and its enable request.
  */
 export function PermissionCard(): m.Component<{
   toolCall: ToolCall;
@@ -611,6 +632,7 @@ export function PermissionCard(): m.Component<{
   ): CloudConnectionsOfferView {
     return {
       providerName: offer.provider_name ?? "provider",
+      connectorName: offer.connector_name,
       isOpen: isOfferOpen,
       isBusy: isOfferBusy,
       error: offerError,
@@ -664,8 +686,9 @@ export function PermissionCard(): m.Component<{
       const effectiveResolution = resolution ?? pageResolution;
       // Only a pending request for a service can be set aside for the
       // account's own connection to that service.
+      const requested = requestedServiceOf(details);
       const offer =
-        effectiveResolution === null && details?.scope ? getCloudConnectionsOffer(chatId, details.scope) : null;
+        effectiveResolution === null && requested !== null ? getCloudConnectionsOffer(chatId, requested) : null;
       return renderPermissionCard(
         details,
         scopeInfo,

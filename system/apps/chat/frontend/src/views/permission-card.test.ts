@@ -24,6 +24,7 @@ import {
   openPermissionRequest,
   parsePermissionRequest,
   renderPermissionCard,
+  requestedServiceOf,
   resetShellPermissionResolutionsForTesting,
   shellPermissionResolutionFor,
 } from "./permission-card";
@@ -153,6 +154,11 @@ const PERMISSION_OUTPUT = `  % Total    % Received % Xferd
   "payload": { "scope": "slack-api", "permissions": ["slack-read-all"] }
 }`;
 
+// Custom service requests: the payload names a domain, and the endpoint of the
+// service's own MCP server when the request signs in to one.
+const CUSTOM_KEY_OUTPUT = `{"request_id":"cs-1","rationale":"look up the tasks you asked about","request_type":"custom-service","payload":{"domain":"api.clickup.com","scheme":"https","header":"Authorization: {token}"}}`;
+const CUSTOM_MCP_OUTPUT = `{"request_id":"cs-2","rationale":"use Example's own connector","request_type":"custom-service","payload":{"domain":"mcp.example.com","scheme":"https","login":{"url":"https://mcp.example.com/authorize","flow":"mcp","flow_params":{"mcpEndpoint":"https://mcp.example.com/mcp","tokenEndpoint":"https://mcp.example.com/token"}}}}`;
+
 // A file-sharing request: payload carries a path and access mode instead.
 const FILE_SHARING_OUTPUT = `{"request_id":"fs-1","rationale":"write the report locally","request_type":"file-sharing","payload":{"path":"/Users/you/Documents/report","access":"WRITE"}}`;
 
@@ -184,6 +190,8 @@ describe("parsePermissionRequest", () => {
       permissions: ["slack-read-all"],
       path: null,
       access: null,
+      domain: null,
+      mcpEndpoint: null,
     });
   });
 
@@ -270,6 +278,8 @@ describe("parsePermissionRequest", () => {
       permissions: ["slack-read-all"],
       path: null,
       access: null,
+      domain: null,
+      mcpEndpoint: null,
     });
   });
 });
@@ -705,6 +715,7 @@ function renderCardWithOffer(
   const details = parsePermissionRequest(makeToolCall(PERMISSION_INPUT.length, "permission_request"), toolResult);
   const view: CloudConnectionsOfferView = {
     providerName: "Anthropic",
+    connectorName: null,
     isOpen: false,
     isBusy: false,
     error: null,
@@ -743,6 +754,55 @@ describe("the cloud-connections offer on the card", () => {
 
     (toggle?.attrs?.onclick as (e: Event) => void)(CLICK);
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the connection the account already has when the backend found one", () => {
+    const vnode = renderCardWithOffer({ connectorName: "ClickUp" });
+
+    expect(textOf(findByClass(vnode, "permission-request-cloud-offer-toggle"))).toBe(
+      "Your Anthropic account already has a ClickUp connection. Alternatively, you could enable the existing " +
+        "connections associated with that account.",
+    );
+  });
+
+  it("asks about a custom service by its domain, and by its MCP server when the request connects one", () => {
+    const toolCall = makeToolCall(PERMISSION_INPUT.length, "permission_request");
+    const byKey = parsePermissionRequest(toolCall, makeResult(CUSTOM_KEY_OUTPUT));
+    const byServer = parsePermissionRequest(toolCall, makeResult(CUSTOM_MCP_OUTPUT));
+    const forService = parsePermissionRequest(toolCall, makeResult(PERMISSION_OUTPUT));
+    const forFiles = parsePermissionRequest(toolCall, makeResult(FILE_SHARING_OUTPUT));
+
+    expect(requestedServiceOf(byKey)).toEqual({ domain: "api.clickup.com", mcpEndpoint: null });
+    expect(requestedServiceOf(byServer)).toEqual({
+      domain: "mcp.example.com",
+      mcpEndpoint: "https://mcp.example.com/mcp",
+    });
+    expect(requestedServiceOf(forService)).toEqual({ scope: "slack-api" });
+    expect(requestedServiceOf(forFiles)).toBeNull();
+    expect(requestedServiceOf(null)).toBeNull();
+  });
+
+  it("is drawn by the live card of a custom service request the account has a connection for", () => {
+    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    seedCloudConnectionsOffer(
+      "chat-1",
+      { domain: "api.clickup.com", mcpEndpoint: null },
+      { is_offered: true, provider_name: "OpenAI", connector_name: "ClickUp" },
+    );
+    const card = PermissionCard();
+    const vnode = card.view({
+      attrs: {
+        toolCall: makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+        toolResult: makeResult(CUSTOM_KEY_OUTPUT),
+        resolution: null,
+        chatId: "chat-1",
+        assistantEventId: "evt-1",
+      },
+    } as unknown as Parameters<typeof card.view>[0]);
+
+    expect(textOf(findByClass(vnode, "permission-request-cloud-offer-toggle"))).toContain(
+      "Your OpenAI account already has a ClickUp connection.",
+    );
   });
 
   it("opens onto a warning and the button that takes the offer", () => {
@@ -787,8 +847,16 @@ describe("the cloud-connections offer on the card", () => {
 
   it("is drawn by the live card when the backend offers it, and replaced by the receipt once taken", async () => {
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
-    seedCloudConnectionsOffer("chat-1", "slack-api", { is_offered: true, provider_name: "Anthropic" });
-    seedCloudConnectionsOffer("chat-2", "slack-api", { is_offered: false, provider_name: null });
+    seedCloudConnectionsOffer(
+      "chat-1",
+      { scope: "slack-api" },
+      { is_offered: true, provider_name: "Anthropic", connector_name: "Slack" },
+    );
+    seedCloudConnectionsOffer(
+      "chat-2",
+      { scope: "slack-api" },
+      { is_offered: false, provider_name: null, connector_name: null },
+    );
     const card = PermissionCard();
     const attrsFor = (chatId: string): Parameters<typeof card.view>[0] =>
       ({

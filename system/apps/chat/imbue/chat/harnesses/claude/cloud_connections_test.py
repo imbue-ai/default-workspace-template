@@ -9,6 +9,7 @@ import pytest
 
 from imbue.chat.harnesses.claude.cloud_connections import ClaudeCloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
+from imbue.chat.harnesses.cloud_connections import CloudConnector
 
 
 def _sign_in(account_dir: Path, scopes: list[str]) -> None:
@@ -16,11 +17,14 @@ def _sign_in(account_dir: Path, scopes: list[str]) -> None:
     (account_dir / ".credentials.json").write_text(json.dumps(credentials))
 
 
-def test_the_list_is_asked_as_the_account_and_names_each_connector_once(tmp_path: Path) -> None:
+def test_the_list_is_asked_as_the_account_and_holds_each_connector_once_with_its_address(tmp_path: Path) -> None:
     _sign_in(tmp_path, ["user:inference", "user:mcp_servers"])
     requests: list[httpx.Request] = []
     pages = {
-        None: {"data": [{"display_name": "Slack"}, {"display_name": "Gmail"}], "next_page": "p2"},
+        None: {
+            "data": [{"display_name": "Slack", "url": "https://mcp.slack.com/mcp"}, {"display_name": "Gmail"}],
+            "next_page": "p2",
+        },
         "p2": {"data": [{"display_name": "Slack"}, {"display_name": ""}, {"url": "https://nameless"}]},
     }
 
@@ -28,9 +32,9 @@ def test_the_list_is_asked_as_the_account_and_names_each_connector_once(tmp_path
         requests.append(request)
         return httpx.Response(200, json=pages[request.url.params.get("page")])
 
-    names = ClaudeCloudConnections.over_transport(httpx.MockTransport(handler)).list_connected(tmp_path)
+    connectors = ClaudeCloudConnections.over_transport(httpx.MockTransport(handler)).list_connected(tmp_path)
 
-    assert names == ("Slack", "Gmail")
+    assert connectors == (CloudConnector(name="Slack", url="https://mcp.slack.com/mcp"), CloudConnector(name="Gmail"))
     assert [request.url.path for request in requests] == ["/v1/mcp_servers", "/v1/mcp_servers"]
     assert requests[0].headers["authorization"] == "Bearer token-of-the-account"
     assert requests[0].headers["anthropic-beta"] == "mcp-servers-2025-12-04"

@@ -1,9 +1,11 @@
 /**
  * The permission card's offer of the account's own cloud connections: whether
- * the backend offers them for a request's scope on this chat, and taking the
- * offer.
+ * the backend offers them for the service a request names on this chat, and
+ * taking the offer. A request names its service by a scope (a service the
+ * gateway's catalog knows) or by a domain (a custom service, with the endpoint
+ * of the service's own MCP server when that is what it connects).
  *
- * The first question for a (chat, scope) pair kicks off a fetch and returns
+ * The first question for a (chat, service) pair kicks off a fetch and returns
  * null; when it lands the answer is cached and the card redrawn. Any answer is
  * definitive for the page: the offer is a hint, so a failed lookup is no offer
  * rather than something to retry. Taking the offer restarts the chat's agent,
@@ -17,9 +19,14 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 export interface CloudConnectionsOffer {
   is_offered: boolean;
   provider_name: string | null;
+  /** The connector on the account taken to be for the requested service. */
+  connector_name: string | null;
 }
 
-const NO_OFFER: CloudConnectionsOffer = { is_offered: false, provider_name: null };
+/** The service a permission request names, as the backend is asked about it. */
+export type RequestedService = { scope: string } | { domain: string; mcpEndpoint: string | null };
+
+const NO_OFFER: CloudConnectionsOffer = { is_offered: false, provider_name: null, connector_name: null };
 
 type CacheEntry = { state: "loading" } | { state: "ready"; offer: CloudConnectionsOffer };
 
@@ -28,18 +35,34 @@ const cache = new Map<string, CacheEntry>();
 // notice's transcript round trip.
 const takenRequestIds = new Set<string>();
 
-function cacheKey(chatId: string, scope: string): string {
-  return `${chatId}\n${scope}`;
+/** The query the backend is asked with, which also tells one requested service from another. */
+function queryOf(requested: RequestedService): string {
+  const params = new URLSearchParams();
+  if ("scope" in requested) {
+    params.set("scope", requested.scope);
+  } else {
+    params.set("domain", requested.domain);
+    if (requested.mcpEndpoint !== null) params.set("mcp_endpoint", requested.mcpEndpoint);
+  }
+  return params.toString();
 }
 
-async function fetchOffer(chatId: string, scope: string): Promise<CloudConnectionsOffer> {
+function cacheKey(chatId: string, requested: RequestedService): string {
+  return `${chatId}\n${queryOf(requested)}`;
+}
+
+async function fetchOffer(chatId: string, requested: RequestedService): Promise<CloudConnectionsOffer> {
   try {
-    const path = `/api/chats/${encodeURIComponent(chatId)}/cloud-connections?scope=${encodeURIComponent(scope)}`;
+    const path = `/api/chats/${encodeURIComponent(chatId)}/cloud-connections?${queryOf(requested)}`;
     const response = await fetch(apiUrl(path));
     if (response.ok) {
       const body = (await response.json()) as Partial<CloudConnectionsOffer>;
       if (body.is_offered === true && typeof body.provider_name === "string") {
-        return { is_offered: true, provider_name: body.provider_name };
+        return {
+          is_offered: true,
+          provider_name: body.provider_name,
+          connector_name: typeof body.connector_name === "string" ? body.connector_name : null,
+        };
       }
     }
   } catch {
@@ -48,15 +71,15 @@ async function fetchOffer(chatId: string, scope: string): Promise<CloudConnectio
   return NO_OFFER;
 }
 
-/** The offer for a request's scope on a chat, or null while it is not known (or
- *  not made). The first call for a pair starts a one-time background fetch that
- *  redraws when it resolves. */
-export function getCloudConnectionsOffer(chatId: string, scope: string): CloudConnectionsOffer | null {
-  const key = cacheKey(chatId, scope);
+/** The offer for the service a request names on a chat, or null while it is not
+ *  known (or not made). The first call for a pair starts a one-time background
+ *  fetch that redraws when it resolves. */
+export function getCloudConnectionsOffer(chatId: string, requested: RequestedService): CloudConnectionsOffer | null {
+  const key = cacheKey(chatId, requested);
   const cached = cache.get(key);
   if (cached === undefined) {
     cache.set(key, { state: "loading" });
-    void fetchOffer(chatId, scope).then((offer) => {
+    void fetchOffer(chatId, requested).then((offer) => {
       cache.set(key, { state: "ready", offer });
       m.redraw();
     });
@@ -104,8 +127,12 @@ export async function enableCloudConnections(
 
 /** Seed the cache directly. Only for tests and the dev-only visual preview,
  *  which have no backend to fetch from. */
-export function seedCloudConnectionsOffer(chatId: string, scope: string, offer: CloudConnectionsOffer): void {
-  cache.set(cacheKey(chatId, scope), { state: "ready", offer });
+export function seedCloudConnectionsOffer(
+  chatId: string,
+  requested: RequestedService,
+  offer: CloudConnectionsOffer,
+): void {
+  cache.set(cacheKey(chatId, requested), { state: "ready", offer });
 }
 
 /** Drop every cached offer and taken request so the next test starts from a quiet page. */

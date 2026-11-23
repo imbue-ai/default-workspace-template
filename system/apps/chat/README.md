@@ -1467,19 +1467,37 @@ mngr sources the host's env file at every agent start and never rewrites it. A p
 
 When an account signs in, the chat app asks its provider once, on a thread of its own, which
 connectors the account has connected, and keeps the names in the account's folder
-(`.cloud_connections.json`): claude's from the endpoint Claude Code itself reads, with the token a
-subscription sign-in leaves there, and codex's from `app/list` on a short-lived `codex app-server`
-bound to the account. The list is never read again, and a read that fails keeps nothing, so no
+(`.cloud_connections.json`), each with the address of the MCP server behind it where the provider
+tells it: claude's from the endpoint Claude Code itself reads, with the token a subscription sign-in
+leaves there (name and address), and codex's from `app/list` on a short-lived `codex app-server`
+bound to the account (name alone: every app is reached through the one server OpenAI hosts). The list is never read again, and a read that fails keeps nothing, so no
 offer is ever made for that account. An account signed in before this existed has no list until
 it signs in again.
 
-The card of a pending request for a service asks `GET /api/chats/<chat-id>/cloud-connections?scope=<scope>`.
-The offer is made when the chat's agent runs claude or codex, does not load its account's
-connections yet, the workspace is not shared (nobody is granted it or one of its apps, and no
-visiting agent is admitted), the request comes from the owner, and one of the account's
-connectors is named like the service: its name contains the service's catalog key read as words
-and without a trailing `-mcp` (`google-gmail` as "google gmail"), or the catalog's display name
-without a parenthesized transport ("Notion (MCP)" as "notion"), whatever the case. Whether an
+The card of a pending request for a service asks `GET /api/chats/<chat-id>/cloud-connections`, with
+`?scope=<scope>` for a service the gateway's catalog knows and `?domain=<domain>` for a custom
+service (plus `&mcp_endpoint=<url>` when the request signs in to the service's own MCP server, the
+`mcp` login flow). The offer is made when the chat's agent runs claude or codex, does not load its
+account's connections yet, the workspace is not shared (nobody is granted it or one of its apps,
+and no visiting agent is admitted), the request comes from the owner, and one of the account's
+connectors is taken to be for the service. The answer names that connector (`connector_name`),
+and the card's line says so ("Your Anthropic account already has a ClickUp connection."), so the
+user can judge the match.
+
+A connector is for a catalog service when it is named like it: its name contains the service's
+catalog key read as words and without a trailing `-mcp` (`google-gmail` as "google gmail"), or the
+catalog's display name without a parenthesized transport ("Notion (MCP)" as "notion"), whatever
+the case. A custom service request names no service, only a domain, so a connector is for it when:
+
+- its server's address has the host the request names, as its domain or as its MCP endpoint (only
+  claude's connectors carry an address); or, failing that,
+- it is named like the domain: every word of its name, less generic ones ("MCP", "API", "com"),
+  is a whole label of the domain other than the last, or those words run together are one. So
+  "ClickUp" is for `api.clickup.com` and "Google Drive" for `drive.google.com`, while "Google
+  Calendar" is for neither that nor `www.googleapis.com`, and "Box" is not for `api.dropbox.com`.
+
+This leans towards making no offer: a service whose API lives on a domain that does not carry its
+name, or whose connector's name says more than its domain, is not matched. Whether an
 agent loads the connections is read each time off the switch and the agent itself: the switch is
 on, and the agent's process started after the host's env file was last written (the marker its
 harness touches at each start). So a chat that was running when another chat turned the switch on

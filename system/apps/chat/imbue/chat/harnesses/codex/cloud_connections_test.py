@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
+from imbue.chat.harnesses.cloud_connections import CloudConnector
 from imbue.chat.harnesses.codex.cloud_connections import CodexCloudConnections
 from imbue.chat.harnesses.codex.cloud_connections import list_connected_apps
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
@@ -51,9 +52,9 @@ def test_only_the_apps_connected_on_the_account_are_named(tmp_path: Path) -> Non
     apps = [_app("Gmail", True), _app("Slack", True), _app("Gmail", True), _app("Zillow", False)]
     transport = _AppListTransport({"result": {"data": apps, "nextCursor": "200"}})
 
-    names = list_connected_apps(CodexAppServerClient(transport=transport))
+    connectors = list_connected_apps(CodexAppServerClient(transport=transport))
 
-    assert names == ("Gmail", "Slack")
+    assert connectors == (CloudConnector(name="Gmail"), CloudConnector(name="Slack"))
     (request,) = transport.requests
     assert request["method"] == "app/list"
     assert request["params"]["limit"] == 200

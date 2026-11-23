@@ -17,7 +17,7 @@ import {
   resetCloudConnectionsOffersForTesting,
 } from "./cloud-connections-offer";
 
-const OFFERED = { is_offered: true, provider_name: "Anthropic" };
+const OFFERED = { is_offered: true, provider_name: "Anthropic", connector_name: "Gmail" };
 
 function jsonResponse(status: number, body: unknown): { ok: boolean; status: number; json: () => Promise<unknown> } {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -44,17 +44,35 @@ describe("getCloudConnectionsOffer", () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, OFFERED));
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(getCloudConnectionsOffer("chat-1", "google-gmail-api")).toBeNull();
-    expect(getCloudConnectionsOffer("chat-1", "google-gmail-api")).toBeNull();
+    expect(getCloudConnectionsOffer("chat-1", { scope: "google-gmail-api" })).toBeNull();
+    expect(getCloudConnectionsOffer("chat-1", { scope: "google-gmail-api" })).toBeNull();
     await flushFetches();
 
-    expect(getCloudConnectionsOffer("chat-1", "google-gmail-api")).toEqual(OFFERED);
+    expect(getCloudConnectionsOffer("chat-1", { scope: "google-gmail-api" })).toEqual(OFFERED);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/chats/chat-1/cloud-connections?scope=google-gmail-api");
     expect(mockRedraw).toHaveBeenCalled();
     // Another chat's card for the same scope is its own question.
-    expect(getCloudConnectionsOffer("chat-2", "google-gmail-api")).toBeNull();
+    expect(getCloudConnectionsOffer("chat-2", { scope: "google-gmail-api" })).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks about a custom service by its domain, and by the endpoint of its MCP server", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { ...OFFERED, connector_name: "ClickUp" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const byKey = { domain: "api.clickup.com", mcpEndpoint: null };
+    const byServer = { domain: "mcp.clickup.com", mcpEndpoint: "https://mcp.clickup.com/mcp?v=1" };
+
+    getCloudConnectionsOffer("chat-1", byKey);
+    getCloudConnectionsOffer("chat-1", byServer);
+    await flushFetches();
+
+    expect(getCloudConnectionsOffer("chat-1", byKey)?.connector_name).toBe("ClickUp");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith("/api/chats/chat-1/cloud-connections?domain=api.clickup.com");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats/chat-1/cloud-connections?domain=mcp.clickup.com&mcp_endpoint=https%3A%2F%2Fmcp.clickup.com%2Fmcp%3Fv%3D1",
+    );
   });
 
   it("makes no offer when the backend makes none, errors, or cannot be reached", async () => {
@@ -69,9 +87,9 @@ describe("getCloudConnectionsOffer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     for (const scope of ["slack-api", "notion-mcp-api", "github-rest-api"]) {
-      expect(getCloudConnectionsOffer("chat-1", scope)).toBeNull();
+      expect(getCloudConnectionsOffer("chat-1", { scope })).toBeNull();
       await flushFetches();
-      expect(getCloudConnectionsOffer("chat-1", scope)).toBeNull();
+      expect(getCloudConnectionsOffer("chat-1", { scope })).toBeNull();
     }
     // A hint is not worth asking for twice.
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -86,8 +104,8 @@ describe("enableCloudConnections", () => {
         : jsonResponse(200, OFFERED),
     );
     vi.stubGlobal("fetch", fetchMock);
-    getCloudConnectionsOffer("chat-1", "slack-api");
-    getCloudConnectionsOffer("chat-2", "slack-api");
+    getCloudConnectionsOffer("chat-1", { scope: "slack-api" });
+    getCloudConnectionsOffer("chat-2", { scope: "slack-api" });
     await flushFetches();
 
     const outcome = await enableCloudConnections("chat-1", "req-7");
@@ -99,8 +117,8 @@ describe("enableCloudConnections", () => {
       body: JSON.stringify({ request_id: "req-7" }),
     });
     expect(isCloudConnectionsOfferTaken("req-7")).toBe(true);
-    expect(getCloudConnectionsOffer("chat-1", "slack-api")).toBeNull();
-    expect(getCloudConnectionsOffer("chat-2", "slack-api")).toEqual(OFFERED);
+    expect(getCloudConnectionsOffer("chat-1", { scope: "slack-api" })).toBeNull();
+    expect(getCloudConnectionsOffer("chat-2", { scope: "slack-api" })).toEqual(OFFERED);
   });
 
   it("reports the backend's own reason for a refusal and leaves the request untaken", async () => {

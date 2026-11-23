@@ -19,6 +19,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.cloud_connections import CONNECTED_FILENAME
 from imbue.chat.cloud_connections import ConnectedConnectors
 from imbue.chat.harnesses.claude.cloud_connections import ClaudeCloudConnections
+from imbue.chat.harnesses.cloud_connections import CloudConnector
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.mock_cloud_connections_bridge_test import RecordingCloudConnectionsBridge
@@ -44,11 +45,15 @@ def _gateway(requests: list[httpx.Request], delete_status: int = 200) -> httpx.C
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def _claude_agent(tmp_path: Path, connected: tuple[str, ...]) -> AgentInfo:
+def _claude_agent(tmp_path: Path, connected: tuple[str | CloudConnector, ...]) -> AgentInfo:
     """A claude agent whose host turns the connectors off, on an account with ``connected`` recorded."""
     account_id, account_path = accounts.mint_account_dir()
     accounts.commit_account(account_id, "anthropic", "Anthropic")
-    (account_path / CONNECTED_FILENAME).write_text(ConnectedConnectors(names=connected).model_dump_json())
+    connectors = tuple(
+        connector if isinstance(connector, CloudConnector) else CloudConnector(name=connector)
+        for connector in connected
+    )
+    (account_path / CONNECTED_FILENAME).write_text(ConnectedConnectors(connectors=connectors).model_dump_json())
     host_dir = tmp_path / "host"
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
@@ -122,8 +127,32 @@ def test_the_offer_is_made_for_a_scope_whose_service_the_account_has_connected(
     bridge = RecordingCloudConnectionsBridge(agents_by_chat_id={_CHAT: agent_info})
     client = _client(tmp_path, monkeypatch, bridge, [])
 
-    assert _offer(client) == {"is_offered": True, "provider_name": "Anthropic"}
-    assert _offer(client, scope="slack-api") == {"is_offered": False, "provider_name": None}
+    assert _offer(client) == {"is_offered": True, "provider_name": "Anthropic", "connector_name": "Gmail"}
+    assert _offer(client, scope="slack-api") == {"is_offered": False, "provider_name": None, "connector_name": None}
+
+
+def test_the_offer_is_made_for_a_custom_service_by_its_domain_or_its_mcp_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A custom service request names no scope: the card asks by the domain, and by the endpoint of an MCP server."""
+    connected = ("ClickUp", CloudConnector(name="Widgets", url="https://mcp.acme-cdn.net/mcp"))
+    agent_info = _claude_agent(tmp_path, connected)
+    bridge = RecordingCloudConnectionsBridge(agents_by_chat_id={_CHAT: agent_info})
+    gateway_requests: list[httpx.Request] = []
+    client = _client(tmp_path, monkeypatch, bridge, gateway_requests)
+    path = f"/api/chats/{_CHAT}/cloud-connections"
+
+    by_domain = client.get(path, query_string={"domain": "api.clickup.com"}).get_json()
+    by_endpoint = client.get(
+        path, query_string={"domain": "acme.com", "mcp_endpoint": "https://mcp.acme-cdn.net/mcp"}
+    ).get_json()
+    unknown = client.get(path, query_string={"domain": "api.example.com"}).get_json()
+
+    assert by_domain == {"is_offered": True, "provider_name": "Anthropic", "connector_name": "ClickUp"}
+    assert by_endpoint == {"is_offered": True, "provider_name": "Anthropic", "connector_name": "Widgets"}
+    assert unknown == {"is_offered": False, "provider_name": None, "connector_name": None}
+    # A domain is matched as it stands: the gateway's catalog is asked about scopes alone.
+    assert gateway_requests == []
 
 
 def test_no_offer_to_a_visitor_in_a_shared_workspace_on_a_preview_or_without_a_scope(

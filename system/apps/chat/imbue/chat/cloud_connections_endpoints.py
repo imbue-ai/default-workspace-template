@@ -1,8 +1,8 @@
 """HTTP endpoints for `/api/chats/<chat_id>/cloud-connections`: the permission card's offer of the account's own
 cloud connections, and taking it.
 
-The card asks the GET whether to make the offer for the service its request names
-(``cloud_connections.offer_for``). Taking it is the POST: the workspace's switch for its
+The card asks the GET whether to make the offer for the service its request names, by the scope of
+a service the gateway's catalog knows or by the domain of a custom one (``cloud_connections.offer_for``). Taking it is the POST: the workspace's switch for its
 agents' cloud connections is turned on, the permission request is withdrawn from the gateway, the
 chat's agent is restarted (an agent reads the switch only as it starts), and it is told what
 happened in a notice the page draws no row for. The switch is written first and stays written
@@ -36,6 +36,7 @@ from workspace_layout.identity import IDENTITY_HEADER
 
 from imbue.chat.cloud_connections import CloudConnectionsOffer
 from imbue.chat.cloud_connections import NO_OFFER
+from imbue.chat.cloud_connections import RequestedService
 from imbue.chat.cloud_connections import is_workspace_shared
 from imbue.chat.cloud_connections import offer_for
 from imbue.chat.cloud_connections import provider_name_of
@@ -57,6 +58,8 @@ logger = _loguru_logger
 OFFER_ROUTE: Final[str] = "/api/chats/<chat_id>/cloud-connections"
 ENABLE_ROUTE: Final[str] = "/api/chats/<chat_id>/cloud-connections/enable"
 _SCOPE_PARAMETER: Final[str] = "scope"
+_DOMAIN_PARAMETER: Final[str] = "domain"
+_MCP_ENDPOINT_PARAMETER: Final[str] = "mcp_endpoint"
 # A request filed for any of the user's devices is addressed the same way when it is withdrawn.
 _DEVICE_HEADER: Final[str] = "X-Latchkey-Device"
 _ANY_DEVICE: Final[str] = "*"
@@ -109,18 +112,35 @@ def _service_names_of(scope: str) -> tuple[str, ...]:
         return ()
 
 
-def get_offer(chat_id: str) -> Response:
-    """GET /api/chats/{chat_id}/cloud-connections?scope=... -- whether the card of a request for ``scope`` makes the offer.
+def _requested_service() -> RequestedService | None:
+    """What the card's request asks to reach, from the query: a catalog scope, or a custom service's domain."""
+    scope = request.args.get(_SCOPE_PARAMETER, "").strip()
+    if scope:
+        names = _service_names_of(scope)
+        return RequestedService(names=names) if names else None
+    domain = request.args.get(_DOMAIN_PARAMETER, "").strip()
+    if not domain:
+        return None
+    return RequestedService(domain=domain, mcp_endpoint=request.args.get(_MCP_ENDPOINT_PARAMETER, "").strip() or None)
 
-    Never offered to a visitor, on a secondary chat, or for a scope the gateway's catalog does not know.
+
+def get_offer(chat_id: str) -> Response:
+    """GET /api/chats/{chat_id}/cloud-connections?scope=... or ?domain=...&mcp_endpoint=... -- whether the card of
+    a request makes the offer.
+
+    ``scope`` is what a request for a service the gateway's catalog knows names; ``domain`` is what a request for a
+    custom service names, with ``mcp_endpoint`` when it connects the service's own MCP server. Never offered to a
+    visitor, on a secondary chat, or for a scope the gateway's catalog does not know.
     """
     agent_info = _bridge().find_agent(chat_id)
     if agent_info is None:
         return _chat_not_found(chat_id)
-    scope = request.args.get(_SCOPE_PARAMETER, "").strip()
-    if not scope or get_state().is_secondary or not is_owner_identity(request.headers.get(IDENTITY_HEADER)):
+    if get_state().is_secondary or not is_owner_identity(request.headers.get(IDENTITY_HEADER)):
         return model_response(NO_OFFER)
-    return model_response(offer_for(agent_info, _service_names_of(scope), is_workspace_shared()))
+    requested = _requested_service()
+    if requested is None:
+        return model_response(NO_OFFER)
+    return model_response(offer_for(agent_info, requested, is_workspace_shared()))
 
 
 def _withdraw_permission_request(request_id: str) -> bool:

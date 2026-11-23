@@ -23,6 +23,7 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
+from imbue.chat.harnesses.cloud_connections import CloudConnector
 from imbue.chat.harnesses.codex.account_models import AccountModelProbeError
 from imbue.chat.harnesses.codex.account_models import ask_codex_account
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
@@ -48,8 +49,11 @@ _SOCKET_FILENAME: Final = "app-server.sock"
 _SOCKET_PARENT_DIR: Final = "/tmp"
 
 
-def _connected_app_names(result: Any) -> tuple[str, ...]:
-    """The names of the apps an ``app/list`` result marks as connected on the account."""
+def _connected_apps(result: Any) -> tuple[CloudConnector, ...]:
+    """The apps an ``app/list`` result marks as connected on the account.
+
+    By name alone: every app is reached through the one server OpenAI hosts, so none has an address of its own.
+    """
     entries = result.get("data") if isinstance(result, dict) else None
     if not isinstance(entries, list):
         raise CodexAppServerError(f"codex app-server answered {_APP_LIST_METHOD!r} with no list of apps")
@@ -61,7 +65,7 @@ def _connected_app_names(result: Any) -> tuple[str, ...]:
         and isinstance(entry.get("name"), str)
         and entry["name"]
     ]
-    return tuple(dict.fromkeys(names))
+    return tuple(CloudConnector(name=name) for name in dict.fromkeys(names))
 
 
 def _parse_frame(raw: str) -> Any:
@@ -72,7 +76,7 @@ def _parse_frame(raw: str) -> Any:
         return None
 
 
-def list_connected_apps(client: CodexAppServerClient) -> tuple[str, ...]:
+def list_connected_apps(client: CodexAppServerClient) -> tuple[CloudConnector, ...]:
     """Ask an initialized app-server for the account's apps, reading frames until it answers.
 
     The answer arrives after however many ``app/list/updated`` notifications codex sends while it loads.
@@ -97,7 +101,7 @@ def list_connected_apps(client: CodexAppServerClient) -> tuple[str, ...]:
         error = frame.get("error")
         if error is not None:
             raise CodexAppServerError(f"codex app-server request {_APP_LIST_METHOD!r} failed: {error!r}")
-        return _connected_app_names(frame.get("result"))
+        return _connected_apps(frame.get("result"))
     raise CodexAppServerError(f"codex app-server request {_APP_LIST_METHOD!r} timed out")
 
 
@@ -108,7 +112,7 @@ class CodexCloudConnections(CloudConnections):
     # codex is started with the apps off unless the variable turns them on.
     is_on_when_unset: ClassVar[bool] = False
 
-    def list_connected(self, account_dir: Path) -> tuple[str, ...]:
+    def list_connected(self, account_dir: Path) -> tuple[CloudConnector, ...]:
         # A socket of its own rather than the account's: the account's is taken, under its probe
         # lock, by whoever is asking for the account's models, and this exchange can run for minutes.
         # Under /tmp whatever TMPDIR says, as mngr's own codex sockets are: a unix socket's path is

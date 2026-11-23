@@ -20,6 +20,7 @@ import httpx
 from imbue.chat.harnesses.claude.tap import CLAUDE_PROCESS_STARTED_MARKER_FILENAME
 from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
+from imbue.chat.harnesses.cloud_connections import CloudConnector
 
 _CREDENTIALS_FILENAME: Final = ".credentials.json"
 _CONNECTORS_URL: Final = "https://api.anthropic.com/v1/mcp_servers"
@@ -56,16 +57,21 @@ def _read_access_token(account_dir: Path) -> str:
     return token
 
 
-def _connector_names(page: Any) -> list[str]:
-    """The display names one page of the connector list carries."""
+def _connectors(page: Any) -> list[CloudConnector]:
+    """The connectors one page of the list carries: each one's display name, and its server's address when given."""
     entries = page.get("data") if isinstance(page, dict) else None
     if not isinstance(entries, list):
         raise CloudConnectionsError("the connector list is not shaped as expected")
-    return [
-        entry["display_name"]
-        for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("display_name"), str) and entry["display_name"]
-    ]
+    connectors: list[CloudConnector] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("display_name")
+        if not isinstance(name, str) or not name:
+            continue
+        url = entry.get("url")
+        connectors.append(CloudConnector(name=name, url=url if isinstance(url, str) and url else None))
+    return connectors
 
 
 class ClaudeCloudConnections(CloudConnections):
@@ -84,13 +90,13 @@ class ClaudeCloudConnections(CloudConnections):
         connections._transport = transport
         return connections
 
-    def list_connected(self, account_dir: Path) -> tuple[str, ...]:
+    def list_connected(self, account_dir: Path) -> tuple[CloudConnector, ...]:
         headers = {
             "Authorization": f"Bearer {_read_access_token(account_dir)}",
             "anthropic-version": _ANTHROPIC_VERSION,
             "anthropic-beta": _CONNECTORS_BETA,
         }
-        names: list[str] = []
+        connectors: list[CloudConnector] = []
         params: dict[str, str] = {"limit": str(_PAGE_SIZE)}
         with httpx.Client(transport=self._transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
             for _ in range(_MAX_PAGES):
@@ -104,9 +110,13 @@ class ClaudeCloudConnections(CloudConnections):
                     page = response.json()
                 except json.JSONDecodeError as e:
                     raise CloudConnectionsError(f"the connector list is not JSON: {e}") from e
-                names.extend(_connector_names(page))
+                connectors.extend(_connectors(page))
                 next_page = page.get("next_page")
                 if not isinstance(next_page, str) or not next_page:
                     break
                 params = {"limit": str(_PAGE_SIZE), "page": next_page}
-        return tuple(dict.fromkeys(names))
+        # One per display name: the first one listed.
+        first_by_name: dict[str, CloudConnector] = {}
+        for connector in connectors:
+            first_by_name.setdefault(connector.name, connector)
+        return tuple(first_by_name.values())
