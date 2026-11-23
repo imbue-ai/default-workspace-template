@@ -1173,12 +1173,7 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
 
 # A line of intent, a tool call, a background task's report, a finished step, and the closing reply below the timeline.
 _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-st-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Install the update"},
-    },
+    user_record("uuid-st-1", "2026-01-01T00:00:00Z", "Install the update"),
     assistant_record(
         "uuid-st-2",
         "2026-01-01T00:00:01Z",
@@ -1189,16 +1184,12 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
         "tool_use",
     ),
     tool_result_record("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
-    {
-        "type": "user",
-        "uuid": "uuid-st-3b",
-        "timestamp": "2026-01-01T00:00:02.5Z",
-        "message": {
-            "role": "user",
-            "content": "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
-            "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
-        },
-    },
+    user_record(
+        "uuid-st-3b",
+        "2026-01-01T00:00:02.5Z",
+        "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
+        "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
+    ),
     assistant_record(
         "uuid-st-4",
         "2026-01-01T00:00:03Z",
@@ -1281,12 +1272,7 @@ def _text_line(uuid: str, timestamp: str, text: str) -> dict[str, Any]:
 def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, Any]]:
     """The shape of a real Opus run: asked mid-task, the agent moves a step and looks it up before answering."""
     return [
-        {
-            "type": "user",
-            "uuid": "uuid-mt-1",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {"role": "user", "content": "Summarize each app, one at a time"},
-        },
+        user_record("uuid-mt-1", "2026-01-01T00:00:00Z", "Summarize each app, one at a time"),
         bash_call_record("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
         tool_result_record(
             "uuid-mt-3",
@@ -1323,12 +1309,7 @@ _QUEUED_QUESTION = {
     "attachment": {"type": "queued_command", "prompt": "Which app folder is the biggest?", "commandMode": "prompt"},
 }
 
-_NEW_TURN_QUESTION = {
-    "type": "user",
-    "uuid": "uuid-mt-6",
-    "timestamp": "2026-01-01T00:00:05Z",
-    "message": {"role": "user", "content": "Which app folder is the biggest?"},
-}
+_NEW_TURN_QUESTION = user_record("uuid-mt-6", "2026-01-01T00:00:05Z", "Which app folder is the biggest?")
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1355,12 +1336,7 @@ def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(t
 
 
 _REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-rc-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Summarize each app; tell me anything surprising"},
-    },
+    user_record("uuid-rc-1", "2026-01-01T00:00:00Z", "Summarize each app; tell me anything surprising"),
     bash_call_record("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
     tool_result_record(
         "uuid-rc-3",
@@ -3447,24 +3423,8 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
 def _question_and_reply_events(uuid_prefix: str, question: str, reply: str) -> list[dict[str, Any]]:
     """A session of one user question and the assistant's finished reply to it."""
     return [
-        {
-            "type": "user",
-            "uuid": f"{uuid_prefix}-1",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {"role": "user", "content": question},
-        },
-        {
-            "type": "assistant",
-            "uuid": f"{uuid_prefix}-2",
-            "timestamp": "2026-01-01T00:00:01Z",
-            "message": {
-                "role": "assistant",
-                "model": "claude-opus-4-6",
-                "content": [{"type": "text", "text": reply}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-        },
+        user_record(f"{uuid_prefix}-1", "2026-01-01T00:00:00Z", question),
+        assistant_record(f"{uuid_prefix}-2", "2026-01-01T00:00:01Z", [{"type": "text", "text": reply}], "end_turn"),
     ]
 
 
