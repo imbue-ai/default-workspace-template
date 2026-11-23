@@ -97,9 +97,10 @@ export const SHELL_FIRST_CONVERSATION_STEP = "shell:first-conversation-step";
 
 /** App to shell: show a one-button card with the page's words in one place (``ShellCoachCardPlace``): under a
  *  control of the Imbue Studio chrome, which is ringed while the card is up, or popping out of the agent's avatar,
- *  whose window the shell brings forward. The shell shows it only while it has nothing else of the kind on screen
- *  (the end of its tour gives way to it), and drops a text that is empty or longer than
- *  ``MAX_COACH_CARD_TEXT_LENGTH`` and a place it does not know. */
+ *  whose window the shell brings forward. The shell shows it while its tour shows nothing, in place of a coach card
+ *  that is up, and in place of the end of its tour (the last card, or the badge an early exit leaves); during any
+ *  other tour card, or the tour's pause notice, the request is dropped. It also drops a text that is empty or
+ *  longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and a place it does not know. */
 export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
 
 /** App to shell: whether an agent is working in what the page shows (a reply under way in a chat), sent when that
