@@ -744,6 +744,7 @@ icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
 uses_microphone = true
+seeds_shortcuts = false
 system = true
 priority = "files"
 launcher_rank = 20
@@ -815,6 +816,7 @@ path = "/api/focus-chat"
 type = "open:file"
 show = "{path}?view"
 showing = ["{path}", "{path}/"]
+reload_when_raised = true
 
 [[keybindings]]
 id = "rename"
@@ -848,6 +850,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
     assert row["uses_microphone"] is True
+    assert row["seeds_shortcuts"] is False
     assert row["system"] is True
     assert row["priority"] == "files"
     assert row["program"] == "files"
@@ -920,7 +923,12 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     }
     assert row["message_handlers"] == [
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
-        {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
+        {
+            "type": "open:file",
+            "show": "{path}?view",
+            "showing": ["{path}", "{path}/"],
+            "reload_when_raised": True,
+        },
     ]
     # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
     assert row["keybindings"] == [
@@ -1086,6 +1094,16 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             id="message-handler-showing-beside-a-path",
         ),
         pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\nshow = "{path}"\nreload_when_raised = "yes"\n',
+            "a message handler's reload_when_raised must be a boolean",
+            id="message-handler-reload-when-raised-not-a-boolean",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nreload_when_raised = true\n',
+            "a message handler gives 'reload_when_raised' only beside 'show'",
+            id="message-handler-reload-when-raised-beside-a-path",
+        ),
+        pytest.param(
             '[[keybindings]]\nid = "rename"\n',
             "every keybinding needs a string 'id' and 'label'",
             id="keybinding-without-a-label",
@@ -1158,6 +1176,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "instances_url",
         "stop_when_no_windows",
         "uses_microphone",
+        "seeds_shortcuts",
         "system",
         "default_shortcut",
         "default_shortcuts",

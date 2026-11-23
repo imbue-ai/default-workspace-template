@@ -9,7 +9,7 @@ metadata:
 
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
-the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
+the shared infrastructure: skills, scripts, `AGENTS.md` scaffolding,
 `Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
 the system interface, `mngr`.
 
@@ -62,9 +62,11 @@ what this run needs, with no confirmation and no preflight script, you may:
 
 - stop other chats and background agents, idle or running, through `run-status
   stop-chats` (5b, and earlier with `--agent <name>` when memory runs short),
-  which records each so the end of the pass starts it again with a note. The
-  main chat is the exception: the chat app starts it again as soon as it stops,
-  so `stop-chats --agent` refuses it, and 5b only interrupts it;
+  which records each so the end of the pass starts it again with a note, except
+  one that was idle when paused for memory: it stays stopped, and its next
+  message starts it. The main chat is the exception: the chat app starts it
+  again as soon as it stops, so `stop-chats --agent` refuses it, and 5b only
+  interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
   (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
@@ -613,17 +615,17 @@ path below instead.
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
 `system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
-`system/apps/style_guide/frontend/`,
+`system/apps/style_guide/frontend/`, `system/apps/onboarding_checklist/frontend/`,
 `system/libs/workspace_ui/`,
 `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files, Routines, Screen and Style Guide frontends, the shared library,
+Getting Started, Files, Routines, Screen, Style Guide and Onboarding checklist frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
 wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files, Routines, Screen and Style Guide frontends, `workspace_ui`, and the npm files count as both
+Started, Files, Routines, Screen, Style Guide and Onboarding checklist frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
 `system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
@@ -744,7 +746,11 @@ commits.
 
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
-is what you read before recording a verdict.
+is what you read before recording a verdict. The apply first stops the worker
+the run record names, keeping it: its `done` is in hand, and its idle session
+holds memory the apply's boots and build need. A retry or catch-up goes through
+the catch-up sender above, which starts it again with its branch and
+conversation intact.
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
@@ -752,10 +758,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, and the Style Guide's), append
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, the Style Guide's, and the Onboarding checklist's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
 --worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
---worker-bundle screen=<path> --worker-bundle style_guide=<path>` so the
+--worker-bundle screen=<path> --worker-bundle style_guide=<path>
+--worker-bundle onboarding_checklist=<path>` so the
 exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
@@ -796,9 +803,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 Leave `--landed` out after exit 2 or 3, and `--wip-commit` when nothing was
 saved. Each chat is started again and told what changed while it was paused,
 in a notice the user sees labelled "Workspace updated"; a background agent is
-named to its lead chat, since it does not pick its work back up by itself. It
-is safe to re-run: a non-zero exit names what it could not start or tell, and
-the same command finishes the rest.
+named to its lead chat, since it does not pick its work back up by itself. A
+chat or background agent that was idle when you paused it for memory is left
+stopped and told nothing: starting it would take the memory back, and the next
+message to it starts it. It is safe to re-run: a non-zero exit names what it
+could not start or tell, and the same command finishes the rest.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it

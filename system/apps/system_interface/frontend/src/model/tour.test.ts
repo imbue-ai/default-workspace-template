@@ -6,17 +6,23 @@ import {
   cardShown,
   chromeAnchorShown,
   dismissBadge,
+  dismissCoach,
   dismissPause,
   exitTour,
   interruptTour,
+  isLastCardShown,
   nextCard,
   parseTourRecord,
   previousCard,
+  showCoach,
   startTour,
   tourStartDelayFromSearch,
+  UNSEEN_TOUR,
 } from "./tour";
+import type { TourRecord } from "./tour";
 import type { TourAction } from "./tourCards";
 import { TOUR_CARDS } from "./tourCards";
+import { makeAgentWorkingSignal } from "./agentWorking";
 import { FAKE_TOUR_CARDS as CARDS, FakeTourApi } from "../testing/fakeTour";
 
 describe("the tour's state machine", () => {
@@ -57,8 +63,14 @@ describe("the tour's state machine", () => {
     expect(new Set(TOUR_CARDS.map((card) => card.id)).size).toBe(TOUR_CARDS.length);
     for (const card of TOUR_CARDS) expect(card.text.length).toBeGreaterThan(0);
     const last = TOUR_CARDS[TOUR_CARDS.length - 1];
+    expect(last.id).toBe("done");
     expect(last.target).toBe("launcher");
     expect(last.buttonLabel).toBe("Done");
+    expect(last.text.split("\n\n")).toEqual([
+      "That’s the tour.",
+      "You can take it again anytime from the launcher.",
+      "Click on any of the entries in the onboarding checklist to learn more!",
+    ]);
     expect(TOUR_CARDS.filter((card) => card.image !== null).map((card) => card.id)).toEqual([
       "connect",
       "devices",
@@ -72,16 +84,33 @@ describe("the tour's state machine", () => {
   });
 
   it("reads the record's fields tolerantly, and the start delay from the query string", () => {
-    expect(parseTourRecord({ is_seen: true, resume_index: 3 })).toEqual({ isSeen: true, resumeIndex: 3 });
-    expect(parseTourRecord({ is_seen: "yes", resume_index: -1 })).toEqual({ isSeen: false, resumeIndex: null });
-    expect(parseTourRecord({})).toEqual({ isSeen: false, resumeIndex: null });
+    expect(parseTourRecord({ is_seen: true, resume_index: 3 })).toEqual({
+      isSeen: true,
+      resumeIndex: 3,
+      isFinished: false,
+    });
+    expect(parseTourRecord({ is_seen: true, resume_index: null, is_finished: true })).toEqual({
+      isSeen: true,
+      resumeIndex: null,
+      isFinished: true,
+    });
+    expect(parseTourRecord({ is_seen: "yes", resume_index: -1, is_finished: "yes" })).toEqual(UNSEEN_TOUR);
+    expect(parseTourRecord({})).toEqual(UNSEEN_TOUR);
     expect(tourStartDelayFromSearch("")).toBe(TOUR_START_AFTER_WORKING_MS);
     expect(tourStartDelayFromSearch("?tour_start_ms=15000")).toBe(15000);
     expect(tourStartDelayFromSearch("?tour_start_ms=soon")).toBe(TOUR_START_AFTER_WORKING_MS);
   });
 });
 
-function controller(api: FakeTourApi, options: { isAllowed?: boolean; startAfterWorkingMs?: number } = {}) {
+/** A tour's record as the controller writes it: seen, with the card it resumes at and whether it is finished. */
+function seenRecord(resumeIndex: number | null, isFinished: boolean): TourRecord {
+  return { isSeen: true, resumeIndex, isFinished };
+}
+
+function controller(
+  api: FakeTourApi,
+  options: { isAllowed?: boolean; startAfterWorkingMs?: number; isViewerOwner?: () => boolean } = {},
+) {
   const highlights: (string | null)[] = [];
   const actions: TourAction[] = [];
   const scheduled: { callback: () => void; delayMs: number }[] = [];
@@ -90,6 +119,7 @@ function controller(api: FakeTourApi, options: { isAllowed?: boolean; startAfter
     api,
     highlightChrome: (anchor) => highlights.push(anchor),
     isAutoStartAllowed: () => options.isAllowed ?? true,
+    isViewerOwner: options.isViewerOwner ?? (() => true),
     performAction: (action) => actions.push(action),
     redraw: () => {
       redraws += 1;
@@ -119,7 +149,7 @@ describe("TourController", () => {
     fire(scheduled);
     expect(tour.shownCard()?.id).toBe("a");
     await Promise.resolve();
-    expect(api.writes).toEqual([{ isSeen: true, resumeIndex: null }]);
+    expect(api.writes).toEqual([seenRecord(null, false)]);
   });
 
   it("drops a start the agent finished before, and begins when it works again", async () => {
@@ -182,17 +212,14 @@ describe("TourController", () => {
     expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 2 });
     expect(highlights).toEqual(["share", null]);
     await Promise.resolve();
-    expect(api.writes).toEqual([
-      { isSeen: true, resumeIndex: null },
-      { isSeen: true, resumeIndex: 2 },
-    ]);
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(2, false)]);
     tour.dismissPause();
     expect(tour.getState()).toEqual(IDLE_TOUR);
     tour.noteAgentWorking(true);
     fire(scheduled);
     expect(tour.shownCard()?.id).toBe("c");
     await Promise.resolve();
-    expect(api.writes[2]).toEqual({ isSeen: true, resumeIndex: null });
+    expect(api.writes[2]).toEqual(seenRecord(null, false));
   });
 
   it("resumes at once when the pause is acknowledged while the agent is already working again", async () => {
@@ -221,7 +248,7 @@ describe("TourController", () => {
     tour.next();
     expect(tour.getState()).toEqual(IDLE_TOUR);
     await Promise.resolve();
-    expect(api.writes).toEqual([{ isSeen: true, resumeIndex: null }]);
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
   });
 
   it("keeps what the launcher's start recorded when the read answers with an older record after it", async () => {
@@ -239,7 +266,7 @@ describe("TourController", () => {
     // The read's unseen record is stale: the tour has run, so the agent's work starts nothing.
     tour.noteAgentWorking(true);
     expect(scheduled).toEqual([]);
-    expect(api.writes).toEqual([{ isSeen: true, resumeIndex: null }]);
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
   });
 
   it("resumes nothing from a record whose card is past the list, while the launcher still starts the tour", async () => {
@@ -264,7 +291,7 @@ describe("TourController", () => {
     expect(actions).toEqual(["snap-avatar-window-right"]);
     expect(highlights).toEqual(["share"]);
     tour.next();
-    expect(actions).toEqual(["snap-avatar-window-right"]);
+    expect(actions.filter((action) => action === "snap-avatar-window-right")).toHaveLength(1);
     expect(highlights).toEqual(["share", null]);
     tour.back();
     expect(highlights).toEqual(["share", null, "share"]);
@@ -275,7 +302,531 @@ describe("TourController", () => {
     expect(tour.getState()).toEqual(IDLE_TOUR);
     expect(redraws()).toBe(6);
     await Promise.resolve();
-    // The launcher's start clears the card that waited to resume.
-    expect(api.writes).toEqual([{ isSeen: true, resumeIndex: null }]);
+    // The launcher's start clears the card that waited to resume, and leaving the tour finishes it.
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+  });
+});
+
+describe("the tour while the workspace's first conversation is following its script", () => {
+  it("does not begin while a page says so, whether the avatar or a page says an agent works", async () => {
+    for (const noteWork of ["noteAvatar", "notePages"] as const) {
+      const api = new FakeTourApi();
+      const { tour, scheduled } = controller(api);
+      const agentWorking = makeAgentWorkingSignal((isWorking) => tour.noteAgentWorking(isWorking));
+      await tour.load();
+      tour.noteFirstConversationPending(true, true);
+
+      agentWorking[noteWork](true);
+      fire(scheduled);
+      agentWorking[noteWork](false);
+      agentWorking[noteWork](true);
+      fire(scheduled);
+
+      expect(tour.getState()).toEqual(IDLE_TOUR);
+      expect(api.writes).toEqual([]);
+    }
+  });
+
+  it("begins at once when a page says the conversation is over while an agent is at work", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteFirstConversationPending(false, true);
+    expect(scheduled.map((entry) => entry.delayMs)).toEqual([0]);
+    fire(scheduled);
+
+    expect(tour.shownCard()?.id).toBe("a");
+    await Promise.resolve();
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+  });
+
+  it("begins the next time an agent works when the conversation ends while none is", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    tour.noteAgentWorking(false);
+
+    tour.noteFirstConversationPending(false, true);
+    expect(scheduled).toEqual([]);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("a");
+  });
+
+  it("holds back a start that was waiting out its stretch of work when a page says so", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi(), { startAfterWorkingMs: 15000 });
+    await tour.load();
+    tour.noteAgentWorking(true);
+    tour.noteFirstConversationPending(true, true);
+    fire(scheduled);
+
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+  });
+
+  it("holds a tour that waits to resume the same way, and resumes it as the conversation ends", async () => {
+    const api = new FakeTourApi({ isSeen: true, resumeIndex: 2 });
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(api.writes).toEqual([]);
+
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("c");
+  });
+
+  it("holds a pause that is acknowledged while an agent works until the conversation ends", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.start();
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+
+    tour.dismissPause();
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("b");
+  });
+
+  it("starts from the launcher all the same, and leaves that tour on screen as the conversation ends", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+
+    tour.start();
+    expect(tour.shownCard()?.id).toBe("a");
+    tour.next();
+    tour.noteFirstConversationPending(false, true);
+    fire(scheduled);
+
+    expect(tour.shownCard()?.id).toBe("b");
+    await Promise.resolve();
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+  });
+
+  it("starts nothing when the word is dropped with its page while an agent works, and stops holding", async () => {
+    const { tour, scheduled } = controller(new FakeTourApi());
+    await tour.load();
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+
+    // The page loaded again in the middle of a reply: it says the same once it is up, and nothing starts between.
+    tour.noteFirstConversationPending(false, false);
+    expect(scheduled).toEqual([]);
+    tour.noteFirstConversationPending(true, true);
+    tour.noteAgentWorking(false);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+
+    // A page that never comes back holds nothing: the next work begins the tour.
+    tour.noteFirstConversationPending(false, false);
+    tour.noteAgentWorking(false);
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("a");
+  });
+
+  it("neither finishes a tour that was never offered nor keeps a cut-off one from being settled", async () => {
+    const unseen = new FakeTourApi();
+    const { tour: fresh } = controller(unseen);
+    fresh.noteFirstConversationPending(true, true);
+    await fresh.load();
+    fresh.noteViewerChanged();
+    fresh.noteFirstConversationPending(false, true);
+    expect(unseen.writes).toEqual([]);
+
+    const cutOff = new FakeTourApi({ isSeen: true });
+    const { tour: reloaded } = controller(cutOff);
+    reloaded.noteFirstConversationPending(true, true);
+    await reloaded.load();
+    expect(cutOff.writes).toEqual([seenRecord(null, true)]);
+  });
+});
+
+describe("whether the tour is finished", () => {
+  it("is recorded when Done is pressed on the last card", async () => {
+    const api = new FakeTourApi();
+    const { tour } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+    tour.next();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+  });
+
+  it("is recorded when the tour is left early", async () => {
+    const api = new FakeTourApi();
+    const { tour } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.exit();
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+    // The badge's button changes nothing the record holds.
+    tour.dismissBadge();
+    expect(api.writes).toHaveLength(2);
+  });
+
+  it("is not recorded for a tour that waits to resume, on the pause or on a later load", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
+    tour.dismissPause();
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(1, false)]);
+
+    const { tour: laterVisit } = controller(api);
+    await laterVisit.load();
+    laterVisit.noteViewerChanged();
+    expect(api.writes).toHaveLength(2);
+    expect(api.record).toEqual(seenRecord(1, false));
+  });
+
+  it("is recorded by the owner's page for a seen record with nothing to resume: a tour a reload cut off, or one never offered", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    const { tour } = controller(api);
+    await tour.load();
+    expect(api.writes).toEqual([seenRecord(null, true)]);
+    // Once is enough: nothing is written again for a record that already says so.
+    tour.noteViewerChanged();
+    const { tour: laterVisit } = controller(api);
+    await laterVisit.load();
+    expect(api.writes).toHaveLength(1);
+  });
+
+  it("is left alone by a visitor's page, and settled once the viewer turns out to be the owner", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    let isOwner = false;
+    const { tour } = controller(api, { isViewerOwner: () => isOwner });
+    await tour.load();
+    tour.noteViewerChanged();
+    expect(api.writes).toEqual([]);
+
+    isOwner = true;
+    tour.noteViewerChanged();
+    expect(api.writes).toEqual([seenRecord(null, true)]);
+  });
+
+  it("is left alone by a page the tour could not begin on, such as a pulled-out window", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    const { tour } = controller(api, { isAllowed: false });
+    await tour.load();
+    tour.noteViewerChanged();
+    expect(api.writes).toEqual([]);
+  });
+
+  it("is not settled under a tour that is on screen, nor for a workspace the tour is still to be offered in", async () => {
+    const unseen = new FakeTourApi();
+    const { tour: fresh } = controller(unseen);
+    await fresh.load();
+    expect(unseen.writes).toEqual([]);
+
+    fresh.start();
+    fresh.noteViewerChanged();
+    expect(unseen.writes).toEqual([seenRecord(null, false)]);
+  });
+
+  it("stays recorded through every later write: the tour run again, and paused again", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, scheduled } = controller(api);
+    await tour.load();
+    tour.start();
+    // The launcher's start changes nothing a finished record holds, so nothing is written for it.
+    expect(api.writes).toEqual([]);
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
+    expect(api.writes).toEqual([seenRecord(1, true)]);
+    tour.dismissPause();
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("b");
+    expect(api.writes).toEqual([seenRecord(1, true), seenRecord(null, true)]);
+  });
+});
+
+describe("the onboarding checklist at the tour's end", () => {
+  /** Only the asks for the checklist among what the controller had the shell do. */
+  function checklistAsks(actions: readonly TourAction[]): number {
+    return actions.filter((action) => action === "show-onboarding-checklist").length;
+  }
+
+  it("says which card is the last", () => {
+    expect(isLastCardShown(startTour(2), CARDS)).toBe(true);
+    expect(isLastCardShown(startTour(1), CARDS)).toBe(false);
+    expect(isLastCardShown(IDLE_TOUR, CARDS)).toBe(false);
+    expect(isLastCardShown({ phase: "paused", resumeIndex: 2 }, CARDS)).toBe(false);
+  });
+
+  it("is asked for as the last card shows, not when Done is pressed", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(0);
+
+    tour.next();
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.next();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is asked for when the tour is left early from any card before the last", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.exit();
+    expect(tour.getState()).toEqual({ phase: "exit-badge" });
+    expect(checklistAsks(actions)).toBe(1);
+
+    // The badge's own button asks for nothing more.
+    tour.dismissBadge();
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is not asked for a second time when the tour is left from its last card, which asked as it showed", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.exit();
+    expect(tour.getState()).toEqual({ phase: "exit-badge" });
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is asked for again by a tour run again from the launcher, and by a last card come back to", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(1);
+
+    tour.back();
+    tour.next();
+    expect(checklistAsks(actions)).toBe(2);
+  });
+
+  it("is asked for by a tour that resumes at its last card, and never by the pause notice", async () => {
+    const api = new FakeTourApi();
+    const { tour, scheduled, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 2 });
+    tour.dismissPause();
+    expect(checklistAsks(actions)).toBe(0);
+
+    tour.noteAgentWorking(true);
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(checklistAsks(actions)).toBe(1);
+  });
+
+  it("is not asked for by a record the owner's page settles as finished", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    const { tour, actions } = controller(api, { isViewerOwner: () => true });
+    await tour.load();
+    expect(api.writes).toEqual([seenRecord(null, true)]);
+    expect(actions).toEqual([]);
+  });
+});
+
+describe("a coach card", () => {
+  it("takes an idle tour's place and another coach card's, goes back to idle, and leaves the tour's own states as they are", () => {
+    const coach = showCoach(IDLE_TOUR, "Your connections live here.", { chromeAnchor: "permissions" });
+    expect(coach).toEqual({
+      phase: "coach",
+      text: "Your connections live here.",
+      place: { chromeAnchor: "permissions" },
+    });
+    expect(chromeAnchorShown(coach, CARDS)).toBe("permissions");
+    expect(cardShown(coach, CARDS)).toBeNull();
+    expect(dismissCoach(coach)).toEqual(IDLE_TOUR);
+    expect(showCoach(coach, "Another.", { chromeAnchor: "share" })).toEqual({
+      phase: "coach",
+      text: "Another.",
+      place: { chromeAnchor: "share" },
+    });
+
+    const atAvatar = showCoach(IDLE_TOUR, "Tell me what to build.", { target: "avatar" });
+    expect(atAvatar).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(chromeAnchorShown(atAvatar, CARDS)).toBeNull();
+
+    const card = startTour();
+    expect(showCoach(card, "Another.", { chromeAnchor: "share" })).toBe(card);
+    expect(showCoach({ phase: "exit-badge" }, "Another.", { chromeAnchor: "share" })).toEqual({
+      phase: "exit-badge",
+    });
+    expect(showCoach({ phase: "paused", resumeIndex: 1 }, "Another.", { chromeAnchor: "share" })).toEqual({
+      phase: "paused",
+      resumeIndex: 1,
+    });
+    expect(dismissCoach(card)).toBe(card);
+    // The tour's own buttons do nothing to a coach card.
+    expect(nextCard(coach, CARDS)).toBe(coach);
+    expect(dismissBadge(coach)).toBe(coach);
+    expect(dismissPause(coach)).toBe(coach);
+  });
+
+  it("is shown while the tour is idle, rings its control, and clears the ring when Got it is pressed", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights, actions } = controller(api);
+    await tour.load();
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    expect(tour.getState()).toEqual({
+      phase: "coach",
+      text: "Your connections live here.",
+      place: { chromeAnchor: "permissions" },
+    });
+    expect(tour.shownCard()).toBeNull();
+    expect(highlights).toEqual(["permissions"]);
+    tour.dismissCoach();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(highlights).toEqual(["permissions", null]);
+    expect(api.writes).toEqual([]);
+    expect(actions).toEqual([]);
+  });
+
+  it("at the avatar rings no control of the chrome and has the avatar's window put on screen", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights, actions } = controller(api);
+    await tour.load();
+    tour.showCoachCard("Tell me what to build.", { target: "avatar" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(highlights).toEqual([]);
+    expect(actions).toEqual(["show-avatar-window"]);
+    tour.dismissCoach();
+    expect(tour.getState()).toEqual(IDLE_TOUR);
+    expect(highlights).toEqual([]);
+  });
+
+  it("takes the place of a coach card that is up, moving the ring to its own control", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights } = controller(api);
+    await tour.load();
+    tour.showCoachCard("First.", { chromeAnchor: "permissions" });
+    tour.showCoachCard("Second.", { chromeAnchor: "share" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Second.", place: { chromeAnchor: "share" } });
+    tour.showCoachCard("Third.", { target: "avatar" });
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Third.", place: { target: "avatar" } });
+    expect(highlights).toEqual(["permissions", "share", null]);
+  });
+
+  it("is dropped while a tour card before the last, or the pause notice, is up", async () => {
+    const api = new FakeTourApi({ isSeen: true, isFinished: true });
+    const { tour, highlights, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.showCoachCard("Over a card.", { chromeAnchor: "help" });
+    tour.showCoachCard("Over a card, at the avatar.", { target: "avatar" });
+    expect(tour.shownCard()?.id).toBe("a");
+    tour.noteAgentWorking(true);
+    tour.noteAgentWorking(false);
+    tour.next();
+    tour.showCoachCard("Over the pause.", { chromeAnchor: "help" });
+    expect(tour.getState()).toEqual({ phase: "paused", resumeIndex: 1 });
+    expect(highlights).toEqual([]);
+    expect(actions).toEqual(["snap-avatar-window-right"]);
+  });
+
+  it("closes the tour's last card as Done would, finishing the tour, and is shown in its place", async () => {
+    const api = new FakeTourApi();
+    const { tour, highlights } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.next();
+    tour.next();
+    expect(tour.shownCard()?.id).toBe("c");
+    expect(api.writes).toEqual([seenRecord(null, false)]);
+
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+
+    expect(tour.getState()).toEqual({
+      phase: "coach",
+      text: "Your connections live here.",
+      place: { chromeAnchor: "permissions" },
+    });
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+    expect(highlights).toEqual(["share", null, "permissions"]);
+  });
+
+  it("closes the exit badge as Got it would and is shown in its place", async () => {
+    const api = new FakeTourApi();
+    const { tour, actions } = controller(api);
+    await tour.load();
+    tour.start();
+    tour.exit();
+    expect(tour.getState()).toEqual({ phase: "exit-badge" });
+
+    tour.showCoachCard("Tell me what to build.", { target: "avatar" });
+
+    expect(tour.getState()).toEqual({ phase: "coach", text: "Tell me what to build.", place: { target: "avatar" } });
+    expect(api.writes).toEqual([seenRecord(null, false), seenRecord(null, true)]);
+    expect(actions).toEqual(["show-onboarding-checklist", "show-avatar-window"]);
+  });
+
+  it("gives way to a tour that starts, from the launcher or by itself, and its ring goes with it", async () => {
+    const api = new FakeTourApi({ isSeen: true, resumeIndex: 1, isFinished: true });
+    const { tour, scheduled, highlights } = controller(api, { startAfterWorkingMs: 15000 });
+    await tour.load();
+    tour.noteAgentWorking(true);
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    expect(highlights).toEqual(["permissions"]);
+    // The start the agent's work scheduled comes due under the coach card, and takes its place.
+    fire(scheduled);
+    expect(tour.shownCard()?.id).toBe("b");
+    expect(highlights).toEqual(["permissions", "share"]);
+    tour.exit();
+    tour.dismissBadge();
+
+    tour.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    tour.start();
+    expect(tour.shownCard()?.id).toBe("a");
+    expect(highlights).toEqual(["permissions", "share", null, "permissions", null]);
   });
 });

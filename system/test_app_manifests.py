@@ -537,8 +537,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             "save-file",
         ],
     }
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the
-    # Style Guide stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, the Onboarding checklist, Routines,
+    # System Monitor, and the Style Guide stop once no window shows them; the Screen never stops for emptiness
+    # (the Screen spec, D3);
     # and the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
@@ -550,6 +551,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": True,
         "screen": False,
         "getting-started": True,
+        "onboarding-checklist": True,
         "routines": True,
         "system-monitor": True,
         "style-guide": True,
@@ -574,6 +576,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": "system",
         "screen": "system",
         "getting-started": "system",
+        "onboarding-checklist": "system",
         "routines": "system",
         "system-monitor": "system",
         "style-guide": "system",
@@ -594,6 +597,25 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "getting-started",
         "--no-register",
     )
+    # The Onboarding checklist: one window, in the launcher right after Getting Started, which no desktop is
+    # seeded with a shortcut of; the desktop's tour opens it by the one message type it registers.
+    assert by_name["onboarding-checklist"].critical is False
+    assert by_name["onboarding-checklist"].program == "onboarding-checklist"
+    assert by_name["onboarding-checklist"].priority == "onboarding-checklist"
+    assert by_name["onboarding-checklist"].launch_paths == ()
+    assert by_name["onboarding-checklist"].seeds_shortcuts is False
+    assert [
+        (shortcut.launch, shortcut.mode)
+        for shortcut in by_name["onboarding-checklist"].default_shortcuts
+    ] == [("open", "focus")]
+    assert [
+        (handler.type, handler.show)
+        for handler in by_name["onboarding-checklist"].message_handlers
+    ] == [("onboarding:show-checklist", "/")]
+    # Every other built-in leaves its shortcuts to be seeded.
+    assert {
+        name for name, manifest in by_name.items() if not manifest.seeds_shortcuts
+    } == {"onboarding-checklist"}
     # System Monitor: one polling page (its views are paths of it, reached inside the app), focused like Getting
     # Started, with its own band so it is shed after every user service.
     assert by_name["system-monitor"].critical is False
@@ -626,6 +648,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ) == [
         (10, "chat"),
         (15, "getting-started"),
+        (16, "onboarding-checklist"),
         (20, "files"),
         (30, "screen"),
         (40, "terminal"),

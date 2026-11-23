@@ -618,6 +618,7 @@ def test_a_delivered_but_blocked_send_reports_the_dialog_not_an_unreachable_agen
     failure = _first_failure(result)
     assert failure.kind == "input_blocked"
     assert failure.reason.startswith("Claude is waiting for you to confirm a model switch.")
+    assert failure.is_delivered
     assert "Failed to send message to agent" not in failure.reason
 
 
@@ -631,6 +632,7 @@ def test_a_real_failure_still_outranks_a_blocked_one() -> None:
     failure = _first_failure(result)
     assert failure.reason == "the pane is gone"
     assert failure.kind == "agent_unreachable"
+    assert not failure.is_delivered
 
 
 def test_nothing_matched_is_still_the_unreachable_catch_all() -> None:

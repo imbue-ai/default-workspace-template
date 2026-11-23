@@ -445,8 +445,8 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
     This is also the one cron entry that deliberately does NOT go through
     ``system/libs/routines/with_agent_env.sh`` (which the routines tick
     goes through, and which would supply that PATH and cwd for free). The
-    wrapper reconstructs the agent environment by sourcing
-    ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
+    wrapper reconstructs the agent environment by sourcing the host dir's
+    ``env`` file and parsing the host dir with ``jq``, and
     exits non-zero when either is missing -- and a workspace left mid-apply is
     exactly where that assumption is least safe. The guard needs no agent
     environment beyond PATH: everything it shells out to resolves from ``$HOME``
@@ -478,12 +478,19 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
 def _write_routines_tick_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install the routines tick into /etc/cron.d, at every boot like the recovery guard.
 
-    One line for the whole workspace: every minute it runs ``routines tick`` through the
+    One entry for the whole workspace: every minute it runs ``routines tick`` through the
     env wrapper, which restores the services agent's environment cron scrubs and runs from
     the repo root. The routines themselves are definition files, never cron entries.
+
+    The wrapper reads that environment from files inside mngr's host dir, whose path differs
+    between hosts and which cron scrubs like everything else. This boot knows it, so the entry
+    states it ahead of the line; without it the wrapper looks in a container's path, and on a
+    host that keeps the dir elsewhere every tick would fail.
     """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     entry = (
-        f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} uv run --no-sync routines tick "
+        (f"{_HOST_DIR_ENV_VAR}={host_dir}\n" if host_dir else "")
+        + f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} uv run --no-sync routines tick "
         f">> {SUPERVISOR_LOG_DIR}/{ROUTINES_TICK_CRON_NAME}-tick.log 2>&1\n"
     )
     target = target_dir / ROUTINES_TICK_CRON_NAME

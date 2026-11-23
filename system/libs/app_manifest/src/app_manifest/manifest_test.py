@@ -9,6 +9,7 @@ from app_manifest.manifest import AppManifest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import PinStyle
 from app_manifest.manifest import PreviewSpec
 from app_manifest.manifest import RESERVED_LAUNCH_PARAM_NAMES
@@ -86,6 +87,13 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.window_closed_path == "/api/window-closed"
     assert manifest.stop_when_no_windows is True
     assert manifest.uses_microphone is True
+
+
+def test_an_app_seeds_its_shortcuts_unless_its_manifest_says_otherwise() -> None:
+    minimal = {"name": "news", "display_name": "News", "icon": "icon.svg"}
+
+    assert AppManifest.model_validate(minimal).seeds_shortcuts is True
+    assert AppManifest.model_validate({**minimal, "seeds_shortcuts": False}).seeds_shortcuts is False
 
 
 def test_uses_microphone_defaults_to_false() -> None:
@@ -220,6 +228,7 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
                     "type": "open:file",
                     "show": "{path}?view",
                     "showing": ["{path}", "{path}/", "{path}/?view"],
+                    "reload_when_raised": True,
                 },
                 {"type": "open:url", "path": "/api/open-url"},
             ],
@@ -227,18 +236,33 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
     )
 
     shown, posted = manifest.message_handlers
-    assert (shown.type, shown.path, shown.show, shown.showing) == (
+    assert (shown.type, shown.path, shown.show, shown.showing, shown.reload_when_raised) == (
         "open:file",
         None,
         "{path}?view",
         ("{path}", "{path}/", "{path}/?view"),
+        True,
     )
-    assert (posted.type, posted.path, posted.show, posted.showing) == (
+    assert (posted.type, posted.path, posted.show, posted.showing, posted.reload_when_raised) == (
         "open:url",
         "/api/open-url",
         None,
         (),
+        False,
     )
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        {"type": "minds:focus-chat", "path": "/api/focus-chat"},
+        {"type": "open:file", "show": "{path}?view", "showing": ["{path}/"], "reload_when_raised": True},
+    ],
+)
+def test_a_message_handler_reads_back_from_its_own_dump(handler: dict[str, object]) -> None:
+    """The shell answers its inventory with these handlers dumped whole, and callers read the answer with this model."""
+    loaded = MessageHandler.model_validate(handler)
+    assert MessageHandler.model_validate(loaded.model_dump(mode="json")) == loaded
 
 
 @pytest.mark.parametrize(
@@ -298,6 +322,11 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             {"type": "open:file", "path": "/api/open", "showing": ["{path}/"]},
             "only beside 'show'",
             id="showing-alone",
+        ),
+        pytest.param(
+            {"type": "open:file", "path": "/api/open", "reload_when_raised": True},
+            "'reload_when_raised' only beside 'show'",
+            id="reload-when-raised-beside-a-path",
         ),
         pytest.param(
             {"type": "open:file", "show": "{path?view"},

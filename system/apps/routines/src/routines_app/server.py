@@ -18,19 +18,18 @@ work unmodified.
 """
 
 import os
-import re
 from pathlib import Path
 from typing import Final
 
 from flask import Flask
 from flask import Response
 from flask import send_file
-from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import ValidationError
 from werkzeug.serving import run_simple
 
+from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
@@ -86,9 +85,6 @@ APP_DESCRIPTION: Final[str] = (
     "reschedule and fix controls."
 )
 STATIC_DIR: Final[Path] = Path(__file__).parent / "static"
-# A bundle file Vite named from its content, which may be cached for good; the rest is checked on every load.
-_HASHED_ASSET: Final[re.Pattern[str]] = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)$")
-_A_YEAR_IN_SECONDS: Final[int] = 365 * 24 * 60 * 60
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 HEALTH_PATH: Final[str] = "/api/health"
 
@@ -191,13 +187,7 @@ def create_app(
     @app.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
         """One file of the pages' built bundle, by name; one named from its content is cached for good."""
-        is_hashed = _HASHED_ASSET.search(filename) is not None
-        response = send_from_directory(
-            (static_directory / "assets").absolute(), filename, max_age=_A_YEAR_IN_SECONDS if is_hashed else None
-        )
-        if not is_hashed:
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+        return send_built_asset((static_directory / "assets").absolute(), filename)
 
     @app.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
