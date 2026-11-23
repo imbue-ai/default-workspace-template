@@ -28,6 +28,7 @@ from imbue.chat.testing import bash_call_record
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
+from imbue.chat.testing import tool_call_record
 from imbue.chat.testing import tool_result_record
 from imbue.chat.testing import user_record
 from imbue.system_interface.testing import find_free_port
@@ -50,6 +51,7 @@ _LONG_CODE_LINE: Final[str] = "result = compute(" + ", ".join(f"argument_{i}=val
 
 _STEP_ID: Final[str] = "ws-step-md"
 _STEP_TITLE: Final[str] = "Lay out the trip options"
+_TRIPS_READ: Final[dict[str, Any]] = {"file_path": "/tmp/trips.md"}
 
 
 def _kitchen_sink(image_path: Path) -> str:
@@ -106,15 +108,6 @@ Inline code with nowhere to break: `{_LONG_TOKEN}`
 """
 
 
-def _read_call(uuid: str, timestamp: str, tool_use_id: str) -> dict[str, Any]:
-    return assistant_record(
-        uuid,
-        timestamp,
-        [{"type": "tool_use", "id": tool_use_id, "name": "Read", "input": {"file_path": "/tmp/trips.md"}}],
-        "tool_use",
-    )
-
-
 def _reply_session(kitchen_sink: str) -> list[dict[str, Any]]:
     """The kitchen sink as a reply, then a person's message holding a URL and a key, last so both are on screen."""
     return [
@@ -136,10 +129,10 @@ def _running_step_session(kitchen_sink: str) -> list[dict[str, Any]]:
             "toolu_md1",
             f"Updated {_STEP_ID} -> in_progress\ntk-step {_STEP_ID} title: {_STEP_TITLE}",
         ),
-        _read_call("uuid-md-4", "2026-01-01T00:00:03Z", "toolu_md2"),
+        tool_call_record("uuid-md-4", "2026-01-01T00:00:03Z", "toolu_md2", "Read", _TRIPS_READ),
         tool_result_record("uuid-md-5", "2026-01-01T00:00:04Z", "toolu_md2", "trips"),
         assistant_record("uuid-md-6", "2026-01-01T00:00:05Z", [{"type": "text", "text": kitchen_sink}], "tool_use"),
-        _read_call("uuid-md-7", "2026-01-01T00:00:06Z", "toolu_md3"),
+        tool_call_record("uuid-md-7", "2026-01-01T00:00:06Z", "toolu_md3", "Read", _TRIPS_READ),
     ]
 
 

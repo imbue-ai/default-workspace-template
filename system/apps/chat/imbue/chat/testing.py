@@ -1414,14 +1414,18 @@ def assistant_record(uuid: str, timestamp: str, content: list[dict[str, Any]], s
     }
 
 
+def tool_call_record(
+    uuid: str, timestamp: str, tool_use_id: str, name: str, tool_input: dict[str, Any]
+) -> dict[str, Any]:
+    """A Claude Code transcript record of the agent calling the tool ``name`` with ``tool_input``."""
+    return assistant_record(
+        uuid, timestamp, [{"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}], "tool_use"
+    )
+
+
 def bash_call_record(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
     """A Claude Code transcript record of the agent calling Bash with ``command``."""
-    return assistant_record(
-        uuid,
-        timestamp,
-        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
-        "tool_use",
-    )
+    return tool_call_record(uuid, timestamp, tool_use_id, "Bash", {"command": command})
 
 
 def tool_result_record(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
