@@ -153,11 +153,11 @@ def test_a_departure_the_sweep_finds_goes_out_after_a_profile_announcement_alrea
     announced: list[list[str]] = []
 
     def hold_the_first(users: Sequence[PresentUser]) -> None:
+        if is_held.is_set() and not is_released.is_set():
+            is_pushed_while_held.set()
         if not is_held.is_set():
             is_held.set()
             assert is_released.wait(timeout=10.0)
-        elif not is_released.is_set():
-            is_pushed_while_held.set()
         announced.append([user.user_id for user in users])
 
     sweep = PresenceSweep(store=store, announce=hold_the_first, announce_roster=lambda: None)

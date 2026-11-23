@@ -988,12 +988,11 @@ class _BroadcasterHoldingBobsNamedPresence(WebSocketBroadcaster):
     presence_pushes: list[list[tuple[str, str | None]]] = Field(default_factory=list)
 
     def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
-        is_bob_named = any(user["display_name"] == "Bob" for user in users)
-        if is_bob_named and not self.held.is_set():
+        if self.held.is_set() and not self.release.is_set():
+            self.pushed_while_held.set()
+        if any(user["display_name"] == "Bob" for user in users) and not self.held.is_set():
             self.held.set()
             assert self.release.wait(timeout=10.0)
-        elif self.held.is_set() and not self.release.is_set():
-            self.pushed_while_held.set()
         self.presence_pushes.append([(user["user_id"], user["display_name"]) for user in users])
         super().broadcast_presence_updated(users)
 
