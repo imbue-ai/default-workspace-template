@@ -20,6 +20,21 @@ const NO_LINK = { desktopId: null, open: null, launch: null };
 let api: FakeDesktopApi;
 let store: DesktopStore;
 
+/** A store over what ``api`` holds now, started. */
+async function startedStore(): Promise<DesktopStore> {
+  const started = new DesktopStore({
+    clientId: CLIENT,
+    api,
+    socket: new FakeDesktopSocket(),
+    metrics: themeMetricsRecord(),
+    modes: { isPhone: false, isTouch: false },
+    redraw: () => undefined,
+    reloadInterface: () => undefined,
+  });
+  await started.start(NO_LINK);
+  return started;
+}
+
 /** A started store whose home desktop holds a docs window on top, the avatar's pinned window (buddy's, win-9)
  *  minimized under it, and a window of the app that lists the onboarding items (win-5), also minimized. */
 beforeEach(async () => {
@@ -42,17 +57,8 @@ beforeEach(async () => {
     }),
   ];
   api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
-  store = new DesktopStore({
-    clientId: CLIENT,
-    api,
-    socket: new FakeDesktopSocket(),
-    metrics: themeMetricsRecord(),
-    modes: { isPhone: false, isTouch: false },
-    redraw: () => undefined,
-    reloadInterface: () => undefined,
-  });
+  store = await startedStore();
   store.setBackdropSize({ width: 1000, height: 800 });
-  await store.start(NO_LINK);
 });
 
 afterEach(() => {
@@ -95,16 +101,7 @@ describe("what the shell does for the tour", () => {
 
   it("does nothing for the checklist when no app registered its message", async () => {
     api.apps = [appRecord("docs"), chatLikeAppRecord("buddy")];
-    const bare = new DesktopStore({
-      clientId: CLIENT,
-      api,
-      socket: new FakeDesktopSocket(),
-      metrics: themeMetricsRecord(),
-      modes: { isPhone: false, isTouch: false },
-      redraw: () => undefined,
-      reloadInterface: () => undefined,
-    });
-    await bare.start(NO_LINK);
+    const bare = await startedStore();
 
     runTourAction(bare, "show-onboarding-checklist");
     await settle();

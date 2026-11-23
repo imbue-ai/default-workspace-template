@@ -18,7 +18,7 @@ chat's new-chat suggestions read too. The app stores nothing.
 | `new_chat` | the chat list's New chat button pulses, with a bubble at it | `shell:message` carrying `onboarding:show-new-chat-pointer`, which the chat app registers |
 | `phone_access` | the chrome's share panel opens with a bubble at its phone control | `minds:open-share-settings {coachMark: "mobile-access"}` |
 | `build_app` | the chat window comes forward and a card pops out of the agent's avatar | `shell:show-coach-card {text, target: "avatar"}` |
-| `connect_data` | the chrome's permissions button is ringed, with a card under it | `shell:show-coach-card {text, chromeAnchor: "permissions"}` |
+| `connect_data` | the chrome's Settings button, which holds a workspace's permissions, is ringed, with a card under that end of the title bar | `shell:show-coach-card {text, chromeAnchor: "permissions"}` |
 
 `phone_access` and `connect_data` need a chrome that draws coach marks: where
 the shell's handshake does not say one does, those two entries are listed but

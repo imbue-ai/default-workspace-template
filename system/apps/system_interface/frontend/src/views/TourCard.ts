@@ -63,9 +63,18 @@ export function findTargetBox(root: ParentNode, selectors: readonly string[]): B
   return null;
 }
 
-/** Which side of the chrome a control is on: help is at the right end of the title bar, the rest by the name. */
+/** Which end of the chrome's title bar a control is at: the workspace's name is at the left end; Settings (which
+ *  holds a workspace's permissions and its settings), Share and Report a bug are at the right end. */
 export function chromeSideOf(anchor: ChromeAnchor): "left" | "right" {
-  return anchor === "help" ? "right" : "left";
+  switch (anchor) {
+    case "workspace-switcher":
+      return "left";
+    case "permissions":
+    case "settings":
+    case "share":
+    case "help":
+      return "right";
+  }
 }
 
 /** A paragraph's words, each run between a pair of ``**`` in bold. */

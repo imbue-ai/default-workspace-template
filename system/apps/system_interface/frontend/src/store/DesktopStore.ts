@@ -90,7 +90,7 @@ import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
-import { SHELL_APP_NAME, noticeFromWire } from "../model/UpdateNotice";
+import { noticeFromWire } from "../model/UpdateNotice";
 import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
@@ -1756,7 +1756,7 @@ export class DesktopStore {
       return false;
     }
     this.setBubbles(withoutChat(this.bubbles, chatId));
-    return (await this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER)) !== null;
+    return this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER);
   }
 
   /** A click on a person's tray entry (the multiplayer spec, section 7.5): a mention of them is drafted through the
@@ -2034,24 +2034,23 @@ export class DesktopStore {
     ) {
       return false;
     }
-    return (await this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER)) !== null;
+    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
   }
 
   /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
-   *  reach every one, or when a page it showed waits for a desktop window; answers what each app did with it, or
-   *  null when it did not reach every app. */
-  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<MessageRelay | null> {
+   *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     let relay: MessageRelay;
     try {
       relay = await this.relayMessage(message, sender);
     } catch (error) {
       this.toast((error as Error).message);
-      return null;
+      return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
       this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
-    return relay;
+    return true;
   }
 
   /** The relay itself; throws with the shell's detail when the message did not reach every app. An app that takes
@@ -2075,7 +2074,7 @@ export class DesktopStore {
     if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, type)) return;
     let relay: MessageRelay;
     try {
-      relay = await this.relayMessage({ type }, SHELL_APP_NAME);
+      relay = await this.relayMessage({ type }, SHELL_SENDER);
     } catch (error) {
       console.warn(`[si] could not show the page registered for ${type}`, error);
       return;
