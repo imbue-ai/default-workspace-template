@@ -91,6 +91,13 @@ describe("renderMarkdown tables", () => {
     expect(table.parentElement?.className).toBe("markdown-table-scroll");
     expect(table.style.getPropertyValue("--markdown-table-columns")).toBe("3");
   });
+
+  it("counts a raw HTML table's columns by its widest row, not its first", () => {
+    const [table] = renderedTables(
+      "<table><tr><th>Trips</th></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>",
+    );
+    expect(table.style.getPropertyValue("--markdown-table-columns")).toBe("4");
+  });
 });
 
 describe("renderMarkdown links", () => {

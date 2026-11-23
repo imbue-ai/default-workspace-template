@@ -68,9 +68,10 @@ function wrapTablesInScrollers(root: DocumentFragment): void {
   for (const table of Array.from(root.querySelectorAll("table"))) {
     const scroller = table.ownerDocument.createElement("div");
     scroller.className = "markdown-table-scroll";
-    const firstRowCells = Array.from(table.rows[0]?.cells ?? []);
-    const columnCount = firstRowCells.reduce((count, cell) => count + cell.colSpan, 0);
-    table.style.setProperty("--markdown-table-columns", String(Math.max(columnCount, 1)));
+    const rowWidths = Array.from(table.rows, (row) =>
+      Array.from(row.cells).reduce((count, cell) => count + cell.colSpan, 0),
+    );
+    table.style.setProperty("--markdown-table-columns", String(Math.max(...rowWidths, 1)));
     table.replaceWith(scroller);
     scroller.append(table);
   }
