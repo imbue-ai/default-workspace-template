@@ -20,7 +20,7 @@
 
 - A chat ends closer to the composer: about 20px separates the end of the last reply (its "Done" mark) from the line above the composer, and about 24px from the first shown pill, where about 70px did.
 
-- A reply's suggestions wait on one quiet line directly above the composer, whose height is always kept in a chat with an agent so their arrival moves nothing: "See N suggestions" shows them above it and becomes "Hide suggestions". The first conversation's fixed sets start shown and a generated set hidden. Every suggestion is drawn, and the "Next steps" toggle and "Show more" are gone.
+- A reply's suggestions wait on one quiet line directly above the composer, whose height is always kept in a chat with an agent so their arrival moves nothing: "See N suggestions" shows them above it and becomes "Hide suggestions". The first conversation's fixed sets start shown and a generated set hidden, and every suggestion of a set is drawn.
 
 - An answered reply keeps its suggestions: on a send or a turn's start they move to the transcript as the same line under that reply, hidden until asked for, and a pill clicked there is sent. `GET /api/chats/<chat-id>/suggestions` gains `sets`, every set the chat app remembers for the chat (in memory, the newest 200), so after it restarts only the last reply's is left.
 
