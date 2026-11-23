@@ -398,8 +398,9 @@
   text-align: left;
 }
 
-/* A link or a key in a cell may break anywhere, since the bubble's own break-word does not narrow a column to fit.
-   Prose keeps its words whole: breaking anywhere in it lets a column of short labels shrink to a letter a line. */
+/* A link or a piece of code in a cell may break anywhere, since the bubble's own break-word does not narrow a
+   column to fit. Prose keeps its words whole: breaking anywhere in it lets a column of short labels shrink to a
+   letter a line. */
 .markdown-content th :is(a, code),
 .markdown-content td :is(a, code) {
   overflow-wrap: anywhere;
