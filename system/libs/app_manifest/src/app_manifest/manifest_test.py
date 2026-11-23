@@ -89,6 +89,13 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.uses_microphone is True
 
 
+def test_an_app_seeds_its_shortcuts_unless_its_manifest_says_otherwise() -> None:
+    minimal = {"name": "news", "display_name": "News", "icon": "icon.svg"}
+
+    assert AppManifest.model_validate(minimal).seeds_shortcuts is True
+    assert AppManifest.model_validate({**minimal, "seeds_shortcuts": False}).seeds_shortcuts is False
+
+
 def test_uses_microphone_defaults_to_false() -> None:
     manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
     assert manifest.uses_microphone is False

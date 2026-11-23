@@ -3,7 +3,9 @@ import atexit
 import os
 import signal
 import threading
+from collections.abc import Callable
 from collections.abc import Sequence
+from concurrent.futures import Executor
 from pathlib import Path
 from types import FrameType
 from typing import Final
@@ -27,6 +29,7 @@ from imbue.chat.auto_open import LEDGER_FILENAME
 from imbue.chat.background_tasks import BACKGROUND_TASKS_DIRNAME
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_naming import DaemonThreadExecutor
 from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -38,6 +41,8 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.registry import build_one_shot_completion
 from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
@@ -51,9 +56,11 @@ from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
+from imbue.chat.server import read_chat_tail_events
 from imbue.chat.shell_client import build_live_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.suggestion_generation import SuggestionGenerator
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -203,6 +210,7 @@ def build_production_state(
         auth_flows=AuthFlowService.create(
             restart_bound_agents=agent_manager.restart_agents_on_account_in_background,
             on_signed_in=record_connected_in_background,
+            is_first_run_provider_step_pending=agent_manager.is_first_run_provider_step_pending,
         ),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
@@ -231,7 +239,35 @@ def build_production_state(
     agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
     agent_manager.set_session_watcher_check(state.has_watcher)
     agent_manager.set_chat_stream_ender(state.event_queues.end_streams)
+    # A secondary's chats are the live chat's, which works out their suggestions.
+    if not is_secondary:
+        install_suggestion_generator(state, build_one_shot_completion, DaemonThreadExecutor())
     return state
+
+
+def install_suggestion_generator(
+    state: ChatAppState,
+    build_completion: Callable[[HarnessType], OneShotCompletion | None],
+    executor: Executor,
+) -> None:
+    """Give the app what works out a chat's next-step suggestions, and have it hear every turn's end.
+
+    It is built once the state exists because it reads each chat's transcript through the state's watchers.
+    """
+    agent_manager = state.agent_manager
+    suggestion_generator = SuggestionGenerator(
+        suggestion_store=agent_manager.suggestion_store,
+        read_chat_settings=state.chat_settings.read,
+        get_chat_snapshot=agent_manager.get_chat_snapshot,
+        read_tail_events=lambda chat_id, limit: read_chat_tail_events(state, chat_id, limit),
+        resolve_chat_account_binding=agent_manager.resolve_chat_account_binding,
+        build_one_shot_completion=build_completion,
+        broadcast_suggestions_updated=state.broadcaster.broadcast_suggestions_updated,
+        get_first_run_tree_step=agent_manager.get_first_run_tree_step,
+        executor=executor,
+    )
+    state.suggestion_generator = suggestion_generator
+    agent_manager.set_turn_end_listener(suggestion_generator.consider_turn_end)
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:

@@ -1,21 +1,24 @@
 /**
- * The show-around tour's card, the badge the tour leaves when exited early, and the pause notice it shows when the
- * agent's reply interrupted it (the new-onboarding spec, section 2.6). One fixed box over the desktop: the avatar
+ * The show-around tour's card, the badge the tour leaves when exited early, the pause notice it shows when the
+ * agent's reply interrupted it (the new-onboarding spec, section 2.6), and the coach card a page asks for
+ * (``shell:show-coach-card``): that page's words and one button, under the control of the Imbue Studio chrome it
+ * names, or popped out of the avatar as the tour's own avatar cards are. One fixed box over the desktop: the avatar
  * and the card's words, its bullets, a picture or a link when the card has one, and a footer with Exit walkthrough,
  * Go back, and Next (Done on the last card). Where it sits comes from ``model/tourPlacement``: beside the shell's
  * own target when the card has one, popped out of the avatar otherwise, and under the Imbue Studio chrome for a
  * card about one of its controls. Targets move (a window opens, the avatar is dragged), so the card measures again
  * on every redraw, on resize, and on a short interval.
- * Markers the tests use: ``data-tour-card``, ``data-tour-badge``, ``data-tour-paused``, ``data-tour-exit``,
- * ``data-tour-back``, ``data-tour-next``, ``data-tour-link``.
+ * Markers the tests use: ``data-tour-card``, ``data-tour-badge``, ``data-tour-paused``, ``data-tour-coach``,
+ * ``data-tour-exit``, ``data-tour-back``, ``data-tour-next``, ``data-tour-link``.
  */
 
 import m from "mithril";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { avatarImageUrl } from "../model/api";
-import type { TourController } from "../model/tour";
-import type { ChromeAnchor, TourCard as TourCardRecord } from "../model/tourCards";
+import type { TourController, TourState } from "../model/tour";
+import type { ChromeAnchor, CoachPlace, TourCard as TourCardRecord } from "../model/tourCards";
 import {
+  COACH_CARD_BUTTON_LABEL,
   TOUR_EXIT_BADGE_BUTTON_LABEL,
   TOUR_EXIT_BADGE_TEXT,
   TOUR_PAUSED_BUTTON_LABEL,
@@ -65,17 +68,26 @@ export function chromeSideOf(anchor: ChromeAnchor): "left" | "right" {
   return anchor === "help" ? "right" : "left";
 }
 
+/** A paragraph's words, each run between a pair of ``**`` in bold. */
+function boldRuns(paragraph: string): m.Children[] {
+  return paragraph
+    .split(/\*\*(.+?)\*\*/)
+    .map((run, index) => (index % 2 === 1 ? m("strong", run) : run))
+    .filter((run) => run !== "");
+}
+
 /** A card's text as paragraphs: one per blank-line break, each after the first a step down from the last. */
 export function textParagraphs(text: string): m.Children[] {
   return text
     .split("\n\n")
     .map((paragraph, index) =>
-      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-primary` }, paragraph),
+      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-primary` }, boldRuns(paragraph)),
     );
 }
 
-/** What the box shows when it is not a card: the exit badge at the launcher, or the pause notice by the avatar. */
-export type TourNotice = "badge" | "paused";
+/** What the box shows when it is not a card: the exit badge at the launcher, the pause notice by the avatar, or a
+ *  page's coach card at the place it names. */
+export type TourNotice = "badge" | "paused" | { readonly coachPlace: CoachPlace };
 
 /** Where the box goes for ``subject`` (a card or a notice), given its own size. */
 export function placeCard(
@@ -84,7 +96,11 @@ export function placeCard(
   root: ParentNode,
   viewport: Size,
 ): TourPlacement {
+  if (typeof subject === "object" && "coachPlace" in subject && "chromeAnchor" in subject.coachPlace) {
+    return placeUnderChrome(chromeSideOf(subject.coachPlace.chromeAnchor), cardSize, viewport);
+  }
   const avatar = findTargetBox(root, tourTargetSelectors("avatar"));
+  if (typeof subject === "object" && "coachPlace" in subject) return placeByAvatar(avatar, cardSize, viewport);
   if (subject === "paused") return placeByAvatar(avatar, cardSize, viewport);
   if (subject === "badge") {
     const launcher = findTargetBox(root, tourTargetSelectors("launcher"));
@@ -110,6 +126,45 @@ function arrowStyle(placement: TourPlacement): Record<string, string> | null {
       return { top: offset, left: ARROW_INSET, borderTop: "0", borderRight: "0" };
     case "right":
       return { top: offset, right: ARROW_INSET, borderBottom: "0", borderLeft: "0" };
+  }
+}
+
+/** What the box shows in place of a card: where it goes, what it says, the label of its one button, and what the
+ *  button does. */
+interface NoticeShown {
+  readonly subject: TourNotice;
+  readonly text: string;
+  readonly buttonLabel: string;
+  readonly dismiss: (tour: TourController) => void;
+}
+
+/** The notice ``state`` shows, or null while a card (or nothing) is shown. */
+function noticeShown(state: TourState): NoticeShown | null {
+  switch (state.phase) {
+    case "exit-badge":
+      return {
+        subject: "badge",
+        text: TOUR_EXIT_BADGE_TEXT,
+        buttonLabel: TOUR_EXIT_BADGE_BUTTON_LABEL,
+        dismiss: (tour) => tour.dismissBadge(),
+      };
+    case "paused":
+      return {
+        subject: "paused",
+        text: TOUR_PAUSED_TEXT,
+        buttonLabel: TOUR_PAUSED_BUTTON_LABEL,
+        dismiss: (tour) => tour.dismissPause(),
+      };
+    case "coach":
+      return {
+        subject: { coachPlace: state.place },
+        text: state.text,
+        buttonLabel: COACH_CARD_BUTTON_LABEL,
+        dismiss: (tour) => tour.dismissCoach(),
+      };
+    case "idle":
+    case "card":
+      return null;
   }
 }
 
@@ -147,16 +202,14 @@ export function TourCard(): m.Component<TourCardAttrs> {
       const viewport = vnode.attrs.viewport ?? { width: window.innerWidth, height: window.innerHeight };
       const state = tour.getState();
       const card = tour.shownCard();
-      const notice: TourNotice | null =
-        state.phase === "exit-badge" ? "badge" : state.phase === "paused" ? "paused" : null;
+      const notice = noticeShown(state);
       const width = card?.image !== null && card?.image !== undefined ? IMAGE_CARD_WIDTH_PX : CARD_WIDTH_PX;
       const cardSize = size ?? { width, height: 160 };
-      const placement = placeCard(notice ?? card ?? "badge", { ...cardSize, width }, root, viewport);
+      const placement = placeCard(notice?.subject ?? card ?? "badge", { ...cardSize, width }, root, viewport);
       const arrow = arrowStyle(placement);
       const cards = tour.getCards();
       const isLast = state.phase === "card" && state.index === cards.length - 1;
-      const text =
-        notice === "badge" ? TOUR_EXIT_BADGE_TEXT : notice === "paused" ? TOUR_PAUSED_TEXT : (card?.text ?? "");
+      const text = notice?.text ?? card?.text ?? "";
       const bullets = notice === null ? (card?.bullets ?? null) : null;
       const link = notice === null ? (card?.link ?? null) : null;
       const image = notice === null ? (card?.image ?? null) : null;
@@ -166,8 +219,14 @@ export function TourCard(): m.Component<TourCardAttrs> {
           role: "dialog",
           "aria-live": "polite",
           "data-tour-card": notice === null ? card?.id : undefined,
-          "data-tour-badge": notice === "badge" ? "" : undefined,
-          "data-tour-paused": notice === "paused" ? "" : undefined,
+          "data-tour-badge": state.phase === "exit-badge" ? "" : undefined,
+          "data-tour-paused": state.phase === "paused" ? "" : undefined,
+          "data-tour-coach":
+            state.phase === "coach"
+              ? "chromeAnchor" in state.place
+                ? state.place.chromeAnchor
+                : state.place.target
+              : undefined,
           class:
             "tour-card fixed z-(--z-popover) rounded-lg border border-default bg-surface p-4 shadow-overlay " +
             (size === null ? "invisible" : ""),
@@ -229,13 +288,8 @@ export function TourCard(): m.Component<TourCardAttrs> {
             ? m("div", { class: "mt-4 flex justify-end" }, [
                 m(
                   Button,
-                  {
-                    variant: "primary",
-                    sm: true,
-                    "data-tour-next": "",
-                    onclick: () => (notice === "badge" ? tour.dismissBadge() : tour.dismissPause()),
-                  },
-                  notice === "badge" ? TOUR_EXIT_BADGE_BUTTON_LABEL : TOUR_PAUSED_BUTTON_LABEL,
+                  { variant: "primary", sm: true, "data-tour-next": "", onclick: () => notice.dismiss(tour) },
+                  notice.buttonLabel,
                 ),
               ])
             : m("div", { class: "mt-4 flex items-center justify-between gap-2" }, [

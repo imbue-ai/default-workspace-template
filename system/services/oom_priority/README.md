@@ -163,8 +163,8 @@ unrecognized. The `oom_tag_service.py <key>` prefix passes band keys by name.
 It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
-(earlyoom, the listener itself, publish_cgroup_meminfo, and the one-shots
-env-converge and vm-exec-register) are never demoted. Because this path *raises*, a built-in
+(earlyoom, the listener itself, publish_cgroup_meminfo, and the one-shot
+env-converge) are never demoted. Because this path *raises*, a built-in
 missing from either band map is not merely left alone but actively pushed to
 `USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
@@ -353,6 +353,21 @@ so a schedule can be tried without editing the module.
 
 When earlyoom acts is not in `bands`: its two thresholds are the `-m` argument in
 `system/supervisord.conf.d/earlyoom.conf`.
+
+Whenever the policy changes, run the drill against the change before it lands.
+From an mngr checkout:
+
+```bash
+just dwt-oom-drill /path/to/this/checkout
+```
+
+It builds a throwaway local Docker workspace from the checkout, runs
+`bin/oom_drill.py` there (one memory-holding sleeper at each score the policy
+assigns, shed by the workspace's own earlyoom), prints the verdict, and removes
+the workspace. A changed score fails `bin/oom_drill_test.py` until the drill's
+`DEFAULT_BANDS` matches it, and the Imbue Studio smoke journey runs the drill
+again in a real workspace before a release reaches production
+([OOM_DRILL.md](OOM_DRILL.md)).
 
 ## Outputs
 

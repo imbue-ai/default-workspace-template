@@ -99,7 +99,7 @@ Triage each conflict; the first rule that applies wins:
   file, or its edit to an entry file), first save the workspace's version to a
   new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
   and name the move in your report.
-- **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
+- **Mixed files (`AGENTS.md`, `CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
   "ours is a superset" is a claim you must **verify, not assert**: diff the
@@ -422,10 +422,10 @@ in your report.
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
-  app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
+  app's, the Screen's, the Style Guide's, and the Onboarding checklist's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those eight bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all seven locations in your report.
+  installed only as a set) -- name all eight locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -596,13 +596,14 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all seven (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all eight (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
     `<your work_dir>/system/apps/routines/src/routines_app/static`,
-    `<your work_dir>/system/apps/screen/src/screen/static`, and
-    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
+    `<your work_dir>/system/apps/screen/src/screen/static`,
+    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`, and
+    `<your work_dir>/system/apps/onboarding_checklist/src/onboarding_checklist/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,

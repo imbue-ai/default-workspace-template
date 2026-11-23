@@ -4,7 +4,7 @@
  * maximize control opens on hover, as a submenu; Fullscreen fills the viewport with the window
  * (Exit fullscreen brings it back) and Immersive asks the Imbue Studio chrome to take the whole
  * app window with the keyboard locked, where the chrome can (the Screen spec, section 12); Share asks the Imbue Studio chrome
- * to open its share settings for the app (never for a critical app); Quit closes every window of
+ * to open its share settings for the app (for every app but an internal one: ``isAppShareable``); Quit closes every window of
  * the app and stops its program where the workspace can honestly do so (the stop-when-no-windows
  * spec, section 7); Close removes the window for
  * everyone, and closes a pinned window, which is never closed for everyone, for this client alone --
@@ -105,7 +105,7 @@ export interface WindowMenuActions {
   readonly onSized: () => void;
   /** The fullscreen and immersive rows, or null where there is no window to fill the viewport with. */
   readonly fullscreen: WindowFullscreenActions | null;
-  /** Null when there is no share surface for the app (a critical app). */
+  /** Null when there is no share surface for the app (an internal app). */
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop the app (a critical one). */
   readonly quit: (() => void) | null;
@@ -117,6 +117,13 @@ export interface WindowMenuActions {
   readonly close: () => void;
   /** Null for an app that wears the theme itself, or declares that it is not themed. */
   readonly theme: WindowThemeActions | null;
+}
+
+/** Whether the app can be shared on its own: every app the shell lists but an internal one, which the Imbue Studio
+ *  chrome's share settings never list. The one rule behind the title bar's Share, the window menu's row, and the
+ *  phone's. */
+export function isAppShareable(app: AppRecord | undefined): app is AppRecord {
+  return app !== undefined && !app.internal;
 }
 
 /** Ask the Imbue Studio chrome to open its share settings for ``app``; the embed contract names the app by the
@@ -138,7 +145,7 @@ function shareAndQuitRows(
       kind: "action",
       key: "share",
       label: `Share ${app.display_name}`,
-      icon: "user-plus",
+      icon: "share",
       onSelect: share,
     });
   }
@@ -199,7 +206,7 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
  *  since a window's row has its own X. */
 export interface PhoneWindowMenuActions {
   readonly refresh: () => void;
-  /** Null when there is no share surface: a critical app, or a page no chrome embeds. */
+  /** Null when there is no share surface: an internal app, or a page no chrome embeds. */
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop the app. */
   readonly quit: (() => void) | null;

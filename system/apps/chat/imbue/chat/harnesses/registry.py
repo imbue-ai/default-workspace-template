@@ -365,7 +365,8 @@ class HarnessSpec(FrozenModel):
     # no lane signs in to it, so nothing binds one.
     binding_class: type[AccountBinding] | None = None
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
-    # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
+    # chat's name, the replies to suggest under a chat's last message). None for a harness that cannot
+    # yet: its chats keep the name they were minted with, and get no generated suggestions.
     one_shot_completion_class: type[OneShotCompletion] | None = None
     # The connectors kept on the provider account's own side, and the workspace's switch for loading them
     # (``harnesses/cloud_connections.py``). None for a harness whose provider keeps none.

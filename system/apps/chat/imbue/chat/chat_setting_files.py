@@ -2,7 +2,8 @@
 
 Such a setting travels with the chat across handoffs and rebinds and survives restarts, since the
 folder is the chat's rather than any one agent's. ``chat_fast_mode.py`` and ``chat_autocompact.py``
-each keep one this way.
+each keep one this way, as ``suggestions.py`` keeps a chat's next-step suggestions and ``first_run_tree.py``
+the step a first-run chat's first conversation stands at.
 """
 
 import json
@@ -43,3 +44,13 @@ def write_chat_setting_file(chat_dir: Path, filename: str, state: FrozenModel) -
     temp_path = path.with_suffix(".json.tmp")
     temp_path.write_text(json.dumps(state.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temp_path.replace(path)
+
+
+def remove_chat_setting_file(chat_dir: Path, filename: str) -> bool:
+    """Remove the chat's setting, so it reads as one the chat never had; False when it had none."""
+    path = chat_dir / filename
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True

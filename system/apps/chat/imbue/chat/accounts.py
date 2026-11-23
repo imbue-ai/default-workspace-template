@@ -135,8 +135,9 @@ class AccountIndex(FrozenModel):
     # The account a new chat uses when none is named and nothing is pinned. Updated on every
     # chat create.
     mru: str | None = None
-    # The account the user pinned as the one a new chat launches on; None falls back to the
-    # mru. Set only by the user, so a sign-in or a launch elsewhere never moves it.
+    # The account pinned as the one a new chat launches on; None falls back to the mru. The
+    # user sets it, and so does the first sign-in of a first run (`commit_account`); no later
+    # sign-in and no launch moves it.
     default_account: str | None = None
 
 
@@ -319,12 +320,23 @@ def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
     return account_id, path
 
 
-def commit_account(account_id: str, lane: str, display: str, home: Path | None = None) -> Account:
+def commit_account(
+    account_id: str,
+    lane: str,
+    display: str,
+    home: Path | None = None,
+    is_default_when_none_pinned: bool = False,
+) -> Account:
     """Write the index row that makes a minted folder into a real account.
 
     This is the commit point of a sign-in. Everything before it is provisional.
     Idempotent: committing an id that is already indexed returns the existing row.
     Every commit, a re-authentication included, stamps the folder with when it signed in.
+
+    `is_default_when_none_pinned` pins the account as the default when the index has no pin,
+    and leaves a pin that is there alone. The first run's provider page signs in with it, so
+    the provider connected first stays the one chats start on whatever is connected after it;
+    without it the most recently used account, which every commit moves here, would decide.
     """
     path = account_dir(account_id, home)
     if not path.is_dir():
@@ -347,6 +359,9 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
             )
         # Before the index write, so the account list that write announces to every chat page carries it.
         stamp_signed_in(account_id, home)
+        default_account = (
+            account_id if is_default_when_none_pinned and index.default_account is None else index.default_account
+        )
         if existing is not None:
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
@@ -355,6 +370,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
                 index.model_copy_update(
                     to_update(index.field_ref().accounts, rows),
                     to_update(index.field_ref().mru, account_id),
+                    to_update(index.field_ref().default_account, default_account),
                 ),
                 home,
             )
@@ -364,6 +380,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
             index.model_copy_update(
                 to_update(index.field_ref().accounts, (*index.accounts, account)),
                 to_update(index.field_ref().mru, account_id),
+                to_update(index.field_ref().default_account, default_account),
             ),
             home,
         )

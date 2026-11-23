@@ -288,6 +288,9 @@ class AuthFlowService:
     # Told of every account a flow signs in, new or signed in again, once its row is committed.
     # Injected for the same reasons, and must return at once: it is called under this service's lock.
     _on_signed_in: Callable[[accounts.Account], None]
+    # Whether the first run's provider page is still owed: a sign-in made while it is pins its
+    # account as the default when nothing is pinned. Injected for the same reason as the restart.
+    _is_first_run_provider_step_pending: Callable[[], bool]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -305,6 +308,7 @@ class AuthFlowService:
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
         on_signed_in: Callable[[accounts.Account], None] | None = None,
+        is_first_run_provider_step_pending: Callable[[], bool] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
@@ -325,6 +329,7 @@ class AuthFlowService:
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         service._on_signed_in = on_signed_in or (lambda _account: None)
+        service._is_first_run_provider_step_pending = is_first_run_provider_step_pending or (lambda: False)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
         service._connect_login_client = login_client_connector or connect_login_client
@@ -652,7 +657,13 @@ class AuthFlowService:
             account_id, path = accounts.mint_account_dir(self._home)
             build_account_binding(lane.harness).seed_account(path, self._work_dir)
             write_claude_env(path, managed_env)
-            return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
+            return accounts.commit_account(
+                account_id,
+                lane.id,
+                ADOPTED_DISPLAY,
+                self._home,
+                is_default_when_none_pinned=self._is_first_run_provider_step_pending(),
+            )
 
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
@@ -844,7 +855,13 @@ class AuthFlowService:
         method = session.method
         if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
             _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
-        account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
+        account = accounts.commit_account(
+            session.account_id,
+            session.lane.id,
+            display,
+            self._home,
+            is_default_when_none_pinned=self._is_first_run_provider_step_pending(),
+        )
         self._on_signed_in(account)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
