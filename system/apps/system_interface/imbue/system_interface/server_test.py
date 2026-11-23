@@ -5,7 +5,10 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
@@ -20,6 +23,7 @@ from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
+from pydantic import Field
 from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
@@ -972,6 +976,58 @@ def test_presence_carries_each_users_profile_from_the_connector(
         ]
     finally:
         broadcaster.unregister(client_queue)
+
+
+class _BroadcasterHoldingBobsNamedPresence(WebSocketBroadcaster):
+    """Holds the first ``presence_updated`` push that names Bob (the one a landed profile fetch announces) until
+    released, recording every presence push in the order it went out."""
+
+    held: threading.Event = Field(default_factory=threading.Event)
+    release: threading.Event = Field(default_factory=threading.Event)
+    pushed_while_held: threading.Event = Field(default_factory=threading.Event)
+    presence_pushes: list[list[tuple[str, str | None]]] = Field(default_factory=list)
+
+    def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
+        is_bob_named = any(user["display_name"] == "Bob" for user in users)
+        if is_bob_named and not self.held.is_set():
+            self.held.set()
+            assert self.release.wait(timeout=10.0)
+        elif self.held.is_set() and not self.release.is_set():
+            self.pushed_while_held.set()
+        self.presence_pushes.append([(user["user_id"], user["display_name"]) for user in users])
+        super().broadcast_presence_updated(users)
+
+
+def test_a_profile_announcement_read_before_a_heartbeat_never_goes_out_after_it(tmp_path: Path) -> None:
+    """The announcement a landed profile fetch makes reads the connected set and pushes it as one step, so a
+    heartbeat that brings the owner in while that announcement is on its way pushes after it, and the windows are
+    left with the owner connected. Each read and push was a step of its own: the fetch read Bob alone, the owner's
+    heartbeat pushed Bob and the owner, and the fetch then pushed its Bob alone last."""
+
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(200, json={"user_id": "user-bob-4471", "display_name": "Bob"})
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    broadcaster = _BroadcasterHoldingBobsNamedPresence()
+    client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
+    # Bob's heartbeat finds no cached profile, so it starts the fetch whose announcement the broadcaster holds.
+    _heartbeat(client, _VISITOR_IDENTITY)
+    assert broadcaster.held.wait(timeout=10.0), "the landed profile fetch never announced"
+
+    owner_heartbeat = threading.Thread(target=_heartbeat, args=(client, _OWNER_IDENTITY))
+    owner_heartbeat.start()
+    # Given the chance, the owner's push must not go out before the held one; once that is released, it must.
+    broadcaster.pushed_while_held.wait(timeout=1.0)
+    broadcaster.release.set()
+    owner_heartbeat.join(timeout=10.0)
+    assert not owner_heartbeat.is_alive()
+
+    assert broadcaster.presence_pushes == [
+        [("user-bob-4471", None)],
+        [("user-bob-4471", "Bob")],
+        [("user-bob-4471", "Bob"), ("user-owner-9c21", None)],
+    ]
 
 
 def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_nothing_is_silent(app: Flask) -> None:

@@ -363,8 +363,10 @@ def utc_now() -> datetime:
 
 
 class PresenceSweep(MutableModel):
-    """The periodic check that notices a silent departure and announces the connected set when it changed, and the
-    announcement a background profile fetch asks for when it changed what the connected users carry."""
+    """Every announcement of the connected set: the periodic check that notices a silent departure, a heartbeat that
+    brings someone in, and the announcement a background profile fetch asks for when it changed what the connected
+    users carry. One at a time, each read and pushed under the one lock: they run on threads of their own, and a set
+    read earlier must never go out after a newer one."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -376,9 +378,11 @@ class PresenceSweep(MutableModel):
         frozen=True, description="How a changed connected set reaches the windows"
     )
     announce_roster: Callable[[], None] = Field(
-        frozen=True, description="How the roster, which a changed connected set changes too, reaches the windows"
+        frozen=True,
+        description="How the roster, which a changed connected set or input time changes too, reaches the windows",
     )
 
+    _announce_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
@@ -399,18 +403,35 @@ class PresenceSweep(MutableModel):
 
     def sweep_once(self, now: datetime) -> bool:
         """One pass: announce the connected set when it differs from the last announced one; answers whether it did."""
-        outcome = self.store.sweep(now)
+        with self._announce_lock:
+            outcome = self.store.sweep(now)
+            if outcome.is_membership_changed:
+                self.announce(outcome.users)
         if outcome.is_membership_changed:
-            self.announce(outcome.users)
             self.announce_roster()
         return outcome.is_membership_changed
+
+    def record_heartbeat(
+        self, identity: RequestIdentity, now: datetime, last_input_at: datetime | None = None
+    ) -> PresenceOutcome:
+        """Record one heartbeat (``PresenceStore.heartbeat``), announcing the connected set when it brought someone
+        in and the roster when it changed who is here or the requester's newest input time (the multiplayer spec,
+        section 4.3), since every other window reads "Active" or "Idle" off the roster it was last pushed."""
+        with self._announce_lock:
+            outcome = self.store.heartbeat(identity, now, last_input_at)
+            if outcome.is_membership_changed:
+                self.announce(outcome.users)
+        if outcome.is_membership_changed or outcome.is_input_changed:
+            self.announce_roster()
+        return outcome
 
     def announce_connected(self) -> None:
         """Announce the connected set and the roster now, whether or not its membership changed: a profile a
         background fetch changed changes what each connected user carries."""
         # Runs on the profile-refresh thread, where nothing else would log it.
         try:
-            self.announce(self.store.connected_users(utc_now()))
+            with self._announce_lock:
+                self.announce(self.store.connected_users(utc_now()))
             self.announce_roster()
         except (OSError, ValueError) as e:
             logger.opt(exception=e).error("Failed to announce a refreshed profile; the next announcement carries it")

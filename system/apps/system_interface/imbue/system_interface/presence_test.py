@@ -1,4 +1,5 @@
 import json
+import threading
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -139,6 +140,41 @@ def test_the_sweep_announces_the_connected_set_only_when_it_changed(tmp_path: Pa
     assert sweep.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW) is True
     assert sweep.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=10)) is False
     assert announced == [[]]
+
+
+def test_a_departure_the_sweep_finds_goes_out_after_a_profile_announcement_already_on_its_way(tmp_path: Path) -> None:
+    """A profile announcement that read Bob as connected is pushed before a sweep that finds him gone gets to read,
+    so the windows are left with Bob gone rather than with the older set the announcement carried."""
+    store = _store(tmp_path)
+    store.heartbeat(_BOB, utc_now())
+    is_held = threading.Event()
+    is_released = threading.Event()
+    is_pushed_while_held = threading.Event()
+    announced: list[list[str]] = []
+
+    def hold_the_first(users: Sequence[PresentUser]) -> None:
+        if not is_held.is_set():
+            is_held.set()
+            assert is_released.wait(timeout=10.0)
+        elif not is_released.is_set():
+            is_pushed_while_held.set()
+        announced.append([user.user_id for user in users])
+
+    sweep = PresenceSweep(store=store, announce=hold_the_first, announce_roster=lambda: None)
+    profile_announcement = threading.Thread(target=sweep.announce_connected)
+    profile_announcement.start()
+    assert is_held.wait(timeout=10.0)
+
+    departure = threading.Thread(target=sweep.sweep_once, args=(utc_now() + PRESENCE_CONNECTED_WINDOW,))
+    departure.start()
+    # Given the chance, the sweep's push must not go out before the held one; once that is released, it must.
+    is_pushed_while_held.wait(timeout=1.0)
+    is_released.set()
+    profile_announcement.join(timeout=10.0)
+    departure.join(timeout=10.0)
+    assert not profile_announcement.is_alive() and not departure.is_alive()
+
+    assert announced == [["user-bob-4471"], []]
 
 
 def test_an_announcement_of_a_refreshed_profile_that_fails_is_logged_not_raised(
