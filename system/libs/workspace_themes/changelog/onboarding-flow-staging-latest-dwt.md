@@ -1,0 +1,1 @@
+- The standard theme's title bar leads with close, minimize and maximize and ends with the window menu and Refresh (Share follows Refresh), so Share sits at the right edge.

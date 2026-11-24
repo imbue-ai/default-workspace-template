@@ -1,0 +1,1 @@
+- A window's title bar puts close, minimize and maximize at the left edge and the window menu, Refresh, the chat balloon and Share at the right edge, so an app's Share sits where Imbue Studio's own Share does. Share wears Studio's new outlined forward-arrow icon.

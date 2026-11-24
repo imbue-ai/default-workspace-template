@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { shareIcon } from "@imbue/workspace-ui/src/components/icons";
 import type { EntryLook } from "../reducers/desktopState";
 import { appRecord } from "../testing/records";
 import type { ActionRow, MenuRow } from "@imbue/workspace-ui/src/components/menu";
@@ -87,7 +88,7 @@ describe("windowMenuRows", () => {
     });
     const shareRow = rowOf(rows, "share");
     expect(shareRow.label).toBe("Share Docs");
-    expect(shareRow.icon).toBe("share");
+    expect(shareRow.icon).toEqual({ markup: shareIcon(14) });
     shareRow.onSelect();
     expect(share).toHaveBeenCalledTimes(1);
   });

@@ -1,12 +1,13 @@
 /**
  * A window's title bar (concepts.md section 2.7; the multiplayer spec, section 9.1), drawn from the theme's
  * chrome slots (docs/system/blueprint/workspace-themes/, section 4.3): the leading slots from the left edge, the
- * trailing ones ending at the right. The standard look is, while the window is focused, the window menu (three
- * dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal), and
- * Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a chrome that can
- * open them, on every window of an app that is not internal); the app icon and the title centred over the bar;
- * then minimize, maximize (fullscreen and restore when maximized: the state control cycles on from maximized to
- * the whole viewport, the Screen spec's L2 layer), and close at the right edge. Share never sits over the centred
+ * trailing ones ending at the right. The standard look is close, minimize, and maximize (fullscreen and restore
+ * when maximized: the state control cycles on from maximized to the whole viewport, the Screen spec's L2 layer) at
+ * the left edge; the app icon and the title centred over the bar; then, while the window is focused, the window
+ * menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not
+ * internal), and Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a
+ * chrome that can open them, on every window of an app that is not internal) ending at the right edge, where
+ * Imbue Studio's own Share sits. Share never sits over the centred
  * title (``shareLookOf``): it wears its word beside its glyph where the title leaves room for both, its glyph alone
  * where it leaves room for that, and is not drawn where it leaves room for neither, which leaves Share to the
  * window menu. A theme may rearrange the slots and align the title its own way, never drop a slot's
@@ -21,7 +22,7 @@ import m from "mithril";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { icon, shareIcon } from "@imbue/workspace-ui/src/components/icons";
 import type { AppRecord, WindowState } from "../model/records";
 import type { ChromeSlot, ThemeChrome } from "../model/themes";
 import { appGlyph, glyph } from "./glyphs";
@@ -50,8 +51,8 @@ const CENTERED_ICON_WIDTH = APP_GLYPH_SIZE + 6;
 /** The air kept between Share and the centred title. */
 const SHARE_CLEARANCE = 8;
 
-/** How far from the bar's leading edge the run that ends in Share reaches, with its glyph alone and with its word:
- *  the bar's inset, the window menu, Refresh and the balloon, then Share. The desktop pair was measured in Chromium
+/** How far from the bar's edge the run of the window menu, Refresh, the balloon and Share reaches, with Share's
+ *  glyph alone and with its word, counting the bar's inset. The desktop pair was measured in Chromium
  *  on the standard look (124 and 174.9); the touch pair is the same run with each square control as wide as the
  *  44 touch target its minimum width asks for. */
 interface ShareRunWidths {
@@ -171,7 +172,7 @@ const SLOT_MARGIN: Readonly<Record<ChromeSlot, string>> = {
   title: "ml-1.5",
   refresh: "ml-0.5",
   menu: "ml-0.5",
-  minimize: "",
+  minimize: "ml-1",
   maximize: "ml-1",
   close: "ml-1",
 };
@@ -273,7 +274,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
                 : control(
                     "share",
                     app === undefined ? SHARE_LABEL : `${SHARE_LABEL} ${app.display_name}`,
-                    icon("share", { size: TITLE_ACTION_GLYPH_SIZE }),
+                    shareIcon(TITLE_ACTION_GLYPH_SIZE),
                     false,
                     onControl,
                     { extra: "ml-0.5", text: shareLook === "labelled" ? SHARE_LABEL : undefined },

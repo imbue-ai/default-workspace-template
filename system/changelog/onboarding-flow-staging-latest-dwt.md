@@ -1,0 +1,1 @@
+- `shareIcon()` draws the Share glyph Imbue Studio uses, an outlined arrow curving forward; the outline `share` icon is gone.

@@ -245,19 +245,20 @@ BARE_CONTROLS_BY_PART: Final[Mapping[str, tuple[str, ...]]] = {
     "select": (":is(select)",),
 }
 
-# The standard title bar (section 4.3; the multiplayer spec, section 9.1): the window menu and Refresh lead, the
-# icon and title sit centred over the bar.
+# The standard title bar (section 4.3; the multiplayer spec, section 9.1): the window's own controls lead, the
+# icon and title sit centred over the bar, and the window menu and Refresh (with Share after them) end at the
+# right, where Imbue Studio's own Share sits.
 STANDARD_TITLE_ALIGN: Final[TitleAlign] = TitleAlign.CENTER
 STANDARD_LEADING_SLOTS: Final[tuple[ChromeSlot, ...]] = (
-    ChromeSlot.MENU,
-    ChromeSlot.REFRESH,
+    ChromeSlot.CLOSE,
+    ChromeSlot.MINIMIZE,
+    ChromeSlot.MAXIMIZE,
     ChromeSlot.ICON,
     ChromeSlot.TITLE,
 )
 STANDARD_TRAILING_SLOTS: Final[tuple[ChromeSlot, ...]] = (
-    ChromeSlot.MINIMIZE,
-    ChromeSlot.MAXIMIZE,
-    ChromeSlot.CLOSE,
+    ChromeSlot.MENU,
+    ChromeSlot.REFRESH,
 )
 OPTIONAL_CHROME_SLOTS: Final[frozenset[ChromeSlot]] = frozenset({ChromeSlot.ICON})
 

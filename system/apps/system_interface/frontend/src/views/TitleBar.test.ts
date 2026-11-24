@@ -73,7 +73,7 @@ describe("TitleBar", () => {
     const bar = render();
 
     expect(bar.getAttribute("data-focused")).toBe("true");
-    expect(slotOrder(bar)).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "maximize", "menu", "refresh"]);
     expect(bar.querySelector('[data-control="close"]')?.getAttribute("data-part")).toBe("window-control");
     // The icon and title sit together in the centred group, laid over the middle of the bar.
     const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
@@ -85,45 +85,45 @@ describe("TitleBar", () => {
   it("offers Chat about this app after Refresh when the window's app takes one", () => {
     const bar = render({ hasAppChat: true });
 
-    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "maximize", "menu", "refresh", "app-chat"]);
     expect(bar.querySelector('[data-window-control="app-chat"]')?.getAttribute("aria-label")).toBe(
       "Chat about this app",
     );
-    expect(slotOrder(render({ hasAppChat: false }))).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
+    expect(slotOrder(render({ hasAppChat: false }))).toEqual(["close", "minimize", "maximize", "menu", "refresh"]);
   });
 
   it("offers Share after the balloon, or after Refresh on a bar with no balloon, as a control a theme can style", () => {
     const bar = render({ hasAppChat: true, share: shareOn(600) });
 
-    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "share", "minimize", "maximize", "close"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "maximize", "menu", "refresh", "app-chat", "share"]);
     const share = shareOf(bar);
     expect(share.getAttribute("data-part")).toBe("window-control");
     expect(share.getAttribute("data-control")).toBe("share");
     expect(share.getAttribute("aria-label")).toBe("Share Docs");
     expect(share.querySelector("svg")).not.toBeNull();
     expect(slotOrder(render({ share: shareOn(600) }))).toEqual([
+      "close",
+      "minimize",
+      "maximize",
       "menu",
       "refresh",
       "share",
-      "minimize",
-      "maximize",
-      "close",
     ]);
   });
 
   it("offers no Share where the caller offers none, and none on a background window", () => {
     expect(slotOrder(render({ hasAppChat: true }))).toEqual([
+      "close",
+      "minimize",
+      "maximize",
       "menu",
       "refresh",
       "app-chat",
-      "minimize",
-      "maximize",
-      "close",
     ]);
     expect(slotOrder(render({ hasAppChat: true, share: shareOn(600), isFocused: false }))).toEqual([
+      "close",
       "minimize",
       "maximize",
-      "close",
     ]);
   });
 
@@ -178,7 +178,7 @@ describe("TitleBar", () => {
   it("draws no Share where a very long title in a narrow window would lie under even its glyph", () => {
     const bar = render({ title: VERY_LONG_TITLE, hasAppChat: true, share: shareOn(400) });
 
-    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "maximize", "menu", "refresh", "app-chat"]);
     // The same title leaves the glyph room on a wider bar, and the word on a wider one still.
     expect(shareLookIn(render({ title: VERY_LONG_TITLE, share: shareOn(700) }))).toBe("glyph");
     expect(shareLookIn(render({ title: VERY_LONG_TITLE, share: shareOn(1000) }))).toBe("labelled");

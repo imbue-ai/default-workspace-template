@@ -9,8 +9,8 @@
 // The stroke-outline icons share one Feather/Lucide-style frame (24x24 grid,
 // no fill, round-capped `currentColor` strokes); only their inner path markup
 // differs, so it lives in STROKE_PATHS and `icon()` wraps it. Filled or
-// otherwise non-standard glyphs (stop, warning, the Claude logo, the progress
-// status badges, the login spinner) have their own builders below.
+// otherwise non-standard glyphs (stop, warning, share, the Claude logo, the
+// progress status badges, the login spinner) have their own builders below.
 //
 // The glyphs named for Lucide below are that project's path data, copied rather
 // than imported; its notice is in THIRD_PARTY_NOTICES.md at the repo root.
@@ -35,9 +35,6 @@ const STROKE_PATHS = {
   mic: `<path d="${MIC_CAPSULE_PATH}"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>`,
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  // Lucide "forward": sharing hands an app on to someone else, so the glyph is
-  // an arrow setting off.
-  share: '<path d="m15 17 5-5-5-5"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
   // Lucide "user-plus": a person being added.
   "user-plus":
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
@@ -158,6 +155,15 @@ export function stopIcon(size = 14): string {
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" ` +
     `fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`
+  );
+}
+
+/** Share: an outlined arrow curving forward, filled on a 16x16 grid. Imbue Studio's own Share wears the same
+ *  drawing, so an app's Share and the Studio window's read as one control. */
+export function shareIcon(size = 16): string {
+  return (
+    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 16 16" fill="currentColor" ` +
+    `aria-hidden="true"><g transform="translate(1 2.5)"><path d="M13.854 4.92276L8.85388 0.140265C8.78399 0.0733402 8.69492 0.027743 8.59793 0.00923944C8.50095 -0.00926413 8.4004 0.000157124 8.30902 0.0363116C8.21763 0.0724661 8.1395 0.13373 8.08452 0.212355C8.02953 0.290981 8.00016 0.383436 8.00012 0.478028V2.8902C6.37883 3.02291 4.58817 3.78214 3.11502 4.97716C1.34124 6.4167 0.236842 8.27171 0.0049621 10.2002C-0.0131584 10.3502 0.0186258 10.5018 0.0957913 10.6334C0.172957 10.7651 0.291572 10.8701 0.434756 10.9335C0.57794 10.997 0.738397 11.0156 0.893293 10.9868C1.04819 10.958 1.18963 10.8831 1.29749 10.773C1.985 10.0729 4.4313 7.85922 8.00012 7.66433V10.043C8.00016 10.1376 8.02953 10.2301 8.08452 10.3087C8.1395 10.3873 8.21763 10.4486 8.30902 10.4847C8.4004 10.5209 8.50095 10.5303 8.59793 10.5118C8.69492 10.4933 8.78399 10.4477 8.85388 10.3808L13.854 5.59829C13.9475 5.50863 14 5.38717 14 5.26053C14 5.13389 13.9475 5.01242 13.854 4.92276ZM9.00013 8.88865V7.17353C9.00013 7.04669 8.94746 6.92504 8.85369 6.83535C8.75992 6.74566 8.63274 6.69528 8.50012 6.69528C6.74509 6.69528 5.03568 7.13347 3.4194 7.99851C2.59623 8.44102 1.82925 8.97302 1.13373 9.5839C1.49624 8.15872 2.41001 6.80348 3.76191 5.70649C5.21319 4.5294 6.98447 3.82578 8.50012 3.82578C8.63274 3.82578 8.75992 3.77539 8.85369 3.6857C8.94746 3.59601 9.00013 3.47437 9.00013 3.34753V1.633L12.7933 5.26053L9.00013 8.88865Z"/></g></svg>`
   );
 }
 
