@@ -1009,11 +1009,8 @@
   background: var(--first-run-ground);
   color: var(--first-run-ink);
 }
-/* A dialog over the page (the provider sign-in) fades the page into its cream rather than dimming it, and its white
- * card goes without a border, as Imbue Studio's first-run sign-in does. Every other dialog keeps the standard scrim. */
-.first-run-page .modal-overlay {
-  background-color: rgb(from var(--first-run-ground) r g b / 0.9);
-}
+/* A dialog's card over the page goes without a border, as Imbue Studio's first-run sign-in does; the cream wash
+ * behind it is `.first-run-dialog`'s. */
 .first-run-page .modal-overlay > [role="dialog"] {
   border-color: transparent;
 }
