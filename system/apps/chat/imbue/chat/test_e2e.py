@@ -548,7 +548,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     expect(pills).to_have_text(fixed_labels, timeout=15000)
     expect(toggle).to_have_text("Hide suggestions")
     disable = column.locator(".suggestion-strip-disable")
-    expect(disable).to_have_text("disable suggestions")
+    expect(disable).to_have_text("Disable suggestions")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
@@ -643,10 +643,10 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
         expect(pills).to_have_text(["Work in parallel by starting a new chat", "Build an app"], timeout=15000)
         expect(shown).to_have_attribute("aria-label", "Things to try")
-        expect(disable).to_have_text("disable new chat suggestions")
+        expect(disable).to_have_text("Disable new chat suggestions")
         # The strip's line is the column's one quiet line, and holds the link alone.
         expect(line).to_have_count(1)
-        expect(line).to_have_text("disable new chat suggestions")
+        expect(line).to_have_text("Disable new chat suggestions")
         expect(column.get_by_role("button")).to_have_count(1)
         _assert_pills_are_a_list_on_the_users_side(pills, column)
         assert _box(disable)["top"] >= _box(pills.last)["bottom"]

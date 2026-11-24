@@ -318,7 +318,7 @@ describe("the new-chat strip", () => {
     expect(layerStrip("new_chat")?.getAttribute("aria-label")).toBe("Things to try");
     expect(pillLabels("new_chat")).toEqual(FIRST_THREE_LABELS);
     // Its line is the one quiet line above the composer, and holds its link alone.
-    expect(nextStepLineText()).toBe("disable new chat suggestions");
+    expect(nextStepLineText()).toBe("Disable new chat suggestions");
     const line = root.querySelector<HTMLElement>(".suggestion-line")!;
     expect(line.parentElement).toBe(strip("new_chat"));
     expect([...line.children].map((child) => child.className.split(" ")[0])).toEqual(["suggestion-strip-disable"]);
@@ -489,7 +489,7 @@ describe("the link that switches a placement off", () => {
     newAndEmpty();
     await drawAndSettle();
     expect(strip("new_chat")?.querySelector(".suggestion-strip-disable")?.textContent).toBe(
-      "disable new chat suggestions",
+      "Disable new chat suggestions",
     );
 
     click('.suggestion-strip[data-placement="new_chat"] .suggestion-strip-disable');
@@ -612,7 +612,7 @@ describe("where a strip's two parts are drawn", () => {
     expect(root.querySelectorAll("footer .suggestion-pill")).toHaveLength(0);
     expect(root.querySelectorAll("main .suggestion-line")).toHaveLength(0);
     expect(root.querySelector("footer .chat-suggestions .suggestion-line")?.textContent).toBe(
-      "disable suggestionsHide suggestions",
+      "Disable suggestionsHide suggestions",
     );
   });
 
@@ -652,7 +652,7 @@ describe("where a strip's two parts are drawn", () => {
     const group = layer().querySelector<HTMLElement>('[data-placement="new_chat"]')!;
     expect(group.getAttribute("aria-label")).toBe("Things to try");
     expect(group.querySelectorAll(".suggestion-pill")).toHaveLength(FIRST_THREE_LABELS.length);
-    expect(root.querySelector("footer .suggestion-line")?.textContent).toBe("disable new chat suggestions");
+    expect(root.querySelector("footer .suggestion-line")?.textContent).toBe("Disable new chat suggestions");
     expect(root.querySelectorAll("footer .suggestion-pill")).toHaveLength(0);
   });
 

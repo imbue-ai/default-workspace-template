@@ -57,9 +57,9 @@ describe("the pills of a set", () => {
     const list = root.querySelector<HTMLElement>(".suggestion-strip-pills");
 
     // A column whose items stretch is one pill to a row, each the group's width; the group is as wide as its
-    // widest pill, never wider than the column, pushed to the right and set in 16px from its edge.
+    // widest pill, never wider than the column, pushed to the right to end at its edge.
     expect([...list!.classList]).toEqual(
-      expect.arrayContaining(["flex", "flex-col", "items-stretch", "w-fit", "max-w-full", "ml-auto", "pr-4"]),
+      expect.arrayContaining(["flex", "flex-col", "items-stretch", "w-fit", "max-w-full", "ml-auto"]),
     );
     expect(list!.classList.contains("flex-wrap")).toBe(false);
     expect([...list!.children].map((child) => child.tagName)).toEqual(["BUTTON", "BUTTON", "BUTTON"]);
@@ -121,7 +121,7 @@ describe("the new-chat strip", () => {
     // The line is a reply's line in height and look, and holds the link alone, at its right end.
     expect([...line!.classList]).toEqual(expect.arrayContaining(["h-5", "justify-end"]));
     expect([...line!.children]).toEqual([link]);
-    expect(link?.textContent).toBe("disable new chat suggestions");
+    expect(link?.textContent).toBe("Disable new chat suggestions");
     expect(lineToggle(root)).toBeNull();
 
     link!.click();
@@ -172,7 +172,7 @@ describe("the next-step strip", () => {
     expect(root.querySelector(".suggestion-strip--open")).not.toBeNull();
     expect(toggle?.textContent).toBe("Hide suggestions");
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(link?.textContent).toBe("disable suggestions");
+    expect(link?.textContent).toBe("Disable suggestions");
     // Both sit at the line's right end, the link immediately left of the button, 16px apart.
     const line = toggle!.parentElement!;
     expect([...line.children]).toEqual([link, toggle]);
@@ -223,7 +223,7 @@ describe("the line a reply's suggestions wait behind", () => {
     expect(drawn.map((element) => element.textContent)).toEqual([
       "",
       "See 3 suggestions",
-      "disable suggestionsHide suggestions",
+      "Disable suggestionsHide suggestions",
     ]);
   });
 
@@ -247,8 +247,8 @@ describe("the line a reply's suggestions wait behind", () => {
 describe("what each placement's strip says", () => {
   it("new_chat's link and its notice say what they do", () => {
     const { root: strip } = renderNewChatStrip();
-    expect(strip.querySelector(".suggestion-strip-disable")?.textContent).toBe("disable new chat suggestions");
-    expect(strip.textContent).toBe("disable new chat suggestions");
+    expect(strip.querySelector(".suggestion-strip-disable")?.textContent).toBe("Disable new chat suggestions");
+    expect(strip.textContent).toBe("Disable new chat suggestions");
 
     const root = document.createElement("div");
     m.render(root, suggestionsOffNotice("new_chat", vi.fn()));

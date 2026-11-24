@@ -29,12 +29,12 @@ interface PlacementWords {
 export const SUGGESTION_PLACEMENT_WORDS: Record<SuggestionPlacement, PlacementWords> = {
   next_step: {
     label: "Suggestions",
-    disableLink: "disable suggestions",
+    disableLink: "Disable suggestions",
     offNotice: "Next step suggestions are off.",
   },
   new_chat: {
     label: "Things to try",
-    disableLink: "disable new chat suggestions",
+    disableLink: "Disable new chat suggestions",
     offNotice: "New chat suggestions are off.",
   },
 };
@@ -52,9 +52,9 @@ export interface SuggestionStripAttrs {
   onDisable: (() => void) | null;
 }
 
-// The user's side of the column: the group as wide as its widest pill and every pill stretched to that, set in from
-// the column's edge as far as a person's bubble sets its text in.
-const PILLS_CLASS = "suggestion-strip-pills ml-auto flex w-fit max-w-full flex-col items-stretch gap-1.5 pr-4";
+// The user's side of the column: the group as wide as its widest pill and every pill stretched to that, ending at
+// the column's edge, where the composer's box ends.
+const PILLS_CLASS = "suggestion-strip-pills ml-auto flex w-fit max-w-full flex-col items-stretch gap-1.5";
 
 const QUIET_LINK_CLASS =
   "cursor-pointer text-(length:--font-size-helper) text-faint hover:text-secondary hover:underline " +

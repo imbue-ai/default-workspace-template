@@ -2415,7 +2415,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       return m(
         "div",
         {
-          class: "message-input mx-auto w-full max-w-(--width-message-column)",
+          // Set in by the face gutter, so the box starts where an agent's bubbles do and the face hangs out to its
+          // left (participant-picture.ts, FACE_COLUMN_CLASS).
+          class: "message-input mx-auto w-full max-w-(--width-message-column) pl-(--width-face-gutter)",
           oncreate: isDictationShown ? attachDictationToPage : undefined,
           onremove: isDictationShown ? detachDictationFromPage : undefined,
         },

@@ -570,7 +570,7 @@ describe("the line above the composer", () => {
 
     const link = root.querySelector<HTMLElement>(".suggestion-strip-disable")!;
     const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
-    expect(link.textContent).toBe("disable suggestions");
+    expect(link.textContent).toBe("Disable suggestions");
     // Immediately left of the button that hides the suggestions, both at the line's right end.
     expect([...toggle.parentElement!.children]).toEqual([link, toggle]);
     expect(toggle.parentElement!.classList.contains("justify-end")).toBe(true);
@@ -606,7 +606,7 @@ describe("the line above the composer", () => {
 describe("the link that switches next-step suggestions off", () => {
   it("is shown to the workspace's owner only", async () => {
     await load();
-    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("disable suggestions");
+    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("Disable suggestions");
 
     setParticipantsForTesting("user:owner-1", ownerAndVisitorRosterFixture());
     draw();

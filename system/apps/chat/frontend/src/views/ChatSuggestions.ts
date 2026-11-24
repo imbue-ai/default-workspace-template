@@ -32,7 +32,8 @@ import { emptyNextStepLine, SuggestionStrip, suggestionsOffNotice } from "./Sugg
 const PLACEMENTS: readonly SuggestionPlacement[] = ["new_chat", "next_step"];
 
 // The composer's own column, so the strips line up with its edge.
-const COLUMN_CLASS = "chat-suggestions mx-auto mb-2 flex w-full max-w-(--width-message-column) flex-col gap-1";
+const COLUMN_CLASS =
+  "chat-suggestions mx-auto mb-2 flex w-full max-w-(--width-message-column) flex-col gap-1 pl-(--width-face-gutter)";
 
 function isPlacementEnabled(placement: SuggestionPlacement): boolean {
   return isSuggestionSwitchOn(SUGGESTION_SWITCHES[placement]) === true;
