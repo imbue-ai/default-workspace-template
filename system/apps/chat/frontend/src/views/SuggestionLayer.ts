@@ -32,19 +32,6 @@ const GROUP_CLASS = "suggestion-layer-strip mx-auto flex min-h-0 w-full max-w-(-
 // scrolls, and sets the pills off from the line under the layer.
 const SCROLL_CLASS = "suggestion-layer-scroll suggestion-rise min-h-0 overflow-y-auto pt-1 pb-1.5 pl-1";
 
-// How wide the open pills are, for the line under the layer to spread its words across (views/SuggestionStrip.ts).
-const PILLS_WIDTH_VAR = "--suggestion-pills-width";
-
-/** Keep the page's note of the pills' width in step with the group drawn in ``scroll``. */
-function notePillsWidth(scroll: Element): void {
-  const width = scroll.querySelector(".suggestion-strip-pills")?.getBoundingClientRect().width ?? 0;
-  if (width > 0) document.documentElement.style.setProperty(PILLS_WIDTH_VAR, `${width}px`);
-}
-
-function forgetPillsWidth(): void {
-  document.documentElement.style.removeProperty(PILLS_WIDTH_VAR);
-}
-
 export function SuggestionLayer(): m.Component<SuggestionLayerAttrs> {
   return {
     oncreate(vnode) {
@@ -73,16 +60,7 @@ export function SuggestionLayer(): m.Component<SuggestionLayerAttrs> {
                   role: "group",
                   "aria-label": SUGGESTION_PLACEMENT_WORDS[strip.placement].label,
                 },
-                m(
-                  "div",
-                  {
-                    class: SCROLL_CLASS,
-                    oncreate: ({ dom }: m.VnodeDOM) => notePillsWidth(dom),
-                    onupdate: ({ dom }: m.VnodeDOM) => notePillsWidth(dom),
-                    onremove: forgetPillsWidth,
-                  },
-                  suggestionPills(strip.suggestions, strip.onPick),
-                ),
+                m("div", { class: SCROLL_CLASS }, suggestionPills(strip.suggestions, strip.onPick)),
               ),
             ],
       );

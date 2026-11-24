@@ -64,15 +64,12 @@ const QUIET_LINK_CLASS =
 // One height whatever it holds, so a set that arrives moves nothing. What it holds sits at its right end.
 const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end";
 
-// The line's words, in a group as wide as the open pills over the transcript (``--suggestion-pills-width``, which
-// views/SuggestionLayer.ts keeps) and, like them, at the column's right end; just as wide as the words with no pills
-// open. Set in 16px each side, as a pill sets in its label and a bubble its text, so the words line up with theirs.
-const PILLS_SPAN_CLASS = "suggestion-line-span flex h-full items-center gap-4 px-4";
-const PILLS_SPAN_STYLE = "width: var(--suggestion-pills-width, auto)";
+// The line's words, 12px apart, set in 16px from the column's end as a pill sets in its label and a bubble its text,
+// so the last of them lines up with theirs.
+const WORDS_CLASS = "suggestion-line-words flex h-full items-center gap-3 pr-4";
 
-/** The line's words under the pills, spread across their width by ``justify``. */
-function underPills(justify: "justify-between" | "justify-start" | "justify-end", children: m.Children[]): m.Vnode {
-  return m("div", { class: `${PILLS_SPAN_CLASS} ${justify}`, style: PILLS_SPAN_STYLE }, children);
+function lineWords(children: m.Children[]): m.Vnode {
+  return m("div", { class: WORDS_CLASS }, children);
 }
 
 /** The suggestions as pills, in order; a click picks that one. */
@@ -148,13 +145,13 @@ export function suggestionLine(attrs: SuggestionLineAttrs | null): m.Vnode {
     },
     attrs.isOpen ? HIDE_SHORT : seeLabel,
   );
-  // Disable at the pills' left edge and Hide at their right; the toggle alone at the right.
+  // Disable just left of Hide; the toggle alone otherwise.
   return m(
     "div",
     { class: LINE_CLASS },
     attrs.isOpen && attrs.onDisable !== null
-      ? underPills("justify-between", [disableLink("next_step", attrs.onDisable, true), toggle])
-      : underPills("justify-end", [toggle]),
+      ? lineWords([disableLink("next_step", attrs.onDisable, true), toggle])
+      : lineWords([toggle]),
   );
 }
 
@@ -168,7 +165,7 @@ function linkLine(placement: SuggestionPlacement, onDisable: (() => void) | null
   return m(
     "div",
     { class: LINE_CLASS },
-    onDisable === null ? null : underPills("justify-start", [disableLink(placement, onDisable, false)]),
+    onDisable === null ? null : lineWords([disableLink(placement, onDisable, false)]),
   );
 }
 

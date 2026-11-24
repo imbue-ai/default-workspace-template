@@ -118,12 +118,11 @@ describe("the new-chat strip", () => {
     expect([...strip!.children]).toEqual([line]);
     expect(pills(root)).toEqual([]);
     expect(root.querySelector(".suggestion-rise")).toBeNull();
-    // The line is a reply's line in height and look, and holds the link alone, at the left of the pills' width.
+    // The line is a reply's line in height and look, and holds the link alone, at its right end.
     expect([...line!.classList]).toEqual(expect.arrayContaining(["h-5", "justify-end"]));
-    const span = line!.querySelector<HTMLElement>(".suggestion-line-span")!;
-    expect([...line!.children]).toEqual([span]);
-    expect([...span.children]).toEqual([link]);
-    expect(span.classList.contains("justify-start")).toBe(true);
+    const words = line!.querySelector<HTMLElement>(".suggestion-line-words")!;
+    expect([...line!.children]).toEqual([words]);
+    expect([...words.children]).toEqual([link]);
     expect(link?.textContent).toBe("Disable new chat suggestions");
     expect(lineToggle(root)).toBeNull();
 
@@ -151,7 +150,7 @@ describe("the next-step strip", () => {
     expect([...toggle!.classList]).toEqual(
       expect.arrayContaining(["text-(length:--font-size-helper)", "text-faint", "hover:underline"]),
     );
-    expect(toggle!.parentElement?.classList.contains("justify-end")).toBe(true);
+    expect(toggle!.closest(".suggestion-line")?.classList.contains("justify-end")).toBe(true);
     expect([...toggle!.parentElement!.children]).toEqual([toggle]);
     expect(pills(root)).toEqual([]);
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
@@ -179,13 +178,12 @@ describe("the next-step strip", () => {
     // Short beside each other, with the full words as their names (and tooltips).
     expect(toggle?.getAttribute("aria-label")).toBe("Hide suggestions");
     expect(link?.getAttribute("aria-label")).toBe("Disable suggestions");
-    // Spread across the open pills' width, the link at its left and the button at its right, each set in 16px as a
-    // pill sets its label and a bubble its text.
-    const span = toggle!.parentElement!;
-    expect([...span.children]).toEqual([link, toggle]);
-    expect([...span.classList]).toEqual(expect.arrayContaining(["flex", "justify-between", "gap-4", "px-4"]));
-    expect(span.style.width).toBe("var(--suggestion-pills-width, auto)");
-    expect(span.parentElement!.classList.contains("justify-end")).toBe(true);
+    // The link just left of the button, 12px apart, the pair set in 16px from the line's right end as a pill sets in
+    // its label and a bubble its text.
+    const words = toggle!.parentElement!;
+    expect([...words.children]).toEqual([link, toggle]);
+    expect([...words.classList]).toEqual(expect.arrayContaining(["flex", "gap-3", "pr-4"]));
+    expect(words.parentElement!.classList.contains("justify-end")).toBe(true);
 
     link!.click();
     expect(attrs.onDisable).toHaveBeenCalledTimes(1);

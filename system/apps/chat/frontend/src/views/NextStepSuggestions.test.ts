@@ -571,9 +571,8 @@ describe("the line above the composer", () => {
     const link = root.querySelector<HTMLElement>(".suggestion-strip-disable")!;
     const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
     expect(link.textContent).toBe("Disable");
-    // At the left end of the words under the pills, and the button that hides the suggestions at their right.
+    // Just left of the button that hides the suggestions.
     expect([...toggle.parentElement!.children]).toEqual([link, toggle]);
-    expect(toggle.parentElement!.classList.contains("justify-between")).toBe(true);
 
     click(".suggestion-line-toggle");
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
