@@ -1084,15 +1084,14 @@ def test_an_app_that_stops_answering_is_waited_on_then_reported_as_not_respondin
     assert ">Try again</a>" in last
 
 
-@pytest.mark.parametrize("host", [_SHELL_HOST, _FILES_HOST], ids=["critical-app", "app-without-a-program"])
 def test_an_app_the_workspace_never_restarts_on_its_own_says_the_owner_may_need_to_restart_it(
-    tmp_path: Path, host: str
+    tmp_path: Path,
 ) -> None:
     harness = _make_harness(tmp_path)
 
-    last = _wait_out_a_minute(harness, host)
+    last = _wait_out_a_minute(harness, _FILES_HOST)
 
-    assert "The workspace owner may need to restart it." in last
+    assert "This app isn't responding. The workspace owner may need to restart it." in last
     assert ">Try again</a>" in last
 
 
@@ -1449,12 +1448,25 @@ def test_the_still_unavailable_page_sends_whoever_may_open_the_workspace_to_its_
     assert _buttons(page) == buttons
 
 
-def test_the_owner_of_a_workspace_whose_shell_is_down_is_sent_to_an_agent_with_no_way_to_open_it(
-    tmp_path: Path,
+@pytest.mark.parametrize("path", ["/_auth/unresponsive", "/_auth/loading"], ids=["not-responding", "not-routed"])
+@pytest.mark.parametrize(
+    ("identity", "sentence"),
+    [
+        (
+            _OWNER_IDENTITY,
+            "This workspace isn't responding. Open it in the Imbue Studio app, which will try to restart it.",
+        ),
+        (_WORKSPACE_VISITOR_IDENTITY, "This workspace isn't responding. The workspace owner may need to restart it."),
+    ],
+    ids=["owner", "workspace-visitor"],
+)
+def test_a_workspace_whose_shell_is_down_sends_only_its_owner_to_imbue_studio(
+    tmp_path: Path, identity: str, sentence: str, path: str
 ) -> None:
     harness = _make_harness(tmp_path)
 
-    page = _given_up_page(harness, _SHELL_HOST, _OWNER_IDENTITY, "document")
+    page = _given_up_page(harness, _SHELL_HOST, identity, "document", path=path)
 
-    assert _ASK_AN_AGENT_TO_RESTART in page
+    assert sentence in page
+    assert "agent" not in page
     assert _buttons(page) == {"Try again": ""}

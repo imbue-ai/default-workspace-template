@@ -57,9 +57,14 @@ three things running:
    on the request it hands to its error route. They also get an "Open the
    workspace" button, when the page fills the browser tab
    (`Sec-Fetch-Dest: document`; inside one of the workspace's windows they are
-   there already) and the app that is down is not the shell itself. The
-   minute is counted per address across all visitors and both pages, and
-   starts over after 30 seconds with no such request.
+   there already) and the app that is down is not the shell itself. When it
+   is the shell, the workspace's agents are out of reach too, so either page
+   says the workspace isn't responding: the owner is told to open it in the
+   Imbue Studio app, which restarts a workspace it finds down, and everyone
+   else that the owner may need to restart it (Studio restarts only a
+   workspace its account owns). The minute is counted per address across all
+   visitors and both pages, and starts over after 30 seconds with no such
+   request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy

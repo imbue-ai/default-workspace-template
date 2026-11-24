@@ -153,15 +153,23 @@ _UNRESPONSIVE_WAITING_PAGE = _render_page(
 
 
 class _GivenUpPage:
-    """What a page that stopped waiting for an address says: a heading and a sentence for a member (the workspace's
-    owner, or anyone whose grant covers the whole workspace, who can ask its agents to fix the app), and another pair
-    for anyone else."""
+    """What a page that stopped waiting for an address says: a heading and a sentence for a member (someone who can
+    fix it: the workspace's owner, and unless ``is_owner_only``, anyone whose grant covers the whole workspace), and
+    another pair for anyone else."""
 
-    def __init__(self, member_heading: str, member_sentence: str, visitor_heading: str, visitor_sentence: str) -> None:
+    def __init__(
+        self,
+        member_heading: str,
+        member_sentence: str,
+        visitor_heading: str,
+        visitor_sentence: str,
+        is_owner_only: bool = False,
+    ) -> None:
         self.member_heading = member_heading
         self.member_sentence = member_sentence
         self.visitor_heading = visitor_heading
         self.visitor_sentence = visitor_sentence
+        self.is_owner_only = is_owner_only
 
     def render(self, is_member: bool, workspace_url: str | None) -> str:
         """The page; ``workspace_url`` adds a way to open the workspace itself beside "Try again"."""
@@ -187,6 +195,16 @@ _UNRESPONSIVE_NOT_RESTARTED = _GivenUpPage(
     member_sentence="This app isn't responding. Ask an agent in the workspace to restart it, then try again.",
     visitor_heading="This app isn't responding",
     visitor_sentence="This app isn't responding. The workspace owner may need to restart it.",
+)
+
+# The shell is the workspace itself, so its agents are out of reach. Imbue Studio restarts a workspace it finds down,
+# but only one its account owns: a workspace shared with the account it only opens through this same address.
+_WORKSPACE_UNRESPONSIVE = _GivenUpPage(
+    member_heading="This workspace isn't responding",
+    member_sentence="This workspace isn't responding. Open it in the Imbue Studio app, which will try to restart it.",
+    visitor_heading="This workspace isn't responding",
+    visitor_sentence="This workspace isn't responding. The workspace owner may need to restart it.",
+    is_owner_only=True,
 )
 
 _STILL_NOT_AVAILABLE = _GivenUpPage(
@@ -435,14 +453,15 @@ def build_gateway_app(
 
     def _given_up(page: _GivenUpPage, service_name: str | None, registered_apps: Sequence[RegisteredApp]) -> Response:
         """``page`` for whoever is asking. The identity caddy verified for the request it could not serve is still on
-        it, so anyone who may open the whole workspace reads the member's sentence. They also get a way there, when
-        the page fills the tab (inside one of the workspace's own windows they are there already) and the address is
-        not the workspace itself."""
+        it, so a member reads the member's sentence. Anyone who may open the whole workspace also gets a way there,
+        when the page fills the tab (inside one of the workspace's own windows they are there already) and the
+        address is not the workspace itself."""
         identity = parse_requester_identity_header(request.headers.get(IDENTITY_HEADER, ""))
-        is_member = identity is not None and _may_open_workspace(identity, registered_apps)
+        may_open_workspace = identity is not None and _may_open_workspace(identity, registered_apps)
+        is_member = (identity is not None and identity.is_owner) if page.is_owner_only else may_open_workspace
         workspace_url = (
             _shell_url(registered_apps)
-            if is_member
+            if may_open_workspace
             and service_name not in (None, _SHELL_SERVICE_NAME)
             and request.headers.get("Sec-Fetch-Dest", "") == "document"
             else None
@@ -533,6 +552,8 @@ def build_gateway_app(
         waited_seconds, service_name, registered_apps = _unanswered_request()
         if waited_seconds < _UNRESPONSIVE_GIVE_UP_SECONDS:
             return _html_page(_LOADING_PAGE, status=503)
+        if service_name == _SHELL_SERVICE_NAME:
+            return _given_up(_WORKSPACE_UNRESPONSIVE, service_name, registered_apps)
         return _given_up(_STILL_NOT_AVAILABLE, service_name, registered_apps)
 
     # A registered app whose backend caddy could not reach.
@@ -541,6 +562,8 @@ def build_gateway_app(
         waited_seconds, service_name, registered_apps = _unanswered_request()
         if waited_seconds < _UNRESPONSIVE_GIVE_UP_SECONDS:
             return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
+        if service_name == _SHELL_SERVICE_NAME:
+            return _given_up(_WORKSPACE_UNRESPONSIVE, service_name, registered_apps)
         app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
         if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
             return _given_up(_UNRESPONSIVE_NOT_RESTARTED, service_name, registered_apps)
