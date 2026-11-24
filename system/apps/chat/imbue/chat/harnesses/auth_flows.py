@@ -128,15 +128,17 @@ _SETTLE_QUIET_SECONDS: Final = 0.2
 class FlowError(PtyAuthError):
     """A sign-in flow could not be started or advanced."""
 
-    def __init__(self, detail: str, user_facing_message: str | None = None) -> None:
+    def __init__(self, detail: str, user_facing_message: str | None = None, is_expected: bool = False) -> None:
         super().__init__(detail)
         # The sentence the chooser shows in place of ``detail``, which then goes behind See details; None where
         # ``detail`` is shown as it is.
         self.user_facing_message = user_facing_message
+        # Whether the refusal is ordinary operation the sentence fully explains, so it owes the person no more help.
+        self.is_expected = is_expected
 
 
 # What a sign-in that could not even be started says; what went wrong goes behind See details.
-_SIGN_IN_NOT_STARTED: Final = "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug."
+_SIGN_IN_NOT_STARTED: Final = "Imbue Studio couldn't start the sign-in. Try again."
 
 
 class FlowState(StrEnum):
@@ -395,6 +397,7 @@ class AuthFlowService:
                     raise FlowError(
                         f"that account signs in through {existing.lane}, not {lane.id}",
                         "That account signs in a different way -- pick it from the provider list instead.",
+                        is_expected=True,
                     )
                 account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
@@ -575,7 +578,7 @@ class AuthFlowService:
                 match = re.search(failure_patterns[index - 1], session.output)
                 detail, provider_words = _cli_failure(copy, match, session.lane.provider_name)
                 self._fail_locked(session, detail, provider_words)
-                raise FlowError(provider_words or detail, detail)
+                raise FlowError(provider_words or detail, detail, is_expected=True)
             if index != 0:
                 self._fail_to_start_locked(session, "Timed out waiting for the sign-in details.")
             session.output += (session.process.before or "") + (session.process.after or "")

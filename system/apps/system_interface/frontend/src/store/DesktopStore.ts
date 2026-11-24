@@ -30,10 +30,12 @@ import { StalePlacementsSaveError } from "../model/api";
 import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, AskOrigin } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
+  ASK_NOT_DRAFTED_REASON,
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
   appAskLaunchOf,
@@ -706,8 +708,8 @@ export class DesktopStore {
   /**
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
-   * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
+   * retry is the control just pressed asks for a plain note; any other, and any failure that owes the person help,
+   * shows one that stays, which for a failure that owes help offers "Report a bug" wherever the embedder opens a bug
    * report when the toast is drawn (``reportBugAction``).
    */
   private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
@@ -717,19 +719,19 @@ export class DesktopStore {
   /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
    *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
   showStartFailure(failure: FailureMessage): void {
-    this.showFailure(failure, { isLasting: failure.details !== null || failure.isReportable });
+    this.showFailure(failure, { isLasting: failure.details !== null || failure.isHelpOwed });
   }
 
   /** ``toastFailure`` for a failure already worded. */
   private showFailure(told: FailureMessage, { isLasting }: { readonly isLasting: boolean }): void {
-    if (!isLasting && !told.isReportable) {
+    if (!isLasting && !told.isHelpOwed) {
       this.toasts.show(told.message, { isLasting: false, details: told.details });
       return;
     }
     this.toasts.show(told.message, {
       isLasting: true,
       details: told.details,
-      isReportable: told.isReportable,
+      isHelpOwed: told.isHelpOwed,
     });
   }
 
@@ -795,7 +797,7 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+  /** What a toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
    *  opens none. */
   reportBugAction(): ((failure: ReportedFailure) => void) | null {
     return this.canReportBug ? (failure) => this.reportBug(failure) : null;
@@ -2863,7 +2865,7 @@ export class DesktopStore {
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
       if (onFailure === null) this.toast(disabledReason);
-      else onFailure({ message: `${disabledReason}.`, details: null, isReportable: false });
+      else onFailure({ message: `${disabledReason}.`, details: null, isHelpOwed: false });
       return false;
     }
     return this.launchPinnedFirst(
@@ -2909,15 +2911,16 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles once the window
-   *  is on the desktop, or with the failure for the caller to show where the press was: nothing is toasted. */
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and where an ask goes that has no chat about
+   *  an app to take it: the primary text action runs with the text (the main chat on a stock machine). Settles once
+   *  the window is on the desktop, or with the failure for the caller to show where the press was: nothing is
+   *  toasted. */
   async startWithText(text: string): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
     const [row] = freeTextRowsOf(openableApps(this.state));
     if (row === undefined) {
-      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
+      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isHelpOwed: false } };
     }
     return this.startOutcomeOf(row.app, (onFailure) =>
       this.runFreeText(row.app.name, row.launchPath.id, text, onFailure),
@@ -2925,19 +2928,34 @@ export class DesktopStore {
   }
 
   /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
-   *  an ask of the shell's own): the text is sent to the chat about that window's app, through the first launch
-   *  path of the machine that takes an ask's text, whose page is put on screen by the show rule and laid out beside
-   *  the window, as "Chat about this app" lays it out. With no such window, a window of an internal app, or no such
-   *  launch path, the primary text action runs with the text instead, behind the assist command (the ask launch
-   *  path's chat puts it in front of its own lead-in). Settles as ``startWithText`` does. */
-  async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
+   *  an ask of the shell's own). The one place an ask becomes the message an agent reads: the assist command and
+   *  the app and window it came from go in front of ``text`` (``assistRequest``). It is sent to the chat about that
+   *  window's app, through the first launch path of the machine that takes an ask's text, whose page is put on
+   *  screen by the show rule and laid out beside the window, as "Chat about this app" lays it out. With no such
+   *  window, a window of an internal app, no such launch path, or the ``main-chat`` delivery, the primary text action
+   *  runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. Settles as
+   *  ``startWithText`` does. */
+  async askAgent(text: string, windowId: string | null, delivery: AskDelivery = "app-chat"): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
     const asking = windowId === null ? null : findWindow(this.state, windowId);
     const about = asking === null ? undefined : appByName(this.state, asking.window.app);
-    const launch = about === undefined || about.internal ? null : appAskLaunchOf(openableApps(this.state));
-    if (asking === null || about === undefined || launch === null) return this.startWithText(assistRequest(text));
-    const params = appAskParams(launch.launchPath, about, text);
+    const origin: AskOrigin | null =
+      asking === null || about === undefined
+        ? null
+        : { appName: about.name, appDisplayName: about.display_name, windowId: asking.window.id };
+    const message = assistRequest(text, origin);
+    if (delivery === "draft") {
+      // ``draftText`` tells a draft that could not be made itself.
+      if (await this.draftText(message)) return { isOpened: true };
+      return { isOpened: false, failure: { message: `${ASK_NOT_DRAFTED_REASON}.`, details: null, isHelpOwed: false } };
+    }
+    const launch =
+      delivery === "main-chat" || about === undefined || about.internal
+        ? null
+        : appAskLaunchOf(openableApps(this.state));
+    if (asking === null || about === undefined || launch === null) return this.startWithText(message);
+    const params = appAskParams(launch.launchPath, about, message);
     return this.startOutcomeOf(launch.app, async (onFailure) => {
       const target: LaunchTarget = { kind: "show", besideWindowId: asking.window.id };
       return (await this.launchAt(launch.app.name, launch.launchPath.id, params, target, onFailure)) !== null;
@@ -2951,7 +2969,7 @@ export class DesktopStore {
     console.info("[si] refused to start a chat while viewing somebody else's desktop");
     return {
       isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isHelpOwed: false },
     };
   }
 
@@ -2971,7 +2989,7 @@ export class DesktopStore {
       failure: failure ?? {
         message: fallbackSentence(`${app.display_name} couldn't open that`),
         details: null,
-        isReportable: true,
+        isHelpOwed: true,
       },
     };
   }

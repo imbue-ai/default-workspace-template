@@ -60,7 +60,7 @@ import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from
 import type { UnpickableReason } from "../models/Providers";
 import { MAX_SIGN_IN_PORT_DRAWS, PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { framePageInShell } from "../shellConnectionFixture";
-import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
+import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE, FIRST_RUN_DIALOG } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
  *
@@ -157,6 +157,21 @@ describe("the provider chooser", () => {
     const card = root.querySelector('[data-part="dialog"]');
     expect(card?.getAttribute("role")).toBe("dialog");
     expect(card?.querySelector('[data-part="dialog-header"] [data-part="dialog-title"]')?.textContent).not.toBe("");
+  });
+
+  it("wears the first run's cream only when the first run's provider page opened it", () => {
+    const fromPage = document.createElement("div");
+    m.render(fromPage, m(ProviderChooserModal as never, { onDismiss: () => undefined, isFirstRun: true }));
+    const fromElsewhere = document.createElement("div");
+    m.render(fromElsewhere, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    // On the root, which is the backdrop, so the card and a removal's confirmation inside it take it too.
+    const root = fromPage.firstElementChild;
+    expect(root?.classList.contains(FIRST_RUN_DIALOG)).toBe(true);
+    expect(root?.classList.contains("modal-overlay")).toBe(true);
+    expect(root?.querySelector('[data-part="dialog"]')).not.toBeNull();
+    expect(fromElsewhere.querySelector(`.${FIRST_RUN_DIALOG}`)).toBeNull();
+    expect(fromElsewhere.firstElementChild?.classList.contains("modal-overlay")).toBe(true);
   });
 
   it("renders a spinner before the lanes arrive", () => {
@@ -887,15 +902,13 @@ describe("a failure on the chooser's screens", () => {
 
     const { root } = await mounted();
 
-    expect(root.textContent).toContain(
-      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("Couldn't load the list of providers. Try again.");
     expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
     (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toEqual([
       {
         type: "shell:report-bug",
-        message: "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+        message: "Couldn't load the list of providers. Try again.",
         details: "HTTP 500",
       },
     ]);
@@ -909,9 +922,7 @@ describe("a failure on the chooser's screens", () => {
 
     const { root, draw } = await mounted();
 
-    expect(root.textContent).toContain(
-      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("Couldn't load the list of providers. Try again.");
     expect(root.querySelector(".see-details-text")?.textContent).toContain("Internal server error: boom");
     (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toHaveLength(1);
@@ -966,8 +977,7 @@ describe("a failure on the chooser's screens", () => {
     startFlow.mockRejectedValue(
       rejection(400, {
         detail: "Timed out waiting for the sign-in details.",
-        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
-        reportable: true,
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again.",
       }),
     );
     const shell = framePageInShell(true);
@@ -990,8 +1000,7 @@ describe("a failure on the chooser's screens", () => {
     startFlow.mockRejectedValue(
       rejection(400, {
         detail: "Timed out waiting for the sign-in details.",
-        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
-        reportable: true,
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again.",
       }),
     );
     const shell = framePageInShell(true);
@@ -1006,6 +1015,7 @@ describe("a failure on the chooser's screens", () => {
 
     state.accounts = [account("a1", "openai", "OpenAI (Codex)")];
     draw();
+    expect(root.querySelector(".report-bug")).toBeNull();
     (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
     const [ask] = shell.posted("shell:ask-agent");
     expect(String(ask?.text)).toMatch(
@@ -1023,9 +1033,7 @@ describe("a failure on the chooser's screens", () => {
     await settled();
     draw();
 
-    expect(root.textContent).toContain(
-      "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("The sign-in didn't complete. Try again, or try another way in.");
     expect(root.querySelector("[data-e2e='status-error'] p")?.textContent).not.toBe("null");
   });
 

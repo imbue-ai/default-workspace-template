@@ -144,7 +144,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               },
               "Start agent",
             ),
-            startError?.isReportable === true
+            startError?.isHelpOwed === true
               ? m(
                   "div",
                   { class: "flex flex-wrap items-center justify-center gap-2" },

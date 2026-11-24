@@ -119,16 +119,16 @@ def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other(
     assert zero.display_body == 'Background command "build" completed'
 
 
-def test_a_task_notification_for_a_failed_task_is_marked_failed_with_its_exit_code_behind_the_details() -> None:
+def test_a_task_notification_for_a_failed_task_is_marked_failed_and_keeps_its_exit_code_on_the_line() -> None:
     failed = classify_user_message(
         '<task-notification>\n<summary>Background command "build" completed (exit code 2)</summary>\n'
         "</task-notification>"
     )
     assert failed is not None
     assert failed.display_label == "Background task failed"
-    assert failed.display_body == 'Background command "build" completed'
+    assert failed.display_body == 'Background command "build" completed (exit code 2)'
     assert failed.resolution == "failed"
-    assert failed.display_details == "exit code 2"
+    assert failed.display_details is None
 
     killed = classify_user_message(
         '<task-notification>\n<status>killed</status>\n<summary>Background command "serve" was stopped</summary>\n'
@@ -422,9 +422,9 @@ def test_a_background_task_report_for_a_killed_command_is_marked_failed() -> Non
 
     assert decision is not None
     assert decision.display_label == "Background task failed"
-    assert decision.display_body == "Run the test suite"
+    assert decision.display_body == "Run the test suite (killed by signal 9)"
     assert decision.resolution == "failed"
-    assert decision.display_details == "Run the test suite: killed by signal 9"
+    assert decision.display_details is None
 
 
 @pytest.mark.parametrize(

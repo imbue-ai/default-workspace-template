@@ -502,14 +502,13 @@ forms compared case-insensitively, so "docs chat" is found rather than refused),
 made with that title and label on the default account when there is none (a
 window's "Chat about this app"; the intake is held with a `hint` the root puts
 on the composer); `app_ask`, an ask from a page of an app (a failure's "Ask an
-agent to fix this"), whose text does not say which app it is about, so the chat
-that takes it receives it led by "/assist This is about the <app_display_name>
-app." and a blank line (`chat_intakes.py`'s `app_ask_message`: the assist
-command first, since a chat runs a command only at the start of its message, so
-the agent runs the workspace's assist flow, which also reports a fault in
-built-in code to Imbue; like any command, it reaches the agent without a
-visitor's `[from: <name>]` prefix, its sender recorded in the annotation alone;
-an ask with no text stays empty): that same chat about the `app` takes the text as a message
+agent to fix this"), whose text the shell wrote whole (`workspace_ui`'s
+`assistRequest`: the assist command first, since a chat runs a command only at
+the start of its message, then the app and window the ask was pressed in), so
+the chat takes it as it arrived and the agent runs the workspace's assist flow,
+which also reports a fault in built-in code to Imbue (like any command, it
+reaches the agent without a visitor's `[from: <name>]` prefix, its sender
+recorded in the annotation alone): that same chat about the `app` takes the text as a message
 when it is an agent chat, has it held for its page while its create is still
 running (the root sends it when the agent is up by the time it applies the
 intake, else leaves it in the chat's composer, unsent), and is
@@ -622,8 +621,12 @@ do", under the welcome's last turn, with the step its first conversation stands 
 below). The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
 under its lanes; the first account connected there is pinned as the workspace's default (see
 "Provider accounts"), and with two or more connected the page marks the default's row "Default"
-and makes every other row a button that pins that account instead. Leaving the provider page with
-a provider connected starts the chat's agent at once, on the default account and with no
+and gives every other row a button that pins that account instead. Every row ends in Remove, which
+asks first (the chat's own remove-account dialog) and then signs the account out; with the last
+one removed the page offers Skip again and holds Next. The dialogs the page opens, that one and
+the provider chooser a tile opens, wear the page's cream and brown ink whatever theme the
+workspace wears, where the chooser opened from anywhere else wears the workspace's look. Leaving
+the provider page with a provider connected starts the chat's agent at once, on the default account and with no
 message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
 types, and that first send carries the welcome. For this chat the context block also says that
 this is the user's first conversation in a new workspace and that the agent reads
@@ -749,8 +752,9 @@ are there when its user comes back to it.
 The question goes to the account the chat runs on, as chat naming's does, and never enters the
 chat's transcript. It runs on a mid-sized model (the one-shot call's `medium` tier: the `sonnet`
 alias for Claude, the newest "terra" model of the account's list for Codex, each falling back to
-the account's default model) with an allowance for thinking (for Codex, a `medium` reasoning
-effort where the model offers one). The system prompt asks for a draft,
+the account's default model) with an allowance of 20,000 tokens for thinking (for Codex, a
+`medium` reasoning effort where the model offers one), and each model it is asked on has 120
+seconds to answer. The system prompt asks for a draft,
 a critique, and a shorter second list, usually two or three suggestions, each as a
 `<suggestion>` element with `recommended="true"` on a clear best one; a reply whose one main
 question has a few possible answers gets those answers themselves. The prompt is the end of
@@ -1069,8 +1073,9 @@ anything but "More ideas" is said, at the list of ideas.
 A new chat is minted as "Chat N". Its first message is sent, in the background
 and outside the chat, to the cheapest model the chat's account offers
 (`chat_naming.py`, through the harness's `OneShotCompletion`, from an empty
-directory with no session kept), and the answer, a short title such as "Simple
-map app", renames the chat the way the rail's rename does. Models are named
+directory with no session kept, given 60 seconds to answer), and the answer, a
+short title such as "Simple map app", renames the chat the way the rail's
+rename does. Models are named
 by family rather than by id, so a change to a provider's model list moves the
 call to the new model instead of breaking it:
 
@@ -1398,26 +1403,32 @@ chat messaged most recently, and never to the failing chat (`chatToAskAbout`
 in `frontend/src/views/ask-running-agent.ts`). The task is the one every "Ask
 an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
 the details, what to do, written as Imbue Studio about the user), behind
-`/assist` (`assistRequest`), so the agent runs the workspace's assist flow as
-it does for an ask through the shell. It is sent as a message through
+`/assist`, so the agent runs the workspace's assist flow as it does for an ask
+through the shell. The shell writes that command for every ask that passes
+through it; this one never does, so the chat app puts it in front itself
+(`assistRequest`). It is sent as a message through
 `POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
 may create a chat for it, so these failures never offer the shell's ask, which
-every other failure that asks for a bug report offers first: with no other
-agent chat they offer none, and a Try again on the failed-create page that
-fails again offers none beside the page's. The button reads "Asking an agent…" until the send
-is answered, and the page then shows the chat the task went to. A failed chat
-that names no account offers neither button, since a sign-in is what it needs
-("Choose a provider").
+every other failure that owes help offers: with no other agent chat the ask is
+withheld and "Report a bug" stands in its place, and a Try again on the
+failed-create page that fails again offers nothing beside the page's own
+remedies. The button reads "Asking an agent…" until the send is answered, and
+the page then shows the chat the task went to. A failed chat that names no
+account offers neither button, since a sign-in is what it needs ("Choose a
+provider").
 
 A send that was refused leaves the user where they were. Its sentence is
 shown beside another chat's failure, so it leads with the chat that was asked
 (`Couldn't ask "<chat>".`, then the send route's own sentence), and its
 details are headed `Asking "<chat>":`. The composer's notice tells it as its
 last paragraph and keeps one "See details", holding the failure's details and
-then the ask's; its "Report a bug" files both, and is offered when either
-sentence asks for one. On the failed-create page the shared button
-(`AskAgentToFixButton` in `workspace_ui`) draws the refused ask under itself,
-on a line of its own with a "See details" of its own.
+then the ask's. "Report a bug" comes only with a refused ask, files both, and
+is offered when either owes help; beside it "Draft it in a chat" leaves the
+same request unsent in a chat's message box when the refused ask owes help
+(the shell makes the draft, and writes `/assist` in front of it). On the
+failed-create page the shared button (`AskAgentToFixButton` in `workspace_ui`)
+draws the refused ask under itself, on a line of its own with a "See details"
+of its own and the draft.
 
 **The failed-create page.** Its sentence is picked by the failure's kind
 (`failure_kind` on the provisional chat, `CreateFailureKind` in `models.py`),
@@ -1426,13 +1437,14 @@ in `chat_handoffs.py`). A Codex create whose plugin installer
 (`system/scripts/codex_update_plugin.sh`) refused prints the installer's
 `codex-plugin-install-refused` marker, and its page reads "This chat's agent
 couldn't be set up."; any other failure reads "The agent for this chat
-couldn't be started." Every failed create offers "Report a bug" (where the
-shell opens one), last in its row, after the ask (as every failure offers the
-agent first), filing the
-page's sentence and what mngr printed, and a refused ask's sentence and
-details with them; the refused ask then has no "Report a bug" of its own. A
-switch's failed create (`frontend/src/views/HandoffFailedNotice.ts`) names the
-harness it could not start and is not worded by kind.
+couldn't be started." The page offers "Report a bug" (where the shell opens
+one) only where it has no agent to ask (no other agent chat exists) and once
+an ask was refused, last in its row, filing the page's sentence and what mngr
+printed, and a refused ask's sentence and details with them; the refused ask
+then has no "Report a bug" of its own. A failed chat that names no account
+offers neither. A switch's failed create
+(`frontend/src/views/HandoffFailedNotice.ts`) names the harness it could not
+start and is not worded by kind.
 
 While one of the notice's actions runs (the ask, a retry, a restart), every
 button on the notice is disabled, and a retry or a restart drops what an

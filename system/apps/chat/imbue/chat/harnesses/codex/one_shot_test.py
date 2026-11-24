@@ -10,6 +10,7 @@ from imbue.chat.harnesses.codex.one_shot import CodexOneShotCompletion
 from imbue.chat.harnesses.codex.one_shot import choose_codex_one_shot_model
 from imbue.chat.harnesses.codex.one_shot import codex_one_shot_argv
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
 from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.testing import put_stand_in_cli_on_path
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -121,7 +122,12 @@ def _account_offering(tmp_path: Path, *models: CodexModel) -> Path:
 def _name_a_chat(account_dir: Path) -> str:
     """The call chat naming makes: the small tier, with no thinking."""
     return CodexOneShotCompletion().complete(
-        account_dir, "Name this chat.", "Plan Rome", model_tier=OneShotModelTier.SMALL, thinking_token_allowance=None
+        account_dir,
+        "Name this chat.",
+        "Plan Rome",
+        model_tier=OneShotModelTier.SMALL,
+        thinking_token_allowance=None,
+        timeout_seconds=60.0,
     )
 
 
@@ -169,3 +175,22 @@ def test_complete_raises_with_both_models_failures_when_neither_answers(
 
     with pytest.raises(OneShotCompletionError, match="gpt-6-luna: .*401.*default model: .*401"):
         _name_a_chat(account_dir)
+
+
+def test_complete_gives_up_at_the_callers_timeout_without_asking_the_default_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account_dir = _account_offering(tmp_path, _model("gpt-6-luna"))
+    log_path = put_stand_in_cli_on_path(tmp_path, "codex", "exec sleep 30", monkeypatch)
+
+    with pytest.raises(OneShotCompletionTimeoutError, match="within 1s"):
+        CodexOneShotCompletion().complete(
+            account_dir,
+            "Name this chat.",
+            "Plan Rome",
+            model_tier=OneShotModelTier.SMALL,
+            thinking_token_allowance=None,
+            timeout_seconds=1.0,
+        )
+
+    assert len(log_path.read_text().splitlines()) == 1

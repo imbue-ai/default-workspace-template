@@ -68,7 +68,9 @@ _CUT_MARK: Final[str] = "[...]\n"
 # How far back the transcript is read for those turns: a turn of work is mostly tool calls and their results.
 _TAIL_EVENT_COUNT: Final[int] = 300
 # Room to draft, critique and redraft before answering, as the prompt asks.
-_THINKING_TOKEN_ALLOWANCE: Final[int] = 4000
+SUGGESTION_THINKING_TOKEN_ALLOWANCE: Final[int] = 20_000
+# How long one model may take over a set: that much thinking can outlast a minute.
+SUGGESTION_COMPLETION_TIMEOUT_SECONDS: Final[float] = 120.0
 
 # The label an agent carries when another agent started it: a helper nobody talks to.
 _AGENT_CREATED_LABEL: Final[str] = "agent_created"
@@ -477,7 +479,8 @@ class SuggestionGenerator(MutableModel):
             system_prompt,
             prompt,
             model_tier=OneShotModelTier.MEDIUM,
-            thinking_token_allowance=_THINKING_TOKEN_ALLOWANCE,
+            thinking_token_allowance=SUGGESTION_THINKING_TOKEN_ALLOWANCE,
+            timeout_seconds=SUGGESTION_COMPLETION_TIMEOUT_SECONDS,
         )
 
     def _is_answer_overtaken(self, chat_id: ChatId, reply_event_id: str) -> bool:

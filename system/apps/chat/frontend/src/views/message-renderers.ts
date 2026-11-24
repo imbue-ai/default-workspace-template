@@ -559,13 +559,16 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
 const PROVIDER_TROUBLE_LINE = "The model provider is having trouble. Try again in a moment.";
 const CONTEXT_TOO_LONG_LINE =
   "This conversation is too long for the model to take in. Start a new chat, or send /compact to shorten it.";
-/** A request the provider refused for a reason of ours rather than its servers'. */
-const REQUEST_REFUSED_LINE = "The model provider refused this request.";
+/** A request the provider refused for a reason of ours rather than its servers', with the provider's own message
+ *  for it when the failure carried one: that message is the one part of the refusal a person can act on. */
+function requestRefusedLine(providerMessage: string | null): string {
+  if (providerMessage === null) return "The model provider refused this request.";
+  return `The model provider refused this request: ${/[.!?]$/.test(providerMessage) ? providerMessage : `${providerMessage}.`}`;
+}
 // The line for each kind (``api_error_kind``) of request the provider refused; a refused kind not named here gets
-// ``REQUEST_REFUSED_LINE``.
+// ``requestRefusedLine``.
 const REFUSED_REQUEST_LINES: Readonly<Record<string, string>> = {
   context_too_long: CONTEXT_TOO_LONG_LINE,
-  invalid_request: REQUEST_REFUSED_LINE,
   permission: "The model provider says this account isn't allowed to make this request.",
   not_found: "The model provider couldn't find the model this chat uses.",
   request_too_large: "This message is too large for the model provider to take. Try sending less at once.",
@@ -576,13 +579,7 @@ const REFUSED_REQUEST_LINES: Readonly<Record<string, string>> = {
  *  provider fault or a failure nothing named, since trying again does not help a refused request. */
 function failedTurnLine(event: AssistantMessageEvent): string {
   if (event.is_provider_fault || event.api_error_kind === null) return PROVIDER_TROUBLE_LINE;
-  return REFUSED_REQUEST_LINES[event.api_error_kind] ?? REQUEST_REFUSED_LINE;
-}
-
-/** Whether a failed turn's text is a response body or a status line (a 401 body, "API Error: 500 ...") rather than
- *  a sentence the provider wrote for people, so it belongs behind "See details" rather than on screen. */
-export function isRawFailureText(text: string): boolean {
-  return /[{}]|\bAPI Error:|^\s*\d{3}\b|\b(?:status|HTTP)\s*\d{3}\b/i.test(text);
+  return REFUSED_REQUEST_LINES[event.api_error_kind] ?? requestRefusedLine(event.api_error_message);
 }
 
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
@@ -781,13 +778,13 @@ function appendEventParts(
       children.push(onLineAsBox(renderSignedInAgain(event, chatId, textContent), placement));
     } else if (event.is_api_error || event.is_auth_error) {
       // A model API error, in light red. The provider's own sentence is shown as written; a response body or a
-      // status line gives way to a plain line of ours and goes behind "See details".
+      // status line (``is_error_text_raw``) gives way to a plain line of ours and goes behind "See details".
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a
       // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
       // throwing a sign-in screen over whatever the user was doing.
-      const isRaw = isRawFailureText(textContent);
+      const isRaw = event.is_error_text_raw;
       children.push(
         onLineAsBox(
           m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [

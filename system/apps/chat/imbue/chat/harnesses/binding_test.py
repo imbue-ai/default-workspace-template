@@ -305,10 +305,12 @@ def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
 
 def test_each_cause_of_an_unbindable_account_says_its_own_sentence(tmp_path: Path) -> None:
     """No account at all, accounts none of which this build can run, and a named account that is gone are three
-    different things to do next, so each refusal carries its own sentence."""
+    different things to do next, so each refusal carries its own sentence. Each is ordinary operation its sentence
+    fully explains."""
     with pytest.raises(AccountError) as no_accounts:
         resolve_binding(home=tmp_path)
     assert no_accounts.value.user_facing_message == "No providers are signed in yet. Sign in to start this chat."
+    assert no_accounts.value.is_expected is True
 
     _account(tmp_path, "a-lane-from-the-future", "Mystery")
     with pytest.raises(BindingError) as none_runnable:
@@ -316,7 +318,9 @@ def test_each_cause_of_an_unbindable_account_says_its_own_sentence(tmp_path: Pat
     assert none_runnable.value.user_facing_message == (
         "That account isn't available in this version of Imbue Studio. Pick another one."
     )
+    assert none_runnable.value.is_expected is True
 
     with pytest.raises(AccountError) as gone:
         resolve_binding("acct-that-was-removed", tmp_path)
     assert gone.value.user_facing_message == "That account is signed out. Sign in to it again, or pick another one."
+    assert gone.value.is_expected is True

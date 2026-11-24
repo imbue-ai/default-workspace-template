@@ -179,6 +179,28 @@ describe("a sent message nothing confirmed", () => {
     );
   });
 
+  it("offers the agent's terminal beside an overdue send's caption, where the chat has one to show", () => {
+    vi.useFakeTimers();
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    noteOutgoingAccepted(chatId, addOutgoing(chatId, "hello"));
+    const turnOnSourceView = vi.fn();
+    const root = document.createElement("div");
+
+    m.render(root, renderOutgoingMessages(chatId, undefined, turnOnSourceView));
+    expect(root.querySelector(".outgoing-message-check-source")).toBeNull();
+
+    vi.advanceTimersByTime(UNCONFIRMED_AFTER_MS);
+    m.render(root, renderOutgoingMessages(chatId, undefined, turnOnSourceView));
+    const check = root.querySelector<HTMLButtonElement>(".outgoing-message-check-source");
+    expect(check?.textContent).toBe("Check in Source view");
+    check?.click();
+    expect(turnOnSourceView).toHaveBeenCalledOnce();
+
+    // A room, or a chat still being created, has no terminal: the caption stands alone.
+    expect(rendered(chatId).querySelector(".outgoing-message-unconfirmed")).not.toBeNull();
+    expect(rendered(chatId).querySelector(".outgoing-message-check-source")).toBeNull();
+  });
+
   it("never marks a bubble whose arrival came, nor one whose send is still waiting on the backend", () => {
     vi.useFakeTimers();
     const chatId = `agent-${Math.random().toString(36).slice(2)}`;

@@ -1961,10 +1961,9 @@ def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: 
     body = response.get_json()
     # Its own kind, apart from mngr's agent_unreachable (a pane that is gone), so the page offers Try again for it.
     assert body["kind"] == "agent_start_failed"
-    assert body["user_facing_message"] == (
-        "This chat's agent couldn't be started. Try again. If this persists, report a bug."
-    )
-    assert body["reportable"] is True
+    assert body["user_facing_message"] == "This chat's agent couldn't be started. Try again."
+    # A start that failed is no ordinary refusal: the page offers help for it.
+    assert "expected" not in body
     assert "no such agent" in body["detail"]
     assert started == [agent_info.name]
 
@@ -5149,6 +5148,7 @@ def test_create_chat_with_nothing_signed_in_is_refused_as_needing_a_provider(
     assert response.get_json() == {
         "detail": "Connect an AI provider to start chatting.",
         "user_facing_message": "Connect an AI provider to start chatting.",
+        "expected": True,
         "kind": "no_provider_account",
     }
 
@@ -5169,7 +5169,12 @@ def test_create_chat_naming_a_signed_out_account_is_refused_in_words(
 
     assert response.status_code == 400
     sentence = "The account this chat was going to start on was signed out. Choose a provider to start it on."
-    assert response.get_json() == {"detail": sentence, "user_facing_message": sentence, "kind": "account_signed_out"}
+    assert response.get_json() == {
+        "detail": sentence,
+        "user_facing_message": sentence,
+        "expected": True,
+        "kind": "account_signed_out",
+    }
 
 
 def test_create_chat_naming_no_account_skips_a_removed_most_recent_one(
@@ -6135,7 +6140,12 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
         refused = client.post(f"/api/chats/{first}/{suffix}", json={})
         assert refused.status_code == 409, suffix
         sentence = "This chat is still moving to Codex. Wait for it to finish, then try again."
-        assert refused.get_json() == {"detail": sentence, "user_facing_message": sentence, "phase": "summarizing"}
+        assert refused.get_json() == {
+            "detail": sentence,
+            "user_facing_message": sentence,
+            "expected": True,
+            "phase": "summarizing",
+        }
     again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
     assert again.status_code == 409
     listed = client.get("/api/chats").get_json()["chats"]
@@ -6242,6 +6252,7 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert own_account.get_json()["user_facing_message"] == "This chat already runs on that account."
+    assert own_account.get_json()["expected"] is True
     assert unknown_account.get_json()["user_facing_message"] == (
         "That account is signed out. Sign in to it again, or pick another one."
     )
@@ -6316,7 +6327,12 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
         refused = client.post(f"/api/chats/{first}/{suffix}", json={})
         assert refused.status_code == 409, suffix
         sentence = "This chat is still moving to Anthropic 2 (Claude Code). Wait for it to finish, then try again."
-        assert refused.get_json() == {"detail": sentence, "user_facing_message": sentence, "phase": "restarting"}
+        assert refused.get_json() == {
+            "detail": sentence,
+            "user_facing_message": sentence,
+            "expected": True,
+            "phase": "restarting",
+        }
     cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
     assert cancelled.status_code == 409
     assert "couldn't be called off" in cancelled.get_json()["user_facing_message"]
@@ -6812,19 +6828,21 @@ def test_a_refused_send_with_no_reason_keeps_mngrs_words_as_details_for_the_page
 
 
 @pytest.mark.parametrize(
-    ("kind", "sentence"),
+    ("kind", "sentence", "is_expected"),
     [
-        ("input_blocked", "The agent is waiting on something in its terminal. Answer it there and try again."),
-        ("agent_unreachable", "The agent isn't running and didn't start."),
-        ("not_ready", "The agent isn't ready for messages yet. Try again in a moment."),
-        ("state_unknown", "Couldn't reach the agent just now. Try again in a moment."),
-        ("agent_not_found", "Couldn't find the agent. Try again in a moment."),
-        ("not_submitted", "The agent didn't take your message. Try again."),
+        ("input_blocked", "The agent is waiting on something in its terminal. Answer it there and try again.", True),
+        ("agent_unreachable", "The agent isn't running and didn't start.", False),
+        ("not_ready", "The agent isn't ready for messages yet. Try again in a moment.", True),
+        ("state_unknown", "Couldn't reach the agent just now. Try again in a moment.", False),
+        ("agent_not_found", "Couldn't find the agent. Try again in a moment.", False),
+        ("not_submitted", "The agent didn't take your message. Try again.", False),
     ],
 )
 def test_a_send_mngr_refused_says_what_its_kind_means_with_mngrs_words_as_details(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, sentence: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, sentence: str, is_expected: bool
 ) -> None:
+    """An agent waiting on its terminal or still starting is the chat working as it should; any other refusal owes
+    the person help, so it carries no ``expected``."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     agent_id = "agent-00000000000000000000000000000742"
     messenger = RecordingMngrMessenger(succeeds=False, failure_reason="mngr's own words", failure_kind=kind)
@@ -6832,7 +6850,8 @@ def test_a_send_mngr_refused_says_what_its_kind_means_with_mngrs_words_as_detail
 
     body = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"}).get_json()
 
-    assert body == {"detail": "mngr's own words", "user_facing_message": sentence, "kind": kind}
+    expected_flag = {"expected": True} if is_expected else {}
+    assert body == {"detail": "mngr's own words", "user_facing_message": sentence, "kind": kind} | expected_flag
 
 
 def test_an_unconfirmed_send_leaves_the_wording_to_the_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6879,6 +6898,7 @@ def test_a_send_to_a_chat_that_is_gone_says_so_and_names_the_case() -> None:
             "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into "
             "a new chat."
         ),
+        "expected": True,
         "kind": "chat_gone",
     }
 
@@ -6894,7 +6914,7 @@ def test_before_the_agent_list_is_read_a_send_is_told_the_workspace_is_still_sta
 
     assert body["kind"] == "chat_starting"
     assert body["user_facing_message"] == "This workspace is still starting up. Try again in a few seconds."
-    assert "reportable" not in body
+    assert body["expected"] is True
 
 
 def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up_wait(
@@ -6911,9 +6931,9 @@ def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up
     assert response.status_code == 503
     assert response.get_json()["kind"] == "agent_list_unreadable"
     assert response.get_json()["user_facing_message"] == (
-        "Chat couldn't load this workspace's chats. Restart the workspace. If this persists, report a bug."
+        "Chat couldn't load this workspace's chats. Restart the workspace."
     )
-    assert response.get_json()["reportable"] is True
+    assert "expected" not in response.get_json()
 
 
 def test_an_intake_before_the_agent_list_is_read_says_chat_is_still_starting() -> None:
@@ -6950,7 +6970,7 @@ def test_an_intake_sent_to_a_chat_whose_account_was_signed_out_says_so_rather_th
     assert body["user_facing_message"] == (
         "You signed out of the account this chat runs on. Choose a provider to continue it on."
     )
-    assert "reportable" not in body
+    assert body["expected"] is True
     assert messenger.sent == []
 
 
@@ -6961,7 +6981,7 @@ def test_an_unexpected_exception_keeps_the_exception_as_detail_and_leaves_the_wo
         response = client.post("/api/chats/agent-00000000000000000000000000000746/start", json={})
 
     assert response.status_code == 500
-    # No sentence of its own: each page names what failed, and the reader asks for a bug report.
+    # No sentence of its own: each page names what failed, and the reader says it owes help.
     assert response.get_json() == {"detail": "Internal server error: boom in the route"}
 
 
@@ -6980,15 +7000,15 @@ def test_a_refused_create_says_what_to_do_for_its_cause(
 
     assert unusable_name.status_code == 400
     assert unusable_name.get_json()["user_facing_message"] == "Pick a name with at least one letter or number."
+    assert unusable_name.get_json()["expected"] is True
     assert "no usable characters" in unusable_name.get_json()["detail"]
     assert gone_account.get_json()["user_facing_message"] == (
         "The account this chat was going to start on was signed out. Choose a provider to start it on."
     )
     assert gone_account.get_json()["kind"] == "account_signed_out"
     assert relaunch_renamed.status_code == 400
-    assert relaunch_renamed.get_json()["user_facing_message"] == (
-        "This chat couldn't be started. Try again. If this persists, report a bug."
-    )
+    assert relaunch_renamed.get_json()["user_facing_message"] == "This chat couldn't be started. Try again."
+    assert "expected" not in relaunch_renamed.get_json()
     assert "a launch cannot rename" in relaunch_renamed.get_json()["detail"]
 
 
@@ -7008,6 +7028,7 @@ def test_a_delete_that_removed_the_agents_but_not_the_folder_says_the_chat_may_c
     assert response.status_code == 500
     assert response.get_json()["kind"] == "partly_deleted"
     assert "If the chat comes back later, delete it again." in response.get_json()["user_facing_message"]
+    assert "expected" not in response.get_json()
 
 
 def test_a_tap_refused_while_a_permission_request_waits_says_to_answer_it(client: FlaskClient, tmp_path: Path) -> None:
@@ -7026,6 +7047,7 @@ def test_a_tap_refused_while_a_permission_request_waits_says_to_answer_it(client
     assert response.get_json()["user_facing_message"] == (
         "This chat is waiting on a permission request. Answer it, then try again."
     )
+    assert response.get_json()["expected"] is True
 
 
 def test_deleting_a_chat_whose_create_failed_drops_it(app: Flask) -> None:
@@ -7108,6 +7130,7 @@ def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
         assert response.get_json() == {
             "detail": "Nothing to compact yet.",
             "user_facing_message": "Nothing to compact yet.",
+            "expected": True,
             "kind": "nothing_to_compact",
         }
         assert messenger.sent == []
@@ -7278,6 +7301,7 @@ def test_a_compact_command_with_nothing_to_compact_is_declined_without_asking_mn
         assert response.get_json() == {
             "detail": "Nothing to compact yet.",
             "user_facing_message": "Nothing to compact yet.",
+            "expected": True,
             "kind": "nothing_to_compact",
         }
         assert messenger.compactions == []
@@ -7316,6 +7340,7 @@ def test_a_compact_command_while_the_agent_cannot_compact_is_declined_without_as
         assert response.get_json() == {
             "detail": detail,
             "user_facing_message": detail,
+            "expected": True,
             "kind": COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
         }
         assert messenger.compactions == []
@@ -8425,9 +8450,9 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
     assert applied.get_json()["first_message"] is None
 
 
-_ASK = "The preview couldn't load. Find out why this failed and fix it."
-# The ask as a chat receives it from a page of the Docs app: the page's task does not say which app failed.
-_ASK_NAMING_DOCS = f"/assist This is about the Docs app.\n\n{_ASK}"
+# An ask as the shell sends it: the assist command first, then where it was pressed, then the task (kept short
+# enough for a bubble to carry whole).
+_ASK = "/assist This is about the Docs app (`docs`, window `win-1`).\n\nThe preview couldn't load. Fix it."
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
@@ -8463,7 +8488,7 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
-    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK)]
     assert len(manager.get_chat_snapshots()) == chat_count
     assert manager.get_provisional_chats() == []
 
@@ -8526,11 +8551,11 @@ def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _DOCS_CHAT_ID
     held = client.get(f"/api/chats/intakes/{_token_of(path)}").get_json()
-    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK_NAMING_DOCS, False)
+    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK, False)
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
     assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (
         _DOCS_CHAT_ID,
-        _ASK_NAMING_DOCS,
+        _ASK,
         None,
     )
     assert messenger.sent == []
@@ -8564,7 +8589,7 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     assert (created.name, created.labels, created.message, created.account_id, created.phase) == (
         "Docs Chat",
         {"app_chat": "docs"},
-        _ASK_NAMING_DOCS,
+        _ASK,
         signed_in_account,
         ProvisionalChatPhase.CREATING,
     )
@@ -8574,15 +8599,14 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     visitors_chat_id = _chat_id_of(visitors.get_json()["path"])
     visitors_chat = manager.get_provisional_chat(visitors_chat_id)
     assert visitors_chat is not None
-    ask_naming_notes = f"/assist This is about the Notes app.\n\n{_ASK}"
     # An ask runs the assist command, which a chat never prefixes with its sender, so who pressed it is in the
     # annotation alone.
-    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", ask_naming_notes)
+    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", _ASK)
     (annotation,) = state.authors.annotations(ChatId(visitors_chat_id))
-    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(ask_naming_notes))
+    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(_ASK))
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the visitor's first message's bubble to reach the shell")
     assert [(str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text) for bubble in shell.bubbles] == [
-        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", ask_naming_notes)
+        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", _ASK)
     ]
 
 
@@ -8623,7 +8647,7 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == provisional_before
     assert len(manager.get_chat_snapshots()) == chat_count
 
@@ -8638,7 +8662,7 @@ def test_an_app_ask_with_nothing_signed_in_goes_to_the_main_chat_and_makes_no_ch
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == []
 
 
@@ -8654,7 +8678,7 @@ def test_an_app_ask_whose_chat_cannot_be_created_goes_to_the_main_chat(tmp_path:
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == []
 
 
@@ -8674,7 +8698,7 @@ def test_an_app_ask_to_be_drafted_with_no_chat_about_the_app_is_held_for_the_mai
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _MAIN_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
-    assert applied.get_json()["composer_text"] == _ASK_NAMING_DOCS
+    assert applied.get_json()["composer_text"] == _ASK
     assert messenger.sent == []
     assert manager.get_provisional_chats() == []
 
@@ -8694,7 +8718,7 @@ def test_an_app_ask_with_no_chat_at_all_and_nothing_signed_in_is_the_first_messa
     assert awaiting is not None
     assert (awaiting.phase, awaiting.labels) == (ProvisionalChatPhase.AWAITING_FIRST_SEND, {})
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
-    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK_NAMING_DOCS)
+    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK)
 
 
 def test_an_app_ask_that_names_no_app_or_no_display_name_is_refused(tmp_path: Path) -> None:

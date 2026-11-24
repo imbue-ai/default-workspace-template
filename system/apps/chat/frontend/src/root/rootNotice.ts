@@ -1,13 +1,13 @@
 /**
  * The chat root's one notice: a failure of something done from the chat list (stop, restart, delete) or of a
  * message sent from outside a chat, told in a styled dialog over the list rather than a browser alert. Our sentence
- * on screen, the server's text behind "See details", Try again where repeating the operation can help, and "Ask an
- * agent to fix this" and "Report a bug" when the sentence asks for a bug report.
+ * on screen, the server's text behind "See details", Try again where repeating the operation can help, and, for a
+ * failure that owes help, "Ask an agent to fix this", or "Report a bug" where no agent can be asked.
  */
 
 import m from "mithril";
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellConnection, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { AgentFixRequest, ShellConnection, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
@@ -44,6 +44,10 @@ function closeRootNotice(): void {
   m.redraw();
 }
 
+function fixRequestOf(notice: RootNotice): AgentFixRequest {
+  return { whatFailed: plainFailureSentence(notice.lines), details: notice.lines.details };
+}
+
 /** Hand ``notice``'s failure to an agent through the shell, which shows its chat; that closes the notice. A refused
  *  ask is told in the notice, under the failure it was about. */
 async function askAgentAbout(notice: RootNotice, connection: Pick<ShellConnection, "askAgent">): Promise<void> {
@@ -51,11 +55,7 @@ async function askAgentAbout(notice: RootNotice, connection: Pick<ShellConnectio
   isAsking = true;
   askFailure = null;
   m.redraw();
-  const outcome = await askAgentToFix(
-    connection,
-    { whatFailed: plainFailureSentence(notice.lines), details: notice.lines.details },
-    { showsOutcome: true },
-  );
+  const outcome = await askAgentToFix(connection, fixRequestOf(notice), { showsOutcome: true });
   // Another notice took this one's place meanwhile.
   if (current !== notice) return;
   isAsking = false;
@@ -65,6 +65,13 @@ async function askAgentAbout(notice: RootNotice, connection: Pick<ShellConnectio
   }
   askFailure = outcome.failure;
   m.redraw();
+}
+
+/** Leave the request a refused ask would have sent in a chat's message box, unsent; a draft that was made closes the
+ *  notice, and the shell tells one that could not be. */
+async function draftAskAbout(notice: RootNotice, connection: Pick<ShellConnection, "askAgent">): Promise<void> {
+  const outcome = await askAgentToFix(connection, fixRequestOf(notice), { showsOutcome: true }, "draft");
+  if (current === notice && outcome.isOpened) closeRootNotice();
 }
 
 export interface RootNoticeViewAttrs {
@@ -83,9 +90,14 @@ export function RootNoticeView(): m.Component<RootNoticeViewAttrs> {
       const retry = notice.retry;
       const told = withRefusedAsk(notice.lines, askFailure);
       const ask =
-        !notice.lines.isReportable || notice.isAgentWithheld === true || connection === null || !connection.hasShell()
+        !notice.lines.isHelpOwed || notice.isAgentWithheld === true || connection === null || !connection.hasShell()
           ? null
-          : { isAsking, run: () => void askAgentAbout(notice, connection) };
+          : {
+              isAsking,
+              run: () => void askAgentAbout(notice, connection),
+              refusal: askFailure,
+              draft: () => void draftAskAbout(notice, connection),
+            };
       return m(dialog, {
         title: notice.title,
         body: told.body,
@@ -122,11 +134,12 @@ export function describeRunVerbFailure(error: unknown, title: string, isRestart:
         `The workspace didn't answer, so Imbue Studio can't tell whether ${named} ${isRestart ? "restarted" : "stopped"}.`,
       ],
       details: failure.details,
-      isReportable: false,
+      isHelpOwed: false,
     };
   }
   if (failure.kind === "chat_gone") {
-    return { body: [failureSentence(failure).message], details: failure.details, isReportable: false };
+    const gone = failureSentence(failure);
+    return { body: [gone.message], details: gone.details, isHelpOwed: gone.isHelpOwed };
   }
   const lead = isRestart
     ? `Couldn't restart ${named}. It's still stopped`
@@ -135,11 +148,11 @@ export function describeRunVerbFailure(error: unknown, title: string, isRestart:
     return {
       body: [`${lead}.`, failure.userFacingMessage],
       details: failure.details,
-      isReportable: failure.isReportable,
+      isHelpOwed: !failure.isExpected,
     };
   }
   const told = failureSentence(failure, lead);
-  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
 }
 
 /** A Delete chat from the list, refused or unanswered. */
@@ -150,11 +163,11 @@ export function describeDeleteFailure(error: unknown, title: string): FailureLin
     return {
       body: [`The workspace didn't answer, so Imbue Studio can't tell whether ${named} was deleted.`],
       details: failure.details,
-      isReportable: false,
+      isHelpOwed: false,
     };
   }
   const told = failureSentence(failure, `Couldn't delete ${named}. It's still here`);
-  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
 }
 
 /** A message sent from outside a chat (the launcher, a desktop draft) that the chat would not take, or that got no
@@ -165,7 +178,7 @@ export function describeIntakeApplyFailure(error: unknown, isDrafted: boolean): 
     return {
       body: ["The workspace didn't answer, so Imbue Studio can't tell whether your message reached this chat."],
       details: failure.details,
-      isReportable: false,
+      isHelpOwed: false,
     };
   }
   return {
@@ -176,6 +189,6 @@ export function describeIntakeApplyFailure(error: unknown, isDrafted: boolean): 
       failure.cause === "user_facing" ? failure.userFacingMessage : null,
     ],
     details: failure.details,
-    isReportable: failure.cause === "user_facing" && failure.isReportable,
+    isHelpOwed: failureSentence(failure).isHelpOwed,
   };
 }

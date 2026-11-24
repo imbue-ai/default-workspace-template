@@ -312,6 +312,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let isFlipped = false;
   let hasEverFlipped = false;
 
+  function turnOnSourceView(): void {
+    if (!isFlipped) toggleSourceView();
+  }
+
   function toggleSourceView(): void {
     isFlipped = !isFlipped;
     // Turning the card over is the user navigating TO the terminal, so the host grants it
@@ -479,10 +483,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const connection = askConnectionToChat(targetChatId);
     return {
       ...connection,
-      askAgent: async (text, options) => {
+      askAgent: async (text, options, delivery) => {
         askInFlight = true;
         try {
-          return await connection.askAgent(text, options);
+          return await connection.askAgent(text, options, delivery);
         } finally {
           askInFlight = false;
           m.redraw();
@@ -491,23 +495,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     };
   }
 
-  /** A failure line under a page's controls, with its details collapsed beneath it. ``isAgentWithheld`` where the
-   *  page's own "Ask an agent to fix this" already covers it. */
-  function renderFailureLines(lines: FailureLines | null, extraClass: string, isAgentWithheld = false): m.Children {
+  /** A failure line under a page's controls, with its details collapsed beneath it. ``isHelpLeftToPage`` where the
+   *  page's own remedies already cover the failure. */
+  function renderFailureLines(lines: FailureLines | null, extraClass: string, isHelpLeftToPage = false): m.Children {
     if (lines === null) return null;
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isReportable
+      lines.isHelpOwed && !isHelpLeftToPage
         ? m(
             "div",
             { class: "flex flex-wrap items-center justify-center gap-2" },
-            m(FailureRemedies, {
-              connection: getShellConnection(),
-              failure: shownFailureOfLines(lines),
-              isAgentWithheld,
-              sm: true,
-            }),
+            m(FailureRemedies, { connection: getShellConnection(), failure: shownFailureOfLines(lines), sm: true }),
           )
         : null,
     ]);
@@ -609,10 +608,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  holds through a switch, then this page's own. Each one's first bubble names its sender ("You" for the viewer's
    *  own) unless it carries on the run of the turn drawn above. */
   function renderPendingSends(chatId: string, run: PendingBubbleRun): m.Vnode[] {
+    // A room has no agent's terminal to check a send in, and a chat still being created has none yet.
+    const hasTerminal = getChatById(chatId) !== undefined && !isRoomChat(chatId);
     return [
       ...renderQueuedMessages(chatId, run),
       ...renderHeldSends(chatId, run),
-      ...renderOutgoingMessages(chatId, run),
+      ...renderOutgoingMessages(chatId, run, hasTerminal ? turnOnSourceView : undefined),
     ];
   }
 
@@ -662,6 +663,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const hasAccount = provisional.account_id !== "";
     const chatToAskId = chatToAskAboutFailedCreate(provisional);
     const sentence = failedCreateSentence(provisional);
+    // What the page holds behind its "See details": the create's output, and a Try again's that failed again.
+    const failedCreateDetails = joinDetailLines([provisional.error, launchError?.details ?? null]);
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
@@ -670,8 +673,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
         m("p", { class: "message-list-create-failed-text text-secondary text-center" }, sentence),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
-        // A Try again that failed again is the page's own failure, which the page's ask (a running chat's, or none
-        // where a new chat would meet it too) is about.
+        // A Try again that failed again is the page's own failure, which the page's remedies below are about.
         renderFailureLines(launchError, "message-list-create-retry-failed", true),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
         m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
@@ -721,15 +723,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          // The agent first, then the page's one Report a bug, as every failure offers them. A refused ask is told
-          // under the ask's button, on a line of its own, and the report files it with the create's failure.
+          // The ask goes to a chat that is already running, and says under itself what a refused one came to. The
+          // page's one Report a bug stands in for it where there is no such chat (a new chat would meet what
+          // stopped this one), and comes with a refused ask, which it files with the create's failure. A chat that
+          // names no account needs a sign-in, which neither can make.
           chatToAskId === null
             ? null
             : m(AskAgentToFixButton, {
                 connection: pageAskConnection(chatToAskId),
                 failure: {
                   whatFailed: `The chat "${provisional.name}" couldn't be started`,
-                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                  details: failedCreateDetails,
                 },
                 pageReportBug: {
                   onFailureChange: (failure) => {
@@ -737,11 +741,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   },
                 },
               }),
-          m(ReportBugButton, {
-            connection: getShellConnection(),
-            failure: withAskFailure({ message: sentence, details: provisional.error }, refusedAsk),
-            extra: "message-list-create-report-bug",
-          }),
+          hasAccount && (chatToAskId === null || refusedAsk !== null)
+            ? m(ReportBugButton, {
+                connection: getShellConnection(),
+                failure: withAskFailure({ message: sentence, details: failedCreateDetails }, refusedAsk),
+                extra: "message-list-create-report-bug",
+              })
+            : null,
         ]),
       ],
     );
@@ -1279,11 +1285,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(ChatSuggestions, { chatId }),
                 m(MessageInput, {
                   chatId,
-                  onTurnOnSourceView: isListed
-                    ? () => {
-                        if (!isFlipped) toggleSourceView();
-                      }
-                    : undefined,
+                  onTurnOnSourceView: isListed ? turnOnSourceView : undefined,
                   leading:
                     isCompact && isListed
                       ? m(ModelProviderMenu, {

@@ -1389,9 +1389,7 @@ describe("the phone layout's card", () => {
     expect(chatId).toBe("a1");
     expect(notice.title).toBe("Couldn't stop the agent");
     const lines = notice.describe(notice.error);
-    expect(lines.body).toEqual([
-      "Couldn't stop the agent. It's still running. Try again. If this persists, report a bug.",
-    ]);
+    expect(lines.body).toEqual(["Couldn't stop the agent. It's still running. Try again."]);
     expect(lines.details).toContain("mngr exited with code 1");
     await notice.retry!().catch(() => undefined);
     expect(fetchMock).toHaveBeenCalledTimes(2);

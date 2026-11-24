@@ -6,6 +6,8 @@
  * with its details and buttons, for a failure whose state outlasts five seconds.
  */
 
+import type { AgentFixRequest } from "../app_contract";
+
 export interface ToastAction {
   readonly label: string;
   readonly run: () => void;
@@ -30,13 +32,16 @@ export type ToastOptions =
       readonly details?: string | null;
       /** Buttons after the message (Try again, Ask an agent to ...), in order. */
       readonly actions?: readonly ToastAction[];
-      /** The message asks for a bug report: the toast offers "Ask an agent to fix this" and "Report a bug" after its
-       *  buttons wherever the page can ask one or open one when the toast is drawn (``components/toasts.ts``'s
-       *  ``onAskAgent`` and ``onReportBug``), which may be only after the toast went up. */
-      readonly isReportable?: boolean;
-      /** No agent is offered for this reportable failure, even where the page can ask one: the ask would go through
-       *  what failed (the chat app's own server not answering), so it could not reach an agent. */
+      /** The failure owes the person help: the toast offers "Ask an agent to fix this" after its buttons wherever
+       *  the page can ask one when the toast is drawn, and "Report a bug" where it can only open one
+       *  (``components/toasts.ts``'s ``onAskAgent`` and ``onReportBug``), which may be only after the toast went up. */
+      readonly isHelpOwed?: boolean;
+      /** No agent is offered for this failure, even where the page can ask one: the ask would go through what
+       *  failed (the chat app's own server not answering), so it could not reach an agent. */
       readonly isAgentWithheld?: boolean;
+      /** What the toast's agent is asked, where that is more than the toast's own message and details: what the
+       *  person was trying to do, an instruction other than to find and fix a fault. */
+      readonly agentRequest?: AgentFixRequest;
     };
 
 export interface Toast {
@@ -45,10 +50,12 @@ export interface Toast {
   readonly details: string | null;
   readonly actions: readonly ToastAction[];
   readonly isLasting: boolean;
-  /** A lasting toast whose message asks for a bug report; never a plain one. */
-  readonly isReportable: boolean;
-  /** A reportable toast that offers an agent where the page can ask one (``isAgentWithheld`` unset). */
+  /** A lasting toast whose failure owes the person help; never a plain one. */
+  readonly isHelpOwed: boolean;
+  /** A toast owing help that offers an agent where the page can ask one (``isAgentWithheld`` unset). */
   readonly isAgentOffered: boolean;
+  /** What its agent is asked: the caller's ``agentRequest``, else its message and details. */
+  readonly agentRequest: AgentFixRequest;
 }
 
 /** How long a plain toast stays up. */
@@ -72,16 +79,17 @@ export class ToastQueue {
   show(message: string, options: ToastOptions = { isLasting: false }): void {
     const details = options.details ?? null;
     const actions = options.isLasting ? (options.actions ?? []) : [];
-    const isReportable = options.isLasting && options.isReportable === true;
-    const isAgentOffered = isReportable && options.isAgentWithheld !== true;
+    const isHelpOwed = options.isLasting && options.isHelpOwed === true;
+    const isAgentOffered = isHelpOwed && options.isAgentWithheld !== true;
     const toast: Toast = {
       id: this.nextId,
       message,
       details,
       actions,
       isLasting: options.isLasting,
-      isReportable,
+      isHelpOwed,
       isAgentOffered,
+      agentRequest: (options.isLasting ? options.agentRequest : undefined) ?? { whatFailed: message, details },
     };
     this.nextId += 1;
     let kept = this.toasts.filter((other) => other.message !== message || other.details !== details);

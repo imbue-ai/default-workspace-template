@@ -129,9 +129,9 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
         case InvalidShellValueError() | AppLifecycleRefusedError() | LayoutOpError() | DesktopValueError():
             return detail_response(str(error), HTTP_BAD_REQUEST)
         case LaunchRefusedError():
-            return detail_response(str(error), HTTP_BAD_REQUEST, error.user_facing_message, error.reportable)
+            return detail_response(str(error), HTTP_BAD_REQUEST, error.user_facing_message, error.expected)
         case LaunchUnavailableError():
-            return detail_response(str(error), HTTP_BAD_GATEWAY, error.user_facing_message, error.reportable)
+            return detail_response(str(error), HTTP_BAD_GATEWAY, error.user_facing_message, error.expected)
         case NoTargetClientError():
             return detail_response(str(error), HTTP_PRECONDITION_FAILED)
         case WindowPoppedOutError():
@@ -161,7 +161,9 @@ PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it
 
 def _refuse_if_preview() -> ResponseReturnValue | None:
     if get_state().is_preview:
-        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL)
+        return detail_response(
+            PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL, expected=True
+        )
     return None
 
 

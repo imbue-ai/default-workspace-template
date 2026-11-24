@@ -637,6 +637,6 @@ def test_an_unreadable_index_is_told_apart_from_a_missing_account(tmp_path: Path
     with pytest.raises(AccountError) as unreadable:
         resolve_account("any", tmp_path)
 
-    assert unreadable.value.user_facing_message == (
-        "Imbue Studio couldn't read this workspace's accounts. Try again. If this persists, report a bug."
-    )
+    assert unreadable.value.user_facing_message == "Imbue Studio couldn't read this workspace's accounts. Try again."
+    # An index that cannot be read is a fault, where a signed-out account is ordinary.
+    assert unreadable.value.is_expected is False

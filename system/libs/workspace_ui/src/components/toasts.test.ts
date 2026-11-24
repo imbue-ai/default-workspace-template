@@ -4,7 +4,7 @@ import "../testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import type { ReportedFailure } from "../app_contract";
+import type { AgentFixRequest, ReportedFailure } from "../app_contract";
 import { ToastQueue } from "../models/toasts";
 import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
@@ -16,8 +16,9 @@ const TOASTS = [
     details: null,
     actions: [],
     isLasting: false,
-    isReportable: false,
+    isHelpOwed: false,
     isAgentOffered: false,
+    agentRequest: { whatFailed: "Could not move it", details: null },
   },
   {
     id: 2,
@@ -25,8 +26,9 @@ const TOASTS = [
     details: null,
     actions: [],
     isLasting: false,
-    isReportable: false,
+    isHelpOwed: false,
     isAgentOffered: false,
+    agentRequest: { whatFailed: "Could not copy it", details: null },
   },
 ];
 
@@ -37,7 +39,7 @@ afterEach(() => {
 function mountQueue(
   queue: ToastQueue,
   onReportBug: () => ((failure: ReportedFailure) => void) | null = () => null,
-  onAskAgent: () => ((failure: ReportedFailure) => Promise<unknown>) | null = () => null,
+  onAskAgent: () => ((request: AgentFixRequest) => Promise<unknown>) | null = () => null,
 ): HTMLElement {
   return mountView(() =>
     m(Toasts, {
@@ -82,7 +84,7 @@ describe("Toasts", () => {
   it("gives a lasting note a close control, its buttons, and its details, and takes it away once one is pressed", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     const retry = vi.fn();
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
       actions: [{ label: "Try again", run: retry }],
@@ -91,9 +93,7 @@ describe("Toasts", () => {
     const root = mountQueue(queue);
 
     const [first, second] = Array.from(root.querySelectorAll("[data-toast]")) as HTMLElement[];
-    expect(first.querySelector(".toast-message")?.textContent).toBe(
-      "This window couldn't be closed. Try again. If this persists, report a bug.",
-    );
+    expect(first.querySelector(".toast-message")?.textContent).toBe("This window couldn't be closed. Try again.");
     expect(first.querySelector(".see-details pre")?.textContent).toBe("HTTP 500");
     (first.querySelector(".toast-action") as HTMLButtonElement).click();
     expect(retry).toHaveBeenCalledTimes(1);
@@ -125,12 +125,12 @@ describe("Toasts", () => {
     expect(queue.current()).toEqual([]);
   });
 
-  it("offers Report a bug on a reportable note once the page can open one, with the note's failure, and keeps it up", () => {
+  it("offers Report a bug on a note that owes help once the page can open one, with the note's failure, and keeps it up", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
-      isReportable: true,
+      isHelpOwed: true,
     });
     queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
     let reportBug: ((failure: ReportedFailure) => void) | null = null;
@@ -143,30 +143,29 @@ describe("Toasts", () => {
     const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>(".report-bug"));
     expect(buttons.map((button) => button.textContent)).toEqual(["Report a bug"]);
     buttons[0].click();
-    expect(reported).toEqual([
-      { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
-    ]);
+    expect(reported).toEqual([{ message: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
     expect(queue.current()).toHaveLength(2);
   });
 
-  it("offers an agent before Report a bug on a reportable note once the page can ask one, pending until the ask settles", async () => {
+  it("offers an agent in Report a bug's place on a note that owes help once the page can ask one, pending until the ask settles", async () => {
     const queue = new ToastQueue(() => m.redraw.sync());
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
-      isReportable: true,
+      isHelpOwed: true,
       actions: [{ label: "Try again", run: vi.fn() }],
     });
     queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
-    const asked: ReportedFailure[] = [];
+    const asked: AgentFixRequest[] = [];
     let settle: () => void = () => undefined;
-    let askAgent: ((failure: ReportedFailure) => Promise<unknown>) | null = null;
+    let askAgent: ((request: AgentFixRequest) => Promise<unknown>) | null = null;
     const root = mountQueue(
       queue,
       () => () => undefined,
       () => askAgent,
     );
     expect(root.querySelector(".ask-agent-to-fix")).toBeNull();
+    expect(root.querySelectorAll(".report-bug")).toHaveLength(1);
 
     askAgent = (failure) => {
       asked.push(failure);
@@ -177,17 +176,15 @@ describe("Toasts", () => {
     m.redraw.sync();
     const labels = (): (string | null)[] =>
       Array.from(root.querySelectorAll<HTMLButtonElement>(".toast-action")).map((button) => button.textContent);
-    // Only the note that asks for a bug report offers an agent, after its own buttons and before the report.
-    expect(labels()).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
+    // Only the note that owes help offers an agent, after its own buttons; the report gives way to it.
+    expect(labels()).toEqual(["Try again", "Ask an agent to fix this"]);
 
     const ask = (): HTMLButtonElement => root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!;
     ask().click();
     m.redraw.sync();
     expect(ask().textContent).toBe("Asking an agent…");
     expect(ask().disabled).toBe(true);
-    expect(asked).toEqual([
-      { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
-    ]);
+    expect(asked).toEqual([{ whatFailed: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
     expect(queue.current()).toHaveLength(2);
 
     settle();
@@ -198,11 +195,32 @@ describe("Toasts", () => {
     expect(ask().disabled).toBe(false);
   });
 
-  it("offers no agent on a reportable note that withholds one, where the ask would go through what failed", () => {
+  it("asks the agent what the note says to ask, where that is more than its message and details", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
-    queue.show("Chat couldn't send that. Try again. If this persists, report a bug.", {
+    const agentRequest: AgentFixRequest = {
+      whatFailed: 'Couldn\'t create "notes". This folder is read-only.',
+      details: "Tried to create /data/reports/notes/\nHTTP 403",
+      instruction: "Do what the user was trying to do if you can.",
+    };
+    queue.show(agentRequest.whatFailed, { isLasting: true, details: "HTTP 403", isHelpOwed: true, agentRequest });
+    const asked: AgentFixRequest[] = [];
+    const root = mountQueue(
+      queue,
+      () => null,
+      () => (request) => {
+        asked.push(request);
+        return Promise.resolve();
+      },
+    );
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    expect(asked).toEqual([agentRequest]);
+  });
+
+  it("offers no agent on a note that withholds one, where the ask would go through what failed", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    queue.show("Chat couldn't send that. Try again.", {
       isLasting: true,
-      isReportable: true,
+      isHelpOwed: true,
       isAgentWithheld: true,
     });
     const root = mountQueue(

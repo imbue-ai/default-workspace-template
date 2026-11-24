@@ -666,7 +666,7 @@ describe("opening", () => {
     const store = await startedStore();
     expect(await store.startWithText("hello")).toEqual({
       isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+      failure: { message: "No app in this workspace can start a chat.", details: null, isHelpOwed: false },
     });
     expect(notices()).toEqual([]);
     socket.deliver().onAppsUpdated([
@@ -694,7 +694,7 @@ describe("opening", () => {
     offerApps(api, socket, [
       chat,
       appRecord("docs", { display_name: "Docs" }),
-      appRecord("monitor", { internal: true }),
+      appRecord("monitor", { internal: true, display_name: "Monitor" }),
     ]);
     api.desktops = [
       desktopRecord("home", {
@@ -718,8 +718,13 @@ describe("opening", () => {
 
     expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
 
+    // The shell writes the message: the assist command, then the app and the window the ask was pressed in.
     expect(launchCalls()).toEqual([
-      'launch:home:chat:app-ask:{"app":"docs","app_display_name":"Docs","message":"Fix this."}:show:beside:win-docs',
+      `launch:home:chat:app-ask:${JSON.stringify({
+        app: "docs",
+        app_display_name: "Docs",
+        message: "/assist This is about the Docs app (`docs`, window `win-docs`).\n\nFix this.",
+      })}:show:beside:win-docs`,
     ]);
     await settle();
     // The chat's window, never placed here, takes the right half beside the asking window, on top, at the chat
@@ -735,13 +740,23 @@ describe("opening", () => {
   it("shell:ask-agent runs the primary text action through the assist command with no window, from an internal app, or with no ask launch path", async () => {
     const store = await startedStore();
     offerAppsWithAnAskPath();
-    const primary = 'launch:home:chat:new:{"message":"/assist Fix this."}:window:win-chat';
+    const primaryWith = (message: string): string =>
+      `launch:home:chat:new:${JSON.stringify({ message })}:window:win-chat`;
+    const primary = primaryWith("/assist Fix this.");
+    const aboutMonitor = primaryWith(
+      "/assist This is about the Monitor app (`monitor`, window `win-monitor`).\n\nFix this.",
+    );
+    const aboutDocs = primaryWith("/assist This is about the Docs app (`docs`, window `win-docs`).\n\nFix this.");
 
     // The shell's own ask, an ask whose window closed meanwhile, and an ask from an app nothing is said about.
     for (const windowId of [null, "win-gone", "win-monitor"]) {
       expect(await store.askAgent("Fix this.", windowId)).toEqual({ isOpened: true });
     }
-    expect(launchCalls()).toEqual([primary, primary, primary]);
+    expect(launchCalls()).toEqual([primary, primary, aboutMonitor]);
+
+    // An ask the page wants in the main chat goes there, still naming the app and window it came from.
+    expect(await store.askAgent("Fix this.", "win-docs", "main-chat")).toEqual({ isOpened: true });
+    expect(launchCalls()).toEqual([primary, primary, aboutMonitor, aboutDocs]);
 
     // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
     offerApps(api, socket, [
@@ -751,14 +766,14 @@ describe("opening", () => {
       appRecord("docs", { display_name: "Docs" }),
     ]);
     expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
-    expect(launchCalls()).toEqual([primary, primary, primary, primary]);
+    expect(launchCalls()).toEqual([primary, primary, aboutMonitor, aboutDocs, aboutDocs]);
   });
 
   it("shell:ask-agent answers a failure for the page to show, and leaves no toast of its own", async () => {
     const store = await startedStore();
     expect(await store.askAgent("Fix this.", null)).toEqual({
       isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+      failure: { message: "No app in this workspace can start a chat.", details: null, isHelpOwed: false },
     });
     offerAppsWithAnAskPath();
     api.refusal = "chat refused the launch: An ask about an app names the app and its display name";
@@ -767,7 +782,7 @@ describe("opening", () => {
       failure: {
         message: "Chat couldn't open that.",
         details: "HTTP 400\nchat refused the launch: An ask about an app names the app and its display name",
-        isReportable: false,
+        isHelpOwed: false,
       },
     });
     expect(notices()).toEqual([]);
@@ -777,6 +792,10 @@ describe("opening", () => {
     const store = await startedStore();
     expect(await store.draftText("Explain this element:")).toBe(false);
     expect(last(notices())).toBe("No app in this workspace can take a draft");
+    expect(await store.askAgent("Fix this.", null, "draft")).toEqual({
+      isOpened: false,
+      failure: { message: "The request couldn't be drafted in a chat.", details: null, isHelpOwed: false },
+    });
     offerApps(api, socket, [
       appRecord("docs", {
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
@@ -798,6 +817,11 @@ describe("opening", () => {
     expect(await store.draftText("Explain this element:")).toBe(true);
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:draft:{"message":"Explain this element:"}:new`,
+    );
+    // An ask delivered as a draft leaves the message an ask would have sent, unsent.
+    expect(await store.askAgent("Fix this.", null, "draft")).toEqual({ isOpened: true });
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:notes:draft:{"message":"/assist Fix this."}:new`,
     );
   });
 
@@ -1025,15 +1049,15 @@ describe("failure toasts", () => {
 
     const [toast] = store.toasts.current();
     expect(toast).toMatchObject({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
       actions: [],
       isLasting: true,
-      isReportable: true,
+      isHelpOwed: true,
     });
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
     expect(reportBug).toHaveBeenCalledWith({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
     });
   });
@@ -1044,7 +1068,7 @@ describe("failure toasts", () => {
     const store = await storeReportingBugs(reportBug, false, redraw);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0].isReportable).toBe(true);
+    expect(store.toasts.current()[0].isHelpOwed).toBe(true);
     expect(store.reportBugAction()).toBeNull();
 
     redraw.mockClear();
@@ -1068,23 +1092,23 @@ describe("failure toasts", () => {
     expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
-  it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
+  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal expected", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
+      expected: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 500: index unreadable",
-      user_facing_message: "Docs couldn't read its notes. If this persists, report a bug.",
-      reportable: true,
+      user_facing_message: "Docs couldn't read its notes.",
     });
     await store.runLaunch("docs", "new", "new");
 
-    expect(store.toasts.current().map((toast) => [toast.message, toast.isReportable])).toEqual([
+    expect(store.toasts.current().map((toast) => [toast.message, toast.isHelpOwed])).toEqual([
       ["Docs is still starting. Try again in a few seconds.", false],
-      ["Docs couldn't read its notes. If this persists, report a bug.", true],
+      ["Docs couldn't read its notes.", true],
     ]);
   });
 
@@ -1115,17 +1139,27 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+  it("leaves a plain note for a refusal the server calls expected, in the server's own sentence", async () => {
+    const store = await startedStore();
+    const sentence = "This is a preview of a proposed change; it cannot change the live workspace.";
+    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, expected: true });
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
+    expect(store.toasts.current()).toMatchObject([{ message: sentence, details: "HTTP 403", isLasting: false }]);
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(notices()).toEqual([]);
+  });
+
+  it("keeps a failure that owes help up with its details, wherever it happened", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Could not close the window. Try again. If this persists, report a bug.",
+        message: "Could not close the window. Try again.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
-        isReportable: true,
+        isHelpOwed: true,
       },
     ]);
   });
@@ -1846,7 +1880,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar. Try again. If this persists, report a bug."]);
+    expect(notices()).toEqual(["Could not change the avatar. Try again."]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {
@@ -4516,7 +4550,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     for (const windowId of ["win-a", null]) {
       expect(await store.askAgent("Fix this.", windowId)).toEqual({
         isOpened: false,
-        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isHelpOwed: false },
       });
     }
     expect(api.calls.slice(callsBefore)).toEqual([]);

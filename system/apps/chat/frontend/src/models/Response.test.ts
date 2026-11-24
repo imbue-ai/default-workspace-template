@@ -88,6 +88,8 @@ function assistantWithAgentToolCall(
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 

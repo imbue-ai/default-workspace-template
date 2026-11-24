@@ -54,12 +54,15 @@ class BindingError(RuntimeError):
 
     # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
     user_facing_message: str | None = None
+    # Whether the refusal is ordinary operation the sentence fully explains, so it owes the person no more help.
+    is_expected: bool = False
 
 
 class AccountLaneUnavailableError(BindingError):
     """The account runs on a lane this build does not have."""
 
     user_facing_message = "That account isn't available in this version of Imbue Studio. Pick another one."
+    is_expected = True
 
 
 class DefaultCreateBinding(FrozenModel):

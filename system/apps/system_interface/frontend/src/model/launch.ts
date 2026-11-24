@@ -26,6 +26,8 @@ export const TEXT_TOO_LONG_REASON = "Too long to send from here";
 export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
 export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
+/** What an ask answers when its request could not be left in a chat's message box. */
+export const ASK_NOT_DRAFTED_REASON = "The request couldn't be drafted in a chat";
 
 /** The launch paths of the openable apps that ``isWanted`` picks, in registry and manifest order. */
 function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: LaunchPath) => boolean): AppLaunch[] {

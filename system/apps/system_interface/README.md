@@ -721,7 +721,7 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it, and "Ask an agent to free up space") and then
+intents and templates use it) and then
 telling the page how it went with `shell:start-with-text-result`, asks an
 agent about its own app through `shell:ask-agent` (see "App chat" above; a
 failure's "Ask an agent to fix this" uses it), which the shell answers with
@@ -737,7 +737,7 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert. A toast whose sentence asks for a bug report offers
+than a browser alert. A toast whose failure owes the person help offers
 "Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
 the toast draws, and the report it opens carries the toast's sentence and
 details (`minds:open-help {errorDetails}`); a page's `shell:report-bug` does

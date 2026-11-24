@@ -56,7 +56,7 @@ async function compactConversation(chatId: string): Promise<void> {
     if (isDeclinedCompact(error)) {
       raiseFailureNotice(chatId, {
         title: DECLINED_COMPACT_TITLE,
-        describe: (declined) => ({ body: [declinedCompactSentence(declined)], details: null, isReportable: false }),
+        describe: (declined) => ({ body: [declinedCompactSentence(declined)], details: null, isHelpOwed: false }),
         error,
       });
     } else {

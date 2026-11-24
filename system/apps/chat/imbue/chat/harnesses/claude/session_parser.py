@@ -22,6 +22,7 @@ from imbue.chat.harnesses.claude.tool_labels import action_note
 from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
 from imbue.chat.harnesses.claude.tool_labels import tool_labels
+from imbue.chat.harnesses.error_patterns import failed_turn_text_fields
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
@@ -425,6 +426,7 @@ def _parse_assistant_message(
         "is_api_error": notice.is_api_error,
         "api_error_kind": notice.api_error_kind,
         "is_provider_fault": is_provider_fault(notice.api_error_kind),
+        **failed_turn_text_fields(joined_text, is_api_error=notice.is_api_error, is_auth_error=notice.is_auth_error),
     }
     if session_id is not None:
         event["session_id"] = session_id

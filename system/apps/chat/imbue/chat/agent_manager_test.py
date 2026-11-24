@@ -4701,7 +4701,7 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
         agent_manager.stop()
 
 
-def test_a_queued_report_of_a_failed_task_carries_its_failed_mark_and_details(
+def test_a_queued_report_of_a_failed_task_carries_its_failed_mark_and_its_outcome_on_the_line(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
@@ -4722,9 +4722,9 @@ def test_a_queued_report_of_a_failed_task_carries_its_failed_mark_and_details(
         assert latest is not None
         [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
         assert queued["display_label"] == "Background task failed"
-        assert queued["display_body"] == "Run the tests"
+        assert queued["display_body"] == "Run the tests (exit code 1)"
         assert queued["resolution"] == "failed"
-        assert queued["display_details"] == "Run the tests: exit code 1"
+        assert queued.get("display_details") is None
     finally:
         agent_manager.stop()
 

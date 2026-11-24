@@ -66,6 +66,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     label: "",
     url: `http://127.0.0.1:1/${name}`,
     internal: false,
+    system: false,
     program: name,
     critical: false,
     stop_when_no_windows: false,
