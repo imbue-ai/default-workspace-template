@@ -6705,6 +6705,28 @@ def test_intake_held_for_a_chat_awaiting_its_first_send_is_kept_for_the_agent_a_
     assert [held.text for held in creating.held_sends] == ["Begin here"]
 
 
+def test_only_a_text_sent_to_a_chat_being_created_is_kept_for_its_agent() -> None:
+    """A draft is never sent, and a chat whose create failed has no agent on its way: both are held for the root,
+    which puts the text in the composer."""
+    creating_id = ChatId(f"agent-{uuid4().hex}")
+    failed_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(creating_id)
+    seed_failed_chat(manager, failed_id, "Chat 2")
+
+    drafted = _intake(client, message="Draw me a seal", target="chat", chat_id=str(creating_id), is_draft=True)
+    sent_to_failed = _intake(client, message="Begin here", target="chat", chat_id=str(failed_id))
+
+    applied_draft = client.post(f"/api/chats/intakes/{_token_of(drafted.get_json()['path'])}/apply", json={})
+    applied_to_failed = client.post(
+        f"/api/chats/intakes/{_token_of(sent_to_failed.get_json()['path'])}/apply", json={}
+    )
+    assert applied_draft.get_json()["composer_text"] == "Draw me a seal"
+    assert applied_to_failed.get_json()["composer_text"] == "Begin here"
+    for chat_id in (creating_id, failed_id):
+        provisional = manager.get_provisional_chat(chat_id)
+        assert provisional is not None and provisional.held_sends == ()
+
+
 def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
     app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
