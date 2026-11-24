@@ -31,7 +31,7 @@ window keeps showing the old page until it is refreshed. The live change loop
 - **A critical app, or a library the critical apps share: follow the careful
   flow, `references/critical-app.md`, for the whole change, in place of the
   steps below.** It sends you back here only for what it shares: the standing
-  instructions, step 2's lease and what step 3 says a change owes. That
+  instructions and step 2's lease. That
   is an app whose manifest says `critical = true` (the shell
   `system_interface`, the chat, the terminal, and any user app that declares
   it), or a change under `system/libs/workspace_ui/` (the library both critical

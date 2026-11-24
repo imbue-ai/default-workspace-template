@@ -140,8 +140,13 @@ real preview (the "janky real edit" of
 ## Step 2: The live loop, in the worktree and its preview
 
 Work entirely inside the worktree. Before you first edit an app's code, read
-`.agents/shared/references/apps/code.md`, the rules that code keeps; what
-SKILL.md's step 3 says about the manifest and the API document holds here too.
+`.agents/shared/references/apps/code.md`, the rules that code keeps. The change
+may owe three more things: a manifest edit when it creates something for the
+app outside its own directory or changes the app's work between requests
+(`.agents/shared/references/apps/manifest.md`); for an app with an
+`api_schema_path`, a docstring and a route-table entry for each new or changed
+route (`.agents/shared/references/apps/api-schema.md`); and, when it calls
+Claude, the `use-ai-integration` skill.
 The build and test mechanics for a critical app are the
 worker's job at harden time. In the live loop you need a clean build, not the
 full gate.
