@@ -215,10 +215,11 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - Milestones dir: `data/.tasks/launch-task/$NAME/reports/milestones/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
-- Milestone names: any name; non-blocking -- handle per
-  `.agents/shared/references/lead-proxy/milestones.md` (provisionally merge the pinned
-  `commit:` or defer it, then re-arm the poll; `await` has already archived
-  the file either way, and the worker keeps working regardless).
+- Milestone names: any name; non-blocking -- read
+  `.agents/shared/references/lead-proxy/milestones.md` and handle the
+  milestone as it says (provisionally merge the pinned `commit:` or defer it,
+  then re-arm the poll; `await` has already archived the file either way, and
+  the worker keeps working regardless).
 - Terminal statuses: `done` (merge, then `create_worker.py destroy --name
   $NAME`); `stuck` (failure flow, ending in `create_worker.py stop --name
   $NAME`).

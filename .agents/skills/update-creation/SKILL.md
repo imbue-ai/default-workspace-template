@@ -23,9 +23,8 @@ Standing instructions:
   (the shell, the chat, the terminal, or an app whose manifest says `critical =
   true`) is an `app:` creation too, but the **whole change** takes the
   `update-app` skill's careful flow: every other creation it touched is edited
-  on the same branch, rides the same pass, and lands through the same apply. That flow calls into Steps 1-3 here and owns
-  the go-live. When it sent you here, read
-  `references/critical-app-handoff.md` before Step 1 for what differs.
+  on the same branch, rides the same pass, and lands through the same apply.
+  That flow calls into Steps 1-3 here and owns the go-live.
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
@@ -91,6 +90,9 @@ needs:
 
 ## Step 1: Name the pass and open a tracking ticket
 
+If the `update-app` skill's careful flow sent you here for a critical app, read
+`references/critical-app-handoff.md` before you go on, for what differs.
+
 `$CREATIONS` lists every creation the pass covers as `<type>:<name>`, and
 `$SLUG` names the pass: the creation's own name when there is one, otherwise a
 short kebab-case name for the change (`roadmap-sync`). The worker
@@ -99,12 +101,13 @@ short kebab-case name for the change (`roadmap-sync`). The worker
 `.agents/shared/references/harden-lead.md` ("Names and paths") has the format
 and all of them.
 
-Then run the single-flight check, for every creation in `$CREATIONS`: the
-command is in `.agents/shared/references/harden-contention.md` ("Before
-dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
-("Single-flight check") says what each outcome means for you. Dispatch only if
-no pass is in flight on any of them, or that reference had you supersede the
-ones that were.
+Then read `.agents/shared/references/harden-contention.md` ("Before dispatch:
+one pass per creation (single-flight)") and
+`.agents/shared/references/harden-lead.md` ("Single-flight check"), and run
+the single-flight check for every creation in `$CREATIONS`: the first has the
+command, and the second says what each outcome means for you. Dispatch only if
+no pass is in flight on any of them, or `harden-contention.md` had you
+supersede the ones that were.
 
 Then open the ticket. Its title and description are read by other chats'
 single-flight checks (`harden-lead.md`, "The tracking ticket"):
@@ -141,12 +144,13 @@ is your current commit:
 DIFF_BASE_REF=HEAD
 ```
 
-Write the task file. `harden-lead.md` ("The task file") explains the
-frontmatter fields and the rules for the body. For an update, `diff_base` is
-the commit before the work being hardened: for the committed origin, the start
-of `$COMMIT_RANGE`, so the scope file's diff covers the committed change; for
-the emergent origin, your `HEAD` at dispatch. The body carries the `## Change
-origin` marker the worker dispatches on, plus origin-specific content:
+Read `.agents/shared/references/harden-lead.md` ("The task file"), which
+explains the frontmatter fields and the rules for the body, then write the
+task file. For an update, `diff_base` is the commit before the work being
+hardened: for the committed origin, the start of `$COMMIT_RANGE`, so the scope
+file's diff covers the committed change; for the emergent origin, your `HEAD`
+at dispatch. The body carries the `## Change origin` marker the worker
+dispatches on, plus origin-specific content:
 
 ```bash
 cat > data/.tasks/harden/update-$SLUG/task.md << TASK_EOF
@@ -222,16 +226,16 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-Handle each report as `.agents/shared/references/lead-proxy.md` says, and
+Before you act on the poll's first message, read
+`.agents/shared/references/lead-proxy.md`. Handle each report as it says, and
 re-arm this poll after every gate. For an update:
 
 - Gates: `outline-approval` (emergent only -- the design gate) and
   `final-creation` (both). A `question` gate can arrive at any point.
 - Terminal statuses: `done` (Step 4); `no-update-needed` (no change -- destroy
   the worker per `lead-proxy.md` and close the ticket, with no merge); `stuck`
-  (the failure flow in
-  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
-  worker).
+  (read `.agents/shared/references/lead-proxy/worker-failure.md` and follow
+  its failure flow, which stops the worker).
 - The committed origin's worker may produce no new commits of its own if
   verification is clean. That is expected -- the substantive change is already
   on the branch from the live commit.
@@ -241,18 +245,17 @@ re-arm this poll after every gate. For an update:
 A pass the careful flow dispatched for a critical app does not take this step
 (`references/critical-app-handoff.md`). Otherwise, on `done`:
 
-1. Run the checks before a merge, in
-   `.agents/shared/references/harden-contention.md` ("Before merge: lease,
-   freshness, conflicts"): wait out any foreground editing lease on an app or
-   service in the pass, confirm the branch is still fresh, and never resolve a
-   conflicted merge yourself. A stale or conflicted pass goes back to its
-   worker to catch up to your `HEAD`, and its next `done` comes back through
-   these same checks.
-2. Merge `mngr/update-$SLUG` and destroy the worker (`create_worker.py destroy
-   --name update-$SLUG`), as `lead-proxy.md` says for `done` ("Terminal status:
-   act and stop polling").
-3. Go live for each creation in the pass by its type: `harden-lead.md`,
-   "Merge, then go live by type".
+1. Read `.agents/shared/references/harden-contention.md` ("Before merge:
+   lease, freshness, conflicts") and run its checks before the merge: wait out
+   any foreground editing lease on an app or service in the pass, confirm the
+   branch is still fresh, and never resolve a conflicted merge yourself. A
+   stale or conflicted pass goes back to its worker to catch up to your
+   `HEAD`, and its next `done` comes back through these same checks.
+2. Read `.agents/shared/references/lead-proxy.md` ("Terminal status: act and
+   stop polling"), then merge `mngr/update-$SLUG` and destroy the worker
+   (`create_worker.py destroy --name update-$SLUG`) as it says for `done`.
+3. Read `.agents/shared/references/harden-lead.md` ("Merge, then go live by
+   type"), then go live for each creation in the pass by its type.
 4. Close the ticket:
 
    ```bash

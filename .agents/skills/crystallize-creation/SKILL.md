@@ -71,10 +71,10 @@ the prior turn) **or when `build-app` or `fetch-process-show` invoked this
 skill** after the user approved a sample or a working app. In those cases go
 straight to Step 2.
 
-Otherwise decide whether the work qualifies:
-`references/when-to-crystallize.md` has the guidelines, so read it if you have
-not. **Default to asking the user**, not deciding silently: if you can name any
-plausible skill shape, send a one-line pre-gate question and let them decide:
+Otherwise read `references/when-to-crystallize.md` if you have not, then
+decide by its guidelines whether the work qualifies. **Default to asking the
+user**, not deciding silently: if you can name any plausible skill shape, send
+a one-line pre-gate question and let them decide:
 
 > "I just did X and Y. Worth crystallizing into a reusable skill? (yes/no)"
 
@@ -108,8 +108,9 @@ tk start <ticket-id>
 
 ## Step 3: Write the task file
 
-`harden-lead.md` ("The task file") explains the frontmatter fields and the
-rules for the body. For a crystallize pass:
+Before you write the task file, read
+`.agents/shared/references/harden-lead.md` ("The task file"): it explains the
+frontmatter fields and the rules for the body. For a crystallize pass:
 
 - `creations` is the one creation, as `<type>:<name>`: `skill:$NAME`,
   `app:<app name>`, or `service:<package>`.
@@ -225,7 +226,8 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-Handle each report as `.agents/shared/references/lead-proxy.md` says (gate
+Before you act on the poll's first message, read
+`.agents/shared/references/lead-proxy.md`. Handle each report as it says (gate
 decisions, the "do not interrupt more recent user work" rule, terminal
 statuses), and re-arm this poll after every gate and every milestone. For a
 crystallize pass:
@@ -233,19 +235,20 @@ crystallize pass:
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
   **app** → none, since the user confirmed the live app already (the worker
   goes straight to `done`). A `question` gate can arrive at any point.
-- Milestones: any name, non-blocking → provisional merge per
-  `.agents/shared/references/lead-proxy/milestones.md`, after the checks before
-  a merge (below). Provisional go-live is the minimum that makes the creation
-  usable: **skill** → it is on disk at `.agents/skills/$NAME/` and invocable;
-  **app** → refresh the window. Step 6 still runs only on `done`.
-- Terminal statuses: `done` (Step 6); `stuck` (the failure flow in
-  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
-  worker).
+- Milestones: any name, non-blocking → read
+  `.agents/shared/references/lead-proxy/milestones.md` and merge provisionally
+  as it says, after the checks before a merge (below). Provisional go-live is
+  the minimum that makes the creation usable: **skill** → it is on disk at
+  `.agents/skills/$NAME/` and invocable; **app** → refresh the window. Step 6
+  still runs only on `done`.
+- Terminal statuses: `done` (Step 6); `stuck` (read
+  `.agents/shared/references/lead-proxy/worker-failure.md` and follow its
+  failure flow, which stops the worker).
 
 Before any merge from the worker's branch, a milestone's or the one on `done`,
-run the checks in `.agents/shared/references/harden-contention.md` ("Before
-merge: lease, freshness, conflicts"), with one exception. A skill that is not
-on your branch yet (`.agents/skills/$NAME/` does not exist, which is every
+read `.agents/shared/references/harden-contention.md` ("Before merge: lease,
+freshness, conflicts") and run its checks, with one exception. A skill that is
+not on your branch yet (`.agents/skills/$NAME/` does not exist, which is every
 merge before the first that brings it) has no freshness check to run:
 `pass-scope` refuses a creation that does not exist, and nothing on your
 branch could have moved under it. Skip that check for such a merge. Once the
@@ -258,12 +261,13 @@ never resolving a conflicted merge yourself hold for every merge.
 A provisional milestone merge does not change this step: it runs only on `done`,
 and the `done` merge brings the remainder of the branch.
 
-On `done`, run the checks before a merge (the end of Step 5), then merge
-`mngr/crystallize-$NAME` and destroy the worker (`create_worker.py destroy --name crystallize-$NAME`; any
-workers it split its pass across go with it), as `lead-proxy.md` says for
-`done` ("Terminal status: act and stop polling"). Then go live by the
-creation's type, as `harden-lead.md` ("Merge, then go live by type") says, with
-what a new creation adds:
+On `done`, read `.agents/shared/references/lead-proxy.md` ("Terminal status:
+act and stop polling"), then run the checks before a merge (the end of Step
+5), merge `mngr/crystallize-$NAME` and destroy the worker (`create_worker.py
+destroy --name crystallize-$NAME`; any workers it split its pass across go
+with it) as it says for `done`. Then read
+`.agents/shared/references/harden-lead.md` ("Merge, then go live by type") and
+go live by the creation's type as it says, with what a new creation adds:
 
 - **skill**: after the `uv sync --all-packages --frozen` a skill with a
   `python/` project needs, read and follow

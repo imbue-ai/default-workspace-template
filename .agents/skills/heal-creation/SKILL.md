@@ -68,12 +68,13 @@ short kebab-case name for the failure (`roadmap-sync`). The worker
 `.agents/shared/references/harden-lead.md` ("Names and paths") has the format
 and all of them.
 
-Then run the single-flight check, for every creation in `$CREATIONS`: the
-command is in `.agents/shared/references/harden-contention.md` ("Before
-dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
-("Single-flight check") says what each outcome means for you. Dispatch only if
-no pass is in flight on any of them, or that reference had you supersede the
-ones that were.
+Then read `.agents/shared/references/harden-contention.md` ("Before dispatch:
+one pass per creation (single-flight)") and
+`.agents/shared/references/harden-lead.md` ("Single-flight check"), and run
+the single-flight check for every creation in `$CREATIONS`: the first has the
+command, and the second says what each outcome means for you. Dispatch only if
+no pass is in flight on any of them, or `harden-contention.md` had you
+supersede the ones that were.
 
 Then open the ticket. Its title and description are read by other chats'
 single-flight checks (`harden-lead.md`, "The tracking ticket"):
@@ -93,12 +94,13 @@ tk start <ticket-id>
 
 ## Step 2: Write the task file
 
-`harden-lead.md` ("The task file") explains the frontmatter fields and the
-rules for the body. For a heal, `diff_base` is your `HEAD` at dispatch: the fix
-does not exist yet, so the worker's own commits are the whole diff. The body
-describes the failure and anchors the worker's search with verbatim quotes (the
-user's request, the failing command or error, any tool output that exposed the
-misbehavior).
+Before you write the task file, read
+`.agents/shared/references/harden-lead.md` ("The task file"): it explains the
+frontmatter fields and the rules for the body. For a heal, `diff_base` is your
+`HEAD` at dispatch: the fix does not exist yet, so the worker's own commits are
+the whole diff. The body describes the failure and anchors the worker's search
+with verbatim quotes (the user's request, the failing command or error, any
+tool output that exposed the misbehavior).
 
 ```bash
 cat > data/.tasks/harden/heal-$SLUG/task.md << TASK_EOF
@@ -166,31 +168,31 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-Handle each report as `.agents/shared/references/lead-proxy.md` says, and
+Before you act on the poll's first message, read
+`.agents/shared/references/lead-proxy.md`. Handle each report as it says, and
 re-arm this poll after every gate. For a heal:
 
 - The only user-approval gate is `final-creation` -- a heal has no outline
   gate. A `question` gate can arrive at any point.
-- Terminal statuses: `done` (Step 4); `stuck` (the failure flow in
-  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
-  worker).
+- Terminal statuses: `done` (Step 4); `stuck` (read
+  `.agents/shared/references/lead-proxy/worker-failure.md` and follow its
+  failure flow, which stops the worker).
 
 ## Step 4: Merge and go live
 
 On `done`:
 
-1. Run the checks before a merge, in
-   `.agents/shared/references/harden-contention.md` ("Before merge: lease,
-   freshness, conflicts"): wait out any foreground editing lease on an app or
-   service in the pass, confirm the branch is still fresh, and never resolve a
-   conflicted merge yourself. A stale or conflicted pass goes back to its
-   worker to catch up to your `HEAD`, and its next `done` comes back through
-   these same checks.
-2. Merge `mngr/heal-$SLUG` and destroy the worker (`create_worker.py destroy
-   --name heal-$SLUG`), as `lead-proxy.md` says for `done` ("Terminal status:
-   act and stop polling").
-3. Go live for each creation in the pass by its type: `harden-lead.md`,
-   "Merge, then go live by type".
+1. Read `.agents/shared/references/harden-contention.md` ("Before merge:
+   lease, freshness, conflicts") and run its checks before the merge: wait out
+   any foreground editing lease on an app or service in the pass, confirm the
+   branch is still fresh, and never resolve a conflicted merge yourself. A
+   stale or conflicted pass goes back to its worker to catch up to your
+   `HEAD`, and its next `done` comes back through these same checks.
+2. Read `.agents/shared/references/lead-proxy.md` ("Terminal status: act and
+   stop polling"), then merge `mngr/heal-$SLUG` and destroy the worker
+   (`create_worker.py destroy --name heal-$SLUG`) as it says for `done`.
+3. Read `.agents/shared/references/harden-lead.md` ("Merge, then go live by
+   type"), then go live for each creation in the pass by its type.
 4. Close the ticket:
 
    ```bash
