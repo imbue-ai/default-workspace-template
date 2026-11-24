@@ -25,6 +25,7 @@ from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.first_run_tree import MORE_IDEAS_LABEL
 from imbue.chat.first_run_tree import SHOW_IDEAS_LABEL
 from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
+from imbue.chat.first_run_tree import START_DESCRIBE_LABEL
 from imbue.chat.first_run_tree import START_FEATURES_LABEL
 from imbue.chat.first_run_tree import idea_names
 from imbue.chat.harnesses.events import DisplayKind
@@ -262,6 +263,25 @@ def test_the_onboarding_skill_answers_every_start_suggestion_by_its_exact_words(
     for suggestion in first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME).suggestions:
         assert f"| `{suggestion.label}` |" in skill
     assert FIRST_RUN_WELCOME[-1].text in skill
+
+
+def test_the_onboarding_skill_answers_describe_what_you_want_to_make_with_an_example() -> None:
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+    path_a = skill.split(f'## Path A: "{START_DESCRIBE_LABEL}"', 1)[1].split("## Path B", 1)[0]
+
+    assert (
+        "```\n"
+        "## Describe the problem you want to solve. Provide lots of context!\n"
+        "\n"
+        "What’s annoying, overwhelming, or tedious in your digital life? Go ahead and complain--I’ll help you build "
+        "something that makes it better.\n"
+        "\n"
+        "*Example: I feel scattered. My todos are in a million different places, and I can never find things when I "
+        "need them. I want a command center that pulls everything into one place and tells me what to do next.*\n"
+        "\n"
+        "**Prefer to talk? Tap the mic and think out loud.**\n"
+        "```\n"
+    ) in path_a
 
 
 def test_the_onboarding_skill_and_the_tree_agree_on_the_replies_offered_under_the_ideas() -> None:

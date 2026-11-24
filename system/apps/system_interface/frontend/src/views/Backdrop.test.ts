@@ -141,13 +141,20 @@ describe("Share in a window's title bar", () => {
     expect(shareOf(render({ isAppShareOffered: false }), "win-2")).toBeNull();
   });
 
-  it("is drawn for a critical app such as the chat or the terminal, and never for an internal one", () => {
+  it("is drawn for a critical app, and never for an internal one", () => {
     socket.deliver().onAppsUpdated([appRecord("docs", { critical: true })]);
     expect(shareOf(render({ isAppShareOffered: true }), "win-2")).not.toBeNull();
     unmountViews();
 
     socket.deliver().onAppsUpdated([appRecord("docs", { internal: true })]);
     expect(shareOf(render({ isAppShareOffered: true }), "win-2")).toBeNull();
+  });
+
+  it("is not drawn for an app that is part of the workspace itself", () => {
+    socket.deliver().onAppsUpdated([appRecord("docs", { system: true })]);
+    const root = render({ isAppShareOffered: true });
+    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(shareOf(root, "win-2")).toBeNull();
   });
 
   it("is not drawn on a window whose app the shell no longer lists", () => {
