@@ -16,6 +16,7 @@
  */
 
 import m from "mithril";
+import { faceGutterInset } from "./participant-picture";
 import { ensureChatSettings, isSuggestionSwitchOn } from "../models/ChatSettings";
 import { isRoomChat } from "../models/Chats";
 import { isViewerOwner } from "../models/Participants";
@@ -32,8 +33,7 @@ import { emptyNextStepLine, SuggestionStrip, suggestionsOffNotice } from "./Sugg
 const PLACEMENTS: readonly SuggestionPlacement[] = ["new_chat", "next_step"];
 
 // The composer's own column, so the strips line up with its edge.
-const COLUMN_CLASS =
-  "chat-suggestions mx-auto mb-2 flex w-full max-w-(--width-message-column) flex-col gap-1 pl-(--width-face-gutter)";
+const COLUMN_CLASS = "chat-suggestions mx-auto mb-2 flex w-full max-w-(--width-message-column) flex-col gap-1";
 
 function isPlacementEnabled(placement: SuggestionPlacement): boolean {
   return isSuggestionSwitchOn(SUGGESTION_SWITCHES[placement]) === true;
@@ -107,7 +107,7 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
         );
       }
       if (children.length === 0) return null;
-      return m("div", { class: COLUMN_CLASS }, children);
+      return m("div", { class: `${COLUMN_CLASS}${faceGutterInset()}` }, children);
     },
   };
 }

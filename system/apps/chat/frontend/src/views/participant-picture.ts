@@ -7,6 +7,7 @@
  */
 
 import m from "mithril";
+import { isCompactLayout } from "../compactLayout";
 
 /** The side of the face beside a turn's bubble, the agent's or another person's. The face and the gap beside it make
  *  up `--width-face-gutter` in style.css. */
@@ -15,6 +16,13 @@ export const TURN_FACE_SIZE_PX = 24;
 /** The column a turn's bubble starts in: one face and the gap beside it in from the row's edge (`--width-face-gutter`
  *  in style.css). A margin, so a row in the message list's stretching flex column keeps the column's right edge. */
 export const FACE_COLUMN_CLASS = "ml-(--width-face-gutter)";
+
+/** The composer column's set-in by the face gutter, so the box and what stands about it start where an agent's
+ *  bubbles do; none in the phone layout, where the gutter holds the composer's tools toggle instead. Leads with a
+ *  space, to append to a class list. */
+export function faceGutterInset(): string {
+  return isCompactLayout() ? "" : " pl-(--width-face-gutter)";
+}
 
 /** The first letter of a name, uppercased; "?" for an empty one. */
 export function monogramOf(name: string): string {

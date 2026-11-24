@@ -20,6 +20,7 @@
  */
 
 import m from "mithril";
+import { faceGutterInset } from "./participant-picture";
 import { isSlotClaimed } from "../slots";
 import {
   addMessageSentListener,
@@ -1095,7 +1096,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // on a phone, where the chip is the settings button, only as tall as a notice in it.
                 class:
                   `composer-under-bar relative mx-auto mt-1 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
-                  "max-w-(--width-message-column) items-center gap-2 pl-(--width-face-gutter)",
+                  `max-w-(--width-message-column) items-center gap-2${faceGutterInset()}`,
               },
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.

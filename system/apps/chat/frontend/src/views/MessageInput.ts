@@ -1,4 +1,5 @@
 import m from "mithril";
+import { faceGutterInset } from "./participant-picture";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
@@ -2415,9 +2416,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       return m(
         "div",
         {
-          // Set in by the face gutter, so the box starts where an agent's bubbles do and the face hangs out to its
-          // left (participant-picture.ts, FACE_COLUMN_CLASS).
-          class: "message-input mx-auto w-full max-w-(--width-message-column) pl-(--width-face-gutter)",
+          class: `message-input mx-auto w-full max-w-(--width-message-column)${faceGutterInset()}`,
           oncreate: isDictationShown ? attachDictationToPage : undefined,
           onremove: isDictationShown ? detachDictationFromPage : undefined,
         },
