@@ -348,7 +348,7 @@ poll) with these specifics:
 
 - **Terminal handling:** on `done`, go to Step 4. On `stuck` or a dead-worker
   timeout, read `.agents/shared/references/lead-proxy/worker-failure.md` and
-  surface it to the user as that file says; do not merge or apply, and do not
+  surface the failure to the user as that file says; do not merge or apply, and do not
   retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work
