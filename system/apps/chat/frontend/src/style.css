@@ -1015,7 +1015,7 @@
 }
 /* The first-run sizes match Imbue Studio's own first-run pages (mngr apps/minds/frontend/src/style.css): Besley
  * Medium for the headline at the welcome's 40px, the type ramp's 18px semibold heading for the line under it, and
- * the same button. Fixed rather than themed: this page wears the first run's brand, whatever the workspace's theme. */
+ * the same button shape, its label at 16px. Fixed rather than themed: this page wears the first run's brand, whatever the workspace's theme. */
 .first-run-headline {
   font-family: "Besley", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   font-size: 40px;
@@ -1090,7 +1090,7 @@
   border-radius: 9999px;
   background: var(--first-run-ink);
   color: var(--first-run-ground);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.333;
   cursor: pointer;
