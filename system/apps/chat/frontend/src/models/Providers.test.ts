@@ -327,12 +327,12 @@ describe("the first run's provider step, across frames", () => {
 
     mockRequest.mockResolvedValueOnce({});
     await finishFirstRunProviderStep();
-    const written = localStorage.getItem("chat:first-run-provider-step-done");
+    const written = localStorage.getItem("first-run-provider-step-done");
     expect(written).not.toBeNull();
 
     // The write reaches the other frames as a storage event; jsdom does not raise it for the writer, so it is raised
     // here as the browser raises it in a sibling frame.
-    window.dispatchEvent(new StorageEvent("storage", { key: "chat:first-run-provider-step-done", newValue: written }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "first-run-provider-step-done", newValue: written }));
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 });
