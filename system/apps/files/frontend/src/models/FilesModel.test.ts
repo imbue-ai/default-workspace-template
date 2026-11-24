@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AGENT_FIX_INSTRUCTION } from "@imbue/workspace-ui/src/app_contract";
 import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
 import type { Connections } from "./connections";
-import { askAgentAction } from "./failures";
 import { FilesModel, compareEntries, type ConflictChoice, type FilesHost } from "./FilesModel";
 
 vi.mock("./server", async (importOriginal) => {
@@ -636,7 +636,7 @@ describe("telling a failed change", () => {
     const toasts = model.toasts.current();
     expect(toasts.map((toast) => toast.isAgentOffered)).toEqual([true]);
 
-    await askAgentAction(host, model.toasts)?.({ message: toasts[0].message, details: toasts[0].details });
+    await askAgentFromToasts(host)?.(toasts[0].agentRequest);
 
     const [task] = vi.mocked(host.askAgent).mock.calls[0];
     expect(task).toContain('Couldn\'t delete "b.txt".');
@@ -655,7 +655,7 @@ describe("telling a failed change", () => {
     await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
     const [toast] = model.toasts.current();
 
-    await askAgentAction(host, model.toasts)?.({ message: toast.message, details: toast.details });
+    await askAgentFromToasts(host)?.(toast.agentRequest);
 
     // What was tried still opens the details; only the task differs from an explained refusal's.
     const [task] = vi.mocked(host.askAgent).mock.calls[0];
@@ -682,7 +682,7 @@ describe("telling a failed change", () => {
       // No button of Files' own: the page's toasts draw "Ask an agent to fix this" on a toast that offers one.
       const [toast] = model.toasts.current();
       expect([toast.isLasting, toast.isAgentOffered, toast.actions]).toEqual([true, true, []]);
-      await askAgentAction(host, model.toasts)?.({ message: toast.message, details: toast.details });
+      await askAgentFromToasts(host)?.(toast.agentRequest);
       // The chat about Files takes it, with the operation as its task in place of a fault to find.
       expect(host.askAgent).toHaveBeenCalledTimes(1);
       const [task, , delivery] = vi.mocked(host.askAgent).mock.calls[0];

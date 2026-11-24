@@ -11,14 +11,13 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
+import { Toasts, askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
 import {
-  askAgentAction,
   goneSentence,
   reportBugAction,
   toastFailures,
@@ -369,7 +368,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: reportBugAction(page.reporter),
-          onAskAgent: askAgentAction(page.reporter, page.toasts),
+          onAskAgent: askAgentFromToasts(page.reporter),
           onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),

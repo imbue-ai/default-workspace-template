@@ -194,9 +194,10 @@ page's `Toasts` draws "Ask an agent to fix this" where a shell frames the page,
 and "Report a bug" only where no agent can be asked. That is every failure
 nothing explained and every refusal that leaves the person unable to do what
 they meant, known cause or not: a read-only folder, a name already taken, no
-permission, a computer that shares read-only. The ask (`askAgentAction`, the app
-contract's `askAgentToFix`) sends the sentence and the details, which say what
-was being done and where, to the chat about Files, opened beside the window (the
+permission, a computer that shares read-only. The ask (`askAgentFromToasts`, sending the
+toast's `agentRequest` through the app contract's `askAgentToFix`) carries the
+sentence and the details, which say what was being done and where, to the chat
+about Files, opened beside the window (the
 main chat where there is none to take it). For a refusal the server explained,
 the operation is the agent's task: to do what the person was trying to do if it
 can, and otherwise to say why it can't be done and what they can do instead. A

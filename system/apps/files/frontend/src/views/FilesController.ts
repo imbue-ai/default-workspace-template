@@ -22,7 +22,7 @@ import { isTextLike } from "../models/fileKinds";
 import { decodePathname, titleOf } from "../models/paths";
 import { sourcesFromFileList } from "../models/uploads";
 import { isAnySyncMoving, isLiveShared } from "../models/connections";
-import { askAgentAction, reportBugAction, type FailureHost } from "../models/failures";
+import { reportBugAction, type FailureHost } from "../models/failures";
 import { Dialogs } from "./dialogs";
 
 /** How often the shares, and the folders on screen, are read again while the window is on screen: often while a sync
@@ -152,11 +152,6 @@ export class FilesController {
   /** The shell connection a failure's buttons go through. */
   get failureHost(): FailureHost {
     return this.connection;
-  }
-
-  /** What the toasts' "Ask an agent to fix this" does as they are drawn; null where no shell frames the page. */
-  askAgentAction(): ((failure: ReportedFailure) => Promise<unknown>) | null {
-    return askAgentAction(this.connection, this.model.toasts);
   }
 
   /** What the toasts' "Report a bug" does as they are drawn; null while Imbue Studio opens no bug report here. */

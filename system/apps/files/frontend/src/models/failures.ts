@@ -5,7 +5,7 @@
  * refusals that depend on which folder refused (the server's ``kind``), else in the server's sentence, which names
  * only the cause. An item the server says is gone is told as that alone. A failure that owes the person help leaves
  * a toast that stays, on which the page's ``Toasts`` draws "Ask an agent to fix this" under a shell ("Report a bug"
- * where only that can be opened); a full disk leaves one that stays with "Ask an agent to free up space" instead; any
+ * where only that can be opened), the toast carrying what the agent is asked; a full disk leaves one that stays with "Ask an agent to free up space" instead; any
  * other leaves a plain note, its retry being the control just used, with its details behind "See details" (opening
  * them keeps the note up).
  */
@@ -75,19 +75,9 @@ const FREE_SPACE_LABEL = "Ask an agent to free up space";
 const FREE_SPACE_INSTRUCTION =
   "Free up disk space in this workspace: remove what is safe to remove (caches, temporary files, build output), and " +
   "ask the user before deleting anything of theirs. Then tell the user what you removed and how much space it freed.";
-/** What an agent asked about a refusal the server explained is to do: nothing is left to diagnose, and the person
- *  pressed for the operation. */
+/** What an agent asked about a refusal with a known cause is to do. */
 const DO_IT_INSTRUCTION =
   "Do what the user was trying to do if you can; otherwise tell them why it can't be done and what they can do instead.";
-
-/** Each queue's toasts on show that tell only refusals with a known cause. The page's ``Toasts`` hands an ask the
- *  toast's message and details and nothing else of its failure, so they are what a toast is found again by, as the
- *  queue itself tells toasts apart by them. */
-const explainedToasts = new WeakMap<ToastQueue, ReadonlySet<string>>();
-
-function toastKey(message: string, details: string | null): string {
-  return JSON.stringify([message, details]);
-}
 
 /** Whether a refusal's kind says the place could not be written: these, or a computer that shares it only to read. */
 export function isNotWritable(kind: string | null): boolean {
@@ -174,32 +164,12 @@ export function toastFailures(
     toasts.show(message, { isLasting: false, details });
     return;
   }
-  toasts.show(message, { isLasting: true, details, isHelpOwed: true });
-  const key = toastKey(message, details);
-  const onShow = new Set(toasts.current().map((toast) => toastKey(toast.message, toast.details)));
-  const explained = new Set([...(explainedToasts.get(toasts) ?? [])].filter((kept) => onShow.has(kept)));
-  if (failures.some((failure) => failure.isUnexplained)) explained.delete(key);
-  else explained.add(key);
-  explainedToasts.set(toasts, explained);
-}
-
-/** What the "Ask an agent to fix this" on a toast of `toasts` does, decided as the toasts are drawn: the toast's
- *  failure, whose details say what was tried and where, sent to the chat about Files. A refusal with a known cause
- *  makes the operation the agent's task; a failure nothing explained is left as a fault for it to find and fix. Null
- *  where no shell frames the page. The shell toasts an ask it refused. */
-export function askAgentAction(
-  host: FailureHost,
-  toasts: ToastQueue,
-): ((failure: ReportedFailure) => Promise<unknown>) | null {
-  if (!host.hasShell()) return null;
-  return (failure) => {
-    const isExplained = explainedToasts.get(toasts)?.has(toastKey(failure.message, failure.details)) === true;
-    return askAgentToFix(host, {
-      whatFailed: failure.message,
-      details: failure.details,
-      ...(isExplained ? { instruction: DO_IT_INSTRUCTION } : {}),
-    });
-  };
+  // A refusal with a known cause leaves nothing to diagnose, so the operation is the agent's task; a failure nothing
+  // explained, alone or among the items of one change, stays a fault for it to find and fix.
+  const agentRequest = failures.some((failure) => failure.isUnexplained)
+    ? undefined
+    : { whatFailed: message, details, instruction: DO_IT_INSTRUCTION };
+  toasts.show(message, { isLasting: true, details, isHelpOwed: true, agentRequest });
 }
 
 /** What a toast's "Report a bug" does, decided as the toasts are drawn: null while the shell says Imbue Studio opens no

@@ -13,7 +13,7 @@ import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/compo
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { SegmentedControl } from "@imbue/workspace-ui/src/components/segmentedControl";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
+import { Toasts, askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { formatItemCount, formatSize } from "../models/format";
 import { DEFAULT_PREFERENCES } from "../models/preferences";
@@ -755,7 +755,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
           onDismiss: (id: number) => app.model.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: app.reportBugAction(),
-          onAskAgent: app.askAgentAction(),
+          onAskAgent: askAgentFromToasts(app.failureHost),
           onHold: (id: number) => app.model.toasts.hold(id),
         }),
         app.dialogs.view(),
