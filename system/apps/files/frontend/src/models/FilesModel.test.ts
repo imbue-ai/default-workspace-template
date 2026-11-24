@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AGENT_FIX_INSTRUCTION } from "@imbue/workspace-ui/src/app_contract";
 import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 
 import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
@@ -635,13 +636,31 @@ describe("telling a failed change", () => {
     const toasts = model.toasts.current();
     expect(toasts.map((toast) => toast.isAgentOffered)).toEqual([true]);
 
-    await askAgentAction(host)?.({ message: toasts[0].message, details: toasts[0].details });
+    await askAgentAction(host, model.toasts)?.({ message: toasts[0].message, details: toasts[0].details });
 
     const [task] = vi.mocked(host.askAgent).mock.calls[0];
     expect(task).toContain('Couldn\'t delete "b.txt".');
     expect(task).toContain('Couldn\'t delete "a.png".');
     expect(task).toContain("Tried to delete /home/b.txt\nHTTP 500\nDELETE /home/b.txt: [Errno 5]");
     expect(task).toContain("Tried to delete /home/a.png\nHTTP 500\nDELETE /home/a.png: [Errno 5]");
+  });
+
+  it("leaves a failure nothing explained as a fault for the agent to find, even beside a refusal with a known cause", async () => {
+    const { model, host } = harness();
+    vi.mocked(server.deletePath)
+      .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/b.txt: [Errno 5]" }))
+      .mockRejectedValueOnce(
+        httpFailure(403, { detail: "DELETE /home/a.png", user_facing_message: PERMISSION, kind: "read_only" }),
+      );
+    await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
+    const [toast] = model.toasts.current();
+
+    await askAgentAction(host, model.toasts)?.({ message: toast.message, details: toast.details });
+
+    // What was tried still opens the details; only the task differs from an explained refusal's.
+    const [task] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toContain("Tried to delete /home/b.txt\nHTTP 500\nDELETE /home/b.txt: [Errno 5]");
+    expect(task.endsWith(`\n\n${AGENT_FIX_INSTRUCTION}`)).toBe(true);
   });
 
   it.each([
@@ -663,7 +682,7 @@ describe("telling a failed change", () => {
       // No button of Files' own: the page's toasts draw "Ask an agent to fix this" on a toast that offers one.
       const [toast] = model.toasts.current();
       expect([toast.isLasting, toast.isAgentOffered, toast.actions]).toEqual([true, true, []]);
-      await askAgentAction(host)?.({ message: toast.message, details: toast.details });
+      await askAgentAction(host, model.toasts)?.({ message: toast.message, details: toast.details });
       // The chat about Files takes it, with the operation as its task in place of a fault to find.
       expect(host.askAgent).toHaveBeenCalledTimes(1);
       const [task, , delivery] = vi.mocked(host.askAgent).mock.calls[0];

@@ -369,7 +369,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: reportBugAction(page.reporter),
-          onAskAgent: askAgentAction(page.reporter),
+          onAskAgent: askAgentAction(page.reporter, page.toasts),
           onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),

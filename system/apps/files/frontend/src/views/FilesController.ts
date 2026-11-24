@@ -156,7 +156,7 @@ export class FilesController {
 
   /** What the toasts' "Ask an agent to fix this" does as they are drawn; null where no shell frames the page. */
   askAgentAction(): ((failure: ReportedFailure) => Promise<unknown>) | null {
-    return askAgentAction(this.connection);
+    return askAgentAction(this.connection, this.model.toasts);
   }
 
   /** What the toasts' "Report a bug" does as they are drawn; null while Imbue Studio opens no bug report here. */
