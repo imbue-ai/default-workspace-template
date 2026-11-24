@@ -8450,12 +8450,9 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
     assert applied.get_json()["first_message"] is None
 
 
-# An ask as the shell sends it: the assist command first, then where it was pressed, then the task.
-_ASK = (
-    "/assist This is about the Docs app (`docs`, window `win-1`).\n\n"
-    "Imbue Studio showed the user this failure: The preview couldn't load.\n\n"
-    "Find out why it failed and fix it, then tell the user what was wrong and what you changed."
-)
+# An ask as the shell sends it: the assist command first, then where it was pressed, then the task (kept short
+# enough for a bubble to carry whole).
+_ASK = "/assist This is about the Docs app (`docs`, window `win-1`).\n\nThe preview couldn't load. Fix it."
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
