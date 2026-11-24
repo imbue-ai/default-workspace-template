@@ -106,8 +106,7 @@ import {
   FailureRemedies,
   ReportBugButton,
 } from "@imbue/workspace-ui/src/components/FailureButtons";
-import { withAskFailure } from "@imbue/workspace-ui/src/app_contract";
-import type { ShownFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
@@ -403,8 +402,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let pageActionError: FailureLines | null = null;
   // A failed create's "Ask an agent to fix this" waiting for its answer: the page's other ways out wait with it.
   let askInFlight = false;
-  // What that ask's refusal said, which the page's Report a bug files with the create's failure.
-  let refusedAsk: ShownFailure | null = null;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -665,6 +662,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const sentence = failedCreateSentence(provisional);
     // What the page holds behind its "See details": the create's output, and a Try again's that failed again.
     const failedCreateDetails = joinDetailLines([provisional.error, launchError?.details ?? null]);
+    // The failure as the page's Report a bug files it.
+    const failedCreate: ReportedFailure = { message: sentence, details: failedCreateDetails };
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
@@ -723,31 +722,26 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          // The ask goes to a chat that is already running, and says under itself what a refused one came to. The
-          // page's one Report a bug stands in for it where there is no such chat (a new chat would meet what
-          // stopped this one), and comes with a refused ask, which it files with the create's failure. A chat that
-          // names no account needs a sign-in, which neither can make.
-          chatToAskId === null
-            ? null
-            : m(AskAgentToFixButton, {
+          // The ask goes to a chat that is already running, and says under itself what a refused one came to,
+          // where its bug report files the refusal with the create's failure. With no such chat, a new one would
+          // meet what stopped this one, so Report a bug stands in the ask's place. A chat that names no account
+          // needs a sign-in, which neither can make.
+          chatToAskId !== null
+            ? m(AskAgentToFixButton, {
                 connection: pageAskConnection(chatToAskId),
                 failure: {
                   whatFailed: `The chat "${provisional.name}" couldn't be started`,
                   details: failedCreateDetails,
                 },
-                pageReportBug: {
-                  onFailureChange: (failure) => {
-                    refusedAsk = failure;
-                  },
-                },
-              }),
-          hasAccount && (chatToAskId === null || refusedAsk !== null)
-            ? m(ReportBugButton, {
-                connection: getShellConnection(),
-                failure: withAskFailure({ message: sentence, details: failedCreateDetails }, refusedAsk),
-                extra: "message-list-create-report-bug",
+                reported: failedCreate,
               })
-            : null,
+            : hasAccount
+              ? m(ReportBugButton, {
+                  connection: getShellConnection(),
+                  failure: failedCreate,
+                  extra: "message-list-create-report-bug",
+                })
+              : null,
         ]),
       ],
     );

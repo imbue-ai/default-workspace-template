@@ -482,7 +482,7 @@ describe("ChatPanel over a provisional chat", () => {
     expect(renderedText(refused)).toContain("This chat couldn't be started. Try again.");
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
     // The refused relaunch is the page's own failure again, so it gets no remedies beside the page's, whose bug
-    // report carries its details.
+    // report (in the ask's place, with no other chat to ask) carries its details.
     expect(flatten(refused).filter((vnode) => vnode.tag === FailureRemedies)).toEqual([]);
     const reports = flatten(refused).filter((vnode) => vnode.tag === ReportBugButton);
     expect(reports.map((vnode) => (vnode.attrs as unknown as ReportBugButtonAttrs).failure.details)).toEqual([
@@ -795,7 +795,7 @@ describe("ChatPanel over a failed create, told by its kind and reported as a bug
     expect(page.querySelector(".ask-agent-to-fix")).toBeNull();
   });
 
-  it("offers the agent alone, and the page's Report a bug once the ask was refused, after the refusal and its draft", async () => {
+  it("offers the agent alone, and under an ask refused by a fault its draft and a Report a bug", async () => {
     mocks.chats = [chatSnapshotFixture("chat-main")];
     mocks.mainChatId = "chat-main";
     failed("acct-1", "mngr create exited with code 3");
@@ -832,7 +832,7 @@ describe("ChatPanel over a failed create, told by its kind and reported as a bug
     expect(page.querySelector(".report-bug")).toBeNull();
   });
 
-  it("files a refused ask with the create's failure from the page's one Report a bug", async () => {
+  it("files a refused ask with the create's failure from the one Report a bug under it", async () => {
     mocks.chats = [chatSnapshotFixture("chat-main")];
     mocks.mainChatId = "chat-main";
     failed("acct-1", CODEX_REFUSAL, "codex_plugin_install_refused");
@@ -848,7 +848,7 @@ describe("ChatPanel over a failed create, told by its kind and reported as a bug
     const refusal = page.querySelector(".ask-agent-failure-message")?.textContent ?? "";
     expect(refusal).toContain("Couldn't ask");
     expect(page.querySelectorAll(".report-bug")).toHaveLength(1);
-    page.querySelector<HTMLButtonElement>(".message-list-create-report-bug")!.click();
+    page.querySelector<HTMLButtonElement>(".ask-agent-failure .report-bug")!.click();
     expect(shell.posted("shell:report-bug")).toEqual([
       {
         type: "shell:report-bug",
