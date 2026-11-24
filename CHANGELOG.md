@@ -6,6 +6,10 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ## [Unreleased]
 
+## [minds-v0.10.7] - 2026-11-23
+
+This release polishes the first run and the show-around tour: the provider page can remove a connected account, system apps no longer show Share in their title bar, the Onboarding checklist and its pointers read more clearly, next-step suggestions get more time to think, and the tour's Getting Started window and title-bar cards sit where they no longer cover what they point at.
+
 ### Added
 
 - Added: The first run's provider page can remove a connected account (Remove asks first; removing the last brings back Skip), and its dialogs wear the page's cream look.
@@ -17,6 +21,8 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: Next-step suggestion generation may think for 20,000 tokens (was 4,000) and has 120 seconds (was 60).
 - Changed: The Onboarding checklist page is headed "Click to learn more" with an arrow on each clickable entry, and the connect-data pointer reads "Just ask your agent to connect anything!".
 - Changed: `first-run-onboarding`'s "Describe what you want to make" reply asks what's annoying or tedious in the user's digital life, with an example.
+- Changed: mngr is pinned to its `minds-v0.10.7` release, the one the 0.10.7 desktop app ships.
+- Changed: The Screen's `test_installing_is_reported_until_the_unit_is_satisfied` test is marked flaky.
 
 ### Fixed
 
