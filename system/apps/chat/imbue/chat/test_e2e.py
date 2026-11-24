@@ -2923,8 +2923,8 @@ def test_a_message_sent_from_the_launcher_as_the_first_run_provider_page_is_left
             launcher_field.press("Enter")
 
             chat = _chat(page, main_chat_id)
-            # The long wait only covers the chat page's socket, which in CI has taken about twenty seconds to
-            # connect and bring the provisional record; the create itself is held until released below.
+            # The long wait covers the chat page's socket connecting and bringing the provisional record; the
+            # create itself is held until released below.
             expect(chat.locator(".held-send", has_text="Write hello.py")).to_be_visible(timeout=45000)
             expect(chat.locator(".message-input-textbox")).to_have_value("")
             assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
