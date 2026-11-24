@@ -1365,15 +1365,21 @@ _WEB_ONLY_VISITOR_IDENTITY = render_identity_header(
 _AGENT_IDENTITY = render_agent_identity_header(AgentIdentity(agent_id="agt-1", agent_name="helper", granter="o"))
 
 
-def _given_up_page(harness: _GatewayHarness, host: str, identity: str, fetch_destination: str) -> str:
-    """The not-responding page after a minute of reloads, as caddy forwards it with the verified identity."""
+def _given_up_page(
+    harness: _GatewayHarness, host: str, identity: str, fetch_destination: str, path: str = "/_auth/unresponsive"
+) -> str:
+    """The waiting page at ``path`` after a minute of reloads, as caddy forwards it with the verified identity."""
     headers = {"Host": host, IDENTITY_HEADER: identity, "Sec-Fetch-Dest": fetch_destination}
-    harness.client.get("/_auth/unresponsive", headers=headers)
+    harness.client.get(path, headers=headers)
     for _reload in range(20):
         harness.clock.now += 3.0
-        resp = harness.client.get("/_auth/unresponsive", headers=headers)
+        resp = harness.client.get(path, headers=headers)
     assert resp.status_code == 503
     return resp.get_data(as_text=True)
+
+
+_ASK_AN_AGENT_TO_RESTART = "This app isn't responding. Ask an agent in the workspace to restart it, then try again."
+_LET_THE_SHARER_KNOW = "This page isn't responding right now. Let the person who shared it know, then try again."
 
 
 @pytest.mark.parametrize(
@@ -1382,37 +1388,30 @@ def _given_up_page(harness: _GatewayHarness, host: str, identity: str, fetch_des
         (
             _OWNER_IDENTITY,
             "document",
-            "This app isn't responding right now. Try again in a moment.",
+            _ASK_AN_AGENT_TO_RESTART,
             {"Try again": "", "Open the workspace": f"https://{_SHELL_HOST}/"},
         ),
-        (
-            _OWNER_IDENTITY,
-            "iframe",
-            "This app isn't responding right now. Try again in a moment.",
-            {"Try again": ""},
-        ),
+        (_OWNER_IDENTITY, "iframe", _ASK_AN_AGENT_TO_RESTART, {"Try again": ""}),
         (
             _WORKSPACE_VISITOR_IDENTITY,
             "document",
-            "This page isn't responding right now. Let the person who shared it know, then try again.",
+            _ASK_AN_AGENT_TO_RESTART,
             {"Try again": "", "Open the workspace": f"https://{_SHELL_HOST}/"},
         ),
-        (
-            _WEB_ONLY_VISITOR_IDENTITY,
-            "document",
-            "This page isn't responding right now. Let the person who shared it know, then try again.",
-            {"Try again": ""},
-        ),
-        (
-            _AGENT_IDENTITY,
-            "document",
-            "This page isn't responding right now. Let the person who shared it know, then try again.",
-            {"Try again": ""},
-        ),
+        (_WORKSPACE_VISITOR_IDENTITY, "iframe", _ASK_AN_AGENT_TO_RESTART, {"Try again": ""}),
+        (_WEB_ONLY_VISITOR_IDENTITY, "document", _LET_THE_SHARER_KNOW, {"Try again": ""}),
+        (_AGENT_IDENTITY, "document", _LET_THE_SHARER_KNOW, {"Try again": ""}),
     ],
-    ids=["owner", "owner-inside-a-window", "workspace-visitor", "visitor-of-this-app-only", "visiting-agent"],
+    ids=[
+        "owner",
+        "owner-inside-a-window",
+        "workspace-visitor",
+        "workspace-visitor-inside-a-window",
+        "visitor-of-this-app-only",
+        "visiting-agent",
+    ],
 )
-def test_the_not_responding_page_speaks_to_the_owner_and_offers_the_workspace_to_whoever_may_open_it(
+def test_the_not_responding_page_sends_whoever_may_open_the_workspace_to_its_agents_and_everyone_else_to_the_sharer(
     tmp_path: Path, identity: str, fetch_destination: str, sentence: str, buttons: dict[str, str]
 ) -> None:
     harness = _make_harness(tmp_path)
@@ -1423,12 +1422,39 @@ def test_the_not_responding_page_speaks_to_the_owner_and_offers_the_workspace_to
     assert _buttons(page) == buttons
 
 
-def test_the_owner_is_told_they_may_need_to_restart_the_workspace_itself_with_no_way_to_open_it(
+@pytest.mark.parametrize(
+    ("identity", "sentence", "buttons"),
+    [
+        (
+            _WORKSPACE_VISITOR_IDENTITY,
+            "This page still isn't available. Ask an agent in the workspace to look into it, then try again.",
+            {"Try again": "", "Open the workspace": f"https://{_SHELL_HOST}/"},
+        ),
+        (
+            _WEB_ONLY_VISITOR_IDENTITY,
+            "This page still isn't available. Let the person who shared it know.",
+            {"Try again": ""},
+        ),
+    ],
+    ids=["workspace-visitor", "visitor-of-this-app-only"],
+)
+def test_the_still_unavailable_page_sends_whoever_may_open_the_workspace_to_its_agents(
+    tmp_path: Path, identity: str, sentence: str, buttons: dict[str, str]
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    page = _given_up_page(harness, _WEB_HOST, identity, "document", path="/_auth/loading")
+
+    assert sentence in page
+    assert _buttons(page) == buttons
+
+
+def test_the_owner_of_a_workspace_whose_shell_is_down_is_sent_to_an_agent_with_no_way_to_open_it(
     tmp_path: Path,
 ) -> None:
     harness = _make_harness(tmp_path)
 
     page = _given_up_page(harness, _SHELL_HOST, _OWNER_IDENTITY, "document")
 
-    assert "This app isn't responding. You may need to restart it from the workspace." in page
+    assert _ASK_AN_AGENT_TO_RESTART in page
     assert _buttons(page) == {"Try again": ""}

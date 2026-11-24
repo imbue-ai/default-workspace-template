@@ -50,16 +50,16 @@ three things running:
    is not responding. For an app the shell never starts on demand (a critical
    app, a row inside a critical app's program, a row with no program, a
    non-loopback address) the not-responding page says it may need a restart.
-   The workspace's owner reads their own sentences ("Try again in a moment",
-   "You may need to restart it from the workspace") rather than a visitor's
-   "Let the person who shared it know": caddy keeps the identity the gateway
-   verified on the request it hands to its error route. The owner and anyone
-   whose grant covers the whole workspace also get an "Open the workspace"
-   button, when the page fills the browser tab (`Sec-Fetch-Dest: document`;
-   inside one of the workspace's windows they are there already) and the app
-   that is down is not the shell itself. The minute is counted per address
-   across all visitors and both pages, and starts over after 30 seconds with
-   no such request.
+   The owner and anyone whose grant covers the whole workspace are told to
+   ask an agent in the workspace to restart the app (or, for the
+   route-not-loaded page, to look into it) rather than a visitor's "Let the
+   person who shared it know": caddy keeps the identity the gateway verified
+   on the request it hands to its error route. They also get an "Open the
+   workspace" button, when the page fills the browser tab
+   (`Sec-Fetch-Dest: document`; inside one of the workspace's windows they are
+   there already) and the app that is down is not the shell itself. The
+   minute is counted per address across all visitors and both pages, and
+   starts over after 30 seconds with no such request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy

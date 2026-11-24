@@ -153,19 +153,20 @@ _UNRESPONSIVE_WAITING_PAGE = _render_page(
 
 
 class _GivenUpPage:
-    """What a page that stopped waiting for an address says: a heading and a sentence for the workspace's owner, and
-    another pair for anyone else."""
+    """What a page that stopped waiting for an address says: a heading and a sentence for a member (the workspace's
+    owner, or anyone whose grant covers the whole workspace, who can ask its agents to fix the app), and another pair
+    for anyone else."""
 
-    def __init__(self, owner_heading: str, owner_sentence: str, visitor_heading: str, visitor_sentence: str) -> None:
-        self.owner_heading = owner_heading
-        self.owner_sentence = owner_sentence
+    def __init__(self, member_heading: str, member_sentence: str, visitor_heading: str, visitor_sentence: str) -> None:
+        self.member_heading = member_heading
+        self.member_sentence = member_sentence
         self.visitor_heading = visitor_heading
         self.visitor_sentence = visitor_sentence
 
-    def render(self, is_owner: bool, workspace_url: str | None) -> str:
+    def render(self, is_member: bool, workspace_url: str | None) -> str:
         """The page; ``workspace_url`` adds a way to open the workspace itself beside "Try again"."""
-        heading = self.owner_heading if is_owner else self.visitor_heading
-        sentence = self.owner_sentence if is_owner else self.visitor_sentence
+        heading = self.member_heading if is_member else self.visitor_heading
+        sentence = self.member_sentence if is_member else self.visitor_sentence
         open_workspace = (
             f'<a class="button secondary" href="{html.escape(workspace_url)}">Open the workspace</a>'
             if workspace_url is not None
@@ -175,22 +176,22 @@ class _GivenUpPage:
 
 
 _UNRESPONSIVE = _GivenUpPage(
-    owner_heading="This app isn't responding",
-    owner_sentence="This app isn't responding right now. Try again in a moment.",
+    member_heading="This app isn't responding",
+    member_sentence="This app isn't responding. Ask an agent in the workspace to restart it, then try again.",
     visitor_heading="This page isn't responding",
     visitor_sentence="This page isn't responding right now. Let the person who shared it know, then try again.",
 )
 
 _UNRESPONSIVE_NOT_RESTARTED = _GivenUpPage(
-    owner_heading="This app isn't responding",
-    owner_sentence="This app isn't responding. You may need to restart it from the workspace.",
+    member_heading="This app isn't responding",
+    member_sentence="This app isn't responding. Ask an agent in the workspace to restart it, then try again.",
     visitor_heading="This app isn't responding",
     visitor_sentence="This app isn't responding. The workspace owner may need to restart it.",
 )
 
 _STILL_NOT_AVAILABLE = _GivenUpPage(
-    owner_heading="This page still isn't available",
-    owner_sentence="This page still isn't available. Try again in a moment.",
+    member_heading="This page still isn't available",
+    member_sentence="This page still isn't available. Ask an agent in the workspace to look into it, then try again.",
     visitor_heading="This page still isn't available",
     visitor_sentence="This page still isn't available. Let the person who shared it know.",
 )
@@ -434,20 +435,19 @@ def build_gateway_app(
 
     def _given_up(page: _GivenUpPage, service_name: str | None, registered_apps: Sequence[RegisteredApp]) -> Response:
         """``page`` for whoever is asking. The identity caddy verified for the request it could not serve is still on
-        it, so the owner reads the owner's sentence. Anyone who may open the whole workspace also gets a way there,
-        when the page fills the tab (inside one of the workspace's own windows they are there already) and the
-        address is not the workspace itself."""
+        it, so anyone who may open the whole workspace reads the member's sentence. They also get a way there, when
+        the page fills the tab (inside one of the workspace's own windows they are there already) and the address is
+        not the workspace itself."""
         identity = parse_requester_identity_header(request.headers.get(IDENTITY_HEADER, ""))
+        is_member = identity is not None and _may_open_workspace(identity, registered_apps)
         workspace_url = (
             _shell_url(registered_apps)
-            if identity is not None
+            if is_member
             and service_name not in (None, _SHELL_SERVICE_NAME)
             and request.headers.get("Sec-Fetch-Dest", "") == "document"
-            and _may_open_workspace(identity, registered_apps)
             else None
         )
-        is_owner = identity is not None and identity.is_owner
-        return _html_page(page.render(is_owner, workspace_url), status=503)
+        return _html_page(page.render(is_member, workspace_url), status=503)
 
     def _unanswered_request() -> tuple[float, str | None, Sequence[RegisteredApp]]:
         """Record one more request caddy could not hand to the app at this request's address: how long the address
