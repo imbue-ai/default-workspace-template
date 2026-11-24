@@ -708,6 +708,9 @@ export interface AgentFixRequest {
   readonly whatFailed: string;
   readonly details: string | null;
   readonly instruction?: string;
+  /** What the person was shown, for the task's lead: a failure unless the ask is about a notice that reports none
+   *  (an update's rollback that ended and leaves a step to do). */
+  readonly shown?: "failure" | "notice";
 }
 
 /** What an agent is told to do about a failure that names nothing more specific. */
@@ -723,9 +726,14 @@ function fenceFor(text: string): string {
 /** The one task every "Ask an agent ..." button gives the agent: what the person was shown, the details as they
  *  are, and what to do about it, said by Imbue Studio about the user rather than as the user, who did not write it.
  *  The shell words its own asks with it too. */
-export function agentFixTask({ whatFailed, details, instruction }: AgentFixRequest): string {
+export function agentFixTask({ whatFailed, details, instruction, shown }: AgentFixRequest): string {
   const stem = whatFailed.trim();
-  const parts = [`Imbue Studio showed the user this failure: ${/[.!?]$/.test(stem) ? stem : `${stem}.`}`];
+  const sentence = /[.!?]$/.test(stem) ? stem : `${stem}.`;
+  const parts = [
+    shown === "notice"
+      ? `Imbue Studio showed the user this notice: ${sentence}`
+      : `Imbue Studio showed the user this failure: ${sentence}`,
+  ];
   if (details !== null && details.trim() !== "") {
     const fence = fenceFor(details);
     parts.push(`Details:\n${fence}\n${details}\n${fence}`);
