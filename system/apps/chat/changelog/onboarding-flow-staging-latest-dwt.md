@@ -1,4 +1,4 @@
-- On the first run's provider page, the dialogs it opens (the sign-in chooser, the removal confirmation) draw their card without a border, as Imbue Studio's first-run sign-in does.
+- On the first run's provider page, the dialogs it opens (the sign-in chooser, the removal confirmation) are white, borderless cards in the standard look's regular ink over the page's cream wash, as Imbue Studio's first-run sign-in is, instead of cream with brown ink.
 
 - The provider page's Next button is smaller: 12px by 20px padding, matching Imbue Studio's first-run buttons, and a 16px label.
 
