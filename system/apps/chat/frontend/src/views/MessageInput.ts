@@ -364,7 +364,7 @@ export async function takeComposerDraft(chatId: string): Promise<TakenComposerDr
           `${names} could not be uploaded, so the new chat was not started. Remove the attachment, or try again.`,
         ],
         details: null,
-        isReportable: false,
+        isHelpOwed: false,
       }),
       error: null,
     });
@@ -1639,7 +1639,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`,
             ],
             details: null,
-            isReportable: false,
+            isHelpOwed: false,
           };
           m.redraw();
           return null;
@@ -1947,7 +1947,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailure = {
               body: [failureSentence(describeRequestFailure(err)).message],
               details: null,
-              isReportable: false,
+              isHelpOwed: false,
             };
           } else {
             actionFailureTitle = "Couldn't cancel the switch";
@@ -2098,7 +2098,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           actionFailure = {
             body: ["The attachment is still there, and will be sent as it is. Try again, or remove it."],
             details: describeRequestFailure(error).details,
-            isReportable: false,
+            isHelpOwed: false,
           };
           m.redraw();
           return;
@@ -2282,6 +2282,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           actionFailureInFlight = null;
           actionFailureAskFailure = outcome.failure;
         }
+        m.redraw();
+      }
+
+      /** Leave the request a refused ask would have sent in a chat's message box, unsent; a draft that was made
+       *  closes the notice, and the shell tells one that could not be. */
+      async function draftAskAboutNotice(
+        asker: Pick<ShellConnection, "askAgent">,
+        request: AgentFixRequest,
+      ): Promise<void> {
+        const noticeAsked = actionFailure;
+        const outcome = await askAgentToFix(asker, request, { showsOutcome: true }, "draft");
+        if (actionFailure !== noticeAsked || !outcome.isOpened) return;
+        clearActionFailureNotice();
         m.redraw();
       }
 
@@ -2571,12 +2584,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           recovery !== null &&
           actionFailureServerKind !== null &&
           KINDS_THE_TERMINAL_SHOWS.has(actionFailureKind);
-        // An unconfirmed send's notice is worded here, and its sentence asks for no bug report.
+        // An unconfirmed send's notice is worded here, and what it offers is the whole remedy.
         const shown: FailureLines = isUnconfirmed
           ? {
               body: ["The agent may already have it, so check its terminal before you send it again."],
               details: failure.details,
-              isReportable: false,
+              isHelpOwed: false,
             }
           : {
               ...failure,
@@ -2585,22 +2598,21 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
-        // A failure that asks for a bug report offers an agent first, through the shell, unless the ask would meet
-        // what failed. The ask carries the failure as the server worded it, without the Restart line.
+        // A failure that owes help offers an agent, through the shell, unless the ask would meet what failed. The ask
+        // carries the failure as the server worded it, without the Restart line.
         const shellConnection = getShellConnection();
+        const fixRequest: AgentFixRequest = { whatFailed: plainFailureSentence(failure), details: failure.details };
         const ask =
-          !shown.isReportable ||
+          !shown.isHelpOwed ||
           SERVER_KINDS_AN_ASK_WOULD_MEET.has(actionFailureServerKind) ||
           shellConnection === null ||
           !shellConnection.hasShell()
             ? null
             : {
                 isAsking: actionFailureInFlight === "ask",
-                run: () =>
-                  void askAgentAboutNotice(shellConnection, {
-                    whatFailed: plainFailureSentence(failure),
-                    details: failure.details,
-                  }),
+                run: () => void askAgentAboutNotice(shellConnection, fixRequest),
+                refusal: actionFailureAskFailure,
+                draft: () => void draftAskAboutNotice(shellConnection, fixRequest),
               };
         // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
         // files both.

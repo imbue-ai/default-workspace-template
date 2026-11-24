@@ -440,9 +440,7 @@ describe("ChatPanel over a provisional chat", () => {
     const refused = render();
 
     expect(detailsShown(refused)).toContain("mngr create exited with code 1");
-    expect(renderedText(refused)).toContain(
-      "This chat couldn't be started. Try again. If this persists, report a bug.",
-    );
+    expect(renderedText(refused)).toContain("This chat couldn't be started. Try again.");
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
 
     mocks.proto = {
@@ -648,7 +646,7 @@ describe("ChatPanel over a transcript that could not be loaded", () => {
     const tree = mountPanel()();
 
     expect(renderedText(findByClass(tree, "message-list-error-text")).trim()).toBe(
-      "This conversation couldn't be loaded. Try again. If this persists, report a bug.",
+      "This conversation couldn't be loaded. Try again.",
     );
     const details = flatten(tree).find((vnode) => vnode.tag === SeeDetails);
     expect(details?.attrs?.details).toContain("transcript file is unreadable");

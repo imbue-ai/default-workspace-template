@@ -167,6 +167,8 @@ def seed_events(chat_id: ChatId, turns: tuple[SeedTurn, ...], created_at: dateti
                         "is_api_error": False,
                         "api_error_kind": None,
                         "is_provider_fault": False,
+                        "api_error_message": None,
+                        "is_error_text_raw": False,
                         "agent_id": str(chat_id),
                     }
                 )

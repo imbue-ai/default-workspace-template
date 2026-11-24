@@ -115,9 +115,7 @@ describe("the failed-switch notice", () => {
     await flush();
     render();
     expect(state.retries).toEqual([["agent-1", "acct-google"]]);
-    expect(ROOT().querySelector(".handoff-retry-error")?.textContent).toBe(
-      "Couldn't try the move again. Try again. If this persists, report a bug.",
-    );
+    expect(ROOT().querySelector(".handoff-retry-error")?.textContent).toBe("Couldn't try the move again. Try again.");
     expect([...ROOT().querySelectorAll(".see-details-text")].map((node) => node.textContent).join("\n")).toContain(
       "no such account",
     );

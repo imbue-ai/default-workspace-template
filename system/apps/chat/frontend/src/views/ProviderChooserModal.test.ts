@@ -902,15 +902,13 @@ describe("a failure on the chooser's screens", () => {
 
     const { root } = await mounted();
 
-    expect(root.textContent).toContain(
-      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("Couldn't load the list of providers. Try again.");
     expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
     (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toEqual([
       {
         type: "shell:report-bug",
-        message: "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+        message: "Couldn't load the list of providers. Try again.",
         details: "HTTP 500",
       },
     ]);
@@ -924,9 +922,7 @@ describe("a failure on the chooser's screens", () => {
 
     const { root, draw } = await mounted();
 
-    expect(root.textContent).toContain(
-      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("Couldn't load the list of providers. Try again.");
     expect(root.querySelector(".see-details-text")?.textContent).toContain("Internal server error: boom");
     (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toHaveLength(1);
@@ -981,8 +977,7 @@ describe("a failure on the chooser's screens", () => {
     startFlow.mockRejectedValue(
       rejection(400, {
         detail: "Timed out waiting for the sign-in details.",
-        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
-        reportable: true,
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again.",
       }),
     );
     const shell = framePageInShell(true);
@@ -1005,8 +1000,7 @@ describe("a failure on the chooser's screens", () => {
     startFlow.mockRejectedValue(
       rejection(400, {
         detail: "Timed out waiting for the sign-in details.",
-        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
-        reportable: true,
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again.",
       }),
     );
     const shell = framePageInShell(true);
@@ -1021,6 +1015,7 @@ describe("a failure on the chooser's screens", () => {
 
     state.accounts = [account("a1", "openai", "OpenAI (Codex)")];
     draw();
+    expect(root.querySelector(".report-bug")).toBeNull();
     (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
     const [ask] = shell.posted("shell:ask-agent");
     expect(String(ask?.text)).toMatch(
@@ -1038,9 +1033,7 @@ describe("a failure on the chooser's screens", () => {
     await settled();
     draw();
 
-    expect(root.textContent).toContain(
-      "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.",
-    );
+    expect(root.textContent).toContain("The sign-in didn't complete. Try again, or try another way in.");
     expect(root.querySelector("[data-e2e='status-error'] p")?.textContent).not.toBe("null");
   });
 

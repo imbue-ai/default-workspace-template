@@ -289,6 +289,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let isFlipped = false;
   let hasEverFlipped = false;
 
+  function turnOnSourceView(): void {
+    if (!isFlipped) toggleSourceView();
+  }
+
   function toggleSourceView(): void {
     isFlipped = !isFlipped;
     // Turning the card over is the user navigating TO the terminal, so the host grants it
@@ -452,7 +456,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isReportable
+      lines.isHelpOwed
         ? m(
             "div",
             { class: "flex flex-wrap items-center justify-center gap-2" },
@@ -558,10 +562,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  holds through a switch, then this page's own. Each one's first bubble names its sender ("You" for the viewer's
    *  own) unless it carries on the run of the turn drawn above. */
   function renderPendingSends(chatId: string, run: PendingBubbleRun): m.Vnode[] {
+    // A room has no agent's terminal to check a send in, and a chat still being created has none yet.
+    const hasTerminal = getChatById(chatId) !== undefined && !isRoomChat(chatId);
     return [
       ...renderQueuedMessages(chatId, run),
       ...renderHeldSends(chatId, run),
-      ...renderOutgoingMessages(chatId, run),
+      ...renderOutgoingMessages(chatId, run, hasTerminal ? turnOnSourceView : undefined),
     ];
   }
 
@@ -1192,11 +1198,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(ChatSuggestions, { chatId }),
                 m(MessageInput, {
                   chatId,
-                  onTurnOnSourceView: isListed
-                    ? () => {
-                        if (!isFlipped) toggleSourceView();
-                      }
-                    : undefined,
+                  onTurnOnSourceView: isListed ? turnOnSourceView : undefined,
                   leading:
                     isCompact && isListed
                       ? m(ModelProviderMenu, {

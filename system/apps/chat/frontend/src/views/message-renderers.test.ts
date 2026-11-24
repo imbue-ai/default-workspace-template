@@ -96,6 +96,8 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -128,12 +130,21 @@ function skillExpansion(ts: string, skillName: string, eventId: string): Transcr
   };
 }
 
+/** What the backend says about a failed turn's text, which the page never reads for itself. */
+interface FailedTurnText {
+  readonly isRaw: boolean;
+  readonly providerMessage?: string;
+}
+const RAW_TEXT: FailedTurnText = { isRaw: true };
+const A_SENTENCE: FailedTurnText = { isRaw: false };
+
 // `isApiError` is separate from `kind`: the backend flags a failure it cannot name, so the
 // two are not in lockstep on the wire.
 function apiErrorEvent(
   text: string,
   kind: string | null,
   providerFault: boolean,
+  failedTurnText: FailedTurnText = A_SENTENCE,
   isApiError: boolean = kind !== null,
 ): AssistantMessageEvent {
   return {
@@ -150,6 +161,8 @@ function apiErrorEvent(
     is_api_error: isApiError,
     api_error_kind: kind,
     is_provider_fault: providerFault,
+    api_error_message: failedTurnText.providerMessage ?? null,
+    is_error_text_raw: failedTurnText.isRaw,
   };
 }
 
@@ -174,7 +187,7 @@ function seeDetailsOf(node: unknown): string | null {
 describe("renderAssistantMessageChildren API errors", () => {
   it("puts a provider's status line behind See details and leads with a plain line, blaming nobody", () => {
     const children = renderAssistantMessageChildren(
-      apiErrorEvent("API Error: 529 Overloaded", "overloaded", true),
+      apiErrorEvent("API Error: 529 Overloaded", "overloaded", true, RAW_TEXT),
       new Map(),
       "agent-1",
     );
@@ -199,9 +212,12 @@ describe("renderAssistantMessageChildren API errors", () => {
     const body =
       'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",' +
       '"message":"prompt is too long: 214332 tokens > 200000 maximum"}}';
-    for (const text of [body, "Prompt is too long"]) {
+    for (const [text, failedTurnText] of [
+      [body, RAW_TEXT],
+      ["Prompt is too long", A_SENTENCE],
+    ] as const) {
       const children = renderAssistantMessageChildren(
-        apiErrorEvent(text, "context_too_long", false),
+        apiErrorEvent(text, "context_too_long", false, failedTurnText),
         new Map(),
         "agent-1",
       );
@@ -212,23 +228,46 @@ describe("renderAssistantMessageChildren API errors", () => {
     }
   });
 
-  it("leads a request the provider refused with that, not with the provider having trouble", () => {
+  it("leads a request the provider refused with the provider's own message, the body behind See details", () => {
     const body =
       'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}';
     const children = renderAssistantMessageChildren(
-      apiErrorEvent(body, "invalid_request", false),
+      apiErrorEvent(body, "invalid_request", false, { isRaw: true, providerMessage: "max_tokens: too large" }),
+      new Map(),
+      "agent-1",
+    );
+    expect(allText(children)).toContain("The model provider refused this request: max_tokens: too large.");
+    expect(allText(children)).not.toContain("having trouble");
+    expect(seeDetailsOf(children)).toBe(body);
+  });
+
+  it("says only that the provider refused a request whose failure carried no message", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 400", "invalid_request", false, RAW_TEXT),
       new Map(),
       "agent-1",
     );
     expect(allText(children)).toContain("The model provider refused this request.");
-    expect(allText(children)).not.toContain("having trouble");
-    expect(seeDetailsOf(children)).toBe(body);
+    expect(seeDetailsOf(children)).toBe("API Error: 400");
+  });
+
+  it("shows a failed turn's text as the backend says to, whatever the text looks like", () => {
+    // The page decides nothing from the text: a body the backend did not call raw stays on screen.
+    const text = 'The provider said {"no": true}';
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent(text, "invalid_request", false, A_SENTENCE),
+      new Map(),
+      "agent-1",
+    );
+    expect(findVnode(children, (vnode) => vnode.attrs?.content === text)).not.toBeNull();
+    expect(allText(children)).not.toContain("The model provider refused this request");
+    expect(seeDetailsOf(children)).toBeNull();
   });
 
   it("leads a credential failure whose text is a raw body with the way to sign in again", () => {
     const body = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}';
     const children = renderAssistantMessageChildren(
-      { ...apiErrorEvent(body, null, false, false), is_auth_error: true },
+      { ...apiErrorEvent(body, null, false, RAW_TEXT, false), is_auth_error: true },
       new Map(),
       "agent-1",
     );
@@ -239,7 +278,7 @@ describe("renderAssistantMessageChildren API errors", () => {
 
   it("styles a client-side error red but adds no not-our-fault note", () => {
     const children = renderAssistantMessageChildren(
-      apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false),
+      apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false, RAW_TEXT),
       new Map(),
       "agent-1",
     );
@@ -253,7 +292,7 @@ describe("renderAssistantMessageChildren API errors", () => {
     // label covers failures that never reached a server, so no kind is claimed. The red block
     // hangs off `is_api_error` alone -- gate it on the kind and these render as plain prose.
     const children = renderAssistantMessageChildren(
-      apiErrorEvent("API Error: Your computer went to sleep mid-response.", null, false, true),
+      apiErrorEvent("API Error: Your computer went to sleep mid-response.", null, false, RAW_TEXT, true),
       new Map(),
       "agent-1",
     );
@@ -342,6 +381,8 @@ describe("buildToolResultsWithSkillExpansions", () => {
         is_api_error: false,
         api_error_kind: null,
         is_provider_fault: false,
+        api_error_message: null,
+        is_error_text_raw: false,
       },
       skillExpansion("2026-04-28T01:00:01Z", "alpha", "u-a"),
       skillExpansion("2026-04-28T01:00:02Z", "beta", "u-b"),
@@ -384,6 +425,8 @@ describe("buildToolResultsWithSkillExpansions", () => {
         is_api_error: false,
         api_error_kind: null,
         is_provider_fault: false,
+        api_error_message: null,
+        is_error_text_raw: false,
       },
       toolResult("2026-04-28T01:00:01Z", "tc-read", "file contents"),
     ];
@@ -501,6 +544,8 @@ describe("renderAssistantRun", () => {
       is_api_error: false,
       api_error_kind: null,
       is_provider_fault: false,
+      api_error_message: null,
+      is_error_text_raw: false,
     };
   }
 
@@ -608,6 +653,8 @@ describe("thinking disclosure", () => {
       is_api_error: false,
       api_error_kind: null,
       is_provider_fault: false,
+      api_error_message: null,
+      is_error_text_raw: false,
       ...(hasThinking ? { has_thinking: true } : {}),
     };
   }
@@ -743,7 +790,7 @@ describe("the auth-error note's switch link", () => {
   const ANTHROPIC_ID = "acct-anthropic";
 
   function authErrorEvent(): AssistantMessageEvent {
-    return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
+    return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, RAW_TEXT, true), is_auth_error: true };
   }
 
   function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {

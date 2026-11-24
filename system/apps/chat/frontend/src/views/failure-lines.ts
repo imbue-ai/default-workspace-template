@@ -14,8 +14,9 @@ export interface FailureLines {
   readonly body: readonly (string | null)[];
   /** What goes behind "See details"; null when there is nothing beyond the body. */
   readonly details: string | null;
-  /** The body asks for a bug report, so the surface offers "Report a bug". */
-  readonly isReportable: boolean;
+  /** The failure owes the person more help than its own words give, so the surface offers an agent for it (a bug
+   *  report where no agent can be asked). */
+  readonly isHelpOwed: boolean;
 }
 
 export interface FailureLinesOptions {
@@ -40,10 +41,10 @@ export function plainFailureLinesOf(
   options: FailureLinesOptions = {},
 ): FailureLines {
   if (failure.cause === "not_answered" && options.notAnswered !== undefined) {
-    return { body: [options.notAnswered], details: failure.details, isReportable: false };
+    return { body: [options.notAnswered], details: failure.details, isHelpOwed: false };
   }
   const told = failureSentence(failure, whatFailed);
-  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
 }
 
 /** The non-empty ``lines`` of a "See details" text, joined; null when every one is empty. */
@@ -62,10 +63,10 @@ export function reportedFailureOfLines(lines: FailureLines): ReportedFailure {
   return { message: plainFailureSentence(lines), details: lines.details };
 }
 
-/** ``lines`` as ``FailureRemedies`` takes a failure: the sentence on screen, its details, and whether it asks for a
- *  bug report. */
+/** ``lines`` as ``FailureRemedies`` takes a failure: the sentence on screen, its details, and whether it owes
+ *  help. */
 export function shownFailureOfLines(lines: FailureLines): ShownFailure {
-  return { ...reportedFailureOfLines(lines), isReportable: lines.isReportable };
+  return { ...reportedFailureOfLines(lines), isHelpOwed: lines.isHelpOwed };
 }
 
 /** ``lines`` told together with a refused ask about them, for a surface that shows both as one failure: the ask's
@@ -75,7 +76,7 @@ export function withRefusedAsk(lines: FailureLines, ask: ShownFailure | null): F
   return {
     body: [...lines.body, ask.message],
     details: joinDetailParts([lines.details, ask.details]),
-    isReportable: lines.isReportable || ask.isReportable,
+    isHelpOwed: lines.isHelpOwed || ask.isHelpOwed,
   };
 }
 

@@ -491,7 +491,7 @@ describe("the switch dialog", () => {
     render();
     const text = ROOT().textContent ?? "";
     expect(text).toContain(
-      "Couldn't load the list of models. Try again. If this persists, report a bug. Codex will start on its " +
+      "Couldn't load the list of models. Try again. Codex will start on its " +
         "default model, and you can change it once it's running.",
     );
     expect(ROOT().querySelector(".see-details-text")?.textContent).toContain("the daemon is not answering");

@@ -52,6 +52,7 @@ describe("the side conversation view", () => {
         detail: "Chat 'agent-1' has no agent 'agent-9'",
         user_facing_message: "This side conversation is no longer available.",
         kind: "side_conversation_gone",
+        expected: true,
       }),
     );
     const root = await mounted();
@@ -71,13 +72,11 @@ describe("the side conversation view", () => {
     const root = await mounted();
 
     expect(root.querySelector(".message-list-error-text")?.textContent).toBe(
-      "This conversation couldn't be loaded. Try again. If this persists, report a bug.",
+      "This conversation couldn't be loaded. Try again.",
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("Could not read the session file");
     const buttons = Array.from(root.querySelectorAll(".message-list-error button")).map((b) => b.textContent);
-    expect(buttons).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
-    (root.querySelector(".report-bug") as HTMLElement).click();
-    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    expect(buttons).toEqual(["Try again", "Ask an agent to fix this"]);
     (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
     expect(String(shell.posted("shell:ask-agent")[0]?.text)).toContain("Could not read the session file");
     shell.release();
@@ -85,15 +84,5 @@ describe("the side conversation view", () => {
     (root.querySelector(".message-list-reload") as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("offers no Report a bug where the shell said Imbue Studio cannot open one", async () => {
-    const shell = framePageInShell(false);
-    vi.spyOn(m, "request").mockRejectedValue(rejection(500, { detail: "Could not read the session file" }));
-    const root = await mounted();
-
-    expect(root.querySelector(".message-list-error-text")?.textContent).toContain("If this persists, report a bug.");
-    expect(root.querySelector(".report-bug")).toBeNull();
-    shell.release();
   });
 });

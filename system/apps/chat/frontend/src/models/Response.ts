@@ -179,6 +179,13 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   // True when the API error is the model provider's fault (a 5xx / overloaded)
   // rather than our request -- these get the "not Imbue Studio's fault" note.
   is_provider_fault: boolean;
+  // The provider's own message for a request it refused ("max_tokens: too large"), read by the
+  // backend out of the response body the failure carried. Null when this is not an API error,
+  // and when the failure carried no such message.
+  api_error_message: string | null;
+  // True when a failed turn's ``text`` is a response body or a status line rather than a
+  // sentence written for people, so it is kept behind "See details".
+  is_error_text_raw: boolean;
   // True when the harness recorded READABLE reasoning for this turn (codex summaries,
   // pi thinking blocks, agy step reasoning; never claude, whose thinking is encrypted).
   // The text itself loads on demand through the detail endpoint.

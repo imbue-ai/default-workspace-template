@@ -29,7 +29,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 }));
 
 import m from "mithril";
-import type { ReportedFailure, StartOptions, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, ReportedFailure, StartOptions, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { rowMenuRows } from "./ChatRail";
@@ -65,7 +65,9 @@ function reportingConnection(
   askOutcome: Promise<StartOutcome> = Promise.resolve({ isOpened: true }),
 ): {
   hasShell: () => boolean;
-  askAgent: ReturnType<typeof vi.fn<(text: string, options?: StartOptions) => Promise<StartOutcome>>>;
+  askAgent: ReturnType<
+    typeof vi.fn<(text: string, options?: StartOptions, delivery?: AskDelivery) => Promise<StartOutcome>>
+  >;
   canReportBug: () => boolean;
   reportBug: (failure: ReportedFailure) => void;
 } {
@@ -116,20 +118,13 @@ describe("the chat list's failed verbs", () => {
     const connection = reportingConnection(true);
     const root = await rendered(connection);
 
-    expect(root.textContent).toContain(
-      `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug.`,
-    );
+    expect(root.textContent).toContain(`Couldn't stop "Plan the trip". It's still running. Try again.`);
     expect(root.querySelector(".see-details-text")?.textContent).toContain("mngr exited with code 1");
-    button(root, "Report a bug")!.click();
-    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
-      message: `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug.`,
-      details: expect.stringContaining("mngr exited with code 1"),
-    });
     button(root, "Try again")!.click();
     expect(verbs.stopChat).toHaveBeenCalledTimes(2);
   });
 
-  it("offers an agent before Report a bug, asks it as Imbue Studio, and closes once the agent's chat opened", async () => {
+  it("offers an agent and no Report a bug beside it, asks it as Imbue Studio, and closes once its chat opened", async () => {
     verbs.stopChat.mockRejectedValue(
       httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
     );
@@ -142,7 +137,7 @@ describe("the chat list's failed verbs", () => {
       }),
     );
     const root = await rendered(connection);
-    expect(labels(root)).toEqual(["Cancel", "Ask an agent to fix this", "Report a bug", "Try again"]);
+    expect(labels(root)).toEqual(["Cancel", "Ask an agent to fix this", "Try again"]);
 
     button(root, "Ask an agent to fix this")!.click();
     const [text, options] = connection.askAgent.mock.calls[0]!;
@@ -150,7 +145,7 @@ describe("the chat list's failed verbs", () => {
       /^Imbue Studio showed the user this failure: Couldn't stop "Plan the trip"\. It's still running\. Try again\./,
     );
     expect(text).toContain("mngr exited with code 1");
-    expect(options).toEqual({ showsOutcome: true, onLateAnswer: undefined });
+    expect(options).toEqual({ showsOutcome: true });
     m.render(root, m(RootNoticeView, { connection }));
     expect(button(root, "Asking an agent…")?.getAttribute("aria-disabled")).toBe("true");
     expect(button(root, "Try again")?.getAttribute("aria-disabled")).toBe("true");
@@ -161,12 +156,12 @@ describe("the chat list's failed verbs", () => {
     expect(root.textContent).not.toContain("Couldn't stop");
   });
 
-  it("tells a refused ask in the notice, and files both in the one bug report", async () => {
+  it("tells a refused ask in the notice, then offers a draft of it and one bug report that files both", async () => {
     verbs.stopChat.mockRejectedValue(
       httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
     );
     select("stop");
-    const refused = { message: "Chat couldn't open that.", details: "HTTP 503", isReportable: true };
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 503", isHelpOwed: true };
     const connection = reportingConnection(true, Promise.resolve({ isOpened: false, failure: refused }));
     const root = await rendered(connection);
 
@@ -175,11 +170,19 @@ describe("the chat list's failed verbs", () => {
     m.render(root, m(RootNoticeView, { connection }));
 
     expect(root.textContent).toContain("Chat couldn't open that.");
+    expect(labels(root)).toEqual([
+      "Cancel",
+      "Ask an agent to fix this",
+      "Draft it in a chat",
+      "Report a bug",
+      "Try again",
+    ]);
+    button(root, "Draft it in a chat")!.click();
+    const [asked, drafted] = connection.askAgent.mock.calls;
+    expect(drafted).toEqual([asked![0], { showsOutcome: true }, "draft"]);
     button(root, "Report a bug")!.click();
     expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
-      message:
-        `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug. ` +
-        "Chat couldn't open that.",
+      message: `Couldn't stop "Plan the trip". It's still running. Try again. ` + "Chat couldn't open that.",
       details: expect.stringMatching(/mngr exited with code 1[\s\S]*\n\nHTTP 503$/),
     });
   });
@@ -188,27 +191,16 @@ describe("the chat list's failed verbs", () => {
     raiseRootNotice({
       title: "Couldn't send your message",
       lines: {
-        body: ["Your message couldn't be sent to a chat. Try again. If this persists, report a bug."],
+        body: ["Your message couldn't be sent to a chat. Try again."],
         details: "HTTP 500",
-        isReportable: true,
+        isHelpOwed: true,
       },
       retry: null,
       isAgentWithheld: true,
     });
-    const root = await rendered();
-
-    expect(labels(root)).toEqual(["OK", "Report a bug"]);
-  });
-
-  it("offers Report a bug only where the shell said Imbue Studio can open one", async () => {
-    verbs.stopChat.mockRejectedValue(
-      httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
-    );
-    select("stop");
-    const root = await rendered(reportingConnection(false));
-
-    expect(root.textContent).toContain("If this persists, report a bug.");
-    expect(button(root, "Report a bug")).toBeUndefined();
+    expect(labels(await rendered())).toEqual(["OK", "Report a bug"]);
+    // Only where the shell said Imbue Studio can open a bug report.
+    expect(labels(await rendered(reportingConnection(false)))).toEqual(["OK"]);
   });
 
   it("says a chat that is gone is gone, with nothing to try again", async () => {
@@ -217,6 +209,7 @@ describe("the chat list's failed verbs", () => {
         detail: "Chat 'agent-1' not found",
         user_facing_message: "This chat is no longer here.",
         kind: "chat_gone",
+        expected: true,
       }),
     );
     select("stop");
@@ -224,7 +217,7 @@ describe("the chat list's failed verbs", () => {
 
     expect(root.textContent).toContain("This chat is no longer here.");
     expect(root.textContent).not.toContain("still running");
-    expect(button(root, "Try again")).toBeUndefined();
+    expect(labels(root)).toEqual(["OK"]);
   });
 
   it("says a delete nothing answered may have run, offers no retry, and keeps the chat off the list until it updates", async () => {
@@ -255,6 +248,7 @@ describe("the chat list's failed verbs", () => {
     const root = await rendered();
 
     expect(root.textContent).toContain("This chat was only partly deleted");
+    expect(button(root, "Ask an agent to fix this")).toBeDefined();
     expect(hasPendingDelete()).toBe(false);
   });
 });
@@ -266,6 +260,23 @@ describe("a message from outside a chat that the chat would not take", () => {
     const lines = describeIntakeApplyFailure(refused, true);
     expect(lines.body).toEqual(["Your message couldn't be sent to this chat. It's in the box below.", null]);
     expect(lines.details).toContain("A pick names one of the chats");
+    expect(lines.isHelpOwed).toBe(false);
+  });
+
+  it("owes help for a refusal the chat app wrote a sentence about, unless it called the refusal expected", async () => {
+    const { describeIntakeApplyFailure } = await import("./rootNotice");
+    const failed = httpError(500, {
+      detail: "mngr failed",
+      user_facing_message: "Chat couldn't take this. Try again.",
+    });
+    expect(describeIntakeApplyFailure(failed, true).isHelpOwed).toBe(true);
+    const gone = httpError(404, {
+      detail: "Chat 'agent-1' not found",
+      user_facing_message: "That chat is no longer here. Pick another chat, or start a new one.",
+      kind: "chat_gone",
+      expected: true,
+    });
+    expect(describeIntakeApplyFailure(gone, false).isHelpOwed).toBe(false);
   });
 
   it("does not claim where the message went when nothing answered", async () => {

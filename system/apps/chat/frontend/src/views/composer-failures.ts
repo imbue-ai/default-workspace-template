@@ -49,20 +49,20 @@ export function composerFailureKindOf(error: unknown): ComposerFailureKind {
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
   if (isUnanswered(error, failure)) {
-    return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
+    return { body: [SEND_NOT_ANSWERED], details: failure.details, isHelpOwed: false };
   }
   // Trying again would meet the same refusal, so the sentence offers no Try again.
   if (error instanceof ChatNotStartedError) {
-    return { body: [SEND_REFUSED], details: failure.details, isReportable: false };
+    return { body: [SEND_REFUSED], details: failure.details, isHelpOwed: false };
   }
   const told = failureSentence(failure, "Your message wasn't delivered. Your text is back in the box");
   if (failure.cause === "user_facing") {
-    return { body: [told.message], details: told.details, isReportable: told.isReportable };
+    return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
   }
   return {
-    body: [told.isReportable ? told.message : SEND_REFUSED],
+    body: [told.isHelpOwed ? told.message : SEND_REFUSED],
     details: told.details,
-    isReportable: told.isReportable,
+    isHelpOwed: told.isHelpOwed,
   };
 }
 
@@ -76,27 +76,18 @@ export function describeLaunchFailure(error: unknown): FailureLines {
           "the box.",
       ],
       details: failure.details,
-      isReportable: false,
-    };
-  }
-  if (failure.cause === "user_facing" && !failure.isReportable) {
-    return {
-      body: [failure.userFacingMessage, "Your message is back in the box."],
-      details: failure.details,
-      isReportable: false,
+      isHelpOwed: false,
     };
   }
   if (failure.cause === "user_facing") {
     return {
-      body: [
-        "This chat couldn't be started. Your message is back in the box. Try again. If this persists, report a bug.",
-      ],
+      body: [failure.userFacingMessage, "Your message is back in the box."],
       details: failure.details,
-      isReportable: true,
+      isHelpOwed: !failure.isExpected,
     };
   }
   const told = failureSentence(failure, "This chat couldn't be started. Your message is back in the box");
-  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
 }
 
 /** A switch of this chat to ``target`` that was refused or got no answer; ``isSendPath`` when a message rode it. */
@@ -107,7 +98,7 @@ export function describeSwitchFailure(error: unknown, target: string, isSendPath
     return {
       body: [`The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to ${target}.`],
       details: failure.details,
-      isReportable: false,
+      isHelpOwed: false,
     };
   }
   const stillThere = `This chat couldn't be moved to ${target}. It's still running where it was${backInTheBox}`;
@@ -115,11 +106,11 @@ export function describeSwitchFailure(error: unknown, target: string, isSendPath
     return {
       body: [`${stillThere}.`, failure.userFacingMessage],
       details: failure.details,
-      isReportable: failure.isReportable,
+      isHelpOwed: !failure.isExpected,
     };
   }
   const told = failureSentence(failure, stillThere);
-  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  return { body: [told.message], details: told.details, isHelpOwed: told.isHelpOwed };
 }
 
 /** A cancel of a running switch that was refused. A refusal says why in its own words (the switch is too far along,

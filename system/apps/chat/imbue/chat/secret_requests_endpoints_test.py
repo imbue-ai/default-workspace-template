@@ -227,6 +227,7 @@ def test_an_answer_to_a_request_already_answered_says_so_and_names_how_it_was_an
 
     assert again.status_code == 409
     assert again.get_json()["user_facing_message"] == "This request was already answered."
+    assert again.get_json()["expected"] is True
     assert again.get_json()["kind"] == "already_declined"
 
 
