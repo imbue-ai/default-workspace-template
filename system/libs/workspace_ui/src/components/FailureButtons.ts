@@ -29,6 +29,9 @@ export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
   readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
   readonly failure: AgentFixRequest;
+  /** The failure the page shows, when the ask is about one: the Report a bug under a refused ask then files both
+   *  (``withAskFailure``), not the ask's failure alone. */
+  readonly reported?: ReportedFailure;
   /** The page offers its own Report a bug beside this button: a refused ask then shows its sentence and details
    *  without a Report a bug of its own, and is handed to ``onFailureChange`` (null once it is gone) so the page's one
    *  report can carry it too (``withAskFailure``). */
@@ -81,7 +84,7 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
     },
     view(vnode) {
       latestAttrs = vnode.attrs;
-      const { connection, variant, sm, extra, pageReportBug } = vnode.attrs;
+      const { connection, variant, sm, extra, reported, pageReportBug } = vnode.attrs;
       if (connection === null || !connection.hasShell()) return null;
       return [
         m(
@@ -116,7 +119,10 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
                     pageReportBug === undefined
                       ? m(ReportBugButton, {
                           connection,
-                          failure: { message: failure.message, details: failure.details },
+                          failure:
+                            reported === undefined
+                              ? { message: failure.message, details: failure.details }
+                              : withAskFailure(reported, failure),
                           sm: true,
                         })
                       : null,
@@ -157,39 +163,24 @@ export interface FailureRemediesAttrs extends FailureButtonOptions {
   readonly isAgentWithheld?: boolean;
 }
 
-/** What a failure that owes help offers by default: "Ask an agent to fix this", and "Report a bug" only where no
- *  agent can be asked (the surface withholds it, or no shell frames the page) or once the ask was refused, when its
- *  report carries the refused ask too. Nothing for a failure that owes none, whose surface offers its own remedy. */
-export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
-  let askFailure: ShownFailure | null = null;
-  return {
-    view(vnode) {
-      const { connection, failure, isAgentWithheld, variant, sm, extra } = vnode.attrs;
-      if (!failure.isHelpOwed) return null;
-      const options = { variant, sm, extra };
-      const isAgentOffered = isAgentWithheld !== true && connection !== null && connection.hasShell();
-      if (!isAgentOffered) askFailure = null;
-      return [
-        isAgentOffered
-          ? m(AskAgentToFixButton, {
-              ...options,
-              connection,
-              failure: { whatFailed: failure.message, details: failure.details },
-              pageReportBug: {
-                onFailureChange: (next) => {
-                  askFailure = next;
-                },
-              },
-            })
-          : null,
-        isAgentOffered && askFailure === null
-          ? null
-          : m(ReportBugButton, {
-              ...options,
-              connection,
-              failure: withAskFailure({ message: failure.message, details: failure.details }, askFailure),
-            }),
-      ];
-    },
-  };
+/** What a failure that owes help offers by default: "Ask an agent to fix this", whose refused ask offers the draft
+ *  and a "Report a bug" that files both failures, or "Report a bug" in its place where no agent can be asked (the
+ *  surface withholds it, or no shell frames the page). Nothing for a failure that owes none, whose surface offers
+ *  its own remedy. */
+export const FailureRemedies: m.Component<FailureRemediesAttrs> = {
+  view(vnode) {
+    const { connection, failure, isAgentWithheld, variant, sm, extra } = vnode.attrs;
+    if (!failure.isHelpOwed) return null;
+    const options = { variant, sm, extra };
+    const reported: ReportedFailure = { message: failure.message, details: failure.details };
+    if (isAgentWithheld !== true && connection !== null && connection.hasShell()) {
+      return m(AskAgentToFixButton, {
+        ...options,
+        connection,
+        failure: { whatFailed: failure.message, details: failure.details },
+        reported,
+      });
+    }
+    return m(ReportBugButton, { ...options, connection, failure: reported });
+  },
 };
