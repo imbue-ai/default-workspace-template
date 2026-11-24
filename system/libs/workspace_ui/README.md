@@ -31,33 +31,40 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `models/request-error.ts`): one reader, `readFailure`, says what went wrong,
   for the REST helpers (`HttpError.failure`) and for a mithril rejection
   (`describeRequestFailure`) alike: a route's `user_facing_message` (a sentence
-  for people, reportable only when the body says `reportable: true`), else its
+  for people, which owes the person help unless the body says `expected: true`), else its
   `detail` or `error` (a reason, developer text), else no answer (nothing
   answered, or a gateway status 502, 503 or 504 with no JSON reason), else
   nothing. `failureSentence(failure, whatFailed)` is the one place that becomes
   words, `whatFailed` being a sentence stem ("This window couldn't be closed"):
   the server's sentence as written; no answer as "The workspace didn't answer.
-  Try again in a moment." for a read and "The workspace didn't answer, so
-  Imbue Studio can't tell whether this went through." for a change, never
+  Try again in a moment." for a read and "The workspace didn't answer. This
+  may not have gone through." for a change, never
   prefixed with what failed (and never "nothing was changed": Imbue Studio's
   forward proxy can send a gateway status after the request arrived); a refusal
   (4xx) with a reason as "<what failed>."; anything else as the fallback "<what
-  failed>. Try again. If this persists, report a bug.". A screen not yet worded
+  failed>. Try again.". A screen not yet worded
   this way shows `failureText` (an `HttpError`'s `message`, and
   `describeRequestError`): the server's own reason, else our sentence. The status and the
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
-- A failure's two buttons, both through the shell that frames the page
+- A failure's buttons, through the shell that frames the page
   (`src/components/FailureButtons.ts`): `AskAgentToFixButton` asks an agent
   to fix the failure, in a message to the chat about the app the page belongs
   to, which the shell opens beside the page's window (the main chat where
   the workspace offers no chat about an app, or the page's app is internal;
   `askAgentToFix` in `src/app_contract.ts`, through `shell:ask-agent`, one
   task text for every caller, written as Imbue Studio about the user: what
-  failed, the details verbatim, and what to do; the chat that takes it
-  receives it behind `/assist` (`ASSIST_COMMAND`, `assistRequest`), the
-  workspace's assist flow, which also reports a fault in built-in code to
-  Imbue), and renders nothing where no shell frames the page. `askAgentToFix`
+  the person was shown, the details verbatim, and what to do, which is to
+  find and fix the fault unless the request names another `instruction`;
+  the shell, the one place that writes the message an agent reads, puts
+  `/assist` and the app and window the ask was pressed in ahead of it
+  (`assistRequest`), so the agent runs the workspace's assist flow, which
+  also reports a fault in built-in code to Imbue), and renders nothing where
+  no shell frames the page. A third argument says where the ask goes
+  (`AskDelivery`): the chat about the app by default, `main-chat` whatever
+  the app (an ask a new chat could not serve, such as one to free up disk
+  space), or `draft`, which leaves the message unsent in a chat's message
+  box. `askAgentToFix`
   answers a promise that settles on the shell's `shell:ask-agent-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
   once without a shell, on a handshake from a shell that started again (a
@@ -66,23 +73,25 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   failure, which it shows itself, and an answer that still arrives
   goes to `onLateAnswer`), and the button reads "Asking an
   agent…", disabled, until it settles, then shows a failure under itself,
-  with "Report a bug" for that failure when it asks for one, and takes a late
-  answer in place of a not-answered one. A page that offers its own
+  with "Draft it in a chat" (the same request, for the person to send) and
+  "Report a bug" for a failure that owes help, and takes a late answer in
+  place of a not-answered one. A page that offers its own
   "Report a bug" beside the button passes `pageReportBug: {onFailureChange}`:
   the button then shows a refused ask's failure without a second "Report a
   bug", and hands it to `onFailureChange`, so the page's one report files both
   (`withAskFailure(pageFailure, askFailure)` adds the ask's sentence and
   details under the page's details, labelled). The connection's `startWithText`,
-  for a request that goes to the main chat (such as "Ask an agent to free up
-  space"), answers the same way through `shell:start-with-text-result`. A
+  which starts a chat with a text as the person's own words, answers the same
+  way through `shell:start-with-text-result`. A
   call without `{showsOutcome: true}` leaves a failure to the shell's toast.
-  `FailureRemedies` is what a failure that asks for a bug report offers by
-  default, so a surface draws it rather than choosing buttons: "Ask an agent
-  to fix this", then "Report a bug", whose report also files a refused ask;
-  nothing for a failure that asks for none (its surface offers its own
-  remedy), and no agent where the surface passes `isAgentWithheld` (the ask
-  would go through what failed, such as the chat app's own server not
-  answering). `ReportBugButton` asks the
+  `FailureRemedies` is what a failure that owes help (`isHelpOwed`) offers
+  by default, so a surface draws it rather than choosing buttons: "Ask an
+  agent to fix this", and "Report a bug" only where no agent can be asked
+  (no shell frames the page, or the surface passes `isAgentWithheld` because
+  the ask would go through what failed, such as the chat app's own server not
+  answering) or once the ask was refused, when its report files the refused
+  ask too; nothing for a failure that owes none (its surface offers its own
+  remedy). `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the
@@ -98,12 +107,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   dismissed, with a close control, its details behind "See details" and its
   buttons ("Try again", ...), at most three on screen. A toast that says the
   same as one already up (message and details) replaces it. A lasting toast
-  says whether its message asks for a bug report (`isReportable`), and
+  says whether its failure owes the person help (`isHelpOwed`), and
   `Toasts` draws "Ask an agent to fix this" on it while the page passes
   `onAskAgent` (`askAgentFromToasts(connection)` for a framed page, whose
   refused ask the shell toasts; read "Asking an agent…" until it settles)
-  unless the toast says `isAgentWithheld`, then "Report a bug" while the page
-  passes `onReportBug`, each decided at each draw, so a toast shown before
+  unless the toast says `isAgentWithheld`, and "Report a bug" in its place
+  while the page passes only `onReportBug`, each decided at each draw, so a toast shown before
   the page learned it can ask an agent or open a bug report gains the button
   once it does. Pressing a button dismisses
   its toast, except one marked `keepsToast` (a button that hands the failure

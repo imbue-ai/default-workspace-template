@@ -737,7 +737,7 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert. A toast whose sentence asks for a bug report offers
+than a browser alert. A toast whose failure owes the person help offers
 "Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
 the toast draws, and the report it opens carries the toast's sentence and
 details (`minds:open-help {errorDetails}`); a page's `shell:report-bug` does

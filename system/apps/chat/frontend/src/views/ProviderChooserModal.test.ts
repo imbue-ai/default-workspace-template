@@ -60,7 +60,7 @@ import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from
 import type { UnpickableReason } from "../models/Providers";
 import { MAX_SIGN_IN_PORT_DRAWS, PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { framePageInShell } from "../shellConnectionFixture";
-import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
+import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE, FIRST_RUN_DIALOG } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
  *
@@ -157,6 +157,21 @@ describe("the provider chooser", () => {
     const card = root.querySelector('[data-part="dialog"]');
     expect(card?.getAttribute("role")).toBe("dialog");
     expect(card?.querySelector('[data-part="dialog-header"] [data-part="dialog-title"]')?.textContent).not.toBe("");
+  });
+
+  it("wears the first run's cream only when the first run's provider page opened it", () => {
+    const fromPage = document.createElement("div");
+    m.render(fromPage, m(ProviderChooserModal as never, { onDismiss: () => undefined, isFirstRun: true }));
+    const fromElsewhere = document.createElement("div");
+    m.render(fromElsewhere, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    // On the root, which is the backdrop, so the card and a removal's confirmation inside it take it too.
+    const root = fromPage.firstElementChild;
+    expect(root?.classList.contains(FIRST_RUN_DIALOG)).toBe(true);
+    expect(root?.classList.contains("modal-overlay")).toBe(true);
+    expect(root?.querySelector('[data-part="dialog"]')).not.toBeNull();
+    expect(fromElsewhere.querySelector(`.${FIRST_RUN_DIALOG}`)).toBeNull();
+    expect(fromElsewhere.firstElementChild?.classList.contains("modal-overlay")).toBe(true);
   });
 
   it("renders a spinner before the lanes arrive", () => {

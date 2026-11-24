@@ -4394,7 +4394,7 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
     tmp_path: Path, page: Page
 ) -> None:
     """The checklist is an app in the launcher with no shortcut on the desktop. Its page lists the four onboarding
-    items in order under its title, none checked in a workspace where none is done; the two whose pointers need the
+    items in order under its heading, none checked in a workspace where none is done; the two whose pointers need the
     Imbue Studio chrome are plain rows here, where no chrome frames the workspace. An item that becomes done is
     checked the next time the page reads."""
     with _running_onboarding_workspace(tmp_path) as server:
@@ -4405,7 +4405,7 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
         checklist_id = _checklist_window_id(server)
         checklist = _page_of_window(page, checklist_id)
 
-        expect(checklist.locator("[data-checklist-title]")).to_have_text("Onboarding checklist", timeout=15000)
+        expect(checklist.locator("[data-checklist-title]")).to_have_text("Click to learn more", timeout=15000)
         # The page reports its title once the shell has greeted it.
         wait_until_true(
             lambda: _app_windows(server, _CHECKLIST_APP_NAME)[0]["title"] == "Onboarding checklist",
@@ -4416,13 +4416,16 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
         expect(items).to_have_text(_CHECKLIST_LABELS)
         for item_id in ("new_chat", "phone_access", "build_app", "connect_data"):
             expect(checklist.locator(f'[data-checklist-item="{item_id}"]')).to_have_attribute("data-done", "false")
-        expect(checklist.locator("[data-checklist-item] svg")).to_have_count(0)
+        expect(checklist.locator("[data-checklist-check] svg")).to_have_count(0)
         expect(checklist.locator("button[data-checklist-item]")).to_have_text(
             [_CHECKLIST_LABELS[0], _CHECKLIST_LABELS[2]]
         )
         expect(checklist.locator("div[data-checklist-item]")).to_have_text(
             [_CHECKLIST_LABELS[1], _CHECKLIST_LABELS[3]]
         )
+        # A row that can be clicked ends in an arrow; a plain one has none.
+        expect(checklist.locator("button[data-checklist-item] [data-checklist-arrow] svg")).to_have_count(2)
+        expect(checklist.locator("div[data-checklist-item] [data-checklist-arrow]")).to_have_count(0)
         page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-none-done.png"))
 
         mark(Marker.SECOND_CHAT_STARTED)
@@ -4433,7 +4436,7 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
 
         new_chat = checklist.locator('[data-checklist-item="new_chat"]')
         expect(new_chat).to_have_attribute("data-done", "true", timeout=20000)
-        expect(new_chat.locator("svg")).to_have_count(1)
+        expect(new_chat.locator("[data-checklist-check] svg")).to_have_count(1)
         expect(checklist.locator('[data-checklist-item][data-done="true"]')).to_have_count(1)
         expect(items).to_have_text(_CHECKLIST_LABELS)
         page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-one-done.png"))

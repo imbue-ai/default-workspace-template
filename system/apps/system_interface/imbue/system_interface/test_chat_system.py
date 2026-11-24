@@ -207,7 +207,7 @@ def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens
                 {
                     "app": "chat",
                     "launch": "app-ask",
-                    "params": {"app": "docs", "app_display_name": "Docs", "message": "The preview is blank. Fix it."},
+                    "params": {"app": "docs", "app_display_name": "Docs", "message": "/assist The preview is blank. Fix it."},
                     "client_id": "client-1",
                     "target": {"kind": "show", "beside": asking_window_id},
                 },
@@ -217,7 +217,7 @@ def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens
         assert (launched["window"]["app"], launched["path"]) == ("chat", f"/?chat={docs_chat_id}")
         wait_for(
             lambda: messenger.sent
-            == [(docs_chat_id, "/assist This is about the Docs app.\n\nThe preview is blank. Fix it.")],
+            == [(docs_chat_id, "/assist The preview is blank. Fix it.")],
             timeout=10.0,
             poll_interval=0.1,
             error_message=f"the ask never reached the chat about Docs alone: {messenger.sent}",

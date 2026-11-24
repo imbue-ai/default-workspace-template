@@ -88,19 +88,6 @@ def app_chat_prefill(app_display_name: str) -> str:
     return f"Change something about the {app_display_name} app: "
 
 
-# The command that runs the workspace's assist flow (.agents/skills/assist), which diagnoses a failure, fixes it, and
-# reports a fault in built-in code to Imbue; the desktop's ASSIST_COMMAND (workspace_ui's app_contract.ts).
-ASSIST_COMMAND: Final[str] = "/assist"
-
-
-@pure
-def app_ask_message(app_display_name: str, ask: str) -> str:
-    """An ask from a page of an app as the chat that takes it receives it: the assist command, which a chat only runs
-    when its message starts with it, then the sentence that tells the agent which app the ask is about, which the
-    page's own text does not say."""
-    return f"{ASSIST_COMMAND} This is about the {app_display_name} app.\n\n{ask}"
-
-
 @pure
 def intake_path(chat_id: ChatId | None, token: str | None) -> str:
     """The root path an intake answers: the selection, with the pending intake's token when one is held."""

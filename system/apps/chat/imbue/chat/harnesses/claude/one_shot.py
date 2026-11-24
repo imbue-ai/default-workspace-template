@@ -34,7 +34,6 @@ ONE_SHOT_MODEL_PREFERENCE_BY_TIER: Final[Mapping[OneShotModelTier, tuple[str | N
     OneShotModelTier.SMALL: ("haiku", None),
     OneShotModelTier.MEDIUM: ("sonnet", None),
 }
-_TIMEOUT_SECONDS: Final = 60.0
 _SLOW_WARNING_SECONDS: Final = 15.0
 
 # An inherited MAIN_CLAUDE_SESSION_ID makes the child look like mngr's managed main session
@@ -121,23 +120,26 @@ class ClaudeOneShotCompletion(OneShotCompletion):
         *,
         model_tier: OneShotModelTier,
         thinking_token_allowance: int | None,
+        timeout_seconds: float,
     ) -> str:
         """The answer on the first model of the tier's preference list that gives one."""
         env = claude_one_shot_env(os.environ, account_dir, thinking_token_allowance)
         return answer_on_first_model(
             ONE_SHOT_MODEL_PREFERENCE_BY_TIER[model_tier],
-            lambda model: self._complete_on(model, env, system_prompt, prompt),
+            lambda model: self._complete_on(model, env, system_prompt, prompt, timeout_seconds),
             describe_model_name,
         )
 
-    def _complete_on(self, model: str | None, env: Mapping[str, str], system_prompt: str, prompt: str) -> str:
+    def _complete_on(
+        self, model: str | None, env: Mapping[str, str], system_prompt: str, prompt: str, timeout_seconds: float
+    ) -> str:
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             try:
                 finished = run_local_command_modern_version(
                     command=claude_one_shot_argv(system_prompt, model),
                     is_checked=False,
-                    timeout=_TIMEOUT_SECONDS,
+                    timeout=timeout_seconds,
                     cwd=Path(isolated_dir),
                     env=env,
                     name="claude one-shot completion",
@@ -147,7 +149,7 @@ class ClaudeOneShotCompletion(OneShotCompletion):
                 raise OneShotCompletionError(f"claude -p could not run: {e}") from e
         elapsed_seconds = time.monotonic() - started_at
         if finished.is_timed_out:
-            raise OneShotCompletionTimeoutError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")
+            raise OneShotCompletionTimeoutError(f"claude -p did not answer within {timeout_seconds:.0f}s")
         if finished.returncode != 0:
             raise OneShotCompletionError(f"claude -p exited {finished.returncode}: {finished.stderr.strip()[:300]}")
         if elapsed_seconds > _SLOW_WARNING_SECONDS:
