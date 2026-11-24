@@ -192,7 +192,12 @@ const FIRST_RUN_PROVIDER_STEP_DONE_KEY = "first-run-provider-step-done";
 export async function finishFirstRunProviderStep(): Promise<void> {
   await m.request({ method: "POST", url: apiUrl("/api/first-run/provider-step/done") });
   firstRunProviderStepPending = false;
-  localStorage.setItem(FIRST_RUN_PROVIDER_STEP_DONE_KEY, String(Date.now()));
+  try {
+    localStorage.setItem(FIRST_RUN_PROVIDER_STEP_DONE_KEY, String(Date.now()));
+  } catch (error) {
+    // The step is done either way; only the chat window's composer misses the keyboard.
+    console.warn("Could not tell the chat window the first run's provider page was left", error);
+  }
 }
 
 /** Run ``onDone`` each time another frame of this app reports the first run's provider page left. */
