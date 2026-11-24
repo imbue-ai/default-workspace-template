@@ -4,8 +4,6 @@ description: The procedure a harden worker follows to crystallize, update or hea
 metadata:
   author: imbue
   role: worker-sub-skill
-  exempt-checks: depth contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Hardening a creation (generic worker)
@@ -18,6 +16,26 @@ is one pass: you harden the change as a whole, against one branch and one test
 gate. You own no operation- or
 type-specific *behavior* yourself -- that all lives in the references; Step 2
 just routes you to the right ones.
+
+Standing instructions, for the whole pass:
+
+- **Never request a secret.** There is no chat here to show a secret card in,
+  so a credential the work turns out to need (an API key for a service, a token
+  for an integration) goes into your report as a need the lead requests through
+  the `connect-external-service` skill, with the file and variable names you
+  would have asked for.
+- **`question` is always available.** Any worker may stop mid-pass and ask its
+  lead with a `type: gate`, `name: question` report, whatever the operation.
+- **After a compaction, re-read** the references Step 2's tables select for
+  your pass before you go on. This file keeps only the routing.
+
+## Steps
+
+1. Read your task file and resolve inputs
+2. Load the references that define your pass
+3. Do the pass as those references say
+4. Report back to the lead, at each gate and with the terminal status that
+   ends the pass
 
 ## Step 1: Read your task file and resolve inputs
 
@@ -49,31 +67,46 @@ The references below speak of "the creation" and "your type"; in a pass over
 several creations, read them as applying to each creation in turn, and load a
 type's reference once however many creations share it.
 
-## Step 2: Load the references that define your run
+## Step 2: Load the references that define your pass
 
-Read these top to bottom, then follow them.
-
-A bare filename is relative to `.agents/skills/harden-worker/references/`; the
+Read the ones your pass selects top to bottom, then follow them. A bare
+filename is relative to `.agents/skills/harden-worker/references/`; the
 shared references are written with their full paths.
+
+Every pass:
 
 | Load when | Reference | What it gives you |
 |---|---|---|
-| every run | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, testing/hardening, review gates, preserve-and-surface, give-up |
-| every run | the one of `op-crystallize.md`, `op-update.md` and `op-heal.md` named for your operation | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
-| every run, once per type among your creations | the one of `type-skill.md`, `type-app.md` and `type-service.md` named for the type (`type-skill.md` for a `shared` creation) | the creation itself: where it lives, how to run/test it in isolation, how to edit it safely |
-| every run | `.agents/shared/references/worker-reporting.md` | the report-file procedure and task-file frontmatter schema (Step 3 uses it) |
-| every run | `.agents/shared/references/review-gates.md` | running the test gate, and what to do about a failing test, a suite the selector left out, and a command that dies from a signal |
-| you reconstruct the work from the lead's session | `transcript-exploration.md` | how to find the work in the lead's transcript |
-| a creation is a `skill` | `.agents/shared/references/spec-summary.md` | the agentskills.io layout/spec authority |
-| a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
-| a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update-in-place vs. split-a-new-sibling |
-| a creation is an `app` | `.agents/shared/references/web-frontend-testing.md` | isolated-instance and rendered-page rules |
+| every pass | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, when to split the pass, testing and hardening, the review gates and the test gate, give-up. |
+| every pass | the one of `op-crystallize.md`, `op-update.md` and `op-heal.md` named for your operation | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
+| every pass, once per type among your creations | the one of `type-skill.md`, `type-app.md` and `type-service.md` named for the type (`type-skill.md` for a `shared` creation) | the creation itself: where it lives, how to run and test it in isolation, how to edit it safely |
+| every pass | `.agents/shared/references/worker-reporting.md` | the report-file procedure and task-file frontmatter schema (Step 4 uses it) |
+| every pass | `.agents/shared/references/review-gates.md` | running the test gate, and what to do when its run is not a clean pass: a failing test, a suite the selector left out, a regression the gate let through, a command that dies from a signal |
 
-The two conditional cases that need defining:
+By what the pass is:
+
+| Load when | Reference | What it gives you |
+|---|---|---|
+| you reconstruct the work from the lead's session | `transcript-exploration.md` | how to find the work in the lead's transcript |
+| a creation is a `skill` | `.agents/shared/references/spec-summary.md` | this workspace's skill packaging rules |
+| a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
+| a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update in place, or split off a new skill |
+| a creation is an `app` | `.agents/shared/references/web-frontend-testing.md` | isolated-instance and rendered-page rules |
+| a creation performs multiple independent I/O-bound operations (fetches, API calls, subprocesses), works through many items, captures data, or keeps anything on disk across runs | `data-and-storage.md` | concurrency for independent work, partial failure and resumption, preserve-and-surface, bounded disk growth, the `.nobackup` marker |
+
+By what happens during the pass:
+
+| Load when | Reference | What it gives you |
+|---|---|---|
+| you decide to split the pass across workers of your own | `splitting-the-pass.md`, then `.agents/shared/references/lead-proxy.md` | how to launch, brief, merge and verify them; the flow every lead follows for its worker |
+| your task body has a `## Carried work` section | `carried-work.md` | merging and hardening what a superseded pass left |
+| your lead asks you to catch up to a commit, or names a revert of a milestone it merged | `catching-up.md` | the catch-up merge and its scoped test gate; bringing a reverted milestone back |
+
+The two conditions that need defining:
 
 - **"you reconstruct the work from the lead's session"** -- a skill
   `crystallize`, an emergent `update`, or any `heal`: the work or incident you
-  must reproduce lives only in the conversation. The other runs are handed a
+  must reproduce lives only in the conversation. The other passes are handed a
   materialized source instead and skip `transcript-exploration.md` -- a committed
   `update` reads the diff, and an app `crystallize` reads the pre-built app on
   disk.
@@ -88,28 +121,28 @@ operation-agnostic description of the thing you are hardening. Where the
 operation reference needs a type-specific value (a gate template's field list,
 the crystallize shape), it carries that itself, keyed by type.
 
-## Step 3: Report back to the lead
+## Step 3: Do the pass as those references say
 
-Report with the launcher's `report` subcommand -- write the body to a file and
-hand that file over -- exactly as
-`.agents/shared/references/worker-reporting.md` describes. The `eval` in Step 1
-already set the variables it needs, and the subcommand derives the report
-destination and the lead's address from `TASK_FILE` itself, so there is nothing
-to substitute.
+Follow your operation reference from its first stage to its last, under
+`harden-creation.md`'s contract and with your type references for the creation
+itself. Stop wherever it names a gate, report it (Step 4), and go on when the
+lead's reply arrives.
+
+## Step 4: Report back to the lead
+
+Before your first report, read
+`.agents/shared/references/worker-reporting.md`. Report exactly as it
+describes, with the launcher's `report` subcommand: write the body to a file
+and hand that file over. The `eval` in Step 1 already set the variables it
+needs, and the subcommand derives the report destination and the lead's
+address from `TASK_FILE` itself, so there is nothing to substitute.
 
 The valid `name:` values for gates and terminal statuses come from your
 operation reference -- it is the authority on which gates fire for your
 operation × type combination (e.g. a crystallized app emits no gates; a
 crystallized skill emits `outline-approval` then `final-creation`). A pass over
 several creations emits each gate once, covering all of them. On top of
-whatever it lists, `question` (`type: gate`) is valid on every run: any worker
-may stop mid-flight and ask its lead, whatever the operation.
-
-One thing a worker never does: request a secret. There is no chat here to show a
-secret card in, so a credential the work turns out to need (an API key for a
-service, a token for an integration) goes into your report as a need the lead
-requests through the `connect-external-service` skill, with the file and variable
-names you would have asked for.
+whatever it lists, `question` (`type: gate`) is valid on every pass.
 
 That is the entire worker. Everything else is in the references you loaded in
 Step 2.

@@ -26,6 +26,7 @@ absent or unrecognized.
 ## Contents
 
 - Valid report `name:` values
+- Critical-app handoff
 - Emergent path
 - Committed path
 - Both paths
@@ -39,7 +40,9 @@ absent or unrecognized.
   in your task file or the repo.
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
-**Critical-app handoff.** When the task says it is the careful flow's handoff
+## Critical-app handoff
+
+When the task says it is the careful flow's handoff
 for a critical app (the shell, the chat, the terminal, or a user app whose
 manifest says `critical = true`; see `type-app.md`, "Critical apps"), there is
 no `## Change origin` toggle and **no approval gate**. The user already
@@ -58,7 +61,7 @@ Read the task body for which of the two handoff shapes you were given:
   Verify and harden it -- **do not re-implement it**, and do not redesign the
   approved shape.
 
-Either way, verify each creation in the pass per its own `type-<TYPE>.md` --
+Either way, verify each creation in the pass per its own type reference --
 the apps per `type-app.md` and
 `.agents/shared/references/web-frontend-testing.md` -- then report `done`
 (or a mid-flight `question`, or `stuck`) with a body that tells the lead what
@@ -84,24 +87,26 @@ and service task.
 
 1. Read the task file: the `## Incident summary` and the `## Anchors` verbatim
    quotes are your primary guide.
-2. Locate the incident and the manual follow-up in the lead's transcript, per
-   `.agents/skills/harden-worker/references/transcript-exploration.md`.
+2. Read `.agents/skills/harden-worker/references/transcript-exploration.md`,
+   then locate the incident and the manual follow-up in the lead's transcript
+   as it says.
 3. Read the creation's current state on disk per your creation reference.
 
 ### Stage 2: Design and Gate 1
 
-For a **skill** creation, first decide update-in-place vs. split-a-new-sibling
-per `.agents/skills/harden-worker/references/update-vs-create-new.md` (default to in-place;
+For a **skill** creation, first read
+`.agents/skills/harden-worker/references/update-vs-create-new.md` and decide
+by it between update-in-place and split-a-new-sibling (default to in-place;
 only split when the gap has a concrete standalone use case). Other creations
 update in place.
 
-Propose one outline covering every creation in the pass. For a **skill**, the
-outline contents are defined in
-`.agents/skills/harden-worker/references/skill-outline-fields.md`; add the update decision
+Propose one outline covering every creation in the pass. For a **skill**, read
+`.agents/skills/harden-worker/references/skill-outline-fields.md`, which
+defines the outline contents, before you write it; add the update decision
 (update-in-place vs. new sibling). For an **app** (or a service), the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
 `type: gate`, `name: outline-approval` report with the outline plus "Approve this
-outline? (yes / no with notes)". Push it and stop. Wait for an explicit yes
+outline? (yes / no with notes)". Deliver it and stop. Wait for an explicit yes
 before coding.
 
 ### Stage 3: Implement
@@ -143,8 +148,8 @@ edge paths to catch regressions.
 
 If the change introduces a new persisted store or enlarges an existing one --
 newly fetching and storing data, adding a log/cache/archive, or widening what an
-existing store retains -- apply the bound-disk-growth contract in
-`harden-creation.md` to that store: give it an explicit retention bound, evict as
+existing store retains -- read "Bound disk growth" in `data-and-storage.md` and
+apply its contract to that store: give it an explicit retention bound, evict as
 part of the run that writes, and cover the bound with a test. An update that
 turns a stateless creation into one that accretes is exactly where an unbounded
 store slips in, since the harden attention is otherwise on the changed path.
@@ -196,7 +201,7 @@ run, `Outside footprint`, which the scope file judges against every creation at
 once, `Undeclared couplings`, `Flaky tests`) may instead come once, after the
 last block.
 
-Push it and stop. On approval, emit a `name: done` terminal report. In the
+Deliver it and stop. On approval, emit a `name: done` terminal report. In the
 committed path a clean verification may produce no new worker commits -- that is
 fine; the merge still brings the live commit forward.
 

@@ -21,11 +21,17 @@ Three principles drive every rule below:
   is kept. A fresh pass replaces it only when the worker is gone, or when
   no one who can receive its reports is left to lead it.
 
+## Contents
+
+- Before dispatch: one pass per creation (single-flight)
+- Before merge: lease, freshness, conflicts
+- Catching up a stale pass
+
 ## Before dispatch: one pass per creation (single-flight)
 
-At most one harden pass per creation may be in flight, in either flow -- an
-`update` and a `heal` pass on the same creation collide just as hard as two
-updates. A pass's ticket title lists every creation it covers (`update
+At most one harden pass per creation may be in flight, under either operation
+-- an `update` and a `heal` pass on the same creation collide just as hard as
+two updates. A pass's ticket title lists every creation it covers (`update
 app:roadmap skill:sync-roadmap`), so before opening the tracking ticket, look
 for a live pass on each creation yours would cover. The match also takes the
 bare name, which is how a ticket opened before titles carried types names its
@@ -40,7 +46,7 @@ done
 
 - **No match** -- dispatch normally.
 - **A match assigned to you** -- you already have a pass in flight; do not
-  launch a sibling. Note your new commits on your own ticket, as in the
+  launch a second one. Note your new commits on your own ticket, as in the
   "Live" case below: the catch-up your merge-time freshness check forces
   covers them.
 - **A match assigned to another agent** -- check whether its holder (the
@@ -79,11 +85,14 @@ done
     note still names all of yours, so the catch-up widens the pass to the
     whole change rather than the half that overlapped.
   - **Orphaned** (holder gone, worker still there -- often waiting on a gate
-    nobody relayed): become its holder rather than replacing it. See "Taking
-    over a pass whose holder is gone".
+    nobody relayed): the pass is neither stale nor abandoned, since the worker
+    holds verified work and is waiting for a lead. Read
+    `.agents/shared/references/harden-contention/takeover.md` and become that
+    lead as it says, rather than replacing the pass.
   - **Abandoned** (holder and worker both gone): replace it with your own
-    pass covering the union, keeping whatever it committed. See "Superseding
-    a pass whose worker is gone".
+    pass covering the union, keeping whatever it committed, as
+    `.agents/shared/references/harden-contention/supersede.md` says. Read it
+    before you destroy anything.
 
 Do not queue a second pass behind a live one. Queued passes verify obsolete
 states; the live pass, caught up, covers the union instead.
@@ -93,12 +102,9 @@ states; the live pass, caught up, covers the union instead.
 Run these in order before any merge from a worker branch -- the merge on `done`
 or a provisional milestone merge:
 
-1. **Wait out the foreground lease (apps and services only).** If a creation in
-   the pass is an app or service and another agent holds its editing lease (an
-   open/in-progress `editing service <name>` ticket in `tk ready`, or `editing
-   critical app <name>` for a critical app -- see `update-app`'s "One editor at
-   a time"), do not merge or refresh mid-edit. Re-check about once a minute
-   until the lease is released, then continue -- their edit will usually make
+1. **Wait out the foreground lease (apps and services only).** Read
+   `.agents/shared/references/lead-proxy.md` ("Before a merge") and wait as
+   it says, for every app or service in the pass. Their edit will usually make
    your pass stale anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if no creation in it has
@@ -123,11 +129,8 @@ or a provisional milestone merge:
    your branch first and rerun; do not treat the failure as staleness. When
    the worker's `done` report lists paths under `References registered:`, add
    them to `$PATHS` as well -- your tree's manifest predates them. A critical
-   app's merge lives in
-   `update-app/references/critical-app.md` step 4, which applies this same
-   check over the pass's footprint together with `system/libs/workspace_ui/`,
-   `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, `system/package.json`,
-   `system/package-lock.json`, and every file the pass branch changes. Empty
+   app's merge is not this one: the `update-app` skill's careful flow owns it,
+   and applies this same check over a wider footprint. Empty
    output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; catch it up (below).
 
@@ -156,11 +159,12 @@ or a provisional milestone merge:
    make two concurrent creations collide on a generated file and force one of
    them into a catch-up. See step 3.
 
-3. **Never resolve a conflicted hardened branch on your side.** If the merge
-   itself conflicts, `git merge --abort` and catch the pass up (below): the
-   worker resolves the conflict on its own branch and verifies the result, so
-   the resolution lands tested. Resolving it here would ship exactly the
-   unverified state the pass exists to prevent.
+3. **Never resolve a conflicted hardened branch on your side.** Catching the
+   pass up (below) is the catch-up rule `lead-proxy.md` ("Before a merge")
+   asks for: if the merge itself conflicts, `git merge --abort` and catch the
+   pass up, so the worker resolves the conflict on its own branch and verifies
+   the result. Resolving it here would ship exactly the unverified state the
+   pass exists to prevent.
 
    One carve-out: a conflict confined to a **generated lockfile** (`uv.lock`,
    `package-lock.json`). Those are derived, not authored, and every creation's
@@ -177,10 +181,9 @@ or a provisional milestone merge:
 ### Provisional milestone merges
 
 A worker can declare a **milestone** mid-pass: a commit it says is already worth
-using (`worker-reporting.md` for the worker's side, `lead-proxy.md`'s
-"Milestone reports: provisional merge" for the lead's). Merging one runs the
-same three checks above, with the target pinned to the milestone's `commit:`
-rather than the branch tip. A milestone that fails them is simply not merged:
+using (the lead's side is `.agents/shared/references/lead-proxy/milestones.md`).
+Merging one runs the same three checks above, with the target pinned to the
+milestone's `commit:` rather than the branch tip. A milestone that fails them is simply not merged:
 the worker is still mid-pass, and its `done` is caught up as usual.
 
 This is the **one sanctioned way not-yet-hardened work reaches the lead's
@@ -203,201 +206,13 @@ you merge. **Keep the worker**: its branch, its worktree and anything it
 built (a critical app's bundles) are the verified work the catch-up builds on.
 Never destroy it to make room for a new pass.
 
-Ask it with a reply naming your current `HEAD` and what moved, then re-arm the
-poll exactly as for a gate (`lead-proxy.md`):
+Before you send a pass back, read
+`.agents/shared/references/harden-contention/catch-up.md`: it has the reply
+that asks the worker to catch up, how to add a creation to the pass, what the
+worker does, and what happens to its next `done`.
 
-```bash
-uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in harden-creation.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
-```
-
-Leave out the `Add to the pass:` sentence when no note names one. When one
-does, add those creations to your own `$CREATIONS` too, so the freshness check
-and go-live cover them from then on, and record them where other chats read
-the pass: your task file's `creations` line, which a chat taking the pass over
-leads it with, and the ticket's title, which the single-flight check above
-matches. A ticket's title is the first `# ` line of its file:
-
-```bash
-ADDED="<each added creation, as type:name>"
-sed -i "s|^creations: .*|& $ADDED|" <TASK_FILE>
-sed -i "0,/^# /s|^# .*|& $ADDED|" "$TICKETS_DIR/<ticket-id>.md"
-```
-
-The worker catches up as its own guide says. It merges your `HEAD` into its
-branch, so merging that branch back into yours conflicts with nothing. It
-resolves every conflict on its side, regenerating lockfiles rather than
-choosing sides. The commits it brings in that touch a creation in the pass get
-the same hardening as the rest of the pass, and its test gate re-runs over
-what the catch-up changed for the pass, not over every other chat's commits in
-the window. Then it reports `done` again.
-
-That report goes through the same checks before merge as the first one.
-Usually it is fresh now. If `HEAD` moved again while the worker caught up,
-catch it up again: each round covers only the commits since the last, so the
-rounds shrink. A worker that cannot reconcile the new base reports `stuck` or
-asks a `question`, handled as on any run.
-
-A provisional milestone you reverted needs nothing more here: its worker
-already brought the milestone's work back on its own branch when you handed it
-the revert (`lead-proxy.md`, "Rolling back a provisional merge").
-
-## Taking over a pass whose holder is gone
-
-A pass whose holder stopped while its worker is still there is neither stale
-nor abandoned: the worker holds verified work and is waiting for a lead, often
-on a gate nobody relayed. Become that lead; do not replace the pass.
-
-1. Its task file is the one the calling skill writes:
-   `data/.tasks/harden/<worker-name>/task.md` for an update or heal pass,
-   `data/.tasks/update-self/task.md` for update-self,
-   `data/.tasks/migrate-workspace/task.md` for migrate-workspace. Its
-   `lead_work_dir` must be your own checkout (`$MNGR_AGENT_WORK_DIR`; the chats
-   of one workspace share it), since the worker delivers every report there.
-   If it names another checkout, you cannot receive its reports: supersede the
-   pass instead (below). An update or heal pass's `creations` are the
-   `$CREATIONS` you lead it with.
-2. Move the ticket to yourself, and say why on it:
-
-   ```bash
-   tk assign <their-ticket-id>
-   ```
-
-   ```bash
-   tk add-note <their-ticket-id> "Holder <holder> is gone; taken over by $MNGR_AGENT_NAME. Commits <range> also change $CREATIONS."
-   ```
-
-   Then label the worker as yours. The `lead_agent` label is how the check
-   above finds you once you are renamed, and how the user's chat list files
-   the worker under the chat leading it:
-
-   ```bash
-   mngr label <worker-name> -l lead_agent=$MNGR_AGENT_ID
-   ```
-3. Find what the worker last said. A report waiting at the task file's
-   `finish_report_path` is unread, and the poll in step 4 hands it to you.
-   Otherwise its last report is the newest file in `consumed/` beside it that
-   arrived after this worker was created (an earlier pass under the same name
-   leaves its reports there too):
-
-   ```bash
-   mngr list --format jsonl > /tmp/harden-agents.jsonl || exit 2
-   CREATED=$(jq -r 'select(.name == "<worker-name>") | .create_time' /tmp/harden-agents.jsonl)
-   [ -n "$CREATED" ] || exit 1
-   find "$(dirname <finish_report_path>)/consumed" -maxdepth 1 -type f -newermt "$CREATED" \
-       -printf '%T@ %p\n' | sort -n | sed -n '$s/^[^ ]* //p'
-   ```
-
-   It prints that report's path. Exit 1 means no agent has the worker's
-   name, so the worker is gone: supersede the pass instead (below). Exit 2
-   means the agent list could not be read, which says nothing about the
-   worker: run the block again. No
-   output means the worker has reported nothing yet. A worker that is
-   RUNNING was answered (a `done` it is catching up on, say), and its next
-   report reaches you through the poll in step 4. Otherwise the holder read
-   that report but stopped before acting on it, so act on it now, by what it
-   is:
-   - A `gate` or `question` was never answered. Handle it as `lead-proxy.md`
-     says ("Deciding: answer gate yourself vs. escalate"). A
-     `final-creation` gate goes to the user, with a sentence saying it comes
-     from an earlier check of this creation that has been waiting on them.
-   - A `done` was never merged: run the calling skill's merge for it now,
-     its checks before merge first ("Before merge" above). They catch the
-     pass up when your commits moved its base.
-   - A `no-update-needed` or `stuck` is handled as `lead-proxy.md`'s
-     "Terminal status" says.
-
-   A worker that crashed restarts with your reply, or with `continue` when
-   there is nothing to answer.
-4. Unless step 3 ended the pass, arm the poll (`lead-proxy.md`) and drive the
-   pass to its end as its lead.
-   Your own commits need nothing extra: the freshness check at merge time
-   finds them, and the pass is caught up, adding any of your creations it
-   does not cover (the note in step 2 names them).
-
-## Superseding a pass whose worker is gone
-
-When there is no worker left to catch up -- an abandoned pass, or one stopped
-after a failure (a `stuck` on the catch-up itself included) whose user did not
-override it -- replace it with **one** new pass. A worker the user's override
-resumes is kept (`lead-proxy.md`, "Resuming after the user overrides a
-failure"). An orphaned pass whose task file names another checkout as
-`lead_work_dir` is replaced the same way although its worker is still there:
-its reports can never reach you, so no one here can lead it.
-
-A pass that is gone can still have left work no one merged: commits on its
-branch or a sub-worker's, a fix it finished before its holder stopped
-answering. That work is never dropped. The new pass carries it:
-
-1. **Commit what its worktrees hold.** A destroy loses uncommitted changes
-   with the worktree. For the worker and each sub-worker, read `work_dir` from
-   its `mngr list --format jsonl` record and run `git -C <work_dir> status
-   --porcelain`; commit anything there on that worktree's branch, per steps
-   1-3 of "Last resort: manual worktree salvage" in
-   `.agents/shared/references/lead-proxy/dead-worker-recovery.md`.
-2. **Destroy it, keeping its commits.**
-
-   ```bash
-   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
-   ```
-
-   Before destroying anything, the launcher checks every branch it would
-   delete, the pass's and its sub-workers'. When one holds commits that
-   neither your `HEAD` nor any other branch has, it refuses and prints, for
-   each, the `git branch superseded/<name> <branch>` command that keeps it
-   under a name the new launch will not need. Run those commands, then the
-   destroy again. The branches themselves still have to go, because the
-   launch cannot reuse the worker's name while they exist. Never pass
-   `--discard-unmerged` unless the user has said that work is not wanted.
-
-   ```bash
-   tk close <old-ticket-id> "Superseded -- worker gone; re-dispatched covering the union."
-   ```
-3. **Dispatch the new pass with that work in scope**, through the normal flow
-   (Steps 1-3 of the calling skill). Its scope covers **everything since the
-   last hardened merge**: at minimum the `$BASE..HEAD` commits touching its
-   creations, whatever any notes on the old ticket describe (and any creation
-   the notes name that the old pass did not cover, which the new pass covers
-   too), and each `superseded/` branch you kept. Name those in the task body under a
-   `## Carried work` heading, one per line with its commits (`git log
-   --oneline HEAD..<branch>`). The worker merges them into its own branch
-   before hardening and treats them as part of the change
-   (`harden-creation.md`, "Carried work from a superseded pass"). They are
-   merged there and not into your branch, because nothing has verified them
-   yet. One superseding pass validates the union of all pending changes
-   together -- which is the only combination that will actually run. A worker
-   that follows its own guide rather than `harden-creation.md` (update-self's,
-   migrate-workspace's) has no such step, so its new pass carries nothing:
-   leave each kept branch for the user to decide on, and say so in step 4.
-4. **Tell the user** what was kept, in a sentence about the work itself (from
-   the commit subjects), and that the new pass is finishing it.
-5. **Once you merge the new pass's `done`**, delete each branch you named
-   under `## Carried work` with `git branch -d superseded/<name>`. The
-   lowercase `-d` refuses a branch your `HEAD` does not contain, which would
-   mean the worker never merged it: ask it why rather than forcing the delete.
-   A kept branch you left for the user stays until they decide.
-
-Two wrinkles when the pass had already delivered a provisional milestone
-merge:
-
-- **A provisionally merged milestone survives.** It is already a commit on your
-  own branch, so deleting the worker branch does not take it back out. The
-  hardening done after that milestone is unmerged work like any other, and the
-  new pass carries it.
-- **A reverted milestone is carried by its revert.** If you rolled a
-  provisional merge back with `git revert -m 1 <merge-commit>`, the reverted
-  commits are still ancestors of your `HEAD`, so carrying the branch cannot
-  bring them back, and `git log HEAD..<branch>` does not list them. The old
-  worker may already have brought them back, as a revert of your revert: on
-  its branch, which carrying the branch then carries, or on yours, through a
-  later report of its you merged. When it had not, name the revert commit
-  under `## Carried work` as well, and the new worker reverts it on its own
-  branch (`harden-creation.md`, "Carried work from a superseded pass"). Never
-  reinstate it on your branch yourself. Check your `HEAD` together with each
-  kept branch (with none kept, `HEAD` alone):
-
-  ```bash
-  git log --oneline HEAD superseded/<name> --grep "This reverts commit <revert-commit>"
-  ```
-
-  Empty output means the old worker had not brought it back.
+A pass with no worker left to catch up (one stopped after a failure the user
+did not override, say) is superseded instead: replace it with **one** new pass
+that carries whatever work the old one left unmerged, as `supersede.md` in the
+same directory says. That work is never dropped, so read it before you destroy
+anything.

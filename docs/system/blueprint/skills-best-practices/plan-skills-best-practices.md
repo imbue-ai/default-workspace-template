@@ -212,7 +212,7 @@ Paths are in dwt unless marked (mngr).
   - Step 4 shrinks to its two commands and a pointer to `manage-desktop`.
   - One statement each for bind host, port picking, naming rules, the verify recipe, the public URL and the icon rules.
   - One step numbering, a checklist at the top, branches beside the step they fork from.
-  - The eager read of `interactive-delivery.md` stays.
+  - The eager read of `interactive-delivery.md` goes. The skill states the loop itself, with the two rules only that file held (one delivery at a time; do not drive the mock yourself). Opus 5.5 skipped the read in every recorded build and still showed a mock within minutes, because SKILL.md's own gates carry the loop.
 - **`update-app`**
   - New `references/verify-against-a-copy.md` for the data-copy guide.
   - Critical-app routing moves into a short top section, so the ordinary flow is not loaded for a critical change.
@@ -227,7 +227,7 @@ Paths are in dwt unless marked (mngr).
 - `heal-creation`, `update-creation`, `crystallize-creation`: each keeps its operation, its gate list and its substitutions.
 - `lead-proxy.md`, `harden-contention.md` and `harden-worker/references/harden-creation.md`: each splits into a core that keeps its path and rare-path siblings the core links conditionally.
 - `harden-worker/SKILL.md`: its load-when table lists the concrete operation and type files.
-- `interactive-delivery.md` gets a contents list and a tighter opening.
+- `interactive-delivery.md` is deleted once `build-app` and `update-app` no longer read it: `fetch-process-show` states its phases in its own words, and `do-something-new` lists the loop for a task that fits neither route.
 - The dwt glossary is applied to every file the area touches. Exemptions on the three skills and on `harden-worker` are removed.
 
 ### Deferred areas (outline)

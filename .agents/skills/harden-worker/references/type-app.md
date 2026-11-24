@@ -43,8 +43,9 @@ paths.
 
 ## Running and testing
 
-The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.
-App specifics:
+Before you run or test the app, read
+`.agents/shared/references/web-frontend-testing.md` for the isolated-instance
+and rendered-page rules. App specifics:
 
 - A user-built app is a standalone uv project
   (`.agents/shared/references/running-python.md`, "User packages are standalone
@@ -198,7 +199,7 @@ Go through every route the app's API document lists, and check:
    line per request that changed something, with the time, the participant
    key, whether it was the owner, and the route. Keep it under the app's data
    directory and bound it like any other store ("Bound disk growth" in
-   `harden-creation.md`). The share gateway's own access log (its README, "The
+   `data-and-storage.md`). The share gateway's own access log (its README, "The
    access log") records every request but never who made it, so it does not
    replace this one.
 5. **Claims.** The API document is what a visiting agent reads to learn the
