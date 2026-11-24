@@ -19,11 +19,10 @@ cache while its processes use a fraction of it: counting the inactive list
 alone would read that as a full cgroup. Mapped file pages are left out: they
 are the running programs' own code, and freeing them is what thrashes.
 
-This is deliberately not the gen-2 publisher's formula
-(``imbue_common.container_meminfo_publisher`` in mngr), which adds the inactive
-file cache alone. That one measures a gVisor sandbox, whose own page cache
-absorbs repeat reads, so the host kernel sees each page once and the cache it
-charges stays on the inactive list.
+The gen-2 publisher (``imbue_common.container_meminfo_publisher`` in mngr)
+counts the same cache and slab but holds back a fixed reserve in place of the
+mapped pages. It measures a gVisor sandbox, whose ``file_mapped`` is mostly the
+sandbox's own memory file and so cannot stand for the programs' code.
 
 The file is touched only on a definite answer. A limit that reads ``max`` (an
 uncapped container) removes it, so earlyoom falls back to ``/proc/meminfo``,
