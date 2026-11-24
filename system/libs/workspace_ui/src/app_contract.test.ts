@@ -26,6 +26,7 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_ASK_AGENT,
   SHELL_ASK_AGENT_RESULT,
+  assistRequest,
   SHELL_START_WITH_TEXT,
   SHELL_START_WITH_TEXT_RESULT,
   CHANGE_NOT_ANSWERED_SENTENCE,
@@ -693,6 +694,37 @@ describe("askAgentToFix", () => {
     expect(text).not.toContain("`");
     expect(text).not.toContain("closed..");
   });
+
+  it("ends the task with the instruction the ask names in place of the default, and says where the ask goes", () => {
+    const parent = shellFramed();
+    const instruction = "Start it again, then tell the user what was wrong.";
+    askAgentToFix(
+      connection as ShellConnection,
+      { whatFailed: "Terminal isn't running.", details: null, instruction },
+      undefined,
+      "main-chat",
+    );
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.text).toBe(`Imbue Studio showed the user this failure: Terminal isn't running.\n\n${instruction}`);
+    expect(message.delivery).toBe("main-chat");
+
+    // The default delivery is left off the wire.
+    askAgentToFix(connection as ShellConnection, { whatFailed: "Terminal isn't running.", details: null });
+    const [plain] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect("delivery" in plain).toBe(false);
+  });
+});
+
+describe("assistRequest", () => {
+  it("puts the assist command first, then the app and the window an ask was pressed in", () => {
+    expect(assistRequest("Fix this.")).toBe("/assist Fix this.");
+    expect(assistRequest("Fix this.", { appName: "files", appDisplayName: "Files", windowId: "win-3" })).toBe(
+      "/assist This is about the Files app (`files`, window `win-3`).\n\nFix this.",
+    );
+    expect(assistRequest("Fix this.", { appName: "files", appDisplayName: "Files", windowId: null })).toBe(
+      "/assist This is about the Files app (`files`).\n\nFix this.",
+    );
+  });
 });
 
 describe("askAgent's answer", () => {
@@ -721,7 +753,7 @@ describe("askAgent's answer", () => {
     deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: "someone-else", isOpened: true }, parent);
     expect(await settledValue(first)).toBe("pending");
 
-    const failure = { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isReportable: false };
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isHelpOwed: false };
     deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: secondId, isOpened: false, failure }, parent);
     deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: firstId, isOpened: true }, parent);
     expect(await first).toEqual({ isOpened: true });
@@ -765,7 +797,7 @@ describe("askAgent's answer", () => {
     expect(await settledValue(asked)).toBe("pending");
     deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
     expect((await asked).isOpened).toBe(false);
-    const failure = { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: false };
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400", isHelpOwed: false };
     deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: message.requestId, isOpened: false, failure }, parent);
     expect(late).toEqual([{ isOpened: false, failure }]);
 
@@ -782,7 +814,7 @@ describe("askAgent's answer", () => {
     deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
     expect(await pending).toEqual({
       isOpened: false,
-      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
     });
   });
 
@@ -811,7 +843,7 @@ describe("askAgent's answer", () => {
     live.disconnect();
     expect(await pending).toEqual({
       isOpened: false,
-      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
     });
   });
 
@@ -822,7 +854,7 @@ describe("askAgent's answer", () => {
     const sentBefore = parent.postMessage.mock.calls.length;
     expect(await settledValue(live.askAgent("Fix this."))).toEqual({
       isOpened: false,
-      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
     });
     expect(parent.postMessage.mock.calls.length).toBe(sentBefore);
   });
@@ -831,7 +863,7 @@ describe("askAgent's answer", () => {
     connection = connectToShell({});
     expect(await connection.askAgent("Fix this.")).toEqual({
       isOpened: false,
-      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
     });
   });
 
