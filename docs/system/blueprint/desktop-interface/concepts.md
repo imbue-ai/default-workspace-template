@@ -99,7 +99,7 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: while the window is focused, the window menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9), and Share; the app icon and the title centred over the bar; then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
+Left to right: close, minimize, and maximize (fullscreen and restore when maximized) at the left edge; the app icon and the title centred over the bar; then, while the window is focused, the window menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9), and Share, ending at the right edge, where Imbue Studio's own Share sits.
 No status indicator.
 Share asks the Imbue Studio chrome to open its share settings for the window's app (`minds:open-share-settings` with the app's name).
 It is offered to the workspace's owner, under a chrome that has said what it can do, on every window of an app that is not internal, the chat and the terminal included.
