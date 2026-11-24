@@ -15,6 +15,7 @@ class ScriptedOneShotCompletion(OneShotCompletion):
         self.system_prompts: list[str] = []
         self.model_tiers: list[OneShotModelTier] = []
         self.thinking_token_allowances: list[int | None] = []
+        self.timeouts_seconds: list[float] = []
         # Runs during each call, for what happens elsewhere while the model is answering.
         self.on_call: Callable[[], None] | None = None
 
@@ -26,11 +27,13 @@ class ScriptedOneShotCompletion(OneShotCompletion):
         *,
         model_tier: OneShotModelTier,
         thinking_token_allowance: int | None,
+        timeout_seconds: float,
     ) -> str:
         self.prompts.append(prompt)
         self.system_prompts.append(system_prompt)
         self.model_tiers.append(model_tier)
         self.thinking_token_allowances.append(thinking_token_allowance)
+        self.timeouts_seconds.append(timeout_seconds)
         if self.on_call is not None:
             self.on_call()
         answer = self.answers.pop(0)

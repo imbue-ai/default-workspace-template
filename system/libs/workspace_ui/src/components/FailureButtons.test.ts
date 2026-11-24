@@ -43,7 +43,7 @@ describe("Report a bug", () => {
     const live = connectToShell({});
     connection = live;
     const failure = {
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502",
     };
     const view = (): m.Children => m(ReportBugButton, { connection: live, failure });

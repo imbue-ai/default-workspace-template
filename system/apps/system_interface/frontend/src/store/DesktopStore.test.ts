@@ -932,15 +932,15 @@ describe("failure toasts", () => {
 
     const [toast] = store.toasts.current();
     expect(toast).toMatchObject({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
       actions: [],
       isLasting: true,
-      isReportable: true,
+      isHelpOwed: true,
     });
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
     expect(reportBug).toHaveBeenCalledWith({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
     });
   });
@@ -951,7 +951,7 @@ describe("failure toasts", () => {
     const store = await storeReportingBugs(reportBug, false, redraw);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0].isReportable).toBe(true);
+    expect(store.toasts.current()[0].isHelpOwed).toBe(true);
     expect(store.reportBugAction()).toBeNull();
 
     redraw.mockClear();
@@ -975,23 +975,23 @@ describe("failure toasts", () => {
     expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
-  it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
+  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal expected", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
+      expected: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 500: index unreadable",
-      user_facing_message: "Docs couldn't read its notes. If this persists, report a bug.",
-      reportable: true,
+      user_facing_message: "Docs couldn't read its notes.",
     });
     await store.runLaunch("docs", "new", "new");
 
-    expect(store.toasts.current().map((toast) => [toast.message, toast.isReportable])).toEqual([
+    expect(store.toasts.current().map((toast) => [toast.message, toast.isHelpOwed])).toEqual([
       ["Docs is still starting. Try again in a few seconds.", false],
-      ["Docs couldn't read its notes. If this persists, report a bug.", true],
+      ["Docs couldn't read its notes.", true],
     ]);
   });
 
@@ -1022,17 +1022,17 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+  it("keeps a failure that owes help up with its details, wherever it happened", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Could not close the window. Try again. If this persists, report a bug.",
+        message: "Could not close the window. Try again.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
-        isReportable: true,
+        isHelpOwed: true,
       },
     ]);
   });
@@ -1753,7 +1753,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar. Try again. If this persists, report a bug."]);
+    expect(notices()).toEqual(["Could not change the avatar. Try again."]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {

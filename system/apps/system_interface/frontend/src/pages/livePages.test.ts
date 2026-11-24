@@ -954,7 +954,7 @@ describe("the contract", () => {
   });
 
   it("opens the bug report about a page's shell:report-bug failure only while the embedder opens one", () => {
-    const failure = { message: "Docs couldn't save. Try again. If this persists, report a bug.", details: "HTTP 500" };
+    const failure = { message: "Docs couldn't save. Try again.", details: "HTTP 500" };
     messageFromPage("win-1", { type: SHELL_REPORT_BUG, ...failure });
     expect(bugReportsOpened).toEqual([]);
     store.setCanReportBug(true);

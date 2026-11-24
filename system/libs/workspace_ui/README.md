@@ -31,18 +31,18 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `models/request-error.ts`): one reader, `readFailure`, says what went wrong,
   for the REST helpers (`HttpError.failure`) and for a mithril rejection
   (`describeRequestFailure`) alike: a route's `user_facing_message` (a sentence
-  for people, reportable only when the body says `reportable: true`), else its
+  for people, which owes the person help unless the body says `expected: true`), else its
   `detail` or `error` (a reason, developer text), else no answer (nothing
   answered, or a gateway status 502, 503 or 504 with no JSON reason), else
   nothing. `failureSentence(failure, whatFailed)` is the one place that becomes
   words, `whatFailed` being a sentence stem ("This window couldn't be closed"):
   the server's sentence as written; no answer as "The workspace didn't answer.
-  Try again in a moment." for a read and "The workspace didn't answer, so
-  Imbue Studio can't tell whether this went through." for a change, never
+  Try again in a moment." for a read and "The workspace didn't answer. This
+  may not have gone through." for a change, never
   prefixed with what failed (and never "nothing was changed": Imbue Studio's
   forward proxy can send a gateway status after the request arrived); a refusal
   (4xx) with a reason as "<what failed>."; anything else as the fallback "<what
-  failed>. Try again. If this persists, report a bug.". A screen not yet worded
+  failed>. Try again.". A screen not yet worded
   this way shows `failureText` (an `HttpError`'s `message`, and
   `describeRequestError`): the server's own reason, else our sentence. The status and the
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
@@ -64,7 +64,7 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   dismissed, with a close control, its details behind "See details" and its
   buttons ("Try again", ...), at most three on screen. A toast that says the
   same as one already up (message and details) replaces it. A lasting toast
-  says whether its message asks for a bug report (`isReportable`), and
+  says whether its failure owes the person help (`isHelpOwed`), and
   `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
   decided at each draw, so a toast shown before the page learned it can open
   a bug report gains the button once it does. Pressing a button dismisses

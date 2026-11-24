@@ -10,8 +10,8 @@ import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
 
 const TOASTS = [
-  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false, isReportable: false },
-  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false, isReportable: false },
+  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false, isHelpOwed: false },
+  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false, isHelpOwed: false },
 ];
 
 afterEach(() => {
@@ -64,7 +64,7 @@ describe("Toasts", () => {
   it("gives a lasting note a close control, its buttons, and its details, and takes it away once one is pressed", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     const retry = vi.fn();
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
       actions: [{ label: "Try again", run: retry }],
@@ -73,9 +73,7 @@ describe("Toasts", () => {
     const root = mountQueue(queue);
 
     const [first, second] = Array.from(root.querySelectorAll("[data-toast]")) as HTMLElement[];
-    expect(first.querySelector(".toast-message")?.textContent).toBe(
-      "This window couldn't be closed. Try again. If this persists, report a bug.",
-    );
+    expect(first.querySelector(".toast-message")?.textContent).toBe("This window couldn't be closed. Try again.");
     expect(first.querySelector(".see-details pre")?.textContent).toBe("HTTP 500");
     (first.querySelector(".toast-action") as HTMLButtonElement).click();
     expect(retry).toHaveBeenCalledTimes(1);
@@ -85,12 +83,12 @@ describe("Toasts", () => {
     expect(queue.current()).toEqual([]);
   });
 
-  it("offers Report a bug on a reportable note once the page can open one, with the note's failure, and keeps it up", () => {
+  it("offers Report a bug on a note that owes help once the page can open one, with the note's failure, and keeps it up", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
-      isReportable: true,
+      isHelpOwed: true,
     });
     queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
     let reportBug: ((failure: ReportedFailure) => void) | null = null;
@@ -103,9 +101,7 @@ describe("Toasts", () => {
     const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>(".report-bug"));
     expect(buttons.map((button) => button.textContent)).toEqual(["Report a bug"]);
     buttons[0].click();
-    expect(reported).toEqual([
-      { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
-    ]);
+    expect(reported).toEqual([{ message: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
     expect(queue.current()).toHaveLength(2);
   });
 

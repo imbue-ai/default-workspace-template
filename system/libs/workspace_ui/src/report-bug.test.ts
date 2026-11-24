@@ -31,12 +31,10 @@ async function openHelpSentFor(failure: ReportedFailure | null): Promise<Record<
 describe("Report a bug", () => {
   it("asks the embedder to open its bug report with the failure's sentence and details attached", async () => {
     const sent = await openHelpSentFor({
-      message: "This window couldn't be closed. Try again. If this persists, report a bug.",
+      message: "This window couldn't be closed. Try again.",
       details: "HTTP 500\nboom",
     });
-    expect(sent.errorDetails).toBe(
-      "This window couldn't be closed. Try again. If this persists, report a bug.\n\nHTTP 500\nboom",
-    );
+    expect(sent.errorDetails).toBe("This window couldn't be closed. Try again.\n\nHTTP 500\nboom");
   });
 
   it("cuts details longer than the embedder takes, keeping their start", async () => {

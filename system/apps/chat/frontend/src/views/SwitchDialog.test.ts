@@ -456,9 +456,7 @@ describe("the switch dialog", () => {
     await flush();
     render();
     const text = ROOT().textContent ?? "";
-    expect(text).toContain(
-      "Couldn't load the list of models. Try again. If this persists, report a bug. Codex starts on its default model",
-    );
+    expect(text).toContain("Couldn't load the list of models. Try again. Codex starts on its default model");
     expect(ROOT().querySelector(".see-details pre")?.textContent).toBe("the daemon is not answering");
     // The switch itself needs no model, so the dialog stays usable.
     expect(text).toContain("Switch this chat");

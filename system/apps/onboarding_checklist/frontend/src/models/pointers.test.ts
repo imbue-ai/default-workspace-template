@@ -54,7 +54,7 @@ describe("what a click on a checklist entry asks for", () => {
       { channel: "coach-card", text: CONNECT_DATA_COACH_TEXT, place: { chromeAnchor: "permissions" } },
     ]);
     expect(CONNECT_DATA_COACH_TEXT).toBe(
-      "**Just ask your agent to connect anything!**\n\nYou can always see your existing connections settings as well.",
+      "**Just ask your agent to connect anything!**\n\nYou can always see your connections here as well.",
     );
   });
 
