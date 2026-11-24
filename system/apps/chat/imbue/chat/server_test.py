@@ -177,6 +177,7 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_gated_mngr_binary
 from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_workspace_with_a_user_built_app
@@ -6639,6 +6640,41 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "first_message": "Begin here",
         "hint": None,
     }
+
+
+def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the_main_chats_agent(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """Leaving the provider page starts the main chat's agent, so the launcher's Enter pressed right after finds
+    the chat being created: the text is kept for that agent and delivered as it lands, never handed to the root as
+    a draft."""
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats"
+    )
+    # The launch's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+
+        response = _intake(client, message="Write hello.py", target="main_chat", client_id="c1", desktop_id="d1")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"path": f"/?chat={chat_id}"}
+        creating = manager.get_provisional_chat(chat_id)
+        assert creating is not None and creating.phase is ProvisionalChatPhase.CREATING
+        assert [held.text for held in creating.held_sends] == ["Write hello.py"]
+        gate.touch()
+        wait_until_true(lambda: len(messenger.sent) == 1, 10, "the delivery of the text kept for the agent")
+        ((_agent_id, delivered),) = messenger.sent
+        assert delivered.endswith("Write hello.py")
+    finally:
+        # Ends the create the gate still holds when an assertion fails ahead of it.
+        manager.stop()
 
 
 def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
