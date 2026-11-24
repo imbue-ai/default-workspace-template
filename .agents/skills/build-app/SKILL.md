@@ -18,11 +18,10 @@ existing app, use the `update-app` skill.
 
 ## Standing instructions
 
-- **Read `.agents/shared/references/interactive-delivery.md` first.** Building
-  an app is that interactive shape, not "scaffold, implement, ship": confirm
-  the look and feel on a cheap throwaway mock, build to a usable state in the
-  chat, and leave thorough testing and the review gates to a background harden
-  pass.
+- **Building an app is the interactive-delivery shape**, not "scaffold,
+  implement, ship": confirm the look and feel on a cheap throwaway mock, build
+  to a usable state in the chat, and leave thorough testing and the review
+  gates to a background harden pass.
 - **Build nothing real before the user confirms the mock.** Scaffolding is
   cheap and reversible; a data layer or a state architecture is not. This skill
   exists to prevent building, testing and hardening a whole app before the
@@ -72,6 +71,9 @@ existing app, use the `update-app` skill.
    the working app.
 
 ## Step 1: Clarify and plan
+
+Before anything else, read `.agents/shared/references/interactive-delivery.md`,
+the shape this flow follows.
 
 Ask only the questions that block: a fork both genuinely uncertain and
 expensive to reverse. Most apps have none. Default to the simplest conventional
@@ -203,8 +205,8 @@ reads the real source (the crystallized pipeline's output, the live API),
 however real its routes are. Each time a piece becomes real, say what still is
 not in a new note ("Your real inbox loads now; archive doesn't work yet.").
 Once the app reads its real data and does what the user will use it for, take
-the frame down and open the app in its place. Both commands are in
-`.agents/shared/references/apps/mock-frame.md`.
+the frame down and open the app in its place: read
+`.agents/shared/references/apps/mock-frame.md` for both commands.
 
 ## Step 6: Verify, then show
 

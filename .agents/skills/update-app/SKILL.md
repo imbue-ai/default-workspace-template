@@ -120,8 +120,8 @@ demonstrative-prototype types of `interactive-delivery.md`):
 - a throwaway mock page, the fastest for a look-and-feel loop;
 - the changed app itself, booted beside the live one as the labeled
   `<name>-preview` app, when a mock page will not convince (a redesign, a
-  change that touches data). `references/verify-against-a-copy.md`, "A preview
-  from a worktree", has the commands.
+  change that touches data). Read `references/verify-against-a-copy.md` ("A
+  preview from a worktree") for its commands.
 
 A new page or capability added to an existing app is its own delivery with its
 own feedback gate: confirm and ship it on its own, not bundled with unrelated
@@ -212,7 +212,7 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
   the window (stuck on the loading page, broken WebSockets) are in
   `.agents/shared/references/apps/gotchas.md`.
 
-**Anything else** is in `references/applying-a-change.md`: a dependency or
+**For anything else, read `references/applying-a-change.md`**: a dependency or
 entry-point change, a service with no port, a change to the program's
 definition, and a restart of the whole services agent.
 

@@ -139,8 +139,10 @@ real preview (the "janky real edit" of
 
 ## Step 2: The live loop, in the worktree and its preview
 
-Work entirely inside the worktree. What the change owes (SKILL.md's step 3)
-holds here too. The build and test mechanics for a critical app are the
+Work entirely inside the worktree. Before you first edit an app's code, read
+`.agents/shared/references/apps/code.md`, the rules that code keeps; what
+SKILL.md's step 3 says about the manifest and the API document holds here too.
+The build and test mechanics for a critical app are the
 worker's job at harden time. In the live loop you need a clean build, not the
 full gate.
 
@@ -340,9 +342,9 @@ poll) with these specifics:
   conversation rather than reconstructing it from prose.
 
 - **Terminal handling:** on `done`, go to Step 4. On `stuck` or a dead-worker
-  timeout, surface to the user per
-  `.agents/shared/references/lead-proxy/worker-failure.md`; do not merge or
-  apply, and do not retry silently.
+  timeout, read `.agents/shared/references/lead-proxy/worker-failure.md` and
+  surface it to the user as that file says; do not merge or apply, and do not
+  retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work
 the user has not seen** (the implement-for-real shape) and the user can
@@ -395,9 +397,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale; do
-   **not** merge, and never resolve a conflicted merge yourself. Catch the
-   pass up per `.agents/shared/references/harden-contention.md` ("Catching up a
-   stale pass"): the worker
+   **not** merge, and never resolve a conflicted merge yourself. Read
+   `.agents/shared/references/harden-contention.md` ("Catching up a stale
+   pass") and catch the pass up as it says: the worker
    merges the served `HEAD` into the branch, resolves any conflict, re-verifies
    what came in, rebuilds the bundles, and reports `done` again, which comes
    back through this check. When the catch-up changed something the user
