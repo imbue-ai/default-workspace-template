@@ -942,6 +942,74 @@ def test_a_send_that_overlaps_the_one_carrying_the_seed_goes_as_typed(
         manager.stop()
 
 
+def test_a_send_kept_while_a_seeded_chats_silent_launch_ran_carries_the_conversation_as_the_agent_lands(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send the chat app kept while the silent launch's create ran is the first send since: it carries the
+    seeded conversation ahead of the user's words as the agent lands, and the send kept behind it goes as typed."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    delivered: list[str] = []
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=lambda agent_info, text, message_id: delivered.append(text) or SendOutcome.OK,
+        )
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-1", "1", HeldSendOrigin.CLIENT)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-2", "2", HeldSendOrigin.CLIENT)
+
+        gate.touch()
+        wait_until_true(lambda: len(delivered) == 2, 10, "the delivery of the sends kept for the agent")
+
+        carried, plain = delivered
+        assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
+        assert "Wait.. what is honest software?" in carried
+        assert plain == "2"
+        assert _is_seed_pending(store, chat_id) is False
+    finally:
+        manager.stop()
+
+
+def test_a_send_kept_while_a_seeded_chat_was_made_a_room_is_appended_as_typed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A room has no agent to need the seeded conversation, and its page shows it as the chat's earlier segment:
+    the send kept for it lands as typed and the seed stays pending, as a send to the room does."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    delivered: list[str] = []
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=lambda agent_info, text, message_id: delivered.append(text) or SendOutcome.OK,
+        )
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, kind=ChatKind.ROOM)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-1", "just say hi", HeldSendOrigin.CLIENT)
+
+        gate.touch()
+        wait_until_true(lambda: len(delivered) == 1, 10, "the delivery of the send kept for the room")
+
+        assert delivered == ["just say hi"]
+        assert _is_seed_pending(store, chat_id) is True
+    finally:
+        manager.stop()
+
+
 def _is_seed_pending(store: InMemoryChatRecordStore, chat_id: ChatId) -> bool:
     record = store.read(chat_id)
     assert record is not None

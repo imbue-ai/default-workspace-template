@@ -6647,7 +6647,7 @@ def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the
 ) -> None:
     """Leaving the provider page starts the main chat's agent, so the launcher's Enter pressed right after finds
     the chat being created: the text is kept for that agent and delivered as it lands, never handed to the root as
-    a draft."""
+    a draft. It is the first send the agent takes, so it carries the welcome the chat opened on."""
     mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(
@@ -6671,7 +6671,9 @@ def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the
         gate.touch()
         wait_until_true(lambda: len(messenger.sent) == 1, 10, "the delivery of the text kept for the agent")
         ((_agent_id, delivered),) = messenger.sent
-        assert delivered.endswith("Write hello.py")
+        assert delivered.startswith(f"<{SEED_CONTEXT_TAG}>")
+        assert FIRST_RUN_WELCOME[0].text in delivered
+        assert delivered.endswith(f"</{SEED_CONTEXT_TAG}>\nWrite hello.py")
     finally:
         # Ends the create the gate still holds when an assertion fails ahead of it.
         manager.stop()

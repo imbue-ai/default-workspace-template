@@ -3744,6 +3744,23 @@ class AgentManager:
             report_undelivered=self._report_undelivered_held_send,
         )
 
+    def _kept_send_delivery(
+        self, capabilities: HandoffCapabilities, chat_id: ChatId, harness: HarnessType
+    ) -> HeldSendDelivery:
+        """How a send kept for a chat being created reaches the agent it landed as: the first one a seeded chat's
+        agent takes carries the conversation the chat opened on when its launch brought none, as that send does
+        through the message route (``carry_pending_seed``). A room's carries none, having no agent to need it."""
+        delivery = self._held_send_delivery(capabilities)
+        if harness is HarnessType.ROOM:
+            return delivery
+
+        def deliver_carrying_pending_seed(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+            return self.carry_pending_seed(
+                chat_id, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
+            )
+
+        return delivery.model_copy_update(to_update(delivery.field_ref().deliver, deliver_carrying_pending_seed))
+
     def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
         """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
         self._broadcaster.broadcast_held_send_failed(chat_id, message_id, detail, kind)
@@ -5792,8 +5809,9 @@ class AgentManager:
             )
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
+        kept_send_delivery = self._kept_send_delivery(capabilities, chat_id, agent_info.harness)
         for held in held_sends:
-            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
+            deliver_held_send(kept_send_delivery, agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
