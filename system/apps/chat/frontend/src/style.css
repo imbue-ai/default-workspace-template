@@ -992,11 +992,13 @@
  * The first run's provider page (views/FirstRunProvidersPage.ts): the warm cream ground and brown ink of
  * Imbue Studio's first-run pages, whatever theme the workspace wears, since it continues them.
  */
-.first-run-page {
+:root {
   --first-run-ground: #fff8e9;
   --first-run-ink: #492222;
   --first-run-ink-muted: #7a5a52;
   --first-run-line: #d9c9b6;
+}
+.first-run-page {
   position: fixed;
   inset: 0;
   display: flex;
@@ -1060,8 +1062,8 @@
   align-items: center;
   justify-content: center;
 }
-/* A connected account that is not the default: the whole row is the button that makes it one, and says so at its
- * right edge only under the pointer or the keyboard's focus. */
+/* A connected account that is not the default: the row, up to its Remove, is the button that makes it one, and
+ * says so at its right edge only under the pointer or the keyboard's focus. */
 .first-run-account-choice {
   border-radius: 10px;
   cursor: pointer;
@@ -1077,6 +1079,21 @@
 .first-run-account-choice:hover .first-run-account-hint,
 .first-run-account-choice:focus-visible .first-run-account-hint {
   opacity: 1;
+}
+.first-run-remove {
+  padding: 6px 12px;
+  border-radius: 9999px;
+  color: var(--first-run-ink-muted);
+  font-size: 13px;
+  line-height: 1.375;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+.first-run-remove:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  color: var(--first-run-ink);
 }
 .first-run-skip {
   color: var(--first-run-ink-muted);
@@ -1107,8 +1124,59 @@
 }
 .first-run-tile:focus-visible,
 .first-run-account-choice:focus-visible,
+.first-run-remove:focus-visible,
 .first-run-skip:focus-visible,
 .first-run-next:focus-visible {
   outline: 2px solid var(--first-run-ink);
   outline-offset: 3px;
+}
+/*
+ * A dialog the provider page opens (the provider chooser, the confirmation before an account is removed): the
+ * page's cream and brown ink, where a dialog anywhere else wears the workspace's look. The class sits on the
+ * dialog's root and re-declares the colour tokens for everything under it, so the dialog is built from the same
+ * components either way: its card and rows take the cream ground and the page's line, its text the ink, and a
+ * primary button the page's own (ink, with the ground for its label). Fixed like the page, so a token a theme
+ * declares on the root never reaches the dialog. A menu the dialog opens is drawn on <body>, outside it, and is
+ * named beside it for that.
+ */
+.first-run-dialog,
+body:has(.first-run-dialog) [data-part="menu"] {
+  --c-bg: var(--first-run-ground);
+  --c-bg-sidebar: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-bg-code: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-surface: var(--first-run-ground);
+  --c-surface-secondary: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-fill-faint: color-mix(in srgb, var(--first-run-ink) 3%, transparent);
+  --c-fill-hover: color-mix(in srgb, var(--first-run-ink) 6%, transparent);
+  --c-fill-active: color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-text-primary: var(--first-run-ink);
+  --c-text-secondary: var(--first-run-ink-muted);
+  --c-text-faint: color-mix(in srgb, var(--first-run-ink) 65%, var(--first-run-ground));
+  --c-text-on-accent: var(--first-run-ground);
+  --c-border: var(--first-run-line);
+  --c-border-faint: color-mix(in srgb, var(--first-run-line) 50%, var(--first-run-ground));
+  --c-border-strong: color-mix(in srgb, var(--first-run-ink) 35%, var(--first-run-ground));
+  --c-border-code: var(--first-run-line);
+  --c-accent: var(--first-run-ink);
+  --c-accent-hover: color-mix(in srgb, var(--first-run-ink) 80%, var(--first-run-ground));
+  --c-accent-light: color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-inverse-surface: var(--first-run-ink);
+  --c-inverse-surface-hover: color-mix(in srgb, var(--first-run-ink) 80%, var(--first-run-ground));
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-shadow-raised:
+    0 1px 3px 0 color-mix(in srgb, var(--first-run-ink) 10%, transparent),
+    0 1px 2px -1px color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-shadow-overlay:
+    0 0 2px 0 color-mix(in srgb, var(--first-run-ink) 8%, transparent),
+    0 3px 8px 2px color-mix(in srgb, var(--first-run-ink) 8%, transparent);
+  color: var(--first-run-ink);
+}
+/* The page fades into its cream behind the dialog, as Imbue Studio's own first-run pages do, where the workspace's
+ * dialogs dim what is behind them. */
+.first-run-dialog.modal-overlay,
+.first-run-dialog .modal-overlay {
+  background-color: color-mix(in srgb, var(--first-run-ground) 90%, transparent);
 }

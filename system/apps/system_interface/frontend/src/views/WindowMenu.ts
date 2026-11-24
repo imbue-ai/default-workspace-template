@@ -120,10 +120,16 @@ export interface WindowMenuActions {
 }
 
 /** Whether the app can be shared on its own: every app the shell lists but an internal one, which the Imbue Studio
- *  chrome's share settings never list. The one rule behind the title bar's Share, the window menu's row, and the
- *  phone's. */
+ *  chrome's share settings never list. The one rule behind the window menu's row and the phone's, and the first
+ *  half of the title bar's (``isAppSharedFromTitleBar``). */
 export function isAppShareable(app: AppRecord | undefined): app is AppRecord {
   return app !== undefined && !app.internal;
+}
+
+/** Whether the title bar offers Share for the app: one that can be shared on its own and that was built on the
+ *  workspace. An app that is part of the workspace itself keeps Share in its window menu alone. */
+export function isAppSharedFromTitleBar(app: AppRecord | undefined): app is AppRecord {
+  return isAppShareable(app) && !app.system;
 }
 
 /** Ask the Imbue Studio chrome to open its share settings for ``app``; the embed contract names the app by the

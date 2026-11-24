@@ -6,10 +6,10 @@
  * the left edge; the app icon and the title centred over the bar; then, while the window is focused, the window
  * menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not
  * internal), and Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a
- * chrome that can open them, on every window of an app that is not internal) ending at the right edge, where
- * Imbue Studio's own Share sits. Share never sits over the centred
- * title (``shareLookOf``): it wears its word beside its glyph where the title leaves room for both, its glyph alone
- * where it leaves room for that, and is not drawn where it leaves room for neither, which leaves Share to the
+ * chrome that can open them, on every window of an app built on the workspace, which is neither internal nor part
+ * of the workspace itself) ending at the right edge, where Imbue Studio's own Share sits. Share never sits over the
+ * centred title (``shareLookOf``): it wears its word beside its glyph where the title leaves room for both, its glyph
+ * alone where it leaves room for that, and is not drawn where it leaves room for neither, which leaves Share to the
  * window menu. A theme may rearrange the slots and align the title its own way, never drop a slot's
  * control; the balloon and Share follow Refresh wherever the theme puts it, and a theme whose controls have no
  * room for a word hides Share, which its window menu still offers. Resting on the maximize control opens the
@@ -103,8 +103,8 @@ export interface TitleBarAttrs {
   /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
    *  path (the multiplayer spec, section 9.1); absent reads as not offered. */
   readonly hasAppChat?: boolean;
-  /** Share, where the bar offers it: an app that can be shared on its own (``isAppShareable``), to the
-   *  workspace's owner, under an Imbue Studio chrome that opens its share settings. It carries the bar's width,
+  /** Share, where the bar offers it: an app built on the workspace that can be shared on its own
+   *  (``isAppSharedFromTitleBar``), to the workspace's owner, under an Imbue Studio chrome that opens its share settings. It carries the bar's width,
    *  which is the window's, and whether the client is a touch one, which with the title decide how Share is drawn
    *  (``shareLookOf``); absent reads as not offered. */
   readonly share?: Pick<ShareFitting, "barWidth" | "isTouch">;
