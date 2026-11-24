@@ -741,6 +741,20 @@ describe("sharing a window's app", () => {
     expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
   });
 
+  it("offers Share in the window menu alone for an app that is part of the workspace itself", () => {
+    offerApps(api, socket, [appRecord("docs", { system: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    expect(titleBarShare()).toBeNull();
+
+    const chrome = framedUnderChrome();
+    const row = windowMenuShare() as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
   it("offers Share in neither the title bar nor the window menu for an internal app", () => {
     offerApps(api, socket, [appRecord("docs", { internal: true })]);
     store.setEmbedderPresent(true);

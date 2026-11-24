@@ -122,6 +122,10 @@ class InventoryApp(FrozenModel):
     label: str = Field(description="The unguessable origin label")
     url: AppUrl = Field(description="Where the app is reachable from inside the workspace")
     internal: bool = Field(description="Hidden from every open surface")
+    system: bool = Field(
+        default=False,
+        description="Part of the workspace itself rather than an app built on it; false from an older shell",
+    )
     program: str = Field(description="The supervisord program that runs the app; empty for none")
     critical: bool = Field(description="Whether the workspace never stops the app")
     stop_when_no_windows: bool = Field(description="Whether the app is stopped once no window shows it")
