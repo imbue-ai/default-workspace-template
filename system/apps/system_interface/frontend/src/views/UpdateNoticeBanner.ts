@@ -50,6 +50,7 @@ export function finishRollbackRequest(outcome: string): string {
   return agentFixTask({
     whatFailed: outcome,
     details: null,
+    shown: "notice",
     instruction:
       "That is how the rollback of the last workspace update, which had changed how the workspace starts, ended. " +
       "Finish what it leaves to do; restarting the workspace's system services " +

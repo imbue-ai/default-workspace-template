@@ -387,6 +387,8 @@ export interface BootFailure {
 interface LaunchFailureCopy {
   readonly whatFailed?: string;
   readonly report?: FailureReport;
+  /** The launch carries an ask the shell wrote, which a note about the launch must not call the person's message. */
+  readonly isAsk?: boolean;
   /** What a toast's Try again runs, when it is more than the launch itself; a surface that reports the failure
    *  itself keeps its own retry (the launcher's field, which still holds the text). */
   readonly retry?: () => void;
@@ -3557,6 +3559,7 @@ export class DesktopStore {
     text: string,
     report?: FailureReport,
     whatFailed?: string,
+    isAsk = false,
   ): Promise<boolean> {
     const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
     const found = this.launchOf(appName, launchId, toReport);
@@ -3572,6 +3575,7 @@ export class DesktopStore {
       freeTextParams(found.launchPath, text),
       report,
       whatFailed,
+      isAsk,
     );
   }
 
@@ -3584,6 +3588,7 @@ export class DesktopStore {
     params: Record<string, string>,
     report?: FailureReport,
     whatFailed?: string,
+    isAsk = false,
   ): Promise<boolean> {
     const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
@@ -3600,14 +3605,15 @@ export class DesktopStore {
               ? `Couldn't send that to ${name}`
               : `Couldn't send that to ${name}, so your text is still in the box`),
           report,
-          retry: () => void this.launchPinnedFirst(appName, launchId, params, report, whatFailed),
+          isAsk,
+          retry: () => void this.launchPinnedFirst(appName, launchId, params, report, whatFailed, isAsk),
         },
       );
       if (launched === null) return false;
       this.restoreWindow(pinned.id);
       return true;
     }
-    return (await this.launchAt(appName, launchId, params, { kind: "new" }, { whatFailed, report })) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" }, { whatFailed, report, isAsk })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
@@ -3627,6 +3633,11 @@ export class DesktopStore {
    *  the window is on the desktop, or with the failure for the caller to show where the press was: nothing is
    *  toasted. */
   async startWithText(text: string): Promise<StartOutcome> {
+    return this.startTextAction(text, false);
+  }
+
+  /** ``startWithText``, for the person's own text or (``isAsk``) for an ask the shell wrote. */
+  private async startTextAction(text: string, isAsk: boolean): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
     const [row] = freeTextRowsOf(openableApps(this.state));
@@ -3634,7 +3645,7 @@ export class DesktopStore {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isHelpOwed: false } };
     }
     return this.startOutcomeOf(row.app, (report, whatFailed) =>
-      this.runFreeText(row.app.name, row.launchPath.id, text, report, whatFailed),
+      this.runFreeText(row.app.name, row.launchPath.id, text, report, whatFailed, isAsk),
     );
   }
 
@@ -3670,11 +3681,12 @@ export class DesktopStore {
       return { isOpened: false, failure: { message: `${ASK_NOT_DRAFTED_REASON}.`, details: null, isHelpOwed: false } };
     }
     const launch = delivery === "main-chat" ? null : this.askLaunchAbout(about);
-    if (about === null || launch === null) return this.startWithText(message);
+    if (about === null || launch === null) return this.startTextAction(message, true);
     const params = appAskParams(launch.launchPath, about, message);
     return this.startOutcomeOf(launch.app, async (report, whatFailed) => {
       const target: LaunchTarget = besideWindowId === null ? { kind: "show" } : { kind: "show", besideWindowId };
-      const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, target, { whatFailed, report });
+      const copy = { whatFailed, report, isAsk: true };
+      const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, target, copy);
       return shown !== null;
     });
   }
@@ -3828,7 +3840,8 @@ export class DesktopStore {
     }
     if (outcome.unsavedKind !== null) {
       const name = known?.display_name ?? "This app";
-      this.toastNotice(this.unsavedLaunchNotice(tookLaunchLead(name, launchPath), outcome.unsavedKind), {
+      const lead = tookLaunchLead(name, launchPath, copy.isAsk === true);
+      this.toastNotice(this.unsavedLaunchNotice(lead, outcome.unsavedKind), {
         isLasting: false,
       });
     }

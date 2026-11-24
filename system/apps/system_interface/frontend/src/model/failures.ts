@@ -90,10 +90,11 @@ export const FREE_SPACE_INSTRUCTION =
 /** How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
  *  into the app, or else the launch path by its label ("“New doc” went through in Docs"). The shell's
  *  ``_launch_lead`` says the same of a launch whose window it could not open. */
-export function tookLaunchLead(displayName: string, launchPath: LaunchPath | null): string {
+export function tookLaunchLead(displayName: string, launchPath: LaunchPath | null, isAsk = false): string {
   if (launchPath === null) return `${displayName} took that`;
   if (launchPath.text_param !== null || (launchPath.app_params !== null && launchPath.app_params.text !== null)) {
-    return `Your message was sent to ${displayName}`;
+    // An ask's message is the shell's, not something the person wrote.
+    return isAsk ? `The request was sent to ${displayName}` : `Your message was sent to ${displayName}`;
   }
   if (launchPath.draft_param !== null) return `Your text was put into ${displayName}`;
   return `“${launchPath.label}” went through in ${displayName}`;

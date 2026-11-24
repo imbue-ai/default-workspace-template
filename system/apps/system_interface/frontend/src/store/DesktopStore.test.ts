@@ -1096,6 +1096,12 @@ describe("opening", () => {
     expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual([
       "Ask an agent to free up space",
     ]);
+
+    // An ask's message is the shell's own, so the note about one does not call it the person's.
+    expect(await store.askAgent("Free up disk space.", null, "main-chat")).toEqual({ isOpened: true });
+    expect(last(notices())).toBe(
+      "The request was sent to Buddy, but this workspace is out of space, so window changes can't be saved.",
+    );
   });
 
   it("reads the desktops again after a launch into a window that has gone, so a second try finds it as it is", async () => {

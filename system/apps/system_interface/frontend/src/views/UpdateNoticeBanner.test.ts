@@ -312,6 +312,10 @@ describe("UpdateNoticeBanner", () => {
       ),
     );
     expect(finishRollbackRequest(restored)).toContain("`mngr start --restart system-services`");
+    // A rollback that ended is told as a notice, not as a failure.
+    expect(finishRollbackRequest(restored).startsWith(`Imbue Studio showed the user this notice: ${restored}`)).toBe(
+      true,
+    );
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {
