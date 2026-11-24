@@ -1,5 +1,5 @@
-"""The browser env.d units: the Playwright path lookup they share, the Fortress unit's links from
-Playwright's default paths, and the test headless shell's install."""
+"""The browser env.d units: the Playwright path lookup they share, the Screen unit's links from
+Playwright's default paths to Fortress, and the test headless shell's install."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from pathlib import Path
 import playwright_browser_paths
 import pytest
 
-_FORTRESS_UNIT_PATH = Path(__file__).parent / "env.d" / "1000-playwright-fortress.sh"
+_SCREEN_UNIT_PATH = Path(__file__).parent / "env.d" / "2000-screen.sh"
 _TEST_SHELL_UNIT_PATH = (
-    Path(__file__).parent / "env.d" / "1010-playwright-test-headless-shell.sh"
+    Path(__file__).parent / "env.d" / "2010-playwright-test-headless-shell.sh"
 )
 
 
@@ -109,7 +109,9 @@ def test_the_shell_is_installed_until_playwright_marks_it_complete(
     expected_calls = (
         []
         if is_install_complete
-        else [f"{browsers_dir} run python -m playwright install --only-shell chromium"]
+        else [
+            f"{browsers_dir} run --no-sync python -m playwright install --only-shell chromium"
+        ]
     )
     assert (calls.read_text().splitlines() if calls.exists() else []) == expected_calls
     assert marker.exists()
@@ -188,8 +190,7 @@ def test_the_playwright_paths_resolve_from_the_locked_playwright(
 def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns(
     tmp_path: Path, is_shell_path_blocked: bool
 ) -> None:
-    install_dir = tmp_path / "fortress"
-    fortress = install_dir / "tilion-fortress" / "tilion"
+    fortress = tmp_path / "fortress" / "tilion-fortress" / "tilion"
     _write_empty_executable(fortress)
     default_chromium = tmp_path / "cache" / "chromium-1" / "chrome-linux" / "chrome"
     # A regular file where a parent directory should be makes the link impossible.
@@ -201,10 +202,10 @@ def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns
     )
 
     result = _run_unit_function(
-        _FORTRESS_UNIT_PATH,
+        _SCREEN_UNIT_PATH,
         "_point_playwright_defaults_at_fortress",
         {
-            "_FORTRESS_INSTALL_DIR": install_dir,
+            "_FORTRESS_STABLE_LINK": fortress,
             "_PW_DEFAULT_CHROMIUM": default_chromium,
             "_PW_DEFAULT_HEADLESS_SHELL": default_shell,
         },

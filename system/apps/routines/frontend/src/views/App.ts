@@ -288,7 +288,8 @@ export const App: m.Component<AppAttrs> = {
         break;
     }
     return [
-      body,
+      // The shared base style pins the body to the window with its overflow hidden, so the page scrolls here.
+      m("main", { class: "h-screen overflow-y-auto", "data-scroller": "" }, body),
       model.scheduleForm === null
         ? null
         : m(ScheduleDialog, {

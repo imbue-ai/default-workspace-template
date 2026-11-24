@@ -16,7 +16,11 @@
  *    user holds the scrollbar);
  *  - progressive fill: one planner action in flight at a time against the data
  *    source (grow / jump / evict), focused on where the user is;
- *  - scroll-state persistence per agent, and the ?debug=scroll trace.
+ *  - scroll-state persistence per agent, and the ?debug=scroll trace;
+ *  - the end overlay, when the view has one (`getEndOverlayEl`): something that
+ *    ends the scroll content and stays in view over the transcript's end. It
+ *    is content as far as the bottom goes, so FOLLOW pins past it; the engine
+ *    snaps that pin, and carries a reader who is at the end without following.
  *
  * Native wheel/touch/keyboard scrolling stays native: the engine never writes
  * scrollTop in response to it, it only observes. The native scrollbar is hidden
@@ -124,6 +128,14 @@ export interface TranscriptScrollEngineConfig {
   dataSource: TranscriptScrollDataSource;
   /** Defaults to always-visible (SubagentView); ChatPanel feeds whether its frame is on screen. */
   isVisible?: () => boolean;
+  /**
+   * What ends the scroll content while staying in view at the viewport's bottom edge, over the transcript: the last
+   * thing in the scroll element, stuck to its bottom (ChatPanel's layer of open suggestion pills). Its height is the
+   * room that lets the transcript's end be scrolled clear of it. Null, the default, for none. Read after every
+   * render: the engine keeps a reader at the end there as it grows, and takes a press on it for none on the
+   * transcript.
+   */
+  getEndOverlayEl?: () => HTMLElement | null;
 }
 
 export interface TranscriptRenderPlan {
@@ -180,6 +192,7 @@ function isTraceEnabled(): boolean {
 export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfig): TranscriptScrollEngine {
   const dataSource = config.dataSource;
   const isVisible = config.isVisible ?? (() => true);
+  const getEndOverlayEl = config.getEndOverlayEl ?? (() => null);
 
   // state machines
   let positionState: ScrollPositionState = FOLLOW_STATE;
@@ -212,6 +225,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // afterRender, which repositions.
   let listResizeObserver: ResizeObserver | null = null;
   let observedListEl: Element | null = null;
+  // The end overlay resizes outside a redraw as the list does (its text wraps, a font swaps in).
+  let endOverlayResizeObserver: ResizeObserver | null = null;
+  let observedEndOverlayEl: Element | null = null;
+  // The end overlay's height at the last positioning.
+  let endOverlayPx = 0;
   let pointerReleaseListener: (() => void) | null = null;
   let isPointerDown = false;
   // A genuine downward user scroll (or a scrollbar move targeting the very
@@ -567,6 +585,27 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     trace?.record("write", { reason, targetPx, afterPx, deltaPx: afterPx - beforePx });
   }
 
+  /**
+   * Re-pin FOLLOW to the bottom when the viewport gets shorter (the composer
+   * grows a line). Runs from the ResizeObserver, which the browser calls after
+   * layout and before paint, so the shorter viewport is never painted short of
+   * the bottom; the redraw it schedules would only pin a frame later.
+   */
+  function pinFollowAfterViewportResize(element: HTMLElement): void {
+    if (positionState.kind !== "FOLLOW" || isPointerDown) {
+      return;
+    }
+    // An upward native scroll whose event has not arrived yet is the user's.
+    if (element.scrollTop < scrollTopPx - 0.01) {
+      return;
+    }
+    const targetPx = element.scrollHeight - element.clientHeight;
+    if (targetPx - element.scrollTop > 0.5) {
+      cancelSmoothScroll();
+      writeScrollTop(element, targetPx, "follow-viewport-resize");
+    }
+  }
+
   // live row measurement
 
   function measureMountedRows(): boolean {
@@ -618,6 +657,19 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
     }
     return changed;
+  }
+
+  /** The end overlay's height now, watching whichever element is the overlay for resizes. */
+  function measureEndOverlay(): number {
+    const overlayEl = getEndOverlayEl();
+    if (overlayEl !== observedEndOverlayEl && endOverlayResizeObserver !== null) {
+      endOverlayResizeObserver.disconnect();
+      if (overlayEl !== null) {
+        endOverlayResizeObserver.observe(overlayEl);
+      }
+      observedEndOverlayEl = overlayEl;
+    }
+    return overlayEl?.offsetHeight ?? 0;
   }
 
   // geometry
@@ -921,7 +973,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     markOtherInteraction();
   }
 
-  function onPointerDown(): void {
+  function onPointerDown(event: Event): void {
+    // The end overlay floats over the transcript: a press on it is none on the transcript's content.
+    if (event.target instanceof Node && getEndOverlayEl()?.contains(event.target) === true) {
+      return;
+    }
     cancelSmoothScroll();
     lastNativeInputAtMs = performance.now();
     lastInputSource = "selection-autoscroll";
@@ -975,12 +1031,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     listResizeObserver = new ResizeObserver(() => {
       m.redraw();
     });
+    endOverlayResizeObserver = new ResizeObserver(() => {
+      m.redraw();
+    });
     resizeObserver = new ResizeObserver(() => {
       if (scrollEl === null || !isVisible()) {
         return;
       }
       if (scrollEl.clientHeight !== viewportHeightPx) {
         viewportHeightPx = scrollEl.clientHeight;
+        pinFollowAfterViewportResize(scrollEl);
         m.redraw();
       }
       const listEl = scrollEl.querySelector(".message-list");
@@ -1017,6 +1077,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     listResizeObserver?.disconnect();
     listResizeObserver = null;
     observedListEl = null;
+    endOverlayResizeObserver?.disconnect();
+    endOverlayResizeObserver = null;
+    observedEndOverlayEl = null;
     scrollEl = null;
   }
 
@@ -1052,6 +1115,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // the rows above shrank.
     const prePatchTopPx = snapshot?.scrollTopPx ?? element.scrollTop;
     const prePatchMaxScrollPx = snapshot?.maxScrollTopPx ?? Math.max(0, element.scrollHeight - element.clientHeight);
+    // The end overlay is room at the content's end, so its growing or shrinking moves the bottom the same way
+    // content does, but in one step and with the overlay already painted over the viewport's end.
+    const overlayPxNow = measureEndOverlay();
+    const endOverlayGrowthPx = overlayPxNow - endOverlayPx;
+    endOverlayPx = overlayPxNow;
+    if (endOverlayGrowthPx !== 0) {
+      trace?.record("end-overlay", { px: overlayPxNow, growthPx: endOverlayGrowthPx });
+    }
+    const wasAtEndBeforePatch =
+      snapshot !== null && prePatchMaxScrollPx - prePatchTopPx < BOTTOM_THRESHOLD_PX && spacerBottomPx <= 0;
     const isPatchShift = Math.abs(element.scrollTop - prePatchTopPx) > 0.01;
     const pendingUserDeltaPx = prePatchTopPx - scrollTopPx;
     // Content can also shrink outside a redraw (an image, a late font swap),
@@ -1067,7 +1140,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // reverts each tiny delta before the next arrives -- pinning the user in
     // place. Bookkeeping is exact, so exact comparison is safe.
     const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
-    if (isPendingClamp || (isPatchShift && !hasPendingUserScroll)) {
+    const didAbsorbClamp = isPendingClamp || (isPatchShift && !hasPendingUserScroll);
+    if (didAbsorbClamp) {
       pendingEchoTops.push(element.scrollTop);
       trace?.record("clamp-absorbed", {
         deltaPx: pendingUserDeltaPx,
@@ -1096,7 +1170,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       element.scrollHeight +
       "|" +
       element.clientHeight;
-    if (positionKey === lastPositionedKey) {
+    // A clamp/patch-shift absorbed this frame means the browser moved scrollTop
+    // out from under us (e.g. a frame hidden with display:none resets its scroll
+    // container to 0, so switching back to this chat shows it at the top while the
+    // state machine still reads FOLLOW). The content key is unchanged, so the
+    // short-circuit would skip the re-pin that returns the viewport to the bottom
+    // -- bypass it whenever a clamp was absorbed so positioning runs below.
+    if (positionKey === lastPositionedKey && !didAbsorbClamp) {
       planFill();
       return;
     }
@@ -1120,12 +1200,22 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         const pinDeltaPx = targetPx - element.scrollTop;
         // Glide only for steady streaming growth. During fill/measurement
         // churn content grows hundreds of px per frame and a glide would lag
-        // it into a visible sustained gap; and a large catch-up would read as
-        // animation. Both snap.
-        const isChurning =
-          fillInFlight || spacerTopPx > 0 || spacerBottomPx > 0 || (geometry !== null && geometry.unmeasuredCount > 0);
+        // it into a visible sustained gap; a large catch-up would read as
+        // animation; and a clamp absorbed this frame (by the patch, or by
+        // content shrinking before it) has already moved the view up, so
+        // gliding back would paint that move and then slide down over several
+        // frames -- a bounce at the bottom. All three snap, and so does the
+        // end overlay growing: a glide would leave the transcript's end under
+        // it for those frames.
+        const isSnapRequired =
+          didAbsorbClamp ||
+          endOverlayGrowthPx !== 0 ||
+          fillInFlight ||
+          spacerTopPx > 0 ||
+          spacerBottomPx > 0 ||
+          (geometry !== null && geometry.unmeasuredCount > 0);
         if (Math.abs(pinDeltaPx) > 0.5) {
-          if (!isChurning && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
+          if (!isSnapRequired && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
             smoothWriteScrollTop(targetPx, "follow-pin");
           } else {
             cancelSmoothScroll();
@@ -1183,6 +1273,30 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
             dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: foldedAnchor, atTail });
           }
         }
+      }
+    }
+
+    // A reader at the end who is not following (they pressed on the transcript there) is still at the end: the
+    // anchor hold above kept their place, which the grown overlay now covers, so move them to the new end and
+    // re-anchor there. A shrinking overlay needs none of this: the browser's clamp keeps them at the end.
+    if (
+      endOverlayGrowthPx > 0 &&
+      wasAtEndBeforePatch &&
+      positionState.kind === "USER_CONTROLLED" &&
+      pendingRestore === null &&
+      !isPointerDown &&
+      !hasPendingUserScroll &&
+      geometry !== null
+    ) {
+      const targetPx = Math.max(0, element.scrollHeight - element.clientHeight);
+      if (Math.abs(element.scrollTop - targetPx) > 0.5) {
+        cancelSmoothScroll();
+        writeScrollTop(element, targetPx, "end-overlay-hold");
+      }
+      const anchor = anchorForUser();
+      if (anchor !== null) {
+        positionState = { kind: "USER_CONTROLLED", anchor };
+        schedulePersist();
       }
     }
 

@@ -12,14 +12,20 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_MESSAGE,
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
+  SHELL_AGENT_WORKING,
+  SHELL_FIRST_CONVERSATION_STEP,
+  SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
+  coachCardPlaceOf,
   connectToShell,
   followShellTheme,
 } from "./app_contract";
@@ -92,6 +98,9 @@ describe("connectToShell", () => {
       app: "chat",
       path: "/?chat=agent-1",
       opensLocalFiles: false,
+      opensWorkspaceSettings: false,
+      showsCoachMarks: false,
+      isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -119,6 +128,9 @@ describe("connectToShell", () => {
       app: "",
       path: "",
       opensLocalFiles: false,
+      opensWorkspaceSettings: false,
+      showsCoachMarks: false,
+      isViewing: false,
     });
   });
 
@@ -129,6 +141,34 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
     deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
+  });
+
+  it("reads whether the embedder opens its workspace settings, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, opensWorkspaceSettings: true }, parent);
+    deliver({ ...HANDSHAKE, opensWorkspaceSettings: 1 }, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].opensWorkspaceSettings)).toEqual([true, false]);
+  });
+
+  it("reads whether the embedder draws coach marks on its own controls, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, showsCoachMarks: true }, parent);
+    deliver({ ...HANDSHAKE, showsCoachMarks: "true" }, parent);
+    deliver(HANDSHAKE, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].showsCoachMarks)).toEqual([true, false, false]);
+  });
+
+  it("reads whether the window is being viewed on somebody else's desktop, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, isViewing: true }, parent);
+    deliver(HANDSHAKE, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].isViewing)).toEqual([true, false]);
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {
@@ -187,7 +227,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, draftText, sendMessage, and openLink to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, draftText, showCoachCard, agentWorking, firstConversationStep, sendMessage, and openLink to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -196,6 +236,12 @@ describe("connectToShell", () => {
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
     connection.draftText("Explain this element:");
+    connection.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    connection.showCoachCard("Tell the agent what to build.", { target: "avatar" });
+    connection.agentWorking(true);
+    connection.agentWorking(false);
+    connection.firstConversationStep(true);
+    connection.firstConversationStep(false);
     connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
     connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
@@ -205,6 +251,12 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
+      [{ type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" }, "*"],
+      [{ type: SHELL_SHOW_COACH_CARD, text: "Tell the agent what to build.", target: "avatar" }, "*"],
+      [{ type: SHELL_AGENT_WORKING, isWorking: true }, "*"],
+      [{ type: SHELL_AGENT_WORKING, isWorking: false }, "*"],
+      [{ type: SHELL_FIRST_CONVERSATION_STEP, isPending: true }, "*"],
+      [{ type: SHELL_FIRST_CONVERSATION_STEP, isPending: false }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
     ]);
@@ -236,6 +288,14 @@ describe("connectToShell", () => {
     expect(parentSpy).toBeNull();
   });
 
+  it("re-fetch request on a keybindings change reaches the handler", () => {
+    const parent = framed();
+    const onKeybindingsChanged = vi.fn();
+    connection = connectToShell({ onKeybindingsChanged });
+    deliver({ type: SHELL_KEYBINDINGS_CHANGED }, parent);
+    expect(onKeybindingsChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("stops listening once disconnected", () => {
     const parent = framed();
     const onShown = vi.fn();
@@ -243,6 +303,36 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("a framed page's input reports", () => {
+  it("posts shell:input on a pointer press or a key, at most once per interval", () => {
+    vi.useFakeTimers();
+    try {
+      const parent = shellFramed();
+      const inputs = (): unknown[][] =>
+        sentAfterConnect(parent).filter(([message]) => (message as { type?: string }).type === SHELL_INPUT);
+
+      window.dispatchEvent(new Event("pointerdown"));
+      window.dispatchEvent(new Event("keydown"));
+      expect(inputs()).toEqual([[{ type: SHELL_INPUT }, "*"]]);
+
+      // Past the throttle the next touch reports again; activity is measured in minutes, so this loses nothing.
+      vi.setSystemTime(Date.now() + 21_000);
+      window.dispatchEvent(new Event("keydown"));
+      expect(inputs()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports no input from an unframed page, which the shell's own window already hears", () => {
+    connection = connectToShell({});
+    const posted = vi.spyOn(window, "postMessage");
+    window.dispatchEvent(new Event("pointerdown"));
+    expect(posted).not.toHaveBeenCalled();
+    posted.mockRestore();
   });
 });
 
@@ -528,5 +618,21 @@ describe("a framed page's scripted popups", () => {
     connection.disconnect();
     connection = null;
     expect(window.open).toBe(nativeOpen);
+  });
+});
+
+describe("the place a coach card names", () => {
+  it("is the chrome control or the shell's own target it names, one of them and no more", () => {
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "permissions" })).toEqual({ chromeAnchor: "permissions" });
+    expect(coachCardPlaceOf({ text: "x", target: "avatar" })).toEqual({ target: "avatar" });
+  });
+
+  it("is none for a payload naming no place, both, or one this build does not know", () => {
+    expect(coachCardPlaceOf({ text: "x" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "permissions", target: "avatar" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: "nowhere" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", target: "launcher" })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", target: 7 })).toBeNull();
+    expect(coachCardPlaceOf({ text: "x", chromeAnchor: null, target: "avatar" })).toBeNull();
   });
 });

@@ -23,13 +23,51 @@ bands while remaining strictly ordered among themselves.
 Raising a process's own (or a descendant's) ``oom_score_adj`` is unprivileged,
 so the tagging hooks need no special capability.
 
+The policy is laid out as its types, then the tables that fill them in, then
+the functions that read the tables. Who is shed first changes by editing a
+table.
+
 This module is stdlib-only (see ``paths``): it is imported by the agent-tagging
 and subprocess-tagging Claude hooks, which run under a plain ``python3``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
+
+_HOUR: Final[float] = 3600.0
+
+
+class ChatStage(NamedTuple):
+    """One stage of a chat nobody is engaging with."""
+
+    # How long the chat has gone unengaged when it has fully reached the stage.
+    idle_seconds: float
+    # The ``oom_score_adj`` it carries there with no engagement to lower it.
+    adj: int
+    # How much of its engagement bonus still counts there: 1.0 all of it, 0.0 none.
+    freshness: float
+
+
+class ChatEngagement(NamedTuple):
+    """What engagement takes off a chat's ``oom_score_adj``, and where that stops."""
+
+    open_bonus: int
+    visible_bonus: int
+    recency_max_bonus: int
+    recency_step: int
+    # The most protected a chat gets, however engaged.
+    floor: int
+
+
+class BrowserBand(NamedTuple):
+    """The range Chromium's processes are remapped into, and the top of the
+    gradation they assign themselves."""
+
+    floor: int
+    ceiling: int
+    chromium_self_assigned_max: int
+
 
 # oom_score_adj value per band, most protected first. Tunable. Spaced so the
 # ordering is unambiguous and there is room to interpose a band later.
@@ -48,135 +86,55 @@ PRIMARY_AGENT: Final[int] = PROTECTED
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
+# The Screen's stack (Xorg, XFCE, PulseAudio, neko and the watcher that ends them
+# together): the desktop an agent or the user launched, so it is shed before a
+# worker or a chat that is still fresh (a chat left for hours climbs past it),
+# and after the programs on it (an agent's subprocesses, and Chromium above
+# them), since ending the X server takes every program on the Screen with it
+# while ending one program may free enough. The Screen service that starts the
+# stack is an ordinary service (``SERVICE_BANDS["screen"]``): it holds little
+# memory and brings the stack back with Chromium's tabs.
+SCREEN_STACK: Final[int] = 850
 
-# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
-# at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
-# anywhere within ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``:
+# The chat's dynamic band, as the stages of a chat nobody is engaging with.
+# Every knob of the chat policy lives in this table and the next. A chat
+# launches at the first stage's band and is re-tagged at runtime from live
+# activity (see the chat app's ``ChatOomPrioritizer``): idle time carries it
+# from one stage to the next, moving linearly between two neighbours in both its
+# band and its freshness, and engagement holds it below that band by as much as
+# its freshness allows (see ``CHAT_ENGAGEMENT``). Reshape the schedule by
+# editing, adding, or removing a stage here -- nothing else encodes it.
 #
-#   300 CHAT_AGENT_FLOOR         a chat the user is engaged with right now
-#   560 CHAT_AGENT_BASE          idle but fresh; also the chat launch band
-#   600 WORKER_AGENT             (for reference -- not a chat band)
-#   800 CHAT_AGENT_STALE_CEILING untouched long enough to be abandoned
+# The range deliberately runs from below ``WORKER_AGENT`` to above everything
+# else. A chat the user has left alone is worth less than the worker their
+# current chat just spawned: the chat revives on its next message with its
+# transcript intact (only the next message pays a cold start, and history stays
+# readable while it is down), whereas shedding a running worker destroys
+# in-flight work. The aged stage sits above ``BROWSER`` by the same argument
+# taken further: a shed renderer takes the page someone was on, and a shed
+# subprocess takes work an agent in use is waiting for.
 #
-# The range deliberately straddles ``WORKER_AGENT``. A chat the user last touched
-# days ago is worth less than the worker their current chat just spawned: the chat
-# revives on its next message with its transcript intact (only the next message
-# pays a cold start, and history stays readable while it is down), whereas
-# shedding a running worker destroys in-flight work. The ceiling still sits below
-# ``AGENT_SUBPROCESS``, so any agent's build/test/browser subprocess is shed
-# before any agent itself.
-#
-# Starting at ``CHAT_AGENT_BASE`` rather than the floor means a chat that is never
+# Starting at the fresh stage rather than the floor means a chat that is never
 # re-tagged at all stays middling-expendable rather than pinned to the protected
 # floor; only a positive staleness signal pushes one past the worker band.
-CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh; also the chat launch band
-CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
-CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
+CHAT_STAGES: Final[dict[str, ChatStage]] = {
+    # Idle but fresh; also the chat launch band.
+    "fresh": ChatStage(idle_seconds=1 * _HOUR, adj=560, freshness=1.0),
+    # Abandoned for the length of a working day: shed before everything else,
+    # whatever its engagement. The highest ``oom_score_adj`` the kernel accepts.
+    "aged": ChatStage(idle_seconds=8 * _HOUR, adj=1000, freshness=0.0),
+}
 
-# Chat band tunables. Every knob of the chat policy lives in this block.
-#
-# How much each engagement signal protects a *fresh* chat, subtracted from
-# ``CHAT_AGENT_BASE``. The recency bonus starts at its max for the most recently
-# messaged chat and decays by one step per rank.
-_CHAT_OPEN_BONUS: Final[int] = 80
-_CHAT_VISIBLE_BONUS: Final[int] = 80
-_CHAT_RECENCY_MAX_BONUS: Final[int] = 120
-_CHAT_RECENCY_STEP: Final[int] = 15
-
-_HOUR: Final[float] = 3600.0
-
-# How a chat's freshness decays with idle time: ``(idle_seconds, freshness)``
-# points in ascending idle order, linearly interpolated between neighbours and
-# flat outside the ends. 1.0 is fully fresh (today's engagement-only behaviour),
-# 0.0 fully abandoned (pinned to the stale ceiling regardless of engagement).
-# Reshape the curve by editing, adding, or removing points here -- nothing else
-# encodes the schedule.
-_CHAT_FRESHNESS_RAMP: Final[tuple[tuple[float, float], ...]] = (
-    (1 * _HOUR, 1.0),
-    (24 * _HOUR, 0.0),
+# How much each engagement signal protects a *fresh* chat, subtracted from the
+# band idle time has carried it to. The recency bonus starts at its max for the
+# most recently messaged chat and decays by one step per rank.
+CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
+    open_bonus=80,
+    visible_bonus=80,
+    recency_max_bonus=120,
+    recency_step=15,
+    floor=300,
 )
-
-
-def _interpolate(x: float, points: tuple[tuple[float, float], ...]) -> float:
-    """Piecewise-linear lookup of ``x`` over ascending ``(x, y)`` points.
-
-    Flat outside the outermost points: below the first, the first ``y``; above
-    the last, the last ``y``.
-    """
-    if x <= points[0][0]:
-        return points[0][1]
-    for (left_x, left_y), (right_x, right_y) in zip(points, points[1:]):
-        if x <= right_x:
-            span = right_x - left_x
-            if span <= 0:
-                return right_y
-            return left_y + (right_y - left_y) * (x - left_x) / span
-    return points[-1][1]
-
-
-def _chat_freshness(idle_seconds: float | None, is_mid_turn: bool) -> float:
-    """How fresh a chat counts as, in ``[0.0, 1.0]`` (see ``_CHAT_FRESHNESS_RAMP``).
-
-    A chat that is mid-turn is always fully fresh: it is running work right now,
-    and unlike an idle chat's revival that work is not recoverable, so age must
-    not demote it however long ago it was last messaged. Unknown idle time (no
-    engagement evidence at all) is also treated as fresh -- a chat is demoted only
-    on positive evidence that it has been abandoned.
-    """
-    if is_mid_turn or idle_seconds is None:
-        return 1.0
-    return _interpolate(idle_seconds, _CHAT_FRESHNESS_RAMP)
-
-
-def chat_agent_oom_score_adj(
-    *,
-    is_open: bool,
-    is_visible: bool,
-    recency_rank: int | None,
-    idle_seconds: float | None,
-    is_mid_turn: bool,
-) -> int:
-    """Map a chat agent's live activity to its ``oom_score_adj``.
-
-    Lower is more protected. Two forces move a chat within its band, starting
-    from ``CHAT_AGENT_BASE``. Engagement pulls it down:
-
-    - ``is_open``: the chat has an open window in the workspace UI.
-    - ``is_visible``: the chat's window is currently visible (implies open).
-    - ``recency_rank``: this chat's position when the chats that have been
-      messaged are sorted by last-message time, newest first (0 = most recently
-      messaged). The bonus decays with rank, so more-recently-messaged chats are
-      more protected than their peers. ``None`` means the chat has not been
-      messaged (this session) and so gets no recency bonus -- a never-messaged
-      chat must not be treated as if it were the most recent.
-
-    Staleness pushes it up: ``idle_seconds`` (time since the chat was last
-    engaged with by any route) scales the engagement bonuses down and lifts the
-    score toward ``CHAT_AGENT_STALE_CEILING``. Because the same freshness factor
-    scales both, engagement only ever *delays* the climb -- an abandoned chat ends
-    up at the ceiling even with a visible tab, since a shed costs it nothing but a
-    slow next message. ``is_mid_turn`` suspends the climb entirely (see
-    ``_chat_freshness``).
-
-    The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``.
-    """
-    engagement_bonus = 0
-    if is_open:
-        engagement_bonus += _CHAT_OPEN_BONUS
-    if is_visible:
-        engagement_bonus += _CHAT_VISIBLE_BONUS
-    if recency_rank is not None:
-        engagement_bonus += max(
-            0, _CHAT_RECENCY_MAX_BONUS - _CHAT_RECENCY_STEP * max(0, recency_rank)
-        )
-    freshness = _chat_freshness(idle_seconds, is_mid_turn)
-    adj = round(
-        CHAT_AGENT_BASE
-        + (1.0 - freshness) * (CHAT_AGENT_STALE_CEILING - CHAT_AGENT_BASE)
-        - freshness * engagement_bonus
-    )
-    return max(CHAT_AGENT_FLOOR, min(CHAT_AGENT_STALE_CEILING, adj))
-
 
 # Supervisord service bands, keyed by the service key passed to
 # ``system/services/oom_priority/bin/oom_tag_service.py`` and by the ``priority``
@@ -190,8 +148,8 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the browser stack (its X display, then the
-# coordinator), then the Files app, then the two single-page apps (Getting
+# the job scheduler, then the Screen service (the stack it starts sits far above,
+# at SCREEN_STACK), then the Files app, then the two single-page apps (Getting
 # Started, then System Monitor), and last the System Monitor's resource sampler.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
@@ -254,20 +212,14 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    # The shared X display Chromium renders into. Losing it breaks the browser
-    # subsystem, so it is *less* expendable than the coordinator below -- whose
-    # death Chromium survives -- but more so than the workspace's own services:
-    # by the time the service bands are being shed at all, every Chromium process
-    # (910-1000) is long gone and this display is holding nothing.
-    "xvfb": 65,
-    # The browser coordinator: the daemon that launches and drives Chromium, not
-    # Chromium itself. An expendable built-in service, but a *service*
-    # nonetheless -- it holds little memory, the Chromium processes it manages
-    # outlive its death, and supervisord restarts it straight back into the same
-    # session, so shedding it frees almost nothing. It therefore must stay well
-    # below SHARED_BROWSER, where those Chromium processes live: a coordinator
-    # ranked above them would be picked first every time and free nothing.
-    "browser": 70,
+    # The Screen service: the lease, the fleet and the CDP proxy of the workspace's
+    # one streamed desktop, which launches the browser's Chromium. Its stack (Xorg,
+    # XFCE, PulseAudio, neko) is not here: it sits at SCREEN_STACK, shed before any
+    # agent (docs/system/specs/screen/spec.md section 9.4). The service itself holds
+    # little memory, brings the stack back with Chromium's tabs, and must stay well
+    # below SHARED_BROWSER, where the Chromium processes it launched live: ranked
+    # above them it would be picked first every time and free nothing.
+    "screen": 72,
     # The Files app: a small Flask server over the workspace's files. It
     # holds little memory and supervisord restarts it if shed.
     "files": 75,
@@ -277,6 +229,13 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Onboarding checklist page: one small page over the onboarding markers,
+    # which stores nothing, so a shed costs one reload.
+    "onboarding-checklist": 82,
+    # The Style Guide page: one static page cataloguing the design system, which
+    # stores nothing, so a shed costs one reload; shed right before System Monitor
+    # and its sampler.
+    "style-guide": 84,
     # The System Monitor page: one polling page that writes nothing to disk, so a
     # shed costs a reload. The most expendable built-in service of all, with the
     # sampler that feeds its graphs just below it: a shed sampler costs a gap in
@@ -293,60 +252,39 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal-session": USER_SERVICE,
 }
 
-# The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
-# browser always outranks even an agent's build/test subprocess and is shed first.
+# The shared-browser band: one above AGENT_SUBPROCESS, so a browser always
+# outranks even an agent's build/test subprocess, and short of the top of the
+# scale, which is left to a chat that has aged (see ``CHAT_STAGES``).
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing
-# a value that the browser service's sweep remaps (see
-# ``shared_browser_oom_score_adj``). The coordinator that launches them is tagged
-# as a service instead (``SERVICE_BANDS["browser"]``) -- shedding it frees none of
+# a value that the Screen service's band sweep remaps (see
+# ``shared_browser_oom_score_adj``). The service that launches them is tagged
+# as a service instead (``SERVICE_BANDS["screen"]``) -- shedding it frees none of
 # Chromium's memory, so it must not outrank the renderers it manages.
-SHARED_BROWSER: Final[int] = 1000
-
-# The floor of the browser band's *range*. Chromium deliberately overwrites any
-# inherited ``oom_score_adj`` once per process at startup with its own internal
-# gradation (browser/zygote 0, gpu/utility 200, renderers 300 -- see
-# ``AdjustLinuxOOMScore`` in chromium's chrome_main_delegate.cc), which without
-# correction would leave the memory-heavy renderers *more* protected than the
-# agents whose work they serve. The kernel offers no way to forbid that lowering
-# without ``CAP_SYS_RESOURCE``, so the browser service instead sweeps its process
-# tree and remaps every self-lowered value into ``[SHARED_BROWSER_FLOOR,
-# SHARED_BROWSER]`` via ``shared_browser_oom_score_adj``: the whole browser tree
-# stays above AGENT_SUBPROCESS, while Chromium's relative ordering (which is worth
-# keeping -- shedding one renderer kills one tab, not the whole browser) decides
-# where in the band each process lands. Chromium only writes each value once, so a
-# remapped value sticks.
-SHARED_BROWSER_FLOOR: Final[int] = 910
-
-# The top of Chromium's own gradation: what it self-assigns to a renderer, the
-# most expendable thing it runs. This is the *input* range of the remap below --
-# a value Chromium writes, never one this workspace assigns.
-CHROMIUM_SELF_ASSIGNED_MAX: Final[int] = 300
-
-
-def shared_browser_oom_score_adj(self_assigned: int) -> int:
-    """Map a value Chromium assigned within its own gradation into the browser
-    band's range ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]``.
-
-    Order-preserving (a more-expendable Chromium process stays more expendable)
-    and clamped, so any input lands inside the band range -- in particular at or
-    above the floor, which is what makes the browser service's sweep idempotent
-    (it only remaps values *below* the floor).
-
-    The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,
-    rather than the full 0..1000 an ``oom_score_adj`` could span. Scaling against
-    1000 would squeeze every Chromium process into the bottom third of the band
-    (renderers reaching only 937), leaving the top of the band to whatever merely
-    *inherited* a high value -- which is never a renderer, because a renderer
-    always self-writes. Renderers hold nearly all of a browser's memory and cost
-    only one tab to shed, so they belong at the ceiling. Anything Chromium marks
-    as even more expendable than a renderer clamps there too.
-    """
-    clamped = max(0, min(CHROMIUM_SELF_ASSIGNED_MAX, self_assigned))
-    span = SHARED_BROWSER - SHARED_BROWSER_FLOOR
-    return SHARED_BROWSER_FLOOR + round(clamped * span / CHROMIUM_SELF_ASSIGNED_MAX)
-
+#
+# Chromium deliberately overwrites any inherited ``oom_score_adj`` once per
+# process at startup with its own internal gradation (browser/zygote 0,
+# gpu/utility 200, renderers 300 -- see ``AdjustLinuxOOMScore`` in chromium's
+# chrome_main_delegate.cc), which without correction would leave the
+# memory-heavy renderers *more* protected than the agents whose work they serve.
+# The kernel offers no way to forbid that lowering without ``CAP_SYS_RESOURCE``,
+# so the Screen service instead sweeps the process trees of the Chromium it
+# launched and of its session and remaps every self-lowered value into the band
+# via ``shared_browser_oom_score_adj``: the whole browser tree stays above
+# AGENT_SUBPROCESS, while Chromium's relative ordering (which is worth keeping --
+# shedding one renderer kills one tab, not the whole browser) decides where in the
+# band each process lands. Chromium only writes each value once, so a remapped
+# value sticks.
+BROWSER: Final[BrowserBand] = BrowserBand(
+    floor=910,
+    # Below the aged chat stage, so that of a chat and a tab holding the same
+    # memory the chat is shed first.
+    ceiling=960,
+    # What Chromium self-assigns to a renderer, the most expendable thing it
+    # runs -- a value Chromium writes, never one this workspace assigns.
+    chromium_self_assigned_max=300,
+)
 
 # Expected band per supervisord program whose *program name* is not a
 # SERVICE_BANDS key, for the backstop listener (system/services/oom_priority/bin/oom_tag_backstop.py).
@@ -362,11 +300,160 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     # earlyoom cannot see the workspace's cap at all.
     "publish_cgroup_meminfo": PROTECTED,
     "env-converge": PROTECTED,
-    # A one-shot (autorestart=false) that registers the VM-resident owner-exec
-    # service origin and exits; shedding it mid-run would leave the registration
-    # half-done, and it holds no memory worth reclaiming.
-    "vm-exec-register": PROTECTED,
+    # The Screen's stack and its watcher: the group ends together, so every member
+    # shares the one band, and it is the stack's own rather than the Screen service's
+    # (see SCREEN_STACK). Each program passes its own name to the tagging wrapper.
+    "screen-xorg": SCREEN_STACK,
+    "screen-session": SCREEN_STACK,
+    "screen-pulse": SCREEN_STACK,
+    "screen-neko": SCREEN_STACK,
+    "screen-watch": SCREEN_STACK,
 }
+
+# The tables' values under the names the rest of the workspace reads them by.
+CHAT_AGENT_BASE: Final[int] = CHAT_STAGES["fresh"].adj
+CHAT_AGENT_FLOOR: Final[int] = CHAT_ENGAGEMENT.floor
+SHARED_BROWSER_FLOOR: Final[int] = BROWSER.floor
+SHARED_BROWSER: Final[int] = BROWSER.ceiling
+CHROMIUM_SELF_ASSIGNED_MAX: Final[int] = BROWSER.chromium_self_assigned_max
+
+
+def _interpolate(x: float, points: tuple[tuple[float, float], ...]) -> float:
+    """Piecewise-linear lookup of ``x`` over ascending ``(x, y)`` points.
+
+    Flat outside the outermost points: below the first, the first ``y``; above
+    the last, the last ``y``.
+    """
+    if x <= points[0][0]:
+        return points[0][1]
+    for (left_x, left_y), (right_x, right_y) in zip(points, points[1:]):
+        if x <= right_x:
+            span = right_x - left_x
+            if span <= 0:
+                return right_y
+            return left_y + (right_y - left_y) * (x - left_x) / span
+    return points[-1][1]
+
+
+def _aging_idle_seconds(idle_seconds: float | None, is_mid_turn: bool) -> float:
+    """The idle time a chat ages by.
+
+    Zero for a chat that is mid-turn: it is running work right now, and unlike
+    an idle chat's revival that work is not recoverable, so age must not demote
+    it however long ago it was last messaged. Zero too for unknown idle time
+    (no engagement evidence at all) -- a chat is demoted only on positive
+    evidence that it has been abandoned.
+    """
+    if is_mid_turn or idle_seconds is None:
+        return 0.0
+    return idle_seconds
+
+
+def _stages_around(
+    stages: Sequence[ChatStage], idle_seconds: float
+) -> tuple[ChatStage, ChatStage]:
+    """The two neighbouring stages a chat idle for ``idle_seconds`` sits between.
+
+    The first two before it has reached any, the last two once it has passed
+    them all, and a lone stage twice.
+    """
+    neighbours = list(zip(stages, stages[1:])) or [(stages[0], stages[0])]
+    for earlier, later in neighbours:
+        if idle_seconds <= later.idle_seconds:
+            return earlier, later
+    return neighbours[-1]
+
+
+def chat_agent_oom_score_adj(
+    *,
+    is_open: bool,
+    is_visible: bool,
+    recency_rank: int | None,
+    idle_seconds: float | None,
+    is_mid_turn: bool,
+    stages: Mapping[str, ChatStage] = CHAT_STAGES,
+) -> int:
+    """Map a chat agent's live activity to its ``oom_score_adj``.
+
+    Lower is more protected. Two forces move a chat within its band, starting
+    from the first of ``stages``. Engagement pulls it down:
+
+    - ``is_open``: the chat has an open window in the workspace UI.
+    - ``is_visible``: the chat's window is currently visible (implies open).
+    - ``recency_rank``: this chat's position when the chats that have been
+      messaged are sorted by last-message time, newest first (0 = most recently
+      messaged). The bonus decays with rank, so more-recently-messaged chats are
+      more protected than their peers. ``None`` means the chat has not been
+      messaged (this session) and so gets no recency bonus -- a never-messaged
+      chat must not be treated as if it were the most recent.
+
+    Staleness pushes it up: ``idle_seconds`` (time since the chat was last
+    engaged with by any route) carries it from each stage toward the next,
+    which lifts the score and scales the engagement bonuses down by the same
+    measure. So engagement only ever *delays* the climb -- an abandoned chat
+    ends up at the last stage's band even with a visible tab, since a shed
+    costs it nothing but a slow next message. ``is_mid_turn`` suspends the climb
+    entirely (see ``_aging_idle_seconds``).
+
+    The result is clamped between ``CHAT_ENGAGEMENT.floor`` and the last stage's
+    band.
+    """
+    engagement_bonus = 0
+    if is_open:
+        engagement_bonus += CHAT_ENGAGEMENT.open_bonus
+    if is_visible:
+        engagement_bonus += CHAT_ENGAGEMENT.visible_bonus
+    if recency_rank is not None:
+        engagement_bonus += max(
+            0,
+            CHAT_ENGAGEMENT.recency_max_bonus
+            - CHAT_ENGAGEMENT.recency_step * max(0, recency_rank),
+        )
+    ordered = tuple(stages.values())
+    aging_seconds = _aging_idle_seconds(idle_seconds, is_mid_turn)
+    earlier, later = _stages_around(ordered, aging_seconds)
+    # How much of the earlier stage is left: 1.0 at it, 0.0 at the later one.
+    remaining = _interpolate(
+        aging_seconds, ((earlier.idle_seconds, 1.0), (later.idle_seconds, 0.0))
+    )
+    freshness = later.freshness + remaining * (earlier.freshness - later.freshness)
+    adj = round(
+        earlier.adj
+        + (1.0 - remaining) * (later.adj - earlier.adj)
+        - freshness * engagement_bonus
+    )
+    return max(CHAT_ENGAGEMENT.floor, min(ordered[-1].adj, adj))
+
+
+def shared_browser_oom_score_adj(self_assigned: int) -> int:
+    """Map a value Chromium assigned within its own gradation into the browser
+    band's range ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]``.
+
+    Order-preserving (a more-expendable Chromium process stays more expendable)
+    and clamped, so any input lands inside the band range -- in particular at or
+    above the floor, which is what makes the Screen service's sweep idempotent
+    (it only remaps values *below* the floor).
+
+    The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,
+    rather than the full 0..1000 an ``oom_score_adj`` could span. Scaling against
+    1000 would squeeze every Chromium process into the bottom third of the band,
+    leaving the top of the band to whatever merely
+    *inherited* a high value -- which is never a renderer, because a renderer
+    always self-writes. Renderers hold nearly all of a browser's memory and cost
+    only one tab to shed, so they belong at the ceiling. Anything Chromium marks
+    as even more expendable than a renderer clamps there too.
+    """
+    clamped = max(0, min(CHROMIUM_SELF_ASSIGNED_MAX, self_assigned))
+    span = SHARED_BROWSER - SHARED_BROWSER_FLOOR
+    return SHARED_BROWSER_FLOOR + round(clamped * span / CHROMIUM_SELF_ASSIGNED_MAX)
+
+
+def tag_key_band(service_key: str) -> int | None:
+    """The band the tagging wrapper gives a program that names ``service_key``: a service's own key, or the
+    program name of a built-in outside the service bands; None for a key neither table knows."""
+    if service_key in SERVICE_BANDS:
+        return SERVICE_BANDS[service_key]
+    return _NON_SERVICE_PROGRAM_BANDS.get(service_key)
 
 
 def supervisord_program_band(

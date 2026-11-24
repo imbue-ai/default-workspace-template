@@ -17,6 +17,10 @@
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
+/** The capsule of the Lucide "mic" glyph, which the chat's dictation button also draws filled to the input
+ *  level; the glyph is the capsule, its cradle, and its stand. */
+export const MIC_CAPSULE_PATH = "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z";
+
 // Inner markup for stroke-outline icons, all drawn on a 24x24 grid.
 const STROKE_PATHS = {
   attach:
@@ -27,12 +31,18 @@ const STROKE_PATHS = {
   pointer:
     '<path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2l.6 2.4"/><path d="M2.2 7.2l2.4.6"/><path d="M3.6 3.6l1.7 1.7"/>',
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
+  // Lucide "mic": the composer's dictation button.
+  mic: `<path d="${MIC_CAPSULE_PATH}"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>`,
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  // Lucide "user-plus": sharing grants people access by email, so the glyph
-  // shows a person being added.
+  // Lucide "forward": sharing hands an app on to someone else, so the glyph is
+  // an arrow setting off.
+  share: '<path d="m15 17 5-5-5-5"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
+  // Lucide "user-plus": a person being added.
   "user-plus":
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
+  // Lucide "user": a neutral silhouette for a person who has no name or picture to show.
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
   refresh:
     '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
@@ -77,6 +87,8 @@ const STROKE_PATHS = {
     '<path d="M12 22v-9"/><path d="M15.17 2.21a1.67 1.67 0 0 1 1.63 0L21 4.57a1.93 1.93 0 0 1 0 3.36L8.82 14.79a1.655 1.655 0 0 1-1.64 0L3 12.43a1.93 1.93 0 0 1 0-3.36z"/><path d="M20 13v3.87a2.06 2.06 0 0 1-1.11 1.83l-6 3.08a1.93 1.93 0 0 1-1.78 0l-6-3.08A2.06 2.06 0 0 1 4 16.87V13"/><path d="M21 12.43a1.93 1.93 0 0 0 0-3.36L8.83 2.2a1.64 1.64 0 0 0-1.63 0L3 4.57a1.93 1.93 0 0 0 0 3.36l12.18 6.86a1.636 1.636 0 0 0 1.63 0z"/>',
   package:
     '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/>',
+  // Lucide "arrow-up-right": a row that leads somewhere else when clicked.
+  "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   "external-link":
     '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
@@ -101,6 +113,7 @@ const STROKE_PATHS = {
     '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   inbox:
     '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  mail: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   "file-plus":
     '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
@@ -110,6 +123,9 @@ const STROKE_PATHS = {
 
 export type IconName = keyof typeof STROKE_PATHS;
 
+/** Every stroke-outline icon's name, in the order above. */
+export const ICON_NAMES = Object.keys(STROKE_PATHS) as readonly IconName[];
+
 export interface IconOptions {
   // Pixel size. Omit to let CSS size the svg.
   size?: number;
@@ -118,6 +134,12 @@ export interface IconOptions {
   // Draw the glyph solid instead of as an outline. Only sensible for shapes that read as a
   // silhouette -- the composer chip's "fast mode" bolt, which has to say "on" at 12px.
   filled?: boolean;
+}
+
+/** The paths of a stroke-outline icon alone, for a drawing that frames them itself (the dictation button draws
+ *  the mic over its own filled capsule) on the same 24x24 grid. */
+export function iconPaths(name: IconName): string {
+  return STROKE_PATHS[name];
 }
 
 /** Full <svg> string for a stroke-outline icon. */

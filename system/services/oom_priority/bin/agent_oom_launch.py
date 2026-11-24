@@ -36,19 +36,16 @@ TUI and its ``app-server`` daemon, so a codex agent registers two pids under one
 agent id. Both get the correct band at launch, which is the protection that matters,
 and either being shed now produces a ledger record where before there was none.
 
-Two known limits, both acceptable because they are strictly better than the
-unbanded status quo:
+The prioritizer's engagement re-tag reaches both (``live_pids_by_agent_id``).
 
-- Shedding is asymmetric and only PROBABLY lands the right way. Killing the daemon
-  takes the TUI with it (``codex --remote`` exits on lost connection) -- a clean
-  full-agent death. Killing the TUI leaves the daemon orphaned in its detached
-  sidecar window, still holding memory. Both carry the same band, so earlyoom picks
-  by memory and the daemon -- the larger one -- goes first, which is the outcome we
-  want. To make that deterministic rather than lucky, give the daemon a
-  more-expendable band than the TUI (one more argument here).
-- ``lookup_pid_by_agent_id`` returns the first live match, so the prioritizer's
-  engagement re-tag reaches only one of the two. Fix by returning every live match
-  and re-tagging each.
+One known limit, acceptable because it is strictly better than the unbanded
+status quo: shedding is asymmetric and only PROBABLY lands the right way. Killing
+the daemon takes the TUI with it (``codex --remote`` exits on lost connection) --
+a clean full-agent death. Killing the TUI leaves the daemon orphaned in its
+detached sidecar window, still holding memory. Both carry the same band, so
+earlyoom picks by memory and the daemon -- the larger one -- goes first, which is
+the outcome we want. To make that deterministic rather than lucky, give the daemon
+a more-expendable band than the TUI (one more argument here).
 
 Separately, and outside this file: the shed NOTICE is claude-only
 (``claude_shed_notice_hook.py`` is a claude SessionStart hook), so a shed codex
@@ -75,6 +72,7 @@ import shutil
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- its only import beyond the standard library is the stdlib-only `oom_priority`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import bands
@@ -92,9 +90,9 @@ def _band_for(agent_name: str) -> int:
     - A chat (``user_created``) starts at ``CHAT_AGENT_BASE``, the middle of the
       chat range. The system_interface prioritizer moves it either way from
       there -- down toward the protected floor as the user engages with it, up
-      toward ``CHAT_AGENT_STALE_CEILING`` (past the worker band) as it is left
-      alone -- so an un-re-tagged chat stays middling-expendable rather than
-      pinned to the protected floor.
+      past the worker band toward the aged stage as it is left alone -- so an
+      un-re-tagged chat stays middling-expendable rather than pinned to the
+      protected floor.
     - Everything else -- a worker, or an agent whose record we cannot read to
       classify -- lands at ``WORKER_AGENT``, the least-protected agent tier: an
       agent we cannot identify must not be shielded by our ignorance."""

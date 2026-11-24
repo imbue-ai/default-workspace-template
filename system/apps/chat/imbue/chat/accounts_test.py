@@ -6,6 +6,8 @@ Every test passes an explicit `home` so nothing touches the real `~/.minds`.
 import json
 import shutil
 import tomllib
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -13,14 +15,17 @@ import pytest
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import INDEX_VERSION
+from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import accounts_root
+from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import discard_account_dir
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
+from imbue.chat.accounts import read_signed_in_at
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.accounts import rename_account
@@ -155,6 +160,32 @@ def test_committing_the_same_folder_twice_keeps_its_id_and_position(tmp_path: Pa
     assert [a.id for a in index.accounts] == [other.id, account_id]
     assert [a.display for a in index.accounts] == ["Anthropic", "Renamed"]
     assert index.mru == account_id
+
+
+def test_every_commit_stamps_when_the_account_signed_in(tmp_path: Path) -> None:
+    """A re-authentication is a commit of the same folder, and it moves the stamp forward, so a
+    chat page can tell an account signed in again after a turn failed on it."""
+    account_id, _ = mint_account_dir(tmp_path)
+    assert read_signed_in_at(account_id, tmp_path) is None
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    (account_dir(account_id, tmp_path) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
+
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+
+    stamp = read_signed_in_at(account_id, tmp_path)
+    assert stamp is not None
+    assert datetime.fromisoformat(stamp) > datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def test_a_commit_refused_for_the_wrong_lane_leaves_the_sign_in_stamp_alone(tmp_path: Path) -> None:
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    (account_dir(account_id, tmp_path) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
+
+    with pytest.raises(AccountError):
+        commit_account(account_id, "openai", "OpenAI", tmp_path)
+
+    assert read_signed_in_at(account_id, tmp_path) == "2000-01-01T00:00:00+00:00"
 
 
 def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:
@@ -401,6 +432,61 @@ def test_pinning_a_default_survives_later_launches_and_sign_ins(tmp_path: Path) 
     index = read_index(tmp_path)
     assert index.default_account == pinned.id
     assert index.mru == later.id
+
+
+def _add_as_first_run_sign_in(home: Path, lane: str, display: str) -> Account:
+    account_id, _ = mint_account_dir(home)
+    return commit_account(account_id, lane, display, home, is_default_when_none_pinned=True)
+
+
+def test_a_first_run_sign_in_pins_its_account_when_nothing_is_pinned(tmp_path: Path) -> None:
+    """The provider connected first stays the default, though each later sign-in is the most recently used."""
+    first = _add_as_first_run_sign_in(tmp_path, "anthropic", "Anthropic")
+    second = _add_as_first_run_sign_in(tmp_path, "openai", "OpenAI")
+
+    index = read_index(tmp_path)
+    assert index.default_account == first.id
+    assert index.mru == second.id
+    assert choose_default_account(index) == first
+
+
+def test_a_first_run_sign_in_leaves_a_pin_the_user_moved(tmp_path: Path) -> None:
+    _add_as_first_run_sign_in(tmp_path, "anthropic", "Anthropic")
+    chosen = _add_as_first_run_sign_in(tmp_path, "openai", "OpenAI")
+    set_default_account(chosen.id, True, tmp_path)
+
+    _add_as_first_run_sign_in(tmp_path, "google", "Google")
+
+    assert read_index(tmp_path).default_account == chosen.id
+
+
+def test_a_first_run_sign_in_pins_again_once_the_pinned_account_is_removed(tmp_path: Path) -> None:
+    first = _add_as_first_run_sign_in(tmp_path, "anthropic", "Anthropic")
+    delete_account(first.id, tmp_path)
+    assert read_index(tmp_path).default_account is None
+
+    replacement = _add_as_first_run_sign_in(tmp_path, "openai", "OpenAI")
+
+    assert read_index(tmp_path).default_account == replacement.id
+
+
+def test_signing_in_again_during_the_first_run_pins_an_unpinned_account(tmp_path: Path) -> None:
+    """A re-authentication is a commit like any other: with nothing pinned, the account it lands in is pinned."""
+    account = _add(tmp_path, "anthropic", "Anthropic")
+    assert read_index(tmp_path).default_account is None
+
+    commit_account(account.id, "anthropic", "Anthropic", tmp_path, is_default_when_none_pinned=True)
+
+    assert read_index(tmp_path).default_account == account.id
+
+
+def test_a_sign_in_outside_the_first_run_pins_nothing(tmp_path: Path) -> None:
+    _add(tmp_path, "anthropic", "Anthropic")
+    later = _add(tmp_path, "openai", "OpenAI")
+
+    index = read_index(tmp_path)
+    assert index.default_account is None
+    assert choose_default_account(index) == later
 
 
 def test_unpinning_clears_the_default_only_when_it_is_the_pinned_one(tmp_path: Path) -> None:

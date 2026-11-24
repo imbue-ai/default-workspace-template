@@ -1,4 +1,4 @@
-"""CLI entry points: `uv run env-converge run | capture | upgrade | status`."""
+"""CLI entry points: `uv run --no-sync env-converge run | capture | upgrade | status`."""
 
 import json
 import sys

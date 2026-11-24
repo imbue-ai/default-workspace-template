@@ -4,18 +4,20 @@
  */
 
 import m from "mithril";
+import "@fontsource/besley/500.css";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
-import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import { addActiveAgentChangedListener, addMentionsUpdatedListener, initChats } from "./models/Chats";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
+import { ensureParticipants } from "./models/Participants";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
 import { runHook } from "./hooks";
 import { trackBackendArrivals } from "./models/OutgoingMessages";
-import { isMessageCarriedBySwitch } from "./models/Response";
+import { countSentTurnsSince, isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
@@ -59,7 +61,7 @@ async function bootstrap(): Promise<void> {
   const sessionId = getChatSessionId();
   // The chat app's own WebSocket, read for this page's own chat.
   initChats();
-  trackBackendArrivals(isMessageCarriedBySwitch);
+  trackBackendArrivals(isMessageCarriedBySwitch, countSentTurnsSince);
   trackPendingLaneSettlement();
   // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an
   // optimistic pick made for the old agent would otherwise sit on the bar until its timeout.
@@ -85,6 +87,10 @@ async function bootstrap(): Promise<void> {
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
+  // Who this page is and who everyone else is, so a turn is drawn as the viewer's own or as another person's;
+  // read again when someone's mentions change, which is the one push that follows a sender joining.
+  void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");

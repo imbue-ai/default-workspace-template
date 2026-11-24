@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import m from "mithril";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // lightbox touches the DOM imperatively; markdown.ts only needs its export to exist.
 vi.mock("./lightbox", () => ({ openImageLightbox: vi.fn() }));
 
-import { renderMarkdown, requestedAtUrl } from "./markdown";
+import { MarkdownContent, renderMarkdown, requestedAtUrl } from "./markdown";
+import { forgetLocalImage, localImageUrl, rememberLocalImage } from "./models/attachments";
+
+function mountMarkdown(content: string, requestedAt?: string): HTMLImageElement {
+  const root = document.createElement("div");
+  m.render(root, m(MarkdownContent, { content, requestedAt }));
+  return root.querySelector("img")!;
+}
 
 describe("requestedAtUrl", () => {
   it("appends the per-message post time to an absolute on-disk path", () => {
@@ -149,5 +157,109 @@ describe("renderMarkdown links", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(container.querySelector("strong")!.textContent).toBe("bold");
     expect(container.querySelector("img")!.getAttribute("src")).toBe("/home/user/workspace/data/images/chart.png");
+  });
+});
+
+describe("MarkdownContent images", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("holds a placeholder for an image until it loads, then lets its own size take over", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
+
+    expect(image.getAttribute("src")).toBe("/home/user/workspace/data/chart.png?requested_at=ts-1");
+    expect(image.classList.contains("is-loading")).toBe(true);
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.classList.contains("is-loading")).toBe(false);
+  });
+
+  it("fades a loaded image in over the box, then lets the box go", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
+    // jsdom applies no stylesheet, so stand in for the fade the chat's style gives an arriving image.
+    image.style.animationName = "image-arrive";
+
+    image.dispatchEvent(new Event("load"));
+    expect(image.classList.contains("is-arriving")).toBe(true);
+
+    image.dispatchEvent(new Event("animationend"));
+    expect(image.classList.contains("is-arriving")).toBe(false);
+  });
+
+  it("does not wait on a fade that reduced motion turned off", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
+    image.style.animationName = "none";
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.classList.contains("is-arriving")).toBe(false);
+  });
+
+  it("gives a loaded image with no size of its own the size the browser decoded, so a viewBox-only SVG still shows", () => {
+    const image = mountMarkdown("![board](/home/user/workspace/data/board.svg)", "ts-1");
+    Object.defineProperty(image, "naturalWidth", { value: 225 });
+    Object.defineProperty(image, "naturalHeight", { value: 150 });
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.getAttribute("width")).toBe("225");
+    expect(image.getAttribute("height")).toBe("150");
+  });
+
+  it("keeps the size an upload's path records over the decoded one", () => {
+    const path = `/code/uploads/${"d".repeat(32)}-300x200/board.svg`;
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+    Object.defineProperty(image, "naturalWidth", { value: 225 });
+    Object.defineProperty(image, "naturalHeight", { value: 150 });
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.getAttribute("width")).toBe("300");
+    expect(image.getAttribute("height")).toBe("200");
+  });
+
+  it("drops the placeholder when the image fails to load as well", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/missing.png)");
+
+    image.dispatchEvent(new Event("error"));
+
+    expect(image.classList.contains("is-loading")).toBe(false);
+  });
+
+  it("holds an upload's box at the size its path records, so it does not jump when it loads", () => {
+    const path = `/code/uploads/${"a".repeat(32)}-1600x900/photo.png`;
+
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+
+    expect(image.getAttribute("width")).toBe("1600");
+    expect(image.getAttribute("height")).toBe("900");
+    expect(image.classList.contains("is-loading")).toBe(true);
+  });
+
+  it("leaves an upload whose path records no size to the fixed-shape box", () => {
+    const path = `/code/uploads/${"b".repeat(32)}/photo.png`;
+
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+
+    expect(image.hasAttribute("width")).toBe(false);
+    expect(image.classList.contains("is-loading")).toBe(true);
+  });
+
+  it("draws an image this document uploaded from its local copy, at the size its path records", () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
+    const path = `/code/uploads/${"c".repeat(32)}-800x600/photo.png`;
+    rememberLocalImage(path, "blob:local-photo", 1024);
+
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+
+    expect(image.getAttribute("src")).toBe("blob:local-photo");
+    expect(image.getAttribute("width")).toBe("800");
+    expect(image.getAttribute("height")).toBe("600");
+    forgetLocalImage(path);
+    expect(localImageUrl(path)).toBeUndefined();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:local-photo");
   });
 });

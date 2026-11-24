@@ -19,7 +19,7 @@ set -euo pipefail
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
-readonly PINNED_VERSION="v0.46.0"
+readonly PINNED_VERSION="v0.55.0"
 
 readonly INSTALL_ROOT="${DATALIB_INSTALL_ROOT:-$HOME/.local/share/datalib}"
 readonly BIN_DIR="${DATALIB_BIN_DIR:-$HOME/.local/bin}"
@@ -85,11 +85,11 @@ for doc in agent_user.md user/getting_your_data.md user/config_examples/all_sour
 done
 _log "agent guide at $DOCS_DIR/agent_user.md"
 
-# The tarball carries the binaries only. The Node runtime (latchkey and qmd,
-# at the versions datalib was built with) is a separate asset of the same
+# The tarball carries the binaries only. The Node runtime (latchkey,
+# at the version datalib was built with) is a separate asset of the same
 # release, fetched sha256-checked into ~/.cache/datalib/runtime. A sync
 # fetches it too if this fails, so a miss here is reported but not fatal.
-_log "fetching the Node runtime (about 115 MB, once)"
+_log "fetching the Node runtime (about 55 MB, once)"
 if "$RELEASE_DIR/datalib-step" pull-runtime; then
     _log "runtime in place under ~/.cache/datalib/runtime"
 else

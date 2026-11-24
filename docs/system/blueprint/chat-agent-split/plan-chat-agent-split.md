@@ -242,7 +242,7 @@ The `rebind` entry (section 6) sits in the same place, and a record carries at m
 }
 ```
 
-The two entries share their common fields (`ChatTransitionRecord` in code): the phase, the target, the confirming message, the held sends, the returned queue, the error and its `failed_step`, and, since phase 9, the `model_pick` (`null` for none), which the handoff entry alone carried in phase 8.
+The two entries share their common fields (`ChatTransitionRecord` in code): the phase, the target, the confirming message, the held sends and those already delivered (`delivered_sends`, 5.7), the returned queue, the error and its `failed_step`, and, since phase 9, the `model_pick` (`null` for none), which the handoff entry alone carried in phase 8.
 A rebind changes no membership; when it completes on a chat of one agent the record is dropped again, so a record still exists only for a chat that has had a handoff.
 
 The own-chat rule: when listing instances, every non-primary agent that appears in no record as a non-first member is a chat of its own.
@@ -258,7 +258,7 @@ Name reuse is not load-bearing for correctness: nothing may depend on reaching t
 The retiring agent is renamed to `archived-<seq>-<canonical>-<agent-id>` with one `mngr rename` whose `-l` flags carry every label in the same atomic write: `display_name="<title> (archived <seq>)"`, `chat_id`, `chat_seq`, and `archived_at` (the label `mngr archive` would set; the rename sets it itself, so the archive is one mngr call rather than three).
 The archival prefix sorts archived agents together and the sequence number orders them; the agent id keeps the name unique for the life of the host.
 `AgentName` allows letters, digits, dashes, and underscores with no length cap, so the name (about 115 characters at most) is valid.
-The rename happens after `mngr stop`, so no tmux session carries the archival name, and an archived agent is never started; tmux's acceptance of a name that long only matters to someone starting one by hand.
+The rename happens just before `mngr stop`, since the successor is created under the chat's name while the old agent stops, so the stopping agent's tmux session carries the archival name for those seconds (tmux takes a name that long); an archived agent is never started.
 
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
@@ -285,7 +285,7 @@ Every chat agent the chat app creates carries `MINDS_CHAT_ID=<chat id>` in its e
 Agents created outside the chat app (a `mngr create --template chat` from a terminal, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
 Those creates are no longer unbound: a create that names no harness and no account resolves the workspace's default account through `.mngr/settings.local.toml` (written by the chat app's `create_defaults.py` from the account store), carries its `account=<id>` label, and is refused by `system/scripts/require_create_account.py` when no account is signed in.
 That changes what they run on, not what they are: they remain own chats with no `MINDS_CHAT_ID`.
-The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the window-surfacing labels, the claude version-check waiver, and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create above.
+The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the window-surfacing labels and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create above.
 
 - `layout.py` builds the requester address from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`.
   The shell resolves `self` and attributes ops to clients through that address, so an archived or successor agent's ops land on the chat's tab and client.
@@ -358,7 +358,7 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
   It carries no `lane`: the lane is the account's, and the page reads it off the account row it already holds for `account_id`, which is all the switch rule needs (5.1: any account but the chat's own is a switch; the kind, a rebind or a handoff, is read by harness and lane, since two lanes can share one harness).
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4, section 6): one shape for both kinds of switch, since the page renders them the same way.
-  While set it carries `kind` (`handoff` or `rebind`), the phase (`restarting` is the rebind's), `started_at` (when the switch was confirmed, which since phase 8 is how the page tells this switch's summary request from an earlier, called-off switch's), the target lane, account, and harness, `target_label` (what the phase text and the 409s name the destination by: the harness for a handoff, the account for a rebind), the messages held for after the switch (the confirming message first, so a reloaded page keeps showing them until they land in the transcript; the record keeps the confirming text as `trigger_text` once it leaves the held list), and, since phase 9, `model_pick` (the model the switch is taking the chat to, `null` for none, which the model bar reads while it is being carried out, 5.12), and the failed phase's `error` and, since phase 8, `failed_step` (which step the retry reruns: `start` or `model`; a rebind's since phase 9).
+  While set it carries `kind` (`handoff` or `rebind`), the phase (`restarting` is the rebind's), `started_at` (when the switch was confirmed, which since phase 8 is how the page tells this switch's summary request from an earlier, called-off switch's), the target lane, account, and harness, `target_label` (what the phase text and the 409s name the destination by: the harness for a handoff, the account for a rebind), the messages sent during the switch (the confirming message first, those already delivered included until the switch is done (5.7), so a reloaded page keeps showing them until they land in the transcript; the record keeps the confirming text as `trigger_text` once it leaves the held list), and, since phase 9, `model_pick` (the model the switch is taking the chat to, `null` for none, which the model bar reads while it is being carried out, 5.12), and the failed phase's `error` and, since phase 8, `failed_step` (which step the retry reruns: `start` or `model`; a rebind's since phase 9).
 - The Flask state holder currently named `ChatState` is renamed (to `ChatAppState`) so the name is free for chat-level state.
 
 Routes are `/api/chats/<chat_id>/...` and `/api/chats/create`; every `/api/agents/...` route was kept as an alias that resolved the path parameter as a chat id until phase 7 dropped the aliases (`GET /api/agents`, the plain listing of every mngr agent, is not one and stays).
@@ -443,7 +443,6 @@ As landed in phase 9, which lets a rebind take a model pick (section 6), revisin
 - The dialog opened from Change, for either kind of switch, starts from the pick already armed for that account, so confirming it again does not drop the pick. Picking the armed account again from the provider chooser ("switch to another provider" under an auth-failed turn, or "+ Add a provider") keeps the pick the same way: a rebind stays armed with it, and a handoff's dialog starts from it.
 - Armed, the strip names the pick ("Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"), and the chip and the Model row read the pick, else, for a rebind, the model the agent keeps.
 - The failed page names the step for a rebind as for a handoff: "Could not restart Claude Code" or "Could not set the model on Claude Code".
-- The dialog offers no picker for a harness whose model bar is read-only (antigravity, whose model is changed from the agent's terminal), for either kind of switch, and a new chat started from a rebind's dialog there does not carry the chat's model over: a pick made there could never be applied, and a rebind's retry would rerun it forever. The server holds the same line for any other caller: `GET /api/accounts/<account_id>/model-options` offers such a harness nothing, and a pick for one is rejected at the model step at once, without the retry a refused switch gets.
 
 ### 5.2 Trigger and preconditions
 
@@ -477,10 +476,11 @@ The sequence:
    Otherwise, if the active agent is stopped, start it.
    Then send the summary request through the chat's normal send path and wait (5.5).
    Cancel is still possible here.
-3. **switching**: `mngr stop` the old agent (the chat app reaps its session's live state, codex's app-server connection included), then rename and archive it (4.3), record its final event count, and create the new agent (5.8).
+3. **switching**: rename and archive the old agent (4.3), then `mngr stop` it (the chat app reaps its session's live state, codex's app-server connection included) while the new agent is created (5.8), and record the old agent's final event count once the stop is done. The stop and the create share no host lock, so the switch costs the longer of the two rather than their sum. A refused rename still stops the old agent before the switch fails.
    The queue was already returned in draining (5.3) and the open tk steps carry over (5.9), so nothing else is captured or closed here.
    Entering this phase is the point of no return.
 4. **active**: the record's `handoff` is cleared, the new agent is the last member, the switch chip is emitted, held sends are delivered, and the chat snapshot is pushed.
+   Between the new agent becoming the last member and the deliveries finishing, the switch has *landed*: the snapshot's `handoff` carries `has_landed`, the chat reads as the new agent (its status, its activity, a Stop for its turn), and an interrupt waits for the deliveries to finish instead of being refused, since its restart would otherwise race one.
 
 Step 3 fails into **failed** (5.10) when the create fails, and, since phase 8, when any other step of it is refused (a stop, the archival rename, the record write): past the point of no return no verb but destroy answers the chat and only the failed phase has a retry, so a refusal left in `switching` would wedge the chat until the next chat-app restart. A refusal in `draining` or `summarizing` keeps its phase, where cancel is still possible. The one exception is a successor the observe stream has not listed yet at delivery time, which is no refusal: the record keeps `switching` for the next resume.
 
@@ -523,6 +523,8 @@ Cancel is refused with 409 in `switching` and later.
 - The trigger message is the first of the held sends.
   It rode the new agent's `mngr create --message-file` together with the handoff prompt until phase 8, which made the create silent: the prompt now carries the message at its end and goes through the send path (5.8), and the others follow it once the agent is ready.
 - Delivery pops one held send at a time under the same lock the message route appends under, and the `handoff` entry is cleared only once the list is empty, so a send that arrives during delivery is delivered by the same loop rather than overtaking one still held.
+  A popped send moves to the entry's `delivered_sends`, and the snapshot's `held_sends` lists those after the confirming message until the entry is cleared: its turn reaches the transcript only after delivery, so the page keeps showing it from the snapshot until then.
+  Each listed send says whether it has been delivered (`is_delivered`): the page stands a delivered one down, oldest first, as the agent's turns since the switch began reach its transcript or queue, and never one still held.
 - A cancel returns the trigger message to the composer and delivers the other held sends to the old agent (5.6).
 - Held sends survive a chat-app restart because they are persisted on the record's `handoff` entry.
 
@@ -568,7 +570,7 @@ The record's `handoff` entry persists the phase, the target, the pre-minted id, 
 
 - `draining` resumes by re-checking the queue.
 - `summarizing` resumes by re-checking the summary's freshness, then the proceed conditions.
-- `switching` resumes by checking, in order: is the old agent stopped (else stop it); does it carry the archival name (else the one rename that also sets its labels); is `final_event_count` recorded; does an agent with the pre-minted id exist.
+- `switching` resumes by checking, in order: does the old agent carry the archival name (else the one rename that also sets its labels); is it stopped (else stop it, alongside the next check); does an agent with the pre-minted id exist; is `final_event_count` recorded.
 - If an agent with the pre-minted id exists and is running or stopped, it is adopted as the new active agent and the handoff completes.
   If the create left something mngr refuses to reuse (`mngr create --id` raises `DuplicateAgentIdOnHostError` for an id present on the host), the partial agent is destroyed and the create rerun under the same id.
 - `failed` resumes as failed.

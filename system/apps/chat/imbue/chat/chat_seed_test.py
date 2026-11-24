@@ -5,23 +5,37 @@ from pathlib import Path
 
 from loguru import logger
 
+from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_start_suggestions
+from imbue.chat.chat_seed import is_first_run_seed
+from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.first_run_tree import MORE_IDEAS_LABEL
+from imbue.chat.first_run_tree import SHOW_IDEAS_LABEL
+from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
+from imbue.chat.first_run_tree import START_DESCRIBE_LABEL
+from imbue.chat.first_run_tree import START_FEATURES_LABEL
+from imbue.chat.first_run_tree import idea_names
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.primitives import ChatId
+from imbue.chat.suggestions import SuggestionSource
 
+_REPO_ROOT = Path(__file__).parents[5]
 _CHAT_ID = ChatId("agent-seeded")
 _CREATED_AT = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 # The last seeded turn a bare-number reply picks from.
@@ -168,3 +182,115 @@ def test_the_seed_pseudo_agent_is_the_chat_itself_on_the_seed_harness(tmp_path: 
     assert info.harness is HarnessType.SEED
     assert info.agent_state_dir == tmp_path and info.claude_config_dir == tmp_path
     assert info.state == "STOPPED"
+
+
+def test_the_first_runs_words_ride_the_launch_message_and_nothing_else(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "  I want to use Studio for: Music.  ")
+
+    launch = seed_context_message(chat_dir, "hello")
+
+    assert read_first_run_context(chat_dir) == "I want to use Studio for: Music."
+    assert "<about-user>\nI want to use Studio for: Music.\n</about-user>" in launch
+    assert launch.endswith("\nhello")
+
+
+def test_a_first_run_chat_with_nothing_said_is_still_marked_and_carries_no_about_user_block(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    assert is_first_run_seed(chat_dir) is False
+    write_first_run_context(chat_dir, "   ")
+
+    assert is_first_run_seed(chat_dir) is True
+    assert "<about-user>" not in seed_context_message(chat_dir, "hello")
+
+
+def test_the_first_run_welcome_is_the_agents_introduction_ending_on_how_to_start() -> None:
+    assert [turn.role for turn in FIRST_RUN_WELCOME] == [SeedRole.ASSISTANT] * 4
+    assert [turn.text for turn in FIRST_RUN_WELCOME] == [
+        "Hi, I'm your Studio agent. I'll be with you from here on.",
+        "You can chat with me any time by clicking my avatar on the desktop.",
+        "With Studio you can:\n\n- Build apps\n- Run agents\n- Automate workflows\n- Consolidate your data",
+        "**How do you want to start?**",
+    ]
+
+
+def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_none() -> None:
+    """The page shows a set only under the message it names, so the set names the seed's last event."""
+    suggestions = first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME)
+
+    assert suggestions.source is SuggestionSource.FIXED
+    assert suggestions.after_event_id == seed_event_id(_CHAT_ID, 3)
+    assert suggestions.after_event_id == seed_events(_CHAT_ID, FIRST_RUN_WELCOME, _CREATED_AT)[-1]["event_id"]
+    assert [(each.suggestion_id, each.label, each.is_recommended) for each in suggestions.suggestions] == [
+        ("start-describe", "Describe what you want to make", False),
+        ("start-ideas", "Get ideas for what to make", False),
+        ("start-features", "See what Studio can do", False),
+    ]
+
+
+def test_a_first_run_chats_first_send_tells_the_agent_to_follow_the_onboarding_skill(tmp_path: Path) -> None:
+    """The reply to each start suggestion is in the skill, so the agent is sent there before it answers; the
+    paragraph rides inside the block the page strips, so the user still sees only what they sent."""
+    chat_dir = _seeded_chat_dir(tmp_path, FIRST_RUN_WELCOME)
+    write_first_run_context(chat_dir, "")
+
+    launch = seed_context_message(chat_dir, START_FEATURES_LABEL)
+
+    paragraph = (
+        "This is the user's first conversation in a new workspace. Before replying, read "
+        ".agents/skills/first-run-onboarding/SKILL.md and follow it."
+    )
+    assert paragraph in launch
+    assert launch.index(paragraph) < launch.index(f"</{SEED_CONTEXT_TAG}>")
+    decision = classify_user_message(launch)
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "See what Studio can do"
+
+
+def test_a_seeded_chat_that_is_not_a_first_runs_is_not_sent_to_the_onboarding_skill(tmp_path: Path) -> None:
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, _turns()), "hello")
+
+    assert "first-run-onboarding" not in launch
+    assert "first conversation in a new workspace" not in launch
+
+
+def test_the_onboarding_skill_answers_every_start_suggestion_by_its_exact_words() -> None:
+    """A click sends the suggestion's label and the skill matches the message against it, so the two are one
+    contract kept in two files."""
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+
+    for suggestion in first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME).suggestions:
+        assert f"| `{suggestion.label}` |" in skill
+    assert FIRST_RUN_WELCOME[-1].text in skill
+
+
+def test_the_onboarding_skill_answers_describe_what_you_want_to_make_with_an_example() -> None:
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+    path_a = skill.split(f'## Path A: "{START_DESCRIBE_LABEL}"', 1)[1].split("## Path B", 1)[0]
+
+    assert (
+        "```\n"
+        "## Describe the problem you want to solve. Provide lots of context!\n"
+        "\n"
+        "What’s annoying, overwhelming, or tedious in your digital life? Go ahead and complain--I’ll help you build "
+        "something that makes it better.\n"
+        "\n"
+        "*Example: I feel scattered. My todos are in a million different places, and I can never find things when I "
+        "need them. I want a command center that pulls everything into one place and tells me what to do next.*\n"
+        "\n"
+        "**Prefer to talk? Tap the mic and think out loud.**\n"
+        "```\n"
+    ) in path_a
+
+
+def test_the_onboarding_skill_and_the_tree_agree_on_the_replies_offered_under_the_ideas() -> None:
+    """The chat app reads each idea's name from the form the skill has the agent write, and offers the two fixed
+    replies the skill answers: one contract kept in two files."""
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+
+    (item_form,) = [line for line in skill.splitlines() if line.startswith("- **<idea name>**")]
+    assert idea_names(item_form) == ("<idea name>",)
+    for label in (SHOW_IDEAS_LABEL, MORE_IDEAS_LABEL, SOMETHING_ELSE_LABEL):
+        assert f"`{label}`" in skill
+    assert (_REPO_ROOT / FIRST_RUN_SKILL_PATH).with_name("references").joinpath("app-ideas.md").is_file()

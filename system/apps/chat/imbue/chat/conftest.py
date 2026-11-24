@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from loguru import logger as loguru_logger
+from onboarding_activity.markers import MARKER_DIR_ENV
 from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
@@ -17,6 +18,7 @@ from playwright.sync_api import sync_playwright
 from pytest_workspace_env.browsers import pick_e2e_browser_executable
 
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.testing import private_tmux_server
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -64,6 +66,8 @@ def _isolate_chat_tests(
     # otherwise; a port nothing listens on refuses them at once. The pipeline and e2e tests
     # serve a shell of their own and point at it.
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
+    # The onboarding markers the chat app sets and reads are the checkout's own otherwise.
+    monkeypatch.setenv(MARKER_DIR_ENV, str(tmp_path_factory.mktemp("onboarding-activity")))
     if "agent_manager_test.py" in request.node.nodeid:
         return None
     isolated = tmp_path_factory.mktemp("mngr-host-isolation")
@@ -302,3 +306,10 @@ def git_work_dir(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+@pytest.fixture
+def isolated_tmux(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """A tmux server of the test's own, for a real ``mngr create`` and everything it starts."""
+    with private_tmux_server(monkeypatch):
+        yield

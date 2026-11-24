@@ -21,6 +21,7 @@ import sys
 import threading
 from pathlib import Path
 
+# import-path: no-venv -- its only import beyond the standard library is the stdlib-only `oom_priority`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import resource_sampler, supervisor_rpc

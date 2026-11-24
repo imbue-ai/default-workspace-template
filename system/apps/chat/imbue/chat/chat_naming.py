@@ -35,6 +35,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatAccountBinding
@@ -53,16 +54,17 @@ MAX_NAMING_ATTEMPTS: Final[int] = 3
 
 # The model's answer for a message with nothing to name yet.
 _NO_NAME_ANSWER: Final[str] = "NONE"
+# The longest name a chat is given; a longer title is cut at a word and ends in ``_SHORTENED_NAME_MARK``.
 _MAX_NAME_LENGTH: Final[int] = 40
-# What the prompt asks for, short of what the parser accepts: models count characters badly. It is about
-# what the chat list shows of a name before cutting it off.
-_REQUESTED_NAME_LENGTH: Final[int] = 30
+_SHORTENED_NAME_MARK: Final[str] = "..."
 # How far a title another chat already has is numbered ("Simple map app 2" ... "Simple map app 9") before
 # the attempt is given up.
 _MAX_NAME_NUMBER: Final[int] = 9
 # Well under the pipe buffer the prompt is written to stdin through (16KiB on macOS) at four
 # bytes a character; the opening of a long message says what it is about.
 _MAX_PROMPT_CHARACTERS: Final[int] = 3000
+# How long one model may take over a name.
+_COMPLETION_TIMEOUT_SECONDS: Final[float] = 60.0
 # How long a chat created with its first message may take to come up before naming gives up on it.
 _AGENT_WAIT_SECONDS: Final[float] = 600.0
 _AGENT_POLL_SECONDS: Final[float] = 2.0
@@ -97,7 +99,11 @@ Reply with exactly one line and nothing else: a short title naming what the chat
 ASCII characters. For a message in a language that uses the Latin alphabet, write the title in that language, \
 dropping accents ("e" for "é"). For a message in any other script (Japanese, Chinese, Korean, Russian, Arabic, \
 Hindi, ...), always write the title in English, never in the message's own script and never romanized.
-- Two to five words, under {_REQUESTED_NAME_LENGTH} characters.
+- As terse as possible while still saying what the chat is about: fewer than {_MAX_NAME_LENGTH} characters, and \
+preferably far fewer.
+- However long or detailed the message, name only its one main subject. Leave out the details it lists \
+(the tools, sources, places, people or steps it names), and never string two or more of them together with \
+commas or "and".
 - Name the subject itself, as a noun phrase ("Failing Postgres migration"), not the request: do not start with a \
 verb in any form ("build", "help with", "designing", "fixing"), use no words for asking ("request", "question", \
 "help"), and never describe the person ("asks", "wants", "user").
@@ -117,6 +123,13 @@ Two plus two
 Thank you in Japanese
 <message>Write a limerick about my cat and reply with only the limerick</message>
 Limerick about a cat
+<message>I want to map how information moves between my tools, from meeting recordings and my to-do notes in \
+Obsidian out to the weekly newsletter, my blog and anything else. Can you look at how each piece is meant to work \
+and draw a diagram of it?</message>
+Information flow diagram
+<message>Go through my Gmail, Slack DMs and calendar for the last month and list every meeting I promised a \
+follow-up on, with who and when</message>
+Promised meeting follow-ups
 <message>¿Me ayudas a preparar una entrevista de trabajo?</message>
 Entrevista de trabajo
 <message>東京で三日間の旅行プランを立てたいです</message>
@@ -148,7 +161,8 @@ def chat_naming_prompt(message: str) -> str:
         opening, tag_count = _MESSAGE_TAG_PATTERN.subn("", opening)
     return (
         f"<message>\n{opening}\n</message>\n\n"
-        f"Reply with the title of the chat this message opens, or {_NO_NAME_ANSWER}."
+        f"Reply with the title of the chat this message opens, as terse as possible while still descriptive "
+        f"(fewer than {_MAX_NAME_LENGTH} characters, preferably far fewer), or {_NO_NAME_ANSWER}."
     )
 
 
@@ -162,6 +176,8 @@ def _spelled_in_ascii(text: str) -> str:
 @pure
 def parse_generated_chat_name(answer: str) -> str | None:
     """The chat name in a model's answer, or None when it gave none or one that cannot be a chat's name.
+
+    The name can run past ``_MAX_NAME_LENGTH``; ``shortened_chat_name`` cuts it to fit.
 
     Only an ASCII name is taken: the chat's true name is the ASCII part of its name, so a name in another script
     would leave it a fragment of the name ("React 待办应用" -> "React") or nothing at all. Accents are dropped
@@ -178,9 +194,24 @@ def parse_generated_chat_name(answer: str) -> str | None:
     if "\n" in line or ":" in line or not line.isascii():
         return None
     name = line.rstrip(".").strip()
-    if not name or name.upper() == _NO_NAME_ANSWER or len(name) > _MAX_NAME_LENGTH or not canonical_agent_name(name):
+    if not name or name.upper() == _NO_NAME_ANSWER or not canonical_agent_name(name):
         return None
     return name
+
+
+@pure
+def shortened_chat_name(name: str) -> str:
+    """``name`` when it fits in ``_MAX_NAME_LENGTH``; otherwise its opening, cut at a word, ending in "...".
+
+    A single word too long to cut at a space is cut where it reaches the limit.
+    """
+    if len(name) <= _MAX_NAME_LENGTH:
+        return name
+    room = _MAX_NAME_LENGTH - len(_SHORTENED_NAME_MARK)
+    opening = name[:room]
+    if name[room] != " " and " " in opening:
+        opening = opening[: opening.rindex(" ")]
+    return opening.rstrip(" ,;-") + _SHORTENED_NAME_MARK
 
 
 def read_chat_naming_state(chat_dir: Path) -> ChatNamingState:
@@ -213,9 +244,10 @@ def _set_result_of_call(
 class DaemonThreadExecutor(Executor):
     """Runs each submitted call on a daemon thread of its own; a call that raises leaves its exception on the future.
 
-    A naming attempt can wait minutes for its chat to come up. On a pool, such waits would hold the places other
-    chats' attempts queue for, and the pool's threads would hold up the app's exit: the interpreter joins them before
-    the ``atexit`` teardown that stops the namer runs.
+    A naming attempt can wait minutes for its chat to come up, and any question put to a model can take a minute to
+    be answered. On a pool, such waits would hold the places other chats' calls queue for, and the pool's threads
+    would hold up the app's exit: the interpreter joins them before the ``atexit`` teardown that stops their owner
+    runs.
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
@@ -224,7 +256,7 @@ class DaemonThreadExecutor(Executor):
         ObservableThread(
             target=_set_result_of_call,
             args=(future, fn, args, kwargs),
-            name="chat-naming",
+            name="chat-one-shot",
             on_failure=future.set_exception,
         ).start()
         return future
@@ -316,16 +348,32 @@ class ChatNamer(MutableModel):
             return
 
         try:
-            answer = completion.complete(binding.account_dir, CHAT_NAMING_SYSTEM_PROMPT, chat_naming_prompt(message))
+            answer = completion.complete(
+                binding.account_dir,
+                CHAT_NAMING_SYSTEM_PROMPT,
+                chat_naming_prompt(message),
+                model_tier=OneShotModelTier.SMALL,
+                thinking_token_allowance=None,
+                timeout_seconds=_COMPLETION_TIMEOUT_SECONDS,
+            )
         except OneShotCompletionError as e:
             logger.warning("Failed to generate a name for chat {}: {}", chat_id, e)
             self._record_attempt(chat_dir)
             return
-        name = parse_generated_chat_name(answer)
-        if name is None:
+        full_name = parse_generated_chat_name(answer)
+        if full_name is None:
             logger.debug("Left chat {} unnamed: the answer {!r} gave no name", chat_id, answer)
             self._record_attempt(chat_dir)
             return
+        name = shortened_chat_name(full_name)
+        if name != full_name:
+            logger.warning(
+                "The name generated for chat {} ran past {} characters and was cut: {!r} -> {!r}",
+                chat_id,
+                _MAX_NAME_LENGTH,
+                full_name,
+                name,
+            )
         # The model takes a second or more, time enough for the chat to be named some other way.
         if self._settle_if_named(chat_id, chat_dir):
             return

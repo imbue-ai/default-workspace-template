@@ -14,6 +14,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from loguru import logger as loguru_logger
+from onboarding_activity.markers import MARKER_DIR_ENV
 from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
@@ -56,8 +57,11 @@ def _isolate_system_interface_tests(
     ``refresh_workspace_view.py``) post to the shell ``MINDS_WORKSPACE_SERVER_URL`` names, which
     would be the workspace's real one. A port nothing listens on refuses them at once; the
     pipeline and e2e tests serve a shell of their own and point at it.
+
+    The onboarding markers the shell sets go to the checkout's own ``data/`` otherwise.
     """
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
+    monkeypatch.setenv(MARKER_DIR_ENV, str(tmp_path_factory.mktemp("onboarding-activity")))
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
 
@@ -327,19 +331,20 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
     """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell:
     what ``test_layout_pipeline.py`` drives ``workspace-layout`` against."""
     registry_path = tmp_path / "apps.toml"
-    port = find_free_port()
-    base_url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
-    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
 
     with serve_app(stand_in_app()) as seeded, serve_app(stand_in_app()) as stub:
+        # Reserved only once both stand-ins are bound, or one of their ephemeral binds can take the freed port.
+        port = find_free_port()
+        base_url = f"http://127.0.0.1:{port}"
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         write_registry(
             registry_path,
             registry_row_toml(
                 PIPELINE_SEEDED_APP_NAME,
                 seeded.http_url,
                 is_critical=True,
-                default_shortcut=("new", "new"),
+                default_shortcuts=[("new", "new")],
                 launch_paths=(("new", "New Chat", "/new"), ("subagent", "Open subagent", "/subagent")),
             ),
             registry_row_toml(PIPELINE_STUB_APP_NAME, stub.http_url),

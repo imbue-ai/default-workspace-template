@@ -5,11 +5,15 @@
   "type": "module",
   "workspaces": [
     "libs/workspace_ui",
+    "libs/workspace_voice",
     "apps/system_interface/frontend",
     "apps/chat/frontend",
     "apps/getting_started/frontend",
+    "apps/onboarding_checklist/frontend",
+    "apps/screen/frontend",
     "apps/files/frontend",
-    "apps/routines/frontend"
+    "apps/routines/frontend",
+    "apps/style_guide/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",

@@ -19,15 +19,19 @@ one -- it has read three times the real headroom on a capped workspace. `free -m
 optimistic file, so do not decide anything from it, and never tell the worker to rerun on a figure
 that came from it: the gate will be shed again and the round is wasted.
 
+The same line says how much of that free memory is left before the guard starts stopping
+processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
+workspace is about 400 MiB of room. That room is what a heavy step can use, so judge by it.
+
 The command lists the idle chats and workers, the apps the workspace may stop with how many windows
-show each, and the browsers no window shows, each with its memory. The figures are summed RSS, so
-they rank candidates rather than promise what stopping one frees. Read the free memory again after
-each round.
+show each, and the browsers no window shows, each with its memory: the anonymous memory of its
+processes, roughly what stopping it frees. Read the free memory again after each round.
 
 ## What this pass may stop
 
 **Every run** may stop what the Step 1 licence names: chats and background agents, the browser, and
-the user apps no window is showing.
+the user apps no window is showing. The main chat is not among them: the chat app starts it again as
+soon as it stops, so the candidates command leaves it out with a note saying so.
 
 **A scheduled run** may stop **any** app the candidates command's apps section lists, windows open
 or not. That section is the boundary, and it is drawn so that everything in it can be brought back:

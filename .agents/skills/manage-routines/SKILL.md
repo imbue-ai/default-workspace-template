@@ -27,9 +27,10 @@ with `--app <name>`, never a loop or a thread inside its service.
 
 ## First: confirm the timezone
 
-Schedules are in the container's local time, which the bootstrap sets from the
-user's machine at each boot. The user may have moved since, so before writing
-a schedule check it:
+Schedules are in the container's local time, which the bootstrap applies at
+each boot from `data/.state/user_timezone` (written once by the client that
+created the workspace). The user may have moved since, so before writing a
+schedule check it:
 
 ```bash
 latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone   # -> {"timezone": "America/Los_Angeles"}
@@ -144,6 +145,12 @@ Imbue Studio feed, and once more when the routine works again.
 
 A command may write `$ROUTINES_RUN_DIR/result.json` with a one-line
 `summary` (shown in the list) and `links` for the run page.
+
+`$ROUTINES_TRIGGER` says what started a command's run: `scheduled` or
+`manual` (Run now in the app, or `routines run`), so a job can behave
+differently when the user runs it by hand. A skill run finds the same in
+`uv run --no-sync routines runs <id> --limit 1 --format json`, whose newest
+record is its own run (`outcome` null, `trigger` `SCHEDULED` or `MANUAL`).
 
 Full reference: `system/libs/routines/README.md`.
 

@@ -1,5 +1,6 @@
 import gzip
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,7 @@ exit 1
 """)
 
 
-def test_agent_script_attaches_to_the_prefixed_agent_session() -> None:
+def test_agent_script_attaches_to_the_prefixed_agent_session_as_a_viewer_when_marked() -> None:
     assert render_agent_script() == snapshot("""\
 #!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
@@ -54,14 +55,21 @@ def test_agent_script_attaches_to_the_prefixed_agent_session() -> None:
 # session (so the Imbue Studio chat UI can deep-link to a specific sub-agent's
 # terminal by passing the agent name). Otherwise fall back to the current
 # tmux session -- useful when ttyd is invoked without args.
+# $2 = "view" when the chat's window is being looked at on somebody else's desktop
+#      (the multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#      window by this client, as the session script attaches a viewer.
 set -euo pipefail
 if [ $# -gt 0 ] && [ -n "$1" ]; then
     TARGET_SESSION="${MNGR_PREFIX:-mngr-}$1"
 else
     TARGET_SESSION=$(tmux display-message -p '#{session_name}')
 fi
+ATTACH_FLAGS=()
+if [ "${2:-}" = "view" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
-exec tmux attach -t "$TARGET_SESSION":0
+exec tmux attach "${ATTACH_FLAGS[@]}" -t "$TARGET_SESSION":0
 """)
 
 
@@ -80,6 +88,10 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
 #   $1 = session name (e.g. "terminal-1"), the terminal's name
 #   $2 = working directory to anchor a newly-created session in (may be "")
+#   $3 = "view" when the window is being looked at on somebody else's desktop (the
+#        multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#        window by this client, so a viewer neither types into nor resizes the owner's terminal;
+#        a viewer never creates the session
 #
 # The terminal app records the tmux session id and creation time of every
 # terminal it created under the sessions directory, named by terminal; attaching
@@ -94,6 +106,10 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
+ATTACH_FLAGS=()
+if [ "${3:-}" = "view" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
@@ -109,9 +125,15 @@ if [ -f "$SESSION_ID_FILE" ]; then
     if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
         LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
         if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
-            exec tmux attach-session -t "$SESSION_ID"
+            exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_ID"
         fi
     fi
+fi
+
+# A viewer never creates the session; tmux resolves a bare name by unique prefix, so the name is given exactly,
+# or a viewer of a lost terminal-1 would land on terminal-10.
+if [ ${#ATTACH_FLAGS[@]} -gt 0 ]; then
+    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "=$SESSION_NAME"
 fi
 
 WORKDIR_ARGS=()
@@ -121,6 +143,38 @@ fi
 
 exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l
 """)
+
+
+def _tmux_on(socket_path: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run ``tmux`` against the test's own server, by the socket the script under test resolves to."""
+    return subprocess.run(
+        ["tmux", "-S", str(socket_path), *arguments], capture_output=True, text=True, timeout=15.0
+    )
+
+
+def test_a_viewer_of_a_lost_session_never_lands_on_one_whose_name_merely_starts_the_same(
+    tmp_path: Path, private_tmux_socket: Path
+) -> None:
+    """tmux resolves a bare ``-t`` name by unique prefix, so with only ``terminal-10`` live a viewer of a lost
+    ``terminal-1`` would read somebody else's terminal; the viewer branch names the session exactly and fails
+    instead (it never creates one). Probed on a private tmux server."""
+    script = tmp_path / "session.sh"
+    script.write_text(render_session_script(tmp_path / "sessions", tmp_path / "oom_tag_service.py"))
+    started = _tmux_on(private_tmux_socket, ["new-session", "-d", "-s", "terminal-10", "sleep", "36281"])
+    assert started.returncode == 0, started.stderr
+    try:
+        # The prefix match the exact target guards against: the bare name finds terminal-10, the exact one does not.
+        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "terminal-1"]).returncode == 0
+        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "=terminal-1"]).returncode != 0
+
+        attached = subprocess.run(
+            ["bash", str(script), "terminal-1", "", "view"], capture_output=True, text=True, timeout=15.0
+        )
+    finally:
+        _tmux_on(private_tmux_socket, ["kill-session", "-t", "=terminal-10"])
+    assert attached.returncode != 0
+    assert "can't find session: terminal-1" in attached.stderr
+    assert "terminal-10" not in attached.stderr
 
 
 def test_a_directory_that_needs_shell_quoting_is_refused() -> None:

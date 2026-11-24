@@ -18,7 +18,7 @@ from imbue.imbue_common.pure import pure
 @pure
 def derive(
     *,
-    is_agent_running: bool,
+    is_turn_in_flight: bool,
     has_pending_tool_use: bool,
     tail_event_type: str | None,
     tail_event_at: float | None = None,
@@ -26,8 +26,8 @@ def derive(
 ) -> ActivityState:
     """Derive an ``ActivityState`` for a claude agent from lifecycle + transcript signals.
 
-    ``is_agent_running`` reflects the mngr lifecycle (RUNNING / RUNNING_UNKNOWN_AGENT_TYPE);
-    a non-running agent is always IDLE, which prevents a STOPPED agent from appearing
+    ``is_turn_in_flight`` reflects the mngr lifecycle (RUNNING / RUNNING_UNKNOWN_AGENT_TYPE);
+    an agent with no turn open is always IDLE, which prevents a STOPPED agent from appearing
     as "Thinking..." on stale transcript data. ``tail_event_type`` is the tracker's folded
     tail event type (non-turn tail events skipped); ``tail_event_at`` / ``process_started_at``
     feed :func:`activity_state.is_transcript_tail_stale` to drop a turn abandoned by a
@@ -40,7 +40,7 @@ def derive(
       3. last transcript event is ``user_message`` or ``tool_result`` -> THINKING.
       4. otherwise (last event is ``assistant_message`` or empty) -> IDLE.
     """
-    if not is_agent_running:
+    if not is_turn_in_flight:
         return ActivityState.IDLE
     if is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at):
         return ActivityState.IDLE

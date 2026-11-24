@@ -35,6 +35,7 @@
  */
 
 import m from "mithril";
+import { peopleGlyph } from "../glyphs";
 
 import { Button, buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
 import { icon, spinnerIcon, warningIcon } from "@imbue/workspace-ui/src/components/icons";
@@ -57,26 +58,47 @@ import {
   getLanes,
   getUnpickableAccount,
   isPickingAccount,
-  loadAccounts,
+  isRoomChoiceOffered,
+  pickRoom,
+  loadLanesAndAccountsWithRetry,
   pickAccount,
   takeChooserAccountId,
-  loadLanes,
+  takeChooserLaneId,
   startFlow,
   submitCode,
   submitKey,
 } from "../models/Providers";
 import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import { requestProviderRelay } from "../models/providerRelay";
+import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
+  /** Opened from the first run's provider page, whose cream the dialog then wears in place of the workspace's look. */
+  isFirstRun?: boolean;
 }
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 
+/** How starting a sign-in and handing its page to the desktop app ended. */
+type HandOff = "relaying" | "not_relaying" | "stood_down";
+
 /** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
  *  advance whether the browser will end on a code instead. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
+
+/** How many sign-ins in a row may draw a callback port that is taken before the chooser stops
+ *  asking the desktop app and signs in without it. */
+export const MAX_SIGN_IN_PORT_DRAWS = 3;
+
+/** The loopback port a sign-in page's `redirect_uri` calls back to, or null when it names none. */
+function callbackPort(relayUrl: string): string | null {
+  try {
+    const redirect = new URL(relayUrl).searchParams.get("redirect_uri");
+    return redirect === null ? null : new URL(redirect).port;
+  } catch {
+    return null;
+  }
+}
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
@@ -114,12 +136,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let awaitingVerdict = false;
   // The page is being handed to the desktop app, which has yet to answer.
   let isOpeningBrowser = false;
-  // Set once no desktop app answered a relay, so this chooser stops offering sign-ins that need one.
+  // Set once the desktop app cannot relay, or no callback port the sign-ins draw comes free, so
+  // this chooser stops offering sign-ins that need a relay.
   let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
   // Bumped by every ask to the desktop app. The ack has one slot, so a newer ask settles an older
-  // one as false, which is not the desktop app's answer.
+  // one as unavailable, which is not the desktop app's answer.
   let relayAsk = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
@@ -159,15 +182,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
   }
 
-  /** Hand a started flow's page to the desktop app; whether it is relaying, or null when a newer
-   *  ask took its place before it was answered. */
-  async function relay(url: string, flowId: string): Promise<boolean | null> {
+  /** Hand a started flow's page to the desktop app; its answer, or null when a newer ask took its
+   *  place before it was answered. */
+  async function relay(url: string, flowId: string): Promise<RelayAnswer | null> {
     relayAsk += 1;
     const ask = relayAsk;
-    const isRelaying = await requestProviderRelay(url, flowId);
+    const answer = await requestProviderRelay(url, flowId);
     if (ask !== relayAsk) return null;
-    if (!isRelaying) isRelayUnavailable = true;
-    return isRelaying;
+    if (answer === "unavailable") isRelayUnavailable = true;
+    return answer;
   }
 
   async function copyToClipboard(value: string, kind: "link" | "code"): Promise<void> {
@@ -184,6 +207,53 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       copyFailed = true;
     }
     m.redraw();
+  }
+
+  /** Start the chosen sign-in and hand its page to the desktop app. Claude's CLI draws its callback
+   *  port at random, so when something on the user's machine already answers on the one it drew,
+   *  starting the sign-in again draws a fresh one, up to `MAX_SIGN_IN_PORT_DRAWS` ports in all.
+   *  Whether the desktop app is relaying the sign-in, or `stood_down` when `begin` must stop: a
+   *  newer attempt took over, or the user left the lane. */
+  async function startAndHandToDesktop(
+    chosen: Lane,
+    chosenMethod: LaneMethod,
+    options: { accountId?: string; isRelaySkipped?: boolean },
+    attempt: number,
+  ): Promise<HandOff> {
+    const takenPorts = new Set<string>();
+    for (let portDraw = 1; ; portDraw += 1) {
+      const isLive = await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      // A start a newer one overtook (here, or in a chooser opened since this one closed) has
+      // nothing left of its own to hand over or end.
+      if (attempt !== generation || !isLive) return "stood_down";
+      // Back and Close clear the lane without superseding this attempt, and the sign-in just
+      // started is then nobody's.
+      if (lane !== chosen) {
+        abortFlow();
+        return "stood_down";
+      }
+      const started = getFlow();
+      if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped)
+        return "not_relaying";
+      const port = callbackPort(started.relay_url);
+      // A CLI that listens on a fixed port (codex) lands on the taken one again; asking again is futile.
+      if (port !== null && takenPorts.has(port)) {
+        isRelayUnavailable = true;
+        return "not_relaying";
+      }
+      isOpeningBrowser = true;
+      m.redraw();
+      const answer = await relay(started.relay_url, started.flow_id);
+      if (attempt !== generation) return "stood_down";
+      isOpeningBrowser = false;
+      if (lane !== chosen) return "stood_down";
+      if (answer === "port_taken") {
+        if (port !== null) takenPorts.add(port);
+        if (portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
+        isRelayUnavailable = true;
+      }
+      return answer === "relaying" ? "relaying" : "not_relaying";
+    }
   }
 
   /** Open a lane's method. `fromChooser` decides where back goes. */
@@ -226,18 +296,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
     let fallback: LaneMethod | null = null;
     try {
-      await startFlow(chosen.id, chosenMethod.id, options.accountId);
-      if (attempt !== generation) return;
-      const started = getFlow();
-      if (started !== null && started.relay_url !== null && !isRelayUnavailable && !options.isRelaySkipped) {
-        isOpeningBrowser = true;
-        m.redraw();
-        const isRelaying = await relay(started.relay_url, started.flow_id);
-        if (attempt !== generation) return;
-        isOpeningBrowser = false;
-        if (isRelaying === true) mode = "relay";
-      }
-      if (mode !== "relay" && chosenMethod.shape === "browser") {
+      const handOff = await startAndHandToDesktop(chosen, chosenMethod, options, attempt);
+      if (handOff === "stood_down") return;
+      if (handOff === "relaying") {
+        mode = "relay";
+      } else if (chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
         fallback = relaylessFallback(chosen);
       }
@@ -381,8 +444,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     busy = true;
     error = null;
     try {
-      await loadLanes();
-      await loadAccounts();
+      await loadLanesAndAccountsWithRetry();
     } catch (e) {
       error = (e as Error).message || "Could not reach the workspace.";
     } finally {
@@ -399,7 +461,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         m(
           "div",
           { class: css.FOOTER_ROW },
-          m(Button, { variant: "primary", disabled: busy, onclick: () => void load() }, "Try again"),
+          m(
+            Button,
+            { variant: "primary", disabled: busy, "data-e2e": "retry-providers", onclick: () => void load() },
+            "Try again",
+          ),
         ),
       ];
     }
@@ -416,7 +482,33 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
+      roomRow(),
     ];
+  }
+
+  /** "Chat room (no provider)": the last row when the chooser was opened for a chat awaiting its first send, which
+   *  then becomes a room among the workspace's people instead of a chat with an agent (section 7.3). Last, under
+   *  the providers: the chooser's job is signing in, and a room is the way out of that, not the point of it. */
+  function roomRow(): m.Children {
+    if (!isRoomChoiceOffered()) return null;
+    return m("div", { class: `${css.ROW_STACK} mt-6` }, [
+      // The pickable row anchors the pick target's stretched after-box; without it the box would cover the dialog.
+      m("div", { class: css.ACCOUNT_ROW_PICKABLE }, [
+        m(
+          "button",
+          {
+            type: "button",
+            class: css.ACCOUNT_PICK,
+            "data-e2e": "pick-room",
+            onclick: () => pickRoom(),
+          },
+          [
+            m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
+            m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
+          ],
+        ),
+      ]),
+    ]);
   }
 
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
@@ -799,8 +891,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             "data-e2e": "open-sign-in-again",
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
-              void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
-                if (isRelaying === null) return;
+              void relay(flow.relay_url, flow.flow_id).then((answer) => {
+                if (answer === null) return;
+                // Try again reuses the flow's port, so a taken one is not drawn afresh here.
+                if (answer === "port_taken") isRelayUnavailable = true;
                 // The user may have gone back, closed the chooser, or finished meanwhile.
                 const live = getFlow();
                 const isStillWaiting =
@@ -808,7 +902,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   live !== null &&
                   live.flow_id === flow.flow_id &&
                   live.status.state === "pending";
-                if (!isRelaying && isStillWaiting)
+                if (answer !== "relaying" && isStillWaiting)
                   signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
               });
             },
@@ -840,9 +934,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
-      if (accountId === null) return;
-      const account = getAccounts().find((candidate) => candidate.id === accountId);
-      if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+      const laneId = takeChooserLaneId();
+      if (accountId !== null) {
+        const account = getAccounts().find((candidate) => candidate.id === accountId);
+        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+        return;
+      }
+      const requested = laneId === null ? undefined : getLanes().find((candidate) => candidate.id === laneId);
+      if (requested !== undefined) await begin(requested, requested.methods[0], { fromChooser: true });
     },
 
     onremove() {
@@ -973,7 +1072,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         // wherever the press ENDED: selecting the device code or the several-hundred
         // character sign-in URL and releasing past the dialog's edge would otherwise read
         // as "close this" and abort the flow the code was being copied out of.
-        { class: MODAL_OVERLAY_CLASS, ...backdropDismissAttrs(onClose) },
+        {
+          class:
+            vnode.attrs.isFirstRun === true ? `${MODAL_OVERLAY_CLASS} ${css.FIRST_RUN_DIALOG}` : MODAL_OVERLAY_CLASS,
+          ...backdropDismissAttrs(onClose),
+        },
         [
           m(
             "div",

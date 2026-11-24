@@ -7,13 +7,17 @@ import {
   parseAppRecord,
   parseAvatarCatalog,
   parseAvatarStatus,
+  parseBubble,
+  parseChatsActivity,
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
   parseInventory,
   parseLayout,
+  parseOwnerLayout,
   parseMessageRelay,
   parsePresentUsers,
+  parseRoster,
   parseWallpaperListings,
   shortcutKey,
 } from "./records";
@@ -66,6 +70,13 @@ describe("parseDesktop", () => {
     expect(() => parseDesktop({ ...DESKTOP_WIRE, theme: 7 })).toThrow(WireShapeError);
   });
 
+  it("reads the owner, absent or null for the workspace owner's and a key for a visitor's", () => {
+    expect(parseDesktop(DESKTOP_WIRE).owner).toBeNull();
+    expect(parseDesktop({ ...DESKTOP_WIRE, owner: null }).owner).toBeNull();
+    expect(parseDesktop({ ...DESKTOP_WIRE, owner: "user:user-alice-0001" }).owner).toBe("user:user-alice-0001");
+    expect(() => parseDesktop({ ...DESKTOP_WIRE, owner: 7 })).toThrow(WireShapeError);
+  });
+
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
     expect(parseDesktop({ ...DESKTOP_WIRE, wallpaper: null }).wallpaper).toBeNull();
     expect(() => parseDesktop({ ...DESKTOP_WIRE, windows: "none" })).toThrow(WireShapeError);
@@ -92,7 +103,7 @@ describe("parseClientArrival", () => {
 });
 
 describe("parseMessageRelay", () => {
-  it("reads a shown page's wait for a desktop window, a posted message as not waiting, and refuses the wrong shape", () => {
+  it("reads a shown page's window and its wait for a desktop window, a posted message as neither, and refuses the wrong shape", () => {
     const relay = parseMessageRelay({
       type: "open:file",
       deliveries: [
@@ -102,8 +113,8 @@ describe("parseMessageRelay", () => {
       detail: null,
     });
     expect(relay.deliveries).toEqual([
-      { app: "logger", has_no_desktop_window: false },
-      { app: "files", has_no_desktop_window: true },
+      { app: "logger", window_id: null, has_no_desktop_window: false },
+      { app: "files", window_id: "win-1", has_no_desktop_window: true },
     ]);
     expect(() => parseMessageRelay({ type: "open:file" })).toThrow(WireShapeError);
   });
@@ -144,6 +155,17 @@ describe("parseLayout", () => {
     });
   });
 
+  it("reads the owner-layout answer's viewport beside the layout, absent or null as none", () => {
+    const raw = { version: 1, updated_at: null, placements: [], window_paths: {} };
+    expect(parseOwnerLayout({ ...raw, viewport: { width: 1920, height: 1017.5 } })).toEqual({
+      layout: { updated_at: null, placements: [], window_paths: {} },
+      viewport: { width: 1920, height: 1017.5 },
+    });
+    expect(parseOwnerLayout({ ...raw, viewport: null }).viewport).toBeNull();
+    expect(parseOwnerLayout(raw).viewport).toBeNull();
+    expect(() => parseOwnerLayout({ ...raw, viewport: { width: "wide" } })).toThrow(/viewport\.width/);
+  });
+
   it("reads the client's stored paths for independent windows, and tells two sets apart", () => {
     const layout = parseLayout({
       version: 1,
@@ -179,7 +201,7 @@ describe("parseAppRecord", () => {
       name: "docs",
       url: "http://127.0.0.1:1",
       launch_paths: [{ id: "new", label: "New docs", path: "/new", params: ["message"] }],
-      default_shortcut: { action: "new", launch: "new", mode: "new" },
+      default_shortcuts: [{ action: "new", launch: "new", mode: "new" }],
       launcher_rank: 10,
       is_running: true,
     });
@@ -191,14 +213,20 @@ describe("parseAppRecord", () => {
     expect(app.launch_paths[0].presets).toEqual({});
     expect(app.launch_paths[0].text_param).toBeNull();
     expect(app.launch_paths[0].draft_param).toBeNull();
-    expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
+    expect(app.default_shortcuts).toEqual([{ launch: "new", mode: "new" }]);
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.stop_when_no_windows).toBe(false);
+    expect(app.uses_microphone).toBe(false);
+    expect(app.system).toBe(false);
     expect(app.pin).toBeNull();
-    expect(
-      parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true }).stop_when_no_windows,
-    ).toBe(true);
+    const bare = parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true });
+    expect(bare.stop_when_no_windows).toBe(true);
+    expect(bare.default_shortcuts).toEqual([]);
+    expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", uses_microphone: true }).uses_microphone).toBe(
+      true,
+    );
+    expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", system: true }).system).toBe(true);
   });
 
   it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
@@ -213,7 +241,7 @@ describe("parseAppRecord", () => {
       draft_param: "message",
     };
     const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
-    expect(app.launch_paths[0]).toEqual({ ...drafting, text_param: null });
+    expect(app.launch_paths[0]).toEqual({ ...drafting, mention_param: null, text_param: null, app_params: null });
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
       WireShapeError,
@@ -232,14 +260,20 @@ describe("parseAppRecord", () => {
     ).toThrow(WireShapeError);
   });
 
-  it("reads a focus shortcut and a null rank", () => {
+  it("reads several shortcuts and a null rank", () => {
     const app = parseAppRecord({
       name: "files",
       url: "http://127.0.0.1:2",
-      default_shortcut: { launch: "new", mode: "focus" },
+      default_shortcuts: [
+        { launch: "new", mode: "focus" },
+        { launch: "recent", mode: "new" },
+      ],
       launcher_rank: null,
     });
-    expect(app.default_shortcut).toEqual({ launch: "new", mode: "focus" });
+    expect(app.default_shortcuts).toEqual([
+      { launch: "new", mode: "focus" },
+      { launch: "recent", mode: "new" },
+    ]);
     expect(app.launcher_rank).toBeNull();
     expect(app.launch_paths).toEqual([]);
   });
@@ -303,6 +337,24 @@ describe("the small helpers", () => {
       entries: {},
       shown_history: [],
       desktop_revision: 0,
+      participant: null,
+      shown: [],
+      viewport: null,
+    });
+    expect(
+      parseClientRecord({
+        id: "c1",
+        active_desktop: "home",
+        last_seen: "now",
+        is_connected: true,
+        participant: "user:user-bob-4471",
+        shown: ["win-2", "win-1"],
+        viewport: { width: 1440, height: 823.5 },
+      }),
+    ).toMatchObject({
+      participant: "user:user-bob-4471",
+      shown: ["win-2", "win-1"],
+      viewport: { width: 1440, height: 823.5 },
     });
     expect(
       parseClientRecord({
@@ -324,7 +376,9 @@ describe("the small helpers", () => {
         is_connected: true,
         entries: { docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } },
       }).entries,
-    ).toEqual({ docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } });
+    ).toEqual({
+      docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 }, is_window_shown: true },
+    });
     expect(() =>
       parseClientRecord({
         id: "c1",
@@ -367,5 +421,100 @@ describe("the small helpers", () => {
       1,
     );
     expect(() => parseWallpaperListings({})).toThrow(WireShapeError);
+  });
+});
+
+describe("the tray's records (the multiplayer spec)", () => {
+  it("reads the roster, what every chat is doing, and a bubble, refusing an unknown kind or status", () => {
+    const participant = {
+      key: "user:user-bob-4471",
+      kind: "person",
+      display_name: "Bob",
+      profile_picture_url: null,
+      email: "bob@example.com",
+      handle: "Bob",
+      color: "#3b5ba9",
+      is_owner: false,
+      is_connected: true,
+      last_seen: "2026-10-25T11:00:00Z",
+      last_input_at: null,
+      is_admitted_by_domain: false,
+    };
+    expect(parseRoster([participant])).toEqual([participant]);
+    expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(WireShapeError);
+    expect(() => parseRoster([{ ...participant, is_connected: "yes" }])).toThrow(WireShapeError);
+    expect(parseChatsActivity([{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }])).toEqual(
+      [{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }],
+    );
+    expect(() => parseChatsActivity([{ chat_id: "agent-1", title: "x", status: "napping", kind: "agent" }])).toThrow(
+      WireShapeError,
+    );
+    expect(() => parseChatsActivity([{ chat_id: "agent-1", title: "x", status: "idle", kind: "voice" }])).toThrow(
+      WireShapeError,
+    );
+    expect(
+      parseBubble({
+        type: "bubble",
+        speaker: "user:user-bob-4471",
+        chat_id: "agent-2",
+        chat_title: "Lounge",
+        text: "hi",
+        message_id: "m-1",
+        mentions: ["user:user-josh-0001"],
+        kind: "message",
+      }),
+    ).toEqual({
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: ["user:user-josh-0001"],
+      kind: "message",
+    });
+    expect(() =>
+      parseBubble({
+        speaker: "workspace-agent",
+        chat_id: "agent-2",
+        chat_title: "",
+        text: "hi",
+        message_id: "m",
+        mentions: [],
+        kind: "shout",
+      }),
+    ).toThrow(WireShapeError);
+    expect(() =>
+      parseBubble({
+        speaker: "user:x",
+        chat_id: "agent-2",
+        chat_title: "",
+        text: "hi",
+        message_id: "m",
+        mentions: [7],
+        kind: "message",
+      }),
+    ).toThrow(WireShapeError);
+    const mentioning = { id: "lounge", label: "Lounge", path: "/x", mention_param: "message" };
+    expect(
+      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [mentioning] }).launch_paths[0]
+        .mention_param,
+    ).toBe("message");
+    const aboutAnApp = {
+      id: "app-chat",
+      label: "Chat about this app",
+      path: "/x",
+      app_params: { name: "app", display_name: "app_display_name" },
+    };
+    expect(
+      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [aboutAnApp] }).launch_paths[0]
+        .app_params,
+    ).toEqual({ name: "app", display_name: "app_display_name" });
+    expect(() =>
+      parseAppRecord({
+        name: "chat",
+        url: "http://127.0.0.1:1",
+        launch_paths: [{ ...aboutAnApp, app_params: { name: "app" } }],
+      }),
+    ).toThrow(WireShapeError);
   });
 });

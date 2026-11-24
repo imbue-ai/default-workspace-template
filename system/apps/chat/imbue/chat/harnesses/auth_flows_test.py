@@ -3,7 +3,8 @@
 Only the paths that do not need a live CLI: the paste lanes (which are file writes), the
 shape mapping the modal branches on, and the lifecycle around a flow. Driving a real PTY
 belongs in a manual check against the actual binaries, not here -- a fake terminal would
-only assert that our fake behaves like our fake.
+only assert that our fake behaves like our fake. The one exception spawns a stand-in on a
+real PTY, because what it checks is the environment our spawn hands the child.
 """
 
 import itertools
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -27,6 +29,7 @@ from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
+from imbue.chat.testing import put_stand_in_cli_on_path
 
 
 @pytest.fixture
@@ -78,6 +81,67 @@ def test_a_paste_flow_writes_pi_auth_json_and_commits(service: AuthFlowService, 
     (account,) = read_index(tmp_path).accounts
     auth = json.loads((tmp_path / ".minds" / "accounts" / account.id / "auth.json").read_text())
     assert auth == {"opencode-go": {"type": "api_key", "key": "sk-test-123"}}
+
+
+def _key_sign_in(service: AuthFlowService, lane_id: str, key: str) -> str:
+    started = service.start(lane_id, "api_key")
+    status = service.submit_key(started.flow_id, key)
+    assert status.account_id is not None
+    return status.account_id
+
+
+def test_the_first_sign_in_of_a_pending_first_run_is_pinned_as_the_default(tmp_path: Path) -> None:
+    """Anthropic then OpenAI on the first run's provider page: the first conversation runs on Anthropic."""
+    during_the_step = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        is_first_run_provider_step_pending=lambda: True,
+    )
+
+    first = _key_sign_in(during_the_step, "anthropic", "sk-ant-xyz")
+    second = _key_sign_in(during_the_step, "openai", "sk-openai-123")
+
+    index = read_index(tmp_path)
+    assert index.default_account == first
+    assert index.mru == second
+    chosen = choose_default_account(index)
+    assert chosen is not None and chosen.id == first
+
+    # The pin outlives the step: a sign-in made once the page has been left moves only the most recently used.
+    after_the_step = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        is_first_run_provider_step_pending=lambda: False,
+    )
+    third = _key_sign_in(after_the_step, "opencode-go", "sk-test-123")
+    index = read_index(tmp_path)
+    assert index.default_account == first
+    assert index.mru == third
+
+
+def test_a_sign_in_with_no_first_run_pending_pins_nothing(service: AuthFlowService, tmp_path: Path) -> None:
+    _key_sign_in(service, "anthropic", "sk-ant-xyz")
+    latest = _key_sign_in(service, "openai", "sk-openai-123")
+
+    index = read_index(tmp_path)
+    assert index.default_account is None
+    assert index.mru == latest
+
+
+def test_credentials_adopted_during_a_pending_first_run_are_pinned_as_the_default(tmp_path: Path) -> None:
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        is_first_run_provider_step_pending=lambda: True,
+    )
+
+    adopted = service.adopt_claude_credentials("sk-ant-api03-" + "A" * 40)
+    _key_sign_in(service, "openai", "sk-openai-123")
+
+    assert read_index(tmp_path).default_account == adopted.id
 
 
 def test_the_key_file_is_not_world_readable(service: AuthFlowService, tmp_path: Path) -> None:
@@ -915,3 +979,32 @@ def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
     service.start("anthropic", "console")
 
     assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+
+
+def test_no_agy_a_google_sign_in_runs_can_update_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Left to itself, both the sign-in's bare `agy` and the `agy models` probe after it spawn a
+    background updater that swaps the image's pinned binary for the latest release, under every
+    agent from then on. So each one has to be spawned with the updater turned off."""
+    env_log = tmp_path / "agy-auto-update.log"
+    argv_log = put_stand_in_cli_on_path(
+        tmp_path,
+        "agy",
+        f'''printf '%s\\n' "${{AGY_CLI_DISABLE_AUTO_UPDATE:-unset}}" >> "{env_log}"
+if [ "$1" = models ]; then echo gemini-3.7-flash-high; exit 0; fi
+echo 'Select login method:'
+read -r _choice
+printf 'Visit %s\\n' '{_AGY_URL}'
+read -r _code
+exec sleep 60''',
+        monkeypatch,
+    )
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir)
+
+    started = service.start("google", "oauth")
+    assert started.url == _AGY_URL
+    assert service.submit_code(started.flow_id, "4/0Aexample").state is FlowState.OK
+
+    assert argv_log.read_text().splitlines() == ["", "models"]
+    assert env_log.read_text().splitlines() == ["true", "true"]

@@ -15,9 +15,15 @@
 
 import m from "mithril";
 import { deleteAttachment } from "./attachments";
+import { forgetLocalImage } from "./attachments";
 import { isImagePath } from "./attachments";
+import { readAttachmentText } from "./attachments";
+import { rememberLocalImage } from "./attachments";
 import { uploadAttachment } from "./attachments";
 import type { UploadedAttachment } from "./attachments";
+import { nextPastedTextFileName } from "./pastedText";
+import { pastedTextFileOf } from "./pastedText";
+import { pastedTextSummaryOf } from "./pastedText";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 export type ComposerAttachmentStatus = "uploading" | "ready" | "error";
@@ -37,9 +43,12 @@ export interface ComposerAttachment {
   /** The picked file's size, shown on the chip while it uploads. */
   localSize?: number;
   /** An image's own pixels, read locally so its thumbnail shows while it uploads. Lives only in this
-   *  document (a blob URL), so it is never persisted, and is revoked once the upload settles or the chip is
-   *  removed. */
+   *  document (a blob URL), so it is never persisted. Once the upload succeeds it is handed to
+   *  ``rememberLocalImage``, so the sent message draws from it; a failed upload or a removed chip revokes it. */
   previewUrl?: string;
+  /** A long paste's own text, held while this document has it so the chip can put it back without a fetch.
+   *  Never persisted: after a reload it is read back from the uploaded copy. */
+  pastedText?: string;
   /** Present once the upload succeeds. */
   uploaded?: UploadedAttachment;
   /** Present when the upload failed. */
@@ -194,7 +203,7 @@ function _localPreviewUrl(file: File, isImage: boolean): string | undefined {
   return isImage && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
 }
 
-function _startUpload(chatId: string, file: File, summary: string | undefined): void {
+function _startUpload(chatId: string, file: File, summary: string | undefined, pastedText?: string): void {
   const localId = _mintLocalId();
   const isImage = file.type.startsWith("image/") || isImagePath(file.name);
   const item: ComposerAttachment = {
@@ -203,20 +212,29 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
     isImage,
     status: "uploading",
     summary,
+    pastedText,
     localSize: file.size,
     previewUrl: _localPreviewUrl(file, isImage),
   };
   _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
-  // The preview only stands in until the upload settles: a ready chip shows the uploaded copy and a
-  // failed one shows no thumbnail, and a sent or cleared chip would otherwise hold the blob for the
-  // life of the document.
+  // The chip's preview only stands in until the upload settles: a ready chip shows the uploaded copy and a
+  // failed one shows no thumbnail. A ready image's blob lives on for the message that names it.
   const releasePreview = (): void => {
     if (item.previewUrl !== undefined) URL.revokeObjectURL(item.previewUrl);
   };
-  item.uploadSettled = uploadAttachment(file)
+  // A paste is the chat's own content, so it lives and dies with the chat; a picked file stays the workspace's.
+  item.uploadSettled = uploadAttachment(file, pastedText === undefined ? null : chatId)
     .then((uploaded) => {
+      // A chip that left the composer mid-upload (removed, or dropped by a clear or a rollback) names no
+      // message, so its preview is let go.
+      const isStillStaged = getComposerAttachments(chatId).some((attachment) => attachment.localId === localId);
       _patchAttachment(chatId, localId, { status: "ready", uploaded, previewUrl: undefined });
-      releasePreview();
+      if (item.previewUrl === undefined) return;
+      if (isStillStaged) {
+        rememberLocalImage(uploaded.path, item.previewUrl, file.size);
+      } else {
+        releasePreview();
+      }
     })
     .catch((error: unknown) => {
       // Logged as well as marked: a document that stages for another (the root, for a page not
@@ -255,6 +273,35 @@ export function uploadDescribedFileToComposer(chatId: string, file: File, summar
   m.redraw();
 }
 
+/** Stage a long paste as a ``pasted-text-<n>.txt`` attachment, its chip saying how many lines it holds. */
+export function stagePastedText(chatId: string, text: string): void {
+  const fileName = nextPastedTextFileName(getComposerAttachments(chatId).map((attachment) => attachment.fileName));
+  _startUpload(chatId, pastedTextFileOf(text, fileName), pastedTextSummaryOf(text), text);
+  m.redraw();
+}
+
+/**
+ * Take a pasted-text attachment out of the composer and answer its text, for the composer to put back inline.
+ * The text comes from memory when this document staged it, else from the uploaded copy; the chip and its copy
+ * are removed only once the text is in hand, so a failed read leaves the attachment as it was. Answers null when
+ * the chip is not in the composer, or left it while its copy was read (sent, removed or cleared), so the text is
+ * not put back.
+ */
+export async function unstagePastedText(chatId: string, localId: string): Promise<string | null> {
+  const item = getComposerAttachments(chatId).find((attachment) => attachment.localId === localId);
+  if (item === undefined) return null;
+  let text = item.pastedText;
+  if (text === undefined) {
+    if (item.uploaded === undefined) {
+      throw new Error(`Attachment ${item.fileName} has neither its text nor an uploaded copy`);
+    }
+    text = await readAttachmentText(item.uploaded);
+    if (!getComposerAttachments(chatId).some((attachment) => attachment.localId === localId)) return null;
+  }
+  removeComposerAttachment(chatId, localId);
+  return text;
+}
+
 /**
  * Remove an attachment from the composer, deleting its VM copy so a removed file
  * does not linger on the agent (removal is treated as revoking access).
@@ -271,6 +318,7 @@ export function removeComposerAttachment(chatId: string, localId: string): void 
     URL.revokeObjectURL(item.previewUrl);
   }
   if (item?.uploaded) {
+    forgetLocalImage(item.uploaded.path);
     void deleteAttachment(item.uploaded.path);
   }
 }

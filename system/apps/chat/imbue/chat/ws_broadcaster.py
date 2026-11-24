@@ -7,7 +7,7 @@ from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
 from imbue.chat.models import ChatSnapshot
-from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 
@@ -25,18 +25,32 @@ _CLIENT_QUEUE_MAX_SIZE = 1000
 _MAX_CONSECUTIVE_QUEUE_FULL = 50
 
 
-def provisional_chat_created_message(provisional: ProvisionalChat) -> dict[str, Any]:
-    """The ``provisional_chat_created`` message: the provisional chat's fields beside the type."""
-    return {"type": "provisional_chat_created", **provisional.model_dump(mode="json")}
+def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dict[str, Any]:
+    """The ``provisional_chat_created`` message: the provisional chat's fields beside the type, its held sends as
+    the page draws them."""
+    return {
+        "type": "provisional_chat_created",
+        **provisional.chat.model_dump(mode="json", exclude={"held_sends"}),
+        "held_sends": [held.model_dump(mode="json") for held in provisional.held_sends],
+    }
 
 
-def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> dict[str, Any]:
-    """The ``chats_updated`` message: every chat's snapshot, and the main chat's id (``main_chat.py``)."""
+def chats_updated_message(
+    snapshots: list[ChatSnapshot], main_chat_id: ChatId | None, is_first_conversation_pending: bool
+) -> dict[str, Any]:
+    """The ``chats_updated`` message: every chat's snapshot, the main chat's id (``main_chat.py``), and whether a
+    first-run chat among them is still following its tree (``first_run_tree.py``)."""
     return {
         "type": "chats_updated",
         "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots],
         "main_chat_id": main_chat_id,
+        "is_first_conversation_pending": is_first_conversation_pending,
     }
+
+
+def mentions_updated_message() -> dict[str, Any]:
+    """The ``mentions_updated`` message: someone's pending mentions changed, so every page reads its own again."""
+    return {"type": "mentions_updated"}
 
 
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
@@ -126,17 +140,33 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_chats_updated(self, snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> None:
-        """Broadcast a chats_updated event: every chat's snapshot, and the main chat's id."""
-        self.broadcast(chats_updated_message(snapshots, main_chat_id))
+    def broadcast_chats_updated(
+        self, snapshots: list[ChatSnapshot], main_chat_id: ChatId | None, is_first_conversation_pending: bool
+    ) -> None:
+        """Broadcast a chats_updated event: every chat's snapshot, the main chat's id, and whether a first-run
+        chat's first conversation is still following its tree."""
+        self.broadcast(chats_updated_message(snapshots, main_chat_id, is_first_conversation_pending))
 
-    def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
+    def broadcast_provisional_chat_created(self, provisional: ProvisionalChatAsShown) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""
         self.broadcast(provisional_chat_created_message(provisional))
+
+    def broadcast_mentions_updated(self) -> None:
+        """Broadcast a mentions_updated event: a person's pending mentions changed."""
+        self.broadcast(mentions_updated_message())
 
     def broadcast_accounts_updated(self) -> None:
         """Broadcast an accounts_updated event: the account list changed, so every page reads it again."""
         self.broadcast({"type": "accounts_updated"})
+
+    def broadcast_settings_updated(self) -> None:
+        """Broadcast a settings_updated event: the chat settings changed, so every page reads them again."""
+        self.broadcast({"type": "settings_updated"})
+
+    def broadcast_suggestions_updated(self, chat_id: ChatId) -> None:
+        """Broadcast a suggestions_updated event: the chat's stored next-step suggestions were replaced or removed,
+        so a page showing the chat reads them again."""
+        self.broadcast({"type": "suggestions_updated", "chat_id": chat_id})
 
     def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
         """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""
@@ -147,6 +177,13 @@ class WebSocketBroadcaster(MutableModel):
                 "success": success,
                 "error": error,
             }
+        )
+
+    def broadcast_held_send_failed(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        """Broadcast a held_send_failed event: a message held while its agent came up never reached it, so the page
+        that sent it can hand it back to its composer."""
+        self.broadcast(
+            {"type": "held_send_failed", "chat_id": chat_id, "message_id": message_id, "detail": detail, "kind": kind}
         )
 
     def shutdown(self) -> None:

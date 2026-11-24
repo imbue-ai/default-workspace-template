@@ -1,14 +1,17 @@
 /**
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
  * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
- * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
+ * ``update_notice_changed``, ``presence_updated``, and ``roster_updated``; the window answers with its ``client_state``
  * (which client it is, on which desktop) and re-sends it on every switch, as a move of the client or, when
  * it only followed the client's stored desktop, as a following report that moves nothing; a pulled-out window's
  * page answers with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
  * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
  * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
- * how the update notice does, and ``presence_updated`` is who is connected to the workspace.
+ * how the update notice does, ``presence_updated`` is who is connected to the workspace, ``roster_updated`` everyone
+ * who may be, ``clients_updated`` that a client left (its socket closed or its record was pruned), ``chats_activity``
+ * what every chat is doing, and ``bubble`` what somebody just said (the multiplayer spec, sections 4.2, 6.4, 6.5,
+ * and 8.3).
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
@@ -18,17 +21,23 @@ import {
   parseAppRecords,
   parseAvatarSelectionChanged,
   parseAvatarStatus,
+  parseBubble,
+  parseChatsActivity,
   parseDesktops,
   parseEntries,
   parsePresentUsers,
+  parseRoster,
   parseUpdateNoticeChanged,
 } from "../model/records";
 import type {
   AppRecord,
   AvatarStatus,
+  BubbleWire,
+  ChatActivity,
   Desktop,
   EntryPresentation,
   PresentUser,
+  RosterParticipant,
   UpdateNoticeWire,
 } from "../model/records";
 import { parseThemeCatalog, type ThemeCatalog } from "../model/themes";
@@ -92,13 +101,28 @@ export interface SocketHandlers {
   onAvatarSelectionChanged(design: string): void;
   /** The update notice as the shell now holds it, null once the record is cleared. */
   onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
+  /** The tray's resource gauge, as the shell pushes it (see ``model/resourceGauge``). */
+  onResourceGaugeChanged(view: unknown): void;
   /** The workspace's themes or its default theme changed (workspace-themes plan section 5.2). */
   onThemesChanged(catalog: ThemeCatalog): void;
+  /** Somebody changed a keybinding; the shell and every framed page re-fetch their resolved chords. */
+  onKeybindingsChanged(): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
   onPresenceUpdated(users: PresentUser[]): void;
+  /** The roster (the multiplayer spec, section 4.2), on connect and whenever presence or a grants file changed. */
+  onRosterUpdated(participants: RosterParticipant[]): void;
+  /** A client's socket closed or its record was pruned (the multiplayer spec, section 8.3): the clients listing
+   *  has changed and is worth reading again. */
+  onClientsUpdated(): void;
+  /** What every chat is doing, as the chat app last reported it (the multiplayer spec, section 6.4). */
+  onChatsActivity(chats: ChatActivity[]): void;
+  /** Somebody just said something (the multiplayer spec, section 6.5). */
+  onBubble(bubble: BubbleWire): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
+  /** The open socket answered the check ``reviveNow`` made: it held through the time the page was out of sight. */
+  onLiveConfirmed(): void;
 }
 
 /** What the store asks of its socket, so a test can stand one in. */
@@ -109,13 +133,22 @@ export interface DesktopSocket {
   /** Register this socket as a pulled-out window's, under this client and naming no desktop: the ops aimed at
    *  the client reach it, and the client's active desktop stays its main window's. */
   reportPopOut(): void;
+  /** Make sure the socket is live now, as a page coming back into sight does, rather than when the backoff says:
+   *  the retries made while it slept may have pushed the next one many seconds out. One that is not open (closed,
+   *  or still connecting on a network that may have died meanwhile) is replaced at once; an open one is asked to
+   *  answer, and replaced if it does not in time, since a connection the network dropped can still read as open. */
+  reviveNow(): void;
 }
 
 interface RawSocketEvent {
+  /** ``resource_gauge_changed``: the gauge, parsed by its model. */
+  view?: unknown;
   type?: unknown;
   apps?: unknown;
   desktops?: unknown;
   users?: unknown;
+  participants?: unknown;
+  chats?: unknown;
   op?: unknown;
   args?: unknown;
   requester?: unknown;
@@ -131,11 +164,16 @@ interface RawSocketEvent {
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show", "open", "focus"];
 
+/** How long an open socket has to answer ``reviveNow``'s ping. The shell reads a socket's incoming messages about
+ *  once a second, so the answer can take that long on top of the round trip. */
+export const LIVENESS_DEADLINE_MS = 4000;
+
 export class ShellSocket implements DesktopSocket {
   private ws: WebSocket | null = null;
   private handlers: SocketHandlers | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly reconnectBackoff = new ReconnectBackoff();
+  private livenessTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly clientId: string) {}
 
@@ -165,6 +203,51 @@ export class ShellSocket implements DesktopSocket {
     this.ws.send(JSON.stringify({ type: "client_state", client_id: this.clientId, is_pop_out: true }));
   }
 
+  reviveNow(): void {
+    if (this.handlers === null) return;
+    this.reconnectBackoff.reset();
+    const ws = this.ws;
+    if (ws !== null && ws.readyState === WebSocket.OPEN) {
+      this.checkLive(ws);
+      return;
+    }
+    if (ws !== null) this.discard(ws);
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.open();
+  }
+
+  private checkLive(ws: WebSocket): void {
+    if (this.livenessTimer !== null) return;
+    ws.send(JSON.stringify({ type: "ping" }));
+    this.livenessTimer = setTimeout(() => {
+      this.livenessTimer = null;
+      if (this.ws !== ws) return;
+      console.warn("[si-ws] no answer from the open socket: replacing it");
+      this.discard(ws);
+      this.open();
+    }, LIVENESS_DEADLINE_MS);
+  }
+
+  /** Let go of a socket this one replaces: its late events must not touch the new one's state. */
+  private discard(ws: WebSocket): void {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    if (this.ws === ws) this.ws = null;
+    this.endLivenessCheck();
+  }
+
+  private endLivenessCheck(): void {
+    if (this.livenessTimer === null) return;
+    clearTimeout(this.livenessTimer);
+    this.livenessTimer = null;
+  }
+
   private open(): void {
     if (this.ws !== null) return;
     const url = wsUrl("/api/ws");
@@ -177,6 +260,11 @@ export class ShellSocket implements DesktopSocket {
       this.handlers?.onConnected();
     };
     ws.onmessage = (event: MessageEvent) => {
+      // Anything heard proves the socket live, the answer to a ping or not.
+      if (this.livenessTimer !== null) {
+        this.endLivenessCheck();
+        this.handlers?.onLiveConfirmed();
+      }
       const data = parseJsonMessage<RawSocketEvent>(event.data as string);
       if (data !== null) this.handleEvent(data);
     };
@@ -185,6 +273,7 @@ export class ShellSocket implements DesktopSocket {
         `[si-ws] closed (code=${event.code} reason=${JSON.stringify(event.reason)} wasClean=${event.wasClean})`,
       );
       this.ws = null;
+      this.endLivenessCheck();
       this.scheduleReconnect();
     };
     ws.onerror = () => {
@@ -216,6 +305,18 @@ export class ShellSocket implements DesktopSocket {
       case "presence_updated":
         handlers.onPresenceUpdated(parsePresentUsers(event.users));
         return;
+      case "roster_updated":
+        handlers.onRosterUpdated(parseRoster(event.participants));
+        return;
+      case "clients_updated":
+        handlers.onClientsUpdated();
+        return;
+      case "chats_activity":
+        handlers.onChatsActivity(parseChatsActivity(event.chats));
+        return;
+      case "bubble":
+        handlers.onBubble(parseBubble(event));
+        return;
       case "placements_updated":
         handlers.onPlacementsUpdated({
           desktopId: String(event.desktop_id ?? ""),
@@ -246,8 +347,16 @@ export class ShellSocket implements DesktopSocket {
       case "update_notice_changed":
         handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
         return;
+      case "resource_gauge_changed":
+        handlers.onResourceGaugeChanged(event.view);
+        return;
       case "themes_changed":
         handlers.onThemesChanged(parseThemeCatalog(event.catalog));
+        return;
+      case "keybindings_changed":
+        handlers.onKeybindingsChanged();
+        return;
+      case "pong":
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

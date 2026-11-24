@@ -32,6 +32,8 @@ from typing import assert_never
 
 from pydantic import Field
 
+from imbue.chat.authors import AUTHOR_NAME_FIELD
+from imbue.chat.authors import split_author_prefix
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -44,13 +46,13 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
-# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# Cross-layer contract: the wrapper ``system/scripts/workspace_bare_scripts/run_in_background.py`` puts around the
 # report it sends an agent's own chat when a command it ran for that agent exits. Only its
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 
 # Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
-# it paused for an update's apply (``.agents/skills/update-self/scripts/update_resume_note.py``,
+# it paused for an update's apply (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``,
 # sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
 # picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
 # pins the tag and both outcomes equal.
@@ -63,6 +65,10 @@ WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
 # message -- the conversation the chat opened on, then the user's own words -- while the page
 # shows only the words, so the block is stripped here and the rest travels as ``display_body``.
 SEED_CONTEXT_TAG = "chat-seed-context"
+
+# The tag around the note the chat app used to start a first-run workspace's first agent with, still in older
+# chats' transcripts: nobody typed it, so the whole message stays hidden.
+FIRST_RUN_KICKOFF_TAG = "first-run-kickoff"
 
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
@@ -98,6 +104,7 @@ _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
+_FIRST_RUN_KICKOFF_RE = re.compile(rf"^\s*<{FIRST_RUN_KICKOFF_TAG}>[\s\S]*</{FIRST_RUN_KICKOFF_TAG}>\s*$")
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
 
 # The slash command the chat app sends a retiring agent for its handoff summary (the
@@ -129,7 +136,7 @@ _LOCAL_COMMAND_OUTPUT_OPENS = ("<local-command-stdout>", "<local-command-stderr>
 # hides them and they would otherwise render as a bare user bubble full of raw XML. They
 # are shown rather than hidden (the user asked for this output), just not as prose: a
 # collapsed chip renders its body in a <pre><code>, which is what makes it read as
-# terminal output instead of conversation.
+# terminal output instead of conversation. The person ran the command, so the chip is theirs.
 _BASH_INPUT_RE = re.compile(r"<bash-input>([\s\S]*?)</bash-input>")
 _BASH_OUTPUT_RE = re.compile(r"<bash-(?:stdout|stderr)>([\s\S]*?)</bash-(?:stdout|stderr)>")
 _BASH_ANY_OPEN = ("<bash-input>", "<bash-stdout>", "<bash-stderr>")
@@ -267,6 +274,13 @@ def _match_seed_context(content: str) -> MessageDisplay | None:
     if match is None:
         return None
     return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
+
+
+def _match_first_run_kickoff(content: str) -> MessageDisplay | None:
+    """The note first-run chats' first agents used to be started with, still in older chats' transcripts."""
+    if _FIRST_RUN_KICKOFF_RE.match(content) is None:
+        return None
+    return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
 def _match_skill_expansion(content: str) -> MessageDisplay | None:
@@ -414,10 +428,12 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
     inputs = _BASH_INPUT_RE.findall(content)
     if inputs:
         body = "\n".join(part.strip() for part in inputs if part.strip())
-        return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
+        return MessageDisplay(display=DisplayKind.PERSON_CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
     streams = [part.strip() for part in _BASH_OUTPUT_RE.findall(content) if part.strip()]
     # An empty result still gets a chip: the alternative is a bare bubble of raw XML.
-    return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams))
+    return MessageDisplay(
+        display=DisplayKind.PERSON_CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams)
+    )
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
@@ -465,6 +481,7 @@ def _match_secret_resolution(content: str) -> MessageDisplay | None:
 
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
+    _match_first_run_kickoff,
     _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
@@ -504,7 +521,8 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
         return None
     # A chip renders its body verbatim; when an attachment block was stripped for
     # classification, show the message text rather than the raw attachment markdown.
-    if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
+    is_chip = decision.display in (DisplayKind.CHIP, DisplayKind.PERSON_CHIP)
+    if is_chip and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
     # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble as
     # an inline image or a file link. Put back what ``_visible_text`` took off the end, and
@@ -524,12 +542,31 @@ def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: 
     The ONE call every user-message emit site makes (each harness's normal path AND
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
+
+    A ``[from: <name>] `` prefix (the multiplayer spec, section 5.3) is read here too: the name
+    is stamped as ``author_name`` (the key is joined later, from the chat's annotations), the
+    detectors run on the words behind it, and the page is handed those words as the body, so
+    the prefix the agent reads is never shown.
     """
-    decision = classify_user_message(content, is_meta=is_meta)
+    author_name, spoken = split_author_prefix(content)
+    if author_name is not None:
+        event[AUTHOR_NAME_FIELD] = author_name
+    decision = classify_delivered_message(content, is_meta=is_meta)
     if decision is not None:
         decision.apply_to(event)
-    if is_non_turn_tail(content, is_meta=is_meta):
+    if is_non_turn_tail(spoken, is_meta=is_meta):
         event["non_turn_tail"] = True
+
+
+@pure
+def classify_delivered_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
+    """The render decision for a message as the agent was handed it: the detectors run on the words behind a
+    ``[from: <name>] `` prefix, and a message carrying one shows those words as its body."""
+    author_name, spoken = split_author_prefix(content)
+    decision = classify_user_message(spoken, is_meta=is_meta)
+    if decision is None and author_name is not None:
+        return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
+    return decision
 
 
 @pure

@@ -1,5 +1,5 @@
 /**
- * "Done in 14s", with a check, under the latest reply once the agent has finished the turn: the
+ * "Done in 14s" under the latest reply once the agent has finished the turn: the
  * explicit end the status row above it hands over to, so a finished chat never reads as one that
  * might still be going.
  *
@@ -16,20 +16,27 @@
  */
 
 import m from "mithril";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { getChatById } from "../models/Chats";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { liveArrivalOfAgentWork, type TranscriptEvent } from "../models/Response";
+import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { formatElapsed, latestTurnSpan } from "./turnTiming";
+
+/** Whether the agent's turn is over, as far as the chat's own state says: its activity idle, nothing queued or
+ *  connecting, no send of this page's on the way, and the chat not waiting on a background task, a permission or a
+ *  switch. */
+export function isChatTurnOver(chatId: string): boolean {
+  const chat = getChatById(chatId);
+  if (chat === undefined || (chat.status !== "idle" && chat.status !== "working") || chat.handoff !== null)
+    return false;
+  const agent = chat.active_agent;
+  if (agent.activity_state !== "IDLE" || agent.queued_messages.length > 0 || agent.is_connecting) return false;
+  return getOutgoingMessages(chatId).length === 0;
+}
 
 /** What the mark says for the transcript's latest turn, or null when it shows nothing. */
 export function turnDoneLabel(chatId: string, events: readonly TranscriptEvent[]): string | null {
-  const chat = getChatById(chatId);
-  if (chat === undefined || (chat.status !== "idle" && chat.status !== "working") || chat.handoff !== null)
-    return null;
-  const agent = chat.active_agent;
-  if (agent.activity_state !== "IDLE" || agent.queued_messages.length > 0 || agent.is_connecting) return null;
-  if (getOutgoingMessages(chatId).length > 0) return null;
+  if (!isChatTurnOver(chatId)) return null;
   const last = events.length === 0 ? undefined : events[events.length - 1];
   // A turn that ended on a provider failure shows that failure's notice, not a finish.
   if (last === undefined || (last.type === "assistant_message" && (last.is_api_error || last.is_auth_error))) {
@@ -49,22 +56,14 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
     view(vnode) {
       const label = turnDoneLabel(vnode.attrs.chatId, vnode.attrs.events);
       if (label === null) return null;
+      // A quiet receipt tucked just under the stretch it closes, off the line, on the bubbles' text edge.
       return m(
         "div",
         {
-          class:
-            "turn-done-mark mb-5 flex min-h-5 items-center gap-1.5 px-1 " +
-            "text-(length:--font-size-helper) text-faint",
+          class: `turn-done-mark -mt-3.5 mb-5 ${AGENT_TEXT_EDGE_CLASS} font-mono text-[11px] text-faint`,
           role: "status",
         },
-        [
-          m(
-            "span",
-            { class: "turn-done-mark__check inline-flex shrink-0" },
-            m.trust(icon("check", { size: 12, strokeWidth: 2.5 })),
-          ),
-          m("span", { class: "turn-done-mark__label" }, label),
-        ],
+        m("span", { class: "turn-done-mark__label" }, label),
       );
     },
   };

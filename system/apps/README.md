@@ -15,8 +15,9 @@ Built-in apps:
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
   8010, and owns the provider accounts. Its frontend, the shell's, the
-  Getting Started app's and Files' are builds of one npm workspace (`system/package.json`)
-  sharing the `system/libs/workspace_ui` library.
+  Getting Started app's, the Onboarding checklist's and Files' are builds of
+  one npm workspace (`system/package.json`) sharing the
+  `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
   fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`, see `catalog/README.md`),
@@ -25,6 +26,13 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
+- `onboarding_checklist/` - The Onboarding checklist: the four things worth
+  trying in a new workspace on one small page, the done ones checked (read
+  from the `onboarding_activity` library, `system/libs/onboarding_activity/`),
+  each showing where it is when clicked. In the launcher, with no desktop
+  shortcut (`seeds_shortcuts = false`); the desktop's tour opens it as it ends,
+  by the message type its manifest registers. Served on port 8070 by the
+  `onboarding-checklist` package; it stores nothing.
 - `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
   serves the wrapper pages (each frames one session's ttyd page) over the
@@ -37,12 +45,20 @@ Built-in apps:
   at the workspace folder. Its `files-app` entry point runs a small server that
   serves the files, and the files shared from the user's computers, with a
   frontend from that same npm workspace.
-- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
-  UI by its daemon (`browser-service`).
+- `screen/` - The Screen: the workspace's one streamed Linux desktop (Xorg, XFCE,
+  PulseAudio and neko) as a window, with the control lease the human and the
+  agents share, the `screen` command, and the browser (one Fortress Chromium on
+  the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
+  drive it through, `agentic-browser-fleet`). Served on port 8090 by the
+  `screen-service` package.
 - `routines/` - Routines: everything that runs on a schedule (the routines
   library, `system/libs/routines/`), each with its health, next run and history,
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
   `routines-app` package; it stores nothing of its own.
+- `style_guide/` - Style Guide: the design system on one page, every colour
+  token, type role and scale and every shared control of
+  `system/libs/workspace_ui` in its variants, drawn by the library itself.
+  Served on port 8060 by the `style-guide-app` package; it stores nothing.
 - `system_monitor/` - System Monitor: how much CPU, memory and disk the
   workspace is using, on an overview and a view per resource: which chats,
   code checkers, and apps use them, the busy stretches, which programs the
@@ -57,14 +73,20 @@ Built-in apps:
 
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, the launch paths the
-desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, whether it
-stops once no window shows it (`stop_when_no_windows`), and the
+desktop opens windows at, whether a desktop is given its shortcuts by itself
+(`seeds_shortcuts`), its memory-shedding `priority`, whether it is `critical`, whether it
+stops once no window shows it (`stop_when_no_windows`), whether its pages
+listen to the microphone (`uses_microphone`), and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
 and the app's port via `system/scripts/forward_port.py --manifest`, from its
 program line or from inside its entry point once its socket is bound, and then
-runs the app.
+runs the app. Every built-in app's Flask app installs the request guard ahead of
+its routes (`app_schema.request_guard`, over `workspace_layout.identity`): the
+workspace's own browser is on loopback too, so a request it marks as a page of
+another origin's is refused, and a request with no `X-Imbue-Identity` header is
+the owner's only from loopback under a loopback `Host`.
 
 A manifest may also declare what belongs to the app *outside* its own folder.
 `[[references]]` lists literal repo-root-relative files and directories the app
@@ -74,7 +96,7 @@ it uses; `[scope] exclude` lists gitignore-style globs that no review or test
 pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
 `**/node_modules/**`, `**/dist/**`, `**/.venv/**`); `[wiring] programs` names
 the supervisord programs the app owns beyond its own block and its
-`<name>-<role>` sidecars (the browser declares `xvfb`). A reference may not point
+`<name>-<role>` sidecars (the Screen declares the four programs of its stack and its watcher). A reference may not point
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together
@@ -84,19 +106,22 @@ scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration
 ignores both tables, so a stale reference can never stop the app.
 
-Every Python app with a manifest runs from its own uv tool environment,
-installed from its own `pyproject.toml` (`uv tool install -e
-system/apps/<package>`, done by `system/scripts/build_workspace.sh` at image
-build, by the build-app scaffold for a new app, and by the update-self apply
-when an app's directory changes), so its program line runs the tool's entry
-point rather than `uv run`. The root venv is for the background services,
-agents, skills, and scripts. The manifest is the discriminator: an app with
-no `app.toml` runs `uv run <name>` from the root venv, and both forms are
-supported (nothing converts an app from one form to the other without the
-user). Python packages here are picked up by the workspace's `system/apps/*`
-uv member glob, so one lockfile covers the whole tree and nothing in the root
-`pyproject.toml` needs editing for a new app; an app's own tool environment is
-what keeps it running while the root venv is rewritten.
+The built-in apps run from the workspace venv: each is named in the root
+`pyproject.toml`'s `[tool.uv.workspace] members` and is also a root dependency
+(so a sync without `--all-packages` keeps its entry point), shares the one
+`uv.lock`, and has its program line exec its entry point from `.venv/bin`.
+`uv sync --all-packages` (run by `system/scripts/build_workspace.sh`, and by the
+update-self apply when a built-in app's `pyproject.toml` or `uv.lock` changes)
+installs each here editable. Adding or removing a built-in app means editing
+both root entries.
+
+Every app the user's agents build here is instead a standalone uv project, not
+a root member: its own `pyproject.toml`, `uv.lock` and `.venv` (a link beside
+the uv cache), shared code through editable path sources, and a program line
+that syncs its own project with `--locked` before it execs from its own
+`.venv/bin`. A dependency it adds changes only its own lock, so it can never move
+the chat's or another app's versions. The build-app scaffold sets this up, and
+`.agents/shared/references/running-python.md` has the rules.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

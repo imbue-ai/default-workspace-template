@@ -42,8 +42,6 @@ from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
-from imbue.chat.harnesses.model import SwitchMode
-from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
@@ -111,6 +109,9 @@ class AccountRow(FrozenModel):
     name: str = Field(description="The user's own name for the account; '' for none")
     label: str = Field(description="The provider, the harness and the number as one string")
     reauth_method: str = Field(description="The method 'Sign in again' runs for the account")
+    signed_in_at: str | None = Field(
+        description="When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept"
+    )
 
 
 class AccountsResponse(FrozenModel):
@@ -119,6 +120,9 @@ class AccountsResponse(FrozenModel):
     accounts: tuple[AccountRow, ...] = Field(description="Every signed-in account, in index order")
     mru: str | None = Field(description="The account the newest chat was created on, if any")
     default: str | None = Field(description="The account the user pinned for new chats, if any")
+    is_first_run_provider_step_pending: bool = Field(
+        default=False, description="Whether the first run's provider page is still owed to the workspace's owner"
+    )
 
 
 class StartFlowRequest(FrozenModel):
@@ -227,10 +231,27 @@ def list_accounts() -> Response:
             name=numbered.account.name,
             label=numbered.label,
             reauth_method=_reauth_method_id(numbered.account, numbered.harness),
+            signed_in_at=accounts.read_signed_in_at(numbered.account.id),
         )
         for numbered in accounts.number_accounts(index.accounts)
     )
-    return model_response(AccountsResponse(accounts=rows, mru=index.mru, default=index.default_account))
+    return model_response(
+        AccountsResponse(
+            accounts=rows,
+            mru=index.mru,
+            default=index.default_account,
+            is_first_run_provider_step_pending=get_state().agent_manager.is_first_run_provider_step_pending(),
+        )
+    )
+
+
+def finish_first_run_provider_step() -> Response:
+    """``POST /api/first-run/provider-step/done``: the owner pressed Skip or Next on the first run's provider page."""
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
+    get_state().agent_manager.finish_first_run_provider_step()
+    return model_response(OkResponse())
 
 
 def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
@@ -274,8 +295,7 @@ def account_model_options(account_id: str) -> Response:
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
     catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
-    has no catalog to offer, so the account's own codex is asked for it. A harness whose model the
-    chat app cannot switch offers nothing (``options`` empty).
+    has no catalog to offer, so the account's own codex is asked for it.
 
     The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
     provider can be on different subscriptions and genuinely offer different models, so an answer
@@ -289,8 +309,6 @@ def account_model_options(account_id: str) -> Response:
     harness = accounts.harness_for(account)
     if harness is None:
         return _error_response(f"Account {account_id} is on a lane this build does not have", status_code=404)
-    if get_catalog(harness).switch_mode is SwitchMode.READ_ONLY:
-        return model_response(ModelOptionsResponse(models=None, options=()))
     options = list_account_options(harness, accounts.account_dir(account_id))
     return model_response(ModelOptionsResponse(models=None, options=options))
 
@@ -423,6 +441,7 @@ ROUTE_TABLE: Final[RouteTable] = {
         request_model=UpdateAccountRequest, response_model=OkResponse
     ),
     ("GET", "/api/accounts/{account_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
+    ("POST", "/api/first-run/provider-step/done"): RouteModels(response_model=OkResponse),
 }
 
 
@@ -443,4 +462,7 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])
     application.add_url_rule(
         "/api/accounts/<account_id>/model-options", view_func=account_model_options, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/first-run/provider-step/done", view_func=finish_first_run_provider_step, methods=["POST"]
     )

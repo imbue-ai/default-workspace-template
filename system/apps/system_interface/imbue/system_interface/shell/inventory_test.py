@@ -39,9 +39,11 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "presets": {},
             "text_param": None,
             "draft_param": None,
+            "mention_param": None,
+            "app_params": None,
         }
     ]
-    assert serialized[0]["default_shortcut"] == {"launch": "new", "mode": "new"}
+    assert serialized[0]["default_shortcuts"] == [{"launch": "new", "mode": "new"}]
     # An app declaring no launch path offers the synthesized ``open`` at its root.
     assert serialized[1]["launch_paths"] == [
         {
@@ -53,6 +55,8 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "presets": {},
             "text_param": None,
             "draft_param": None,
+            "mention_param": None,
+            "app_params": None,
         }
     ]
     assert set(serialized[1]) == {
@@ -62,11 +66,13 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "label",
         "url",
         "internal",
+        "system",
         "program",
         "critical",
         "stop_when_no_windows",
+        "uses_microphone",
         "launch_paths",
-        "default_shortcut",
+        "default_shortcuts",
         "launcher_rank",
         "pin",
         "message_handlers",
@@ -80,6 +86,21 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
     # One broadcast for the read; the liveness probe that found everything running adds none.
     assert [message["type"] for message in drain_messages(client_queue)] == ["apps_updated"]
     assert inventory.is_registry_read is True
+
+
+def test_an_app_view_says_whether_the_app_is_part_of_the_workspace_itself(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("getting-started", "http://127.0.0.1:1/started", is_system=True)
+    )
+    inventory = build_inventory(registry_path, broadcaster)
+
+    assert {str(view.name): view.system for view in inventory.views()} == {
+        "terminal": False,
+        "files": False,
+        "getting-started": True,
+    }
 
 
 def test_liveness_changes_are_broadcast_once_and_kept_across_a_registry_read(

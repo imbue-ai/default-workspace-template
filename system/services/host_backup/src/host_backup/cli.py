@@ -8,7 +8,8 @@ user's most recent edits are guaranteed to land in the next tick rather
 than the in-flight one).
 
 It then waits for the triggered tick to reach any terminal event and prints it,
-exiting 0 on success, 3 when backups are not configured, 1 on any other tick
+exiting 0 on success, 3 when backups are not configured, 4 when the tick skipped
+its backup because the account is out of backup storage, 1 on any other tick
 outcome, and 2 when no outcome was observed at all (no terminal event before the
 timeout, or no events log to read in the first place). When the in-flight tick is
 still running at the timeout, it exits 2 without triggering a tick.
@@ -16,7 +17,7 @@ still running at the timeout, it exits 2 without triggering a tick.
 With `--check` it triggers nothing and waits for nothing: it reads the newest tick
 outcomes back from the log, prints them, and exits 0 when a `restic_backup_succeeded`
 is recent (within two backup intervals), 3 when the newest tick ended for missing
-secrets, 1 otherwise (the service is down, or its ticks fail), and 2 when the events
+secrets, 4 when it was skipped for lack of backup storage, 1 otherwise (the service is down, or its ticks fail), and 2 when the events
 log cannot be located.
 """
 
@@ -58,6 +59,9 @@ EXIT_BACKUP_SUCCEEDED: Final[int] = 0
 EXIT_BACKUP_FAILED: Final[int] = 1
 EXIT_NO_COMPLETION_OBSERVED: Final[int] = 2
 EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
+# The tick took no backup because the account is out of backup storage: like
+# "not configured", a state the caller names rather than a broken service.
+EXIT_BACKUP_SKIPPED_OVER_QUOTA: Final[int] = 4
 
 
 @click.command()
@@ -113,7 +117,8 @@ def backup_now_main(timeout_seconds: float, check: bool) -> None:
 def _check_recent_backup(events_path: Path) -> int:
     """Print the newest tick outcomes and map them to an exit code: 0 when the newest
     `restic_backup_succeeded` is within two backup intervals, 3 when the newest tick
-    ended for missing secrets, 1 otherwise.
+    ended for missing secrets, 4 when it was skipped for lack of backup storage, 1
+    otherwise.
 
     Two intervals: a healthy service starts the next tick one interval after the
     previous one ended, so its newest success is at most one interval plus one run
@@ -149,6 +154,8 @@ def _check_recent_backup(events_path: Path) -> int:
         return EXIT_BACKUPS_NOT_CONFIGURED
     if age_seconds is not None and age_seconds <= max_age_seconds:
         return EXIT_BACKUP_SUCCEEDED
+    if newest_outcome == BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value:
+        return EXIT_BACKUP_SKIPPED_OVER_QUOTA
     return EXIT_BACKUP_FAILED
 
 
@@ -169,6 +176,8 @@ def _exit_code_for_completion(completion: dict[str, object]) -> int:
         return EXIT_BACKUP_SUCCEEDED
     if event_type == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value:
         return EXIT_BACKUPS_NOT_CONFIGURED
+    if event_type == BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value:
+        return EXIT_BACKUP_SKIPPED_OVER_QUOTA
     return EXIT_BACKUP_FAILED
 
 

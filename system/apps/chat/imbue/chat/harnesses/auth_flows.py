@@ -115,9 +115,8 @@ _VERDICT_DEADLINE_SECONDS: Final = 120.0
 # desktop app shows can say how the sign-in ended. A flow still pending after this is reported as
 # finishing, and the chooser shows how it ends.
 _RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
-_DEVICE_LOGIN_REFUSED_DETAIL: Final = (
-    "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
-    "ChatGPT's security settings, or use an OpenAI API key instead."
+_DEVICE_LOGIN_START_FAILED_DETAIL: Final = (
+    "ChatGPT couldn't start a sign-in with a code. Try again, or use an OpenAI API key instead."
 )
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
@@ -286,6 +285,9 @@ class AuthFlowService:
     # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
     # with a 60s timeout each and this service holds one lock across every route.
     _restart_bound_agents: Callable[[str], None]
+    # Whether the first run's provider page is still owed: a sign-in made while it is pins its
+    # account as the default when nothing is pinned. Injected for the same reason as the restart.
+    _is_first_run_provider_step_pending: Callable[[], bool]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -302,6 +304,7 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        is_first_run_provider_step_pending: Callable[[], bool] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
@@ -321,6 +324,7 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._is_first_run_provider_step_pending = is_first_run_provider_step_pending or (lambda: False)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
         service._connect_login_client = login_client_connector or connect_login_client
@@ -410,7 +414,7 @@ class AuthFlowService:
         socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
         env = {
             **os.environ,
-            **build_account_binding(session.lane.harness).account_env(account_path),
+            **build_account_binding(session.lane.harness).cli_env(account_path),
             BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
             SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
             SIGN_IN_FLOW_ENV_VAR: "1",
@@ -443,11 +447,9 @@ class AuthFlowService:
                 login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
         except (CodexAppServerError, OSError) as e:
             logger.warning("Codex sign-in could not begin: {}", e)
-            # A code sign-in is refused when the ChatGPT account has device codes turned off, a
-            # setting the user can change.
             self._fail_locked(
                 session,
-                _DEVICE_LOGIN_REFUSED_DETAIL
+                _DEVICE_LOGIN_START_FAILED_DETAIL
                 if method.login is CodexLogin.DEVICE
                 else "Codex could not begin the sign-in.",
             )
@@ -473,7 +475,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        env = {**os.environ, **build_account_binding(session.lane.harness).cli_env(account_path)}
         url_file: Path | None = None
         if method.relays_browser_sign_in:
             session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
@@ -650,7 +652,13 @@ class AuthFlowService:
             account_id, path = accounts.mint_account_dir(self._home)
             build_account_binding(lane.harness).seed_account(path, self._work_dir)
             write_claude_env(path, managed_env)
-            return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
+            return accounts.commit_account(
+                account_id,
+                lane.id,
+                ADOPTED_DISPLAY,
+                self._home,
+                is_default_when_none_pinned=self._is_first_run_provider_step_pending(),
+            )
 
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
@@ -842,7 +850,13 @@ class AuthFlowService:
         method = session.method
         if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
             _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
-        account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
+        account = accounts.commit_account(
+            session.account_id,
+            session.lane.id,
+            display,
+            self._home,
+            is_default_when_none_pinned=self._is_first_run_provider_step_pending(),
+        )
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
         # daemon re-reading a swapped credential either. One rule for every harness rather than

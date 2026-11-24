@@ -1,9 +1,10 @@
 import m from "mithril";
+
+import { SHELL_FIRST_RUN_PROVIDER_STEP } from "@imbue/workspace-ui/src/app_contract";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
-  EMBEDDER_CAPABILITIES,
   HIGHLIGHT_CHROME,
   OPEN_EXTERNAL,
   OPEN_LINK,
@@ -19,22 +20,27 @@ import {
 } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { IS_CHAT_ROOT_FOCUS_ACCEPTED, PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
+import { refreshShellKeybindings } from "./model/keybindings";
+import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
+import { connectEmbedderToStore, firstRunChrome, immersiveBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
+import { applyFirstRunProviderStep, isFirstRunProviderStepPending } from "./model/firstRunCover";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
-import { getOwnIdentity, startPresenceHeartbeat } from "./model/Presence";
+import { makeAgentWorkingSignal } from "./model/agentWorking";
+import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
-import type { TourAction } from "./model/tourCards";
-import { avatarPinnedWindow } from "./reducers/desktopState";
-import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
+import { initEmbedderRelay, setChildFrameMessageHandler, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
+import { runTourAction } from "./store/tourActions";
 import { ShellSocket } from "./store/socket";
 import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
@@ -119,6 +125,7 @@ function bootstrap(): void {
           reloadInterface,
           popOut: popOutBridge,
           outsideLinks,
+          immersive: immersiveBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -140,8 +147,11 @@ function bootstrap(): void {
     setIconTheme,
   });
   const gestures = new PointerGestureSource();
-  // Say this window is here (and learn who it is) for as long as it stays visible.
-  startPresenceHeartbeat();
+  // Say this window is here (and learn who it is) for as long as it stays visible. Until the first answer the
+  // active desktop reads as the viewer's own, so a window that landed on somebody else's re-reads the layout as
+  // the owner's once it knows (the multiplayer spec, section 8.3).
+  onOwnIdentityChanged(() => desktopStore.takeViewerIdentityKnown());
+  startPresenceHeartbeat(clientId);
   // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
   // each framed page does the same for itself.
   installCursorHidingWhileTyping(document);
@@ -149,6 +159,13 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
+  // A permission verdict may answer the keybindings delivery's own request: the backend matches
+  // the entries against the request it filed and retries the unsent saves (spec section 9.3).
+  setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, (message) => {
+    const entries = permissionResolutionEntries(message);
+    if (entries.length > 0) void api.deliverKeybindings(entries).catch(() => undefined);
+  });
+  void refreshShellKeybindings();
   // A phone's page sleeps while it is out of sight; coming back, the store reads the shell's word again.
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),
@@ -157,15 +174,9 @@ function bootstrap(): void {
   // types through the endpoint's observer, any other (a notification's destination) through the relay.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   setEmbedderAppMessageHandler((message) => void desktopStore.relayEmbedderMessage(message, null));
-  // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
-  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
-    desktopStore.setCanPopOut(message.canPopOut === true);
-    desktopStore.setOutsideLinkCapabilities({
-      opensExternalLinks: message.opensExternalLinks === true,
-      opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
-    });
-    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
-  });
+  // What the chrome can do, and its immersive-mode changes; then the pull-out conversation's ask to bring a
+  // window back.
+  connectEmbedderToStore(desktopStore);
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;
@@ -188,18 +199,13 @@ function bootstrap(): void {
     desktopStore.setTearOut(windowId, phase);
   });
   // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
-  // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
-  // row any time. A card about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's
-  // window aside.
-  const runTourAction = (action: TourAction): void => {
-    switch (action) {
-      case "snap-avatar-window-right": {
-        const window = avatarPinnedWindow(desktopStore.getState());
-        if (window !== null) desktopStore.setWindowState(window.id, "SNAPPED_RIGHT");
-        return;
-      }
-    }
-  };
+  // looking at the whole desktop, resumed the same way after the agent's reply interrupted it, and never while a
+  // page says the workspace's first conversation is still following its script; from the launcher's row any
+  // time. An agent is at work while the avatar's status says so or a page the shell frames does. A card
+  // about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's window aside, a
+  // coach card at the avatar brings that window forward, and the tour's end has the onboarding checklist opened
+  // down the left of the desktop by whichever app registered its message. The owner's page also records as
+  // finished a tour that has nothing left to show.
   const tour = new TourController({
     api: TOUR_API,
     highlightChrome: (anchor) => sendToEmbedder(HIGHLIGHT_CHROME, { anchor }),
@@ -207,12 +213,23 @@ function bootstrap(): void {
       !desktopStore.isPhoneLayout() &&
       desktopStore.getSoloWindowId() === null &&
       !isPreviewShell() &&
+      !isFirstRunProviderStepPending() &&
       (getOwnIdentity()?.owner ?? true),
-    performAction: runTourAction,
+    // Unknown until the first heartbeat answers, and nobody's record is settled on a guess.
+    isViewerOwner: () => getOwnIdentity()?.owner === true,
+    performAction: (action) => runTourAction(desktopStore, action),
     startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
     redraw: () => m.redraw(),
   });
-  desktopStore.subscribe(() => tour.noteAgentWorking(desktopStore.getState().avatar.status.mood === "working"));
+  const agentWorking = makeAgentWorkingSignal((isWorking) => tour.noteAgentWorking(isWorking));
+  desktopStore.subscribe(() => agentWorking.noteAvatar(desktopStore.getState().avatar.status.mood === "working"));
+  onOwnIdentityChanged(() => tour.noteViewerChanged());
+  // The chat app says whether the first run's provider page is owed; the cover follows it (views/FirstRunCover.ts).
+  setChildFrameMessageHandler(SHELL_FIRST_RUN_PROVIDER_STEP, (frame, payload) => {
+    if (typeof payload.isPending !== "boolean") return;
+    const origin = new URL(frame.src, window.location.href).origin;
+    applyFirstRunProviderStep(payload.isPending, origin, firstRunChrome, () => m.redraw());
+  });
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -221,6 +238,7 @@ function bootstrap(): void {
           store: desktopStore,
           gestures,
           tour,
+          notePagesAgentWorking: agentWorking.notePages,
           host: window.location.host,
           protocol: window.location.protocol,
         }),
@@ -232,7 +250,14 @@ function bootstrap(): void {
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void loaded.then(() => announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true }));
+  void loaded.then(() =>
+    announceReadyToEmbedder({
+      opensLinks: true,
+      opensCustomSchemeLinks: true,
+      reportsChatOnScreen: true,
+      reportsProviderChooserOnScreen: IS_CHAT_ROOT_FOCUS_ACCEPTED,
+    }),
+  );
 }
 
 window.addEventListener("load", bootstrap);

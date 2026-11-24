@@ -96,7 +96,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         response = client.get("/api/accounts")
     assert response.status_code == 200
     payload = response.get_json()
-    assert set(payload) == {"accounts", "mru", "default"}
+    assert set(payload) == {"accounts", "mru", "default", "is_first_run_provider_step_pending"}
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
@@ -110,6 +110,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         "name",
         "label",
         "reauth_method",
+        "signed_in_at",
     }
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"
@@ -274,6 +275,36 @@ def test_a_key_paste_mints_an_account_and_lists_it(tmp_path: Path) -> None:
     assert len(read_index().accounts) == 1
 
 
+def _paste_key(client: FlaskClient, lane_id: str, api_key: str) -> str:
+    started = client.post("/api/accounts", json={"lane_id": lane_id, "method_id": "api_key"})
+    submitted = client.post(f"/api/accounts/flow/{started.get_json()['flow_id']}", json={"api_key": api_key})
+    assert submitted.get_json()["state"] == "ok"
+    return submitted.get_json()["account_id"]
+
+
+def test_the_first_account_connected_while_the_first_runs_provider_page_is_owed_is_listed_as_the_default(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    agent_manager.note_agent_list_known()
+    service = AuthFlowService.create(
+        home=None,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        is_first_run_provider_step_pending=agent_manager.is_first_run_provider_step_pending,
+    )
+    with _client_for(build_test_state(agent_manager=agent_manager, auth_flows=service)) as client:
+        assert client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).status_code == 201
+
+        first = _paste_key(client, "anthropic", "sk-ant-xyz")
+        second = _paste_key(client, "openai", "sk-openai-123")
+        listed = client.get("/api/accounts").get_json()
+
+    assert listed["is_first_run_provider_step_pending"] is True
+    assert listed["default"] == first
+    assert listed["mru"] == second
+
+
 def test_aborting_a_flow_leaves_no_account_behind(tmp_path: Path) -> None:
     with _client(_signed_in_service(tmp_path)) as client:
         flow_id = client.post("/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}).get_json()[
@@ -375,19 +406,6 @@ def test_account_model_options_offers_the_catalog_for_a_static_harness_and_the_a
         assert [option["id"] for option in offered.get_json()["options"]] == ["gpt-6-astra"]
 
         assert client.get("/api/accounts/acct-nope/model-options").status_code == 404
-
-
-def test_account_model_options_offers_nothing_for_a_harness_whose_model_the_chat_cannot_switch(
-    tmp_path: Path,
-) -> None:
-    """Antigravity's model is changed from its terminal, so the dialog is offered no pick it could not apply."""
-    agy_id, _ = mint_account_dir()
-    commit_account(agy_id, "google", "Google")
-    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary="/bin/true")
-    with _client_for(build_test_state(agent_manager=manager)) as client:
-        answered = client.get(f"/api/accounts/{agy_id}/model-options")
-        assert answered.status_code == 200
-        assert answered.get_json() == {"models": None, "options": []}
 
 
 # the relayed browser callback

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from chat_background_tasks import markers
-from script_modules_testing import message_chat
+from workspace_bare_scripts import message_chat
 
 
 @pytest.fixture(autouse=True)
@@ -162,6 +162,13 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class _FakeChatAppServer(ThreadingHTTPServer):
+    answers: list[tuple[int, Any]]
+    get_answers: dict[str, tuple[int, Any]]
+    posted: list[tuple[str, Any]]
+    drop_connections: bool
+
+
 @pytest.fixture
 def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
@@ -171,7 +178,7 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     is every ``(path, body)`` it received; ``server.drop_connections``
     makes it read each request and then close the connection without answering.
     """
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
+    server = _FakeChatAppServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
     server.get_answers = {}
     server.posted = []
@@ -193,7 +200,7 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 @pytest.fixture
 def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A ``mngr`` on PATH that records its argv and the message file's contents, prints
+    """A ``mngr`` on PATH that records its argv, the message file's contents and its cwd, prints
     ``$FAKE_MNGR_STDOUT`` (default nothing), then exits with the code in ``$FAKE_MNGR_EXIT``
     (default 0). Returns the file the record is written to."""
     bin_dir = tmp_path / "fake-bin"
@@ -206,7 +213,7 @@ def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "argv = sys.argv[1:]\n"
         "text = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
         f"with open({str(record)!r}, 'a') as handle:\n"
-        "    handle.write(json.dumps({'argv': argv, 'text': text}) + '\\n')\n"
+        "    handle.write(json.dumps({'argv': argv, 'text': text, 'cwd': os.getcwd()}) + '\\n')\n"
         "sys.stdout.write(os.environ.get('FAKE_MNGR_STDOUT', ''))\n"
         "raise SystemExit(int(os.environ.get('FAKE_MNGR_EXIT', '0')))\n"
     )

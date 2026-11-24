@@ -59,7 +59,7 @@ every suite (the root pass and the `chat` and `system_interface` passes):
 
 - `pick_e2e_browser_executable(is_headed)` returns Playwright's headless
   shell at `/opt/playwright-test-browsers/headless-shell`, installed for the
-  tests alone by `system/scripts/env.d/1010-playwright-test-headless-shell.sh`,
+  tests alone by `system/scripts/env.d/2010-playwright-test-headless-shell.sh`,
   else Fortress at `/opt/fortress/tilion-fortress/tilion`, the workspace's
   own browser. A browser suite runs about a third faster in about a third
   less memory on the shell. A headed run gets Fortress, since the shell

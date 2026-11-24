@@ -11,6 +11,7 @@ import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import {
   buildSections,
+  hasLandedLiveSwitch,
   hasOpenHandoffRequest,
   hasUserTurn,
   isTailTurnSettled,
@@ -242,6 +243,13 @@ function run(events: TranscriptEvent[], isTailSettled = true, liveCompaction: Li
 
 function stepItems(items: TimelineItem[]): StepNode[] {
   return items.filter((i): i is { kind: "step"; step: StepNode } => i.kind === "step").map((i) => i.step);
+}
+
+/** The event ids of every inline (ungrouped) part, in order. */
+function ungroupedIds(items: TimelineItem[]): string[] {
+  return items.flatMap((item) =>
+    item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+  );
 }
 
 describe("bug fixes", () => {
@@ -579,6 +587,528 @@ describe("narration and close-time ejection", () => {
     expect(steps[0].is_frontier).toBe(true);
     expect(steps[0].narration).toBe("Checking the result.");
     expect(sections[0].trailing_reply).toHaveLength(0);
+  });
+
+  // A reply still being written goes where its words will land: in the live step, which is
+  // where prose the agent speaks next joins.
+  it("names the live step as the one the agent's next words join", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+    ];
+    expect(run(events, /* idle */ false)[0].live_step_id).toBe("s1");
+    expect(run(events, /* idle */ true)[0].live_step_id).toBeNull();
+  });
+
+  // A step carried over a user message shows in both sections; only the tail's copy is live.
+  it("names only the tail section's copy of a carried-over step as live", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "also check this"),
+      assistantText("t3a", "Sure, checking it too.", "ans"),
+      workMsg("t4", "Read", "w2"),
+      result("t4", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.live_step_id)).toEqual([null, "s1"]);
+  });
+
+  // A step the agent left open belongs to the earlier request: an answer to the user's next
+  // message is the turn's reply, not that step's narration, while it is written and once it lands.
+  it("keeps a step left open by an earlier turn out of the next turn's answer", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "what's the difference between RAM and disk?"),
+      assistantText("t4", "RAM is short-term memory; disk keeps files.", "ans"),
+    ];
+    const writing = run(events.slice(0, -1), /* idle */ false);
+    expect(writing[1].live_step_id).toBeNull();
+
+    const landed = run(events, /* idle */ true);
+    expect(landed[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+    // The step stays where it was left, frozen, and is not drawn again in a turn that never took it up.
+    expect(stepItems(landed[1].items)).toHaveLength(0);
+    expect(stepItems(landed[0].items).map((step) => step.ticket_id)).toEqual(["s1"]);
+  });
+
+  // The agent working while the carried-over step is open takes it up again.
+  it("takes a carried-over step up again once the agent works in it", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "keep going"),
+      assistantText("t4", "Looking at the cache next.", "narr"),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBe("s1");
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // The open-steps reminder asks the agent to re-start a step it means to keep working on, which it
+  // does before answering. That only says the step is still open: the answer stays the turn's reply,
+  // and the step joins the turn with the agent's next real work.
+  it("keeps the answer out of a carried-over step the agent re-starts before answering", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "what's the difference between RAM and disk?"),
+      tkMsg("t4", "tk start s1", "t4"),
+      result("t4", "t4", startOut("s1", "Check overall disk usage")),
+      assistantText("t5", "RAM is short-term memory; disk keeps files. Back to the cleanup.", "ans"),
+    ];
+    const answering = run(events, /* idle */ false);
+    expect(answering[1].live_step_id).toBeNull();
+
+    const idle = run(events, /* idle */ true);
+    expect(idle[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+    expect(stepItems(idle[1].items)).toHaveLength(0);
+
+    const working = run(
+      [
+        ...events,
+        assistantText("t6", "Looking at the cache next.", "narr"),
+        workMsg("t7", "Bash", "w2"),
+        result("t7", "w2", "ok"),
+      ],
+      /* idle */ false,
+    );
+    const inlineIds = ungroupedIds(working[1].items);
+    expect(inlineIds).toContain("ans");
+    expect(working[1].live_step_id).toBe("s1");
+    expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // The agent often looks something up before answering, then goes back to the earlier work. The
+  // lookup takes the carried-over step up, but the answer is still the reply to the user's message.
+  it("keeps the answer out of a carried-over step the agent works in before answering", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "how big is the cache?"),
+      workMsg("t4", "Bash", "w2"),
+      result("t4", "w2", "ok"),
+      assistantText("t5", "The cache is 4 GB. Back to the cleanup.", "ans"),
+      assistantText("t6", "Looking at old logs next.", "narr"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = ungroupedIds(sections[1].items);
+    expect(inlineIds).toEqual(["ans"]);
+    const step = stepItems(sections[1].items)[0];
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(step.narration).toBe("Looking at old logs next.");
+    expect(sections[1].live_step_id).toBe("s1");
+
+    // While the answer is still being written, it streams as a reply, not under the step.
+    expect(run(events.slice(0, 8), /* idle */ false)[1].live_step_id).toBeNull();
+  });
+
+  // Moving a step is the agent taking up the work, so what it says after that is the step's.
+  it("treats prose after a step move in a new turn as the step's narration", () => {
+    const events = [
+      userMsg("t0", "add a login page"),
+      tkMsg("t1", "tk start s2", "t1"),
+      result("t1", "t1", startOut("s2", "Build the login page")),
+      workMsg("t2", "Read", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "The routes live in one file; adding the page there.", "narr"),
+      workMsg("t4", "Edit", "w2"),
+      result("t4", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[0].items)[0];
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w1", "narr", "a-w2"]);
+    expect(step.narration).toBe("The routes live in one file; adding the page there.");
+  });
+
+  // A message sent while the agent works reaches it inside the turn it is running. Its answer can
+  // come after a step move and a lookup, so every line it writes from
+  // there to the turn's end is a reply; its work still groups under the steps.
+  it("shows every line after a message sent mid-task, when the answer follows a step move", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "which app folder is the biggest?", "q", { delivered_mid_turn: true }),
+      tkMsg("t4", "tk close s1 done; tk start s2", "t4"),
+      result(
+        "t4",
+        "t4",
+        `${closeOut("s1", "Summarize the chat app", "Read it")}\n${startOut("s2", "Summarize the data library")}`,
+      ),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "The chat folder is the biggest, at 92 KB.", "ans"),
+      workMsg("t7", "Read", "w3"),
+      result("t7", "w3", "ok"),
+      assistantText("t8", "Six of the ten apps are done.", "narr"),
+      workMsg("t9", "Bash", "w4"),
+      result("t9", "w4", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = ungroupedIds(sections[1].items);
+    expect(inlineIds).toEqual(["ans", "narr"]);
+    const step = stepItems(sections[1].items).find((s) => s.ticket_id === "s2")!;
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "a-w3", "a-w4"]);
+    expect(step.narration).toBeNull();
+    expect(sections[1].live_step_id).toBeNull();
+  });
+
+  it("shows the answer to a message sent mid-task after a line about the earlier work", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the data library")),
+      workMsg("t2", "Read", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "which app folder is the biggest?", "q", { delivered_mid_turn: true }),
+      assistantText("t4", "The data library summary didn't save, so I'm adding it again.", "old"),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      tkMsg("t6", "tk close s1 done; tk start s2", "t6"),
+      result(
+        "t6",
+        "t6",
+        `${closeOut("s1", "Summarize the data library", "Read it")}\n${startOut("s2", "Summarize files")}`,
+      ),
+      assistantText("t7", "The chat folder is the biggest, at 92 KB.", "ans"),
+      workMsg("t8", "Bash", "w3"),
+      result("t8", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ true);
+    const visibleIds = [...ungroupedIds(sections[1].items), ...sections[1].trailing_reply.map((e) => e.event_id)];
+    expect(visibleIds).toEqual(["old", "ans"]);
+    expect(stepItems(sections[1].items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
+  });
+
+  // A finished background task's notice continues the turn it lands in, so it keeps showing every line.
+  it("keeps showing every line after a message sent mid-task past a background task's notice", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "how long will this take?", "q", { delivered_mid_turn: true }),
+      workMsg("t4", "Bash", "w2"),
+      result("t4", "w2", "ok"),
+      notice("t5", "n1"),
+      workMsg("t6", "Bash", "w3"),
+      result("t6", "w3", "ok"),
+      assistantText("t7", "About two more minutes; the build is done.", "ans"),
+      workMsg("t8", "Bash", "w4"),
+      result("t8", "w4", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const afterNotice = sections[2];
+    expect(afterNotice.user_event?.event_id).toBe("n1");
+    const inlineIds = ungroupedIds(afterNotice.items);
+    expect(inlineIds).toEqual(["ans"]);
+    expect(stepItems(afterNotice.items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
+    expect(afterNotice.live_step_id).toBeNull();
+  });
+
+  // Agents often write `cd x && tk close s1`, which the step hooks refuse before it runs. The refused
+  // call did no work, so a finding said just before it is still the step's closing remark.
+  it("shows a line said before a refused tk call and the close that follows as the step's closing remark", () => {
+    const refusedClose: AssistantMessageEvent = {
+      ...bashMsg("t4", "cd /repo && tk close s1 done", "t4"),
+      tool_calls: [
+        {
+          ...bashMsg("t4", "cd /repo && tk close s1 done", "t4").tool_calls[0],
+          tk_command: "cd /repo && tk close s1 done",
+        },
+      ],
+    };
+    const events = [
+      userMsg("t0", "summarize each app; tell me anything surprising"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Read the shorter app write-ups")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Datalib stays off by default, and its server can run shell commands.", "finding"),
+      refusedClose,
+      { ...result("t4", "t4", ""), is_error: true, tk_stamp: undefined },
+      tkMsg("t5", "tk close s1 done; tk start s2", "t5"),
+      result(
+        "t5",
+        "t5",
+        `${closeOut("s1", "Read the shorter app write-ups", "Read them")}\n${startOut("s2", "Read the rest")}`,
+      ),
+      workMsg("t6", "Bash", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = ungroupedIds(sections[0].items);
+    expect(inlineIds).toEqual(["finding"]);
+    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
+
+  // A chained command whose own work failed before tk ran (no hook refused it) is real work.
+  it("still shows a chained tk call whose own work failed", () => {
+    const chained = bashMsg("t2", "uv run pytest && tk close s1 done", "t2");
+    const events = [
+      userMsg("t0", "run the tests"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Run the tests")),
+      { ...chained, tool_calls: [{ ...chained.tool_calls[0], tk_command: "uv run pytest && tk close s1 done" }] },
+      { ...result("t2", "t2", ""), is_error: true, error_snippet: "FAILED test_x.py::test_y", tk_stamp: undefined },
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-t2"]);
+  });
+
+  // Sent after the agent stopped (a Stop, or a turn's end), a message starts a new turn: once the agent
+  // takes up a step, its progress lines stay that step's captions.
+  it("keeps progress lines in the steps after a message that started a new turn", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk close s1 done; tk start s2", "t4"),
+      result(
+        "t4",
+        "t4",
+        `${closeOut("s1", "Summarize the chat app", "Read it")}\n${startOut("s2", "Summarize the data library")}`,
+      ),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "Six of the ten apps are done.", "narr"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[1].items).find((s) => s.ticket_id === "s2")!;
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(sections[1].live_step_id).toBe("s2");
+  });
+
+  // Moving a step ends the carried-over step's claim on the turn without taking it up: the agent
+  // closing it and answering leaves the answer as the turn's reply.
+  it("leaves a carried-over step out of the turn once the agent moves a step", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "never mind, what's RAM?"),
+      tkMsg("t4", "tk close s1", "c1"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Stopped early")),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBeNull();
+    expect(stepItems(sections[1].items)[0].status).toBe("done");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
+  // Closing another step left open earlier is the agent back on that request: the step still
+  // open is current again, so the work that follows joins it.
+  it("takes a carried-over step up again once the agent closes another one left open", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      tkMsg("t2", "tk start s2", "t2"),
+      result("t2", "t2", startOut("s2", "Clear the cache")),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk close s1", "c1"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Checked")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBe("s2");
+    expect(stepItems(sections[1].items).map((step) => [step.ticket_id, step.status])).toEqual([
+      ["s1", "done"],
+      ["s2", "active"],
+    ]);
+    expect(stepItems(sections[1].items)[1].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // Starting another step moves on without taking the carried-over one up, so the new turn draws
+  // only the step it works in.
+  it("draws only the new step when the agent starts another one in the next turn", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "do the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[0].items).map((step) => step.ticket_id)).toEqual(["s1"]);
+    expect(stepItems(sections[1].items).map((step) => step.ticket_id)).toEqual(["s2"]);
+    expect(sections[1].live_step_id).toBe("s2");
+  });
+
+  // An empty turn keeps no copy and the turn after it never took the step up: the step is drawn
+  // once, in the turn that opened it.
+  it("draws a step left open past back-to-back messages only in the turn that opened it", () => {
+    const events = [
+      userMsg("t0", "free up disk", "u1"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "wait", "u2"),
+      userMsg("t4", "what's RAM?", "u3"),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ true);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u1", "u2", "u3"]);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], [], []]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
+  // Work batched with the carried-over step's close is work done while it was open: it stays in
+  // the step, as it does in the turn that opened it.
+  it("keeps work batched with a carried-over step's close inside the step", () => {
+    const closeWithWork: AssistantMessageEvent = {
+      ...tkMsg("t4", "tk close s1", "c1"),
+      tool_calls: [
+        { tool_call_id: "w2", tool_name: "Edit", input_chars: 12 },
+        { tool_call_id: "c1", tool_name: "Bash", input_chars: 26, tk_command: "tk close s1", display: "hidden" },
+      ],
+    };
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "finish up and tell me what's RAM"),
+      closeWithWork,
+      result("t4", "w2", "ok"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Cleared the cache")),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-c1"]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
+  // A chip landing before the agent took the step up does not hand it the agent's next words.
+  it("keeps a carried-over step out of the turn across a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "what's RAM?"),
+      assistantText("t4", "RAM is short-term memory.", "ans"),
+      notice("t5", "n1"),
+      assistantText("t6", "The download you asked about earlier finished.", "after"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections[2].live_step_id).toBeNull();
+    expect(stepItems(sections[2].items)).toHaveLength(0);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
+  });
+
+  // A step the turn moved past without taking it up stays off the timeline after a chip too.
+  it("keeps a step the turn moved past off the timeline across a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "do the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      notice("t6", "n1"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
+  });
+
+  // Once the step the turn started has closed, the one it never took up is still not current
+  // after a chip: the agent's next words are the turn's reply, not that step's caption.
+  it("keeps a step the turn never took up from taking the agent's words after a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "sort the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      tkMsg("t6", 'tk close s2 "sorted"', "c2"),
+      result("t6", "c2", closeOut("s2", "Sort the photos", "sorted")),
+      notice("t7", "n1"),
+      assistantText("t8", "The photos are sorted.", "after"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections[2].live_step_id).toBeNull();
+    expect(stepItems(sections[2].items)).toHaveLength(0);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
+  });
+
+  // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
+  // by the work that follows. The agent has not answered yet, so its next words are the answer and
+  // are written as a reply, not into the step.
+  it("takes a carried-over step up again after a regular ticket transition", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk start cod-oglc", "k2"),
+      result("t4", "k2", startOut("cod-oglc")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBeNull();
+    expect(stepItems(sections[1].items).map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // With every step closed, the agent's next words are ungrouped prose, not a step's.
+  it("names no live step once the open step has closed", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      tkMsg("t2", 'tk close s1 "did it"', "t2"),
+      result("t2", "t2", closeOut("s1", "Do it", "did it")),
+    ];
+    expect(run(events, /* idle */ false)[0].live_step_id).toBeNull();
   });
 
   // When the agent goes idle with a step still open, its trailing prose is the
@@ -1682,6 +2212,35 @@ describe("permission resolutions", () => {
     expect(sections.every((s) => !(s.user_event?.content ?? "").includes("was granted"))).toBe(true);
   });
 
+  it("keeps a step the turn moved past off the timeline across a permission verdict", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "free up disk"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Check overall disk usage")),
+      userMsg("2026-05-01T01:00:02Z", "show me my gmail unreads instead"),
+      tkMsg("2026-05-01T01:00:03Z", "tk start s2", "c-s2"),
+      result("2026-05-01T01:00:03Z", "c-s2", startOut("s2", "Connect to your Gmail account")),
+      permissionMsg("2026-05-01T01:00:04Z", "perm"),
+      result("2026-05-01T01:00:04Z", "perm", '{"request_id":"r1"}'),
+      userMsg(
+        "2026-05-01T01:00:05Z",
+        "Your permission request for Gmail was granted. Retry. (request_id: r1)",
+        "u-res",
+        {
+          display: "permission_resolution",
+          resolution: "granted",
+          request_id: "r1",
+        },
+      ),
+      workMsg("2026-05-01T01:00:06Z", "Bash", "w-after"),
+      result("2026-05-01T01:00:06Z", "w-after", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
+    expect(stepItems(sections[2].items)[0].events.map((e) => e.event_id)).toEqual(["a-w-after"]);
+  });
+
   it("carries an open step over the approval so it continues in the new turn", () => {
     const events = [
       userMsg("2026-05-01T01:00:00Z", "show me my gmail unreads"),
@@ -1924,6 +2483,20 @@ describe("agent switches", () => {
     expect(after[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
   });
 
+  it("reports the live switch as landed once its marker is on the transcript, while the chat still delivers", () => {
+    const live = handoffStateFixture({ phase: "switching", started_at: "2026-09-16T00:44:10.000Z" });
+    const before: TranscriptEvent[] = [userMsg("2026-09-16T00:44:00.000Z", "do the thing")];
+    expect(hasLandedLiveSwitch(before, live)).toBe(false);
+    // The marker is stamped when the retiring agent was archived, after the switch began.
+    const landed = [...before, agentSwitch("2026-09-16T00:45:00.000Z", "sw2")];
+    expect(hasLandedLiveSwitch(landed, live)).toBe(true);
+    expect(hasLandedLiveSwitch([...landed, assistantText("2026-09-16T00:45:30.000Z", "hi")], live)).toBe(true);
+    // An earlier switch's marker says nothing about the one running now.
+    const earlier = [agentSwitch("2026-09-16T00:40:00.000Z", "sw1"), ...before];
+    expect(hasLandedLiveSwitch(earlier, live)).toBe(false);
+    expect(hasLandedLiveSwitch(landed, null)).toBe(false);
+  });
+
   it("tells the live switch's request from an earlier one that was called off, by when the switch began", () => {
     const stale = summaryRequest("2026-09-16T00:43:00.000Z", "u-stale");
     const live = summaryRequest("2026-09-16T00:44:20.000Z", "u-live");
@@ -2053,6 +2626,26 @@ describe("agent switches", () => {
     expect(sections[1].items.map((i) => i.kind)).toEqual(["step"]);
     expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "handoff"]);
   });
+
+  // The successor answers the message the user switched with: a step the retiring agent left open
+  // does not take that answer as its caption, until the successor works in it.
+  it("keeps a step carried over a switch out of the successor's answer until it works in it", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Check overall disk usage")),
+      agentSwitch("t2", "sw1", "claude", "codex", ["m-trigger", "what's RAM?"]),
+      assistantText("t3", "RAM is short-term memory.", "ans"),
+    ];
+    const answering = run(events, /* idle */ false);
+    expect(answering[1].live_step_id).toBeNull();
+    expect(stepItems(answering[1].items)).toHaveLength(0);
+    expect(answering[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+
+    const working = run([...events, workMsg("t4", "Bash", "w1"), result("t4", "w1", "ok")], /* idle */ false);
+    expect(working[1].live_step_id).toBe("s1");
+    expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
 });
 
 describe("secret requests", () => {
@@ -2082,6 +2675,30 @@ describe("secret requests", () => {
     expect(verdictFor(sections[0].items[1] as PermissionItem, "secret-1")).toBe("stored");
     expect(sections[1].user_event).toBeNull();
     expect(stepItems(sections[1].items)[0].is_carryover).toBe(true);
+  });
+
+  it("keeps a step the turn moved past off the timeline across a secret's notice", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "free up disk"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Check overall disk usage")),
+      userMsg("2026-05-01T01:00:02Z", "connect me to the widget API instead"),
+      tkMsg("2026-05-01T01:00:03Z", "tk start s2", "c-s2"),
+      result("2026-05-01T01:00:03Z", "c-s2", startOut("s2", "Connect to the widget API")),
+      secretMsg("2026-05-01T01:00:04Z", "sec"),
+      secretResult("2026-05-01T01:00:04Z", "sec", "secret-1", "svc"),
+      userMsg(
+        "2026-05-01T01:00:05Z",
+        "Secret stored: data/.secrets/svc.env (A) (secret: stored, request_id: secret-1)",
+        "u-res",
+        { display: "secret_resolution", resolution: "stored", request_id: "secret-1" },
+      ),
+      workMsg("2026-05-01T01:00:06Z", "Bash", "w-after"),
+      result("2026-05-01T01:00:06Z", "w-after", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
   });
 
   it("carries the decline note onto the card by id", () => {

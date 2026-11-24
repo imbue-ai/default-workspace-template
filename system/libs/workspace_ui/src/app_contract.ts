@@ -53,12 +53,18 @@ export const SHELL_CLOSE_REQUEST = "shell:close-request";
  *  handshake and on every change; the page wears it, and remembers it unless it is a preview
  *  (`themes/themeClient.ts`). */
 export const SHELL_THEME = "shell:theme";
+/** Shell to app: somebody changed a keybinding; the page re-fetches its own backend's
+ *  `/api/keybindings/me` (no payload: each app resolves for its own actions and identity). */
+export const SHELL_KEYBINDINGS_CHANGED = "shell:keybindings-changed";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
 export const SHELL_CAPABILITIES = "shell:capabilities";
 /** App to shell: the page received focus; the shell raises its window. */
 export const SHELL_FOCUSED = "shell:focused";
+/** App to shell: a person touched the page (a pointer press or a key), throttled. The shell's presence heartbeat
+ *  reads activity off it, since input inside an app's frame never bubbles to the shell's own window. */
+export const SHELL_INPUT = "shell:input";
 /** App to shell: the page reports where it is and what it is called. */
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
@@ -78,6 +84,59 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
+
+/** App to shell: whether the first run's provider page is still owed (the chat app's word for it); while it is, the
+ *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
+export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
+
+/** App to shell: whether the workspace's first conversation is still following its script (the chat app's word for
+ *  it), sent once the page knows and when that changes. The shell keeps each page's last report and drops it when the
+ *  page goes away or loads again, so a page that is greeted says it again; while any page says yes, the shell's
+ *  show-around tour neither begins nor resumes by itself. */
+export const SHELL_FIRST_CONVERSATION_STEP = "shell:first-conversation-step";
+
+/** App to shell: show a one-button card with the page's words in one place (``ShellCoachCardPlace``): under a
+ *  control of the Imbue Studio chrome, which is ringed while the card is up, or popping out of the agent's avatar,
+ *  whose window the shell brings forward. The shell shows it while its tour shows nothing, in place of a coach card
+ *  that is up, and in place of the end of its tour (the last card, or the badge an early exit leaves); during any
+ *  other tour card, or the tour's pause notice, the request is dropped. It also drops a text that is empty or
+ *  longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and a place it does not know. */
+export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
+
+/** App to shell: whether an agent is working in what the page shows (a reply under way in a chat), sent when that
+ *  changes. The shell keeps each page's last report and drops it when the page goes away or loads again, so a page
+ *  that is greeted while it has said yes says so again. */
+export const SHELL_AGENT_WORKING = "shell:agent-working";
+
+/** The controls of the Imbue Studio chrome a coach card can sit under, as the embed contract names them
+ *  (``minds:highlight-chrome``). */
+export const SHELL_CHROME_ANCHORS = ["workspace-switcher", "permissions", "settings", "share", "help"] as const;
+export type ShellChromeAnchor = (typeof SHELL_CHROME_ANCHORS)[number];
+
+/** What the shell draws that a coach card can pop out of: the agent's avatar. */
+export const SHELL_COACH_CARD_TARGETS = ["avatar"] as const;
+export type ShellCoachCardTarget = (typeof SHELL_COACH_CARD_TARGETS)[number];
+
+/** Where a coach card goes: under a control of the chrome (``chromeAnchor``), or at something the shell draws
+ *  (``target``). A message names exactly one. */
+export type ShellCoachCardPlace =
+  { readonly chromeAnchor: ShellChromeAnchor } | { readonly target: ShellCoachCardTarget };
+
+/** The place a ``shell:show-coach-card`` payload names, or null when it names none, both, or one this build does
+ *  not know. */
+export function coachCardPlaceOf(payload: Readonly<Record<string, unknown>>): ShellCoachCardPlace | null {
+  const { chromeAnchor, target } = payload;
+  if ((chromeAnchor === undefined) === (target === undefined)) return null;
+  if (chromeAnchor !== undefined) {
+    const anchor = SHELL_CHROME_ANCHORS.find((known) => known === chromeAnchor);
+    return anchor === undefined ? null : { chromeAnchor: anchor };
+  }
+  const known = SHELL_COACH_CARD_TARGETS.find((candidate) => candidate === target);
+  return known === undefined ? null : { target: known };
+}
+
+/** The longest text a coach card carries. */
+export const MAX_COACH_CARD_TEXT_LENGTH = 500;
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -146,10 +205,12 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, the path the window is at, and whether the Imbue Studio chrome around the
- * shell opens its settings for the files shared from the user's computer (desktop-interface
- * contracts.md section 7). The client id is required; a text field the shell does not send, a page
- * reads as "", and a flag it does not send, as false.
+ * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
+ * shell opens its settings for the files shared from the user's computer and its workspace settings and draws coach
+ * marks on its own controls (desktop-interface contracts.md section 7), and whether the window is being viewed on
+ * somebody else's desktop. The
+ * client id is required; a text field the shell does not send, a page reads as "", and a flag it
+ * does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -158,6 +219,11 @@ export interface ShellHandshake {
   app: string;
   path: string;
   opensLocalFiles: boolean;
+  opensWorkspaceSettings: boolean;
+  showsCoachMarks: boolean;
+  /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
+   *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
+  isViewing: boolean;
 }
 
 /**
@@ -183,6 +249,8 @@ export interface ShellConnectionHandlers {
   onNavigate?: (path: string) => void;
   /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
   onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
+  /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
+  onKeybindingsChanged?: () => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -201,6 +269,15 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
+  /** Ask the shell to show ``text`` as a one-button card at ``place``: under a control of the Imbue Studio chrome,
+   *  ringed while the card is up, or popping out of the agent's avatar. */
+  showCoachCard(text: string, place: ShellCoachCardPlace): void;
+  /** Say whether an agent is working in what this page shows. */
+  agentWorking(isWorking: boolean): void;
+  /** Say whether the first run's provider page is still owed to this workspace's owner. */
+  firstRunProviderStep(isPending: boolean): void;
+  /** Say whether the workspace's first conversation is still following its script. */
+  firstConversationStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
@@ -222,7 +299,17 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, opensLocalFiles } = data;
+  const {
+    clientId,
+    windowId,
+    desktopId,
+    app,
+    path,
+    opensLocalFiles,
+    opensWorkspaceSettings,
+    showsCoachMarks,
+    isViewing,
+  } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -231,6 +318,9 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     app: optionalString(app),
     path: optionalString(path),
     opensLocalFiles: opensLocalFiles === true,
+    opensWorkspaceSettings: opensWorkspaceSettings === true,
+    showsCoachMarks: showsCoachMarks === true,
+    isViewing: isViewing === true,
   };
 }
 
@@ -288,6 +378,11 @@ function isHandedOn(url: URL): boolean {
 }
 const PRIMARY_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
+
+/** How often at most the page reports input (``shell:input``): activity is measured in minutes, so a report every
+ *  20 seconds loses nothing and keeps the message traffic negligible. The shell's page driver throttles its focus
+ *  fallback for a page that binds no contract by the same interval. */
+export const INPUT_REPORT_INTERVAL_MS = 20_000;
 
 /** The link a click landed in, if any (through shadow roots too). */
 function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | null {
@@ -421,6 +516,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
         return;
       }
+      case SHELL_KEYBINDINGS_CHANGED:
+        handlers.onKeybindingsChanged?.();
+        return;
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);
@@ -435,6 +533,16 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     if (!isFramed) return;
     boundWindow.parent.postMessage({ type, ...payload }, "*");
   }
+
+  // Input inside the page never bubbles to the shell's window, so the page reports it (the multiplayer spec,
+  // section 4.3): at most one message per interval, which is plenty for an active/idle call measured in minutes.
+  let lastInputReportAt = 0;
+  const onInput = (): void => {
+    const now = Date.now();
+    if (now - lastInputReportAt < INPUT_REPORT_INTERVAL_MS) return;
+    lastInputReportAt = now;
+    send(SHELL_INPUT, {});
+  };
 
   // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
   const onLinkClick = (event: MouseEvent): void => {
@@ -454,6 +562,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   if (isFramed) {
     boundWindow.addEventListener("click", onLinkClick);
     boundWindow.addEventListener("auxclick", onLinkClick);
+    for (const type of ["pointerdown", "keydown"]) {
+      boundWindow.addEventListener(type, onInput, { capture: true, passive: true });
+    }
     boundWindow.open = routedOpen;
   }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
@@ -465,6 +576,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
+    showCoachCard: (text: string, place: ShellCoachCardPlace) => send(SHELL_SHOW_COACH_CARD, { text, ...place }),
+    agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
+    firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
+    firstConversationStep: (isPending: boolean) => send(SHELL_FIRST_CONVERSATION_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
@@ -472,6 +587,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       boundWindow.removeEventListener("message", onMessage);
       boundWindow.removeEventListener("click", onLinkClick);
       boundWindow.removeEventListener("auxclick", onLinkClick);
+      for (const type of ["pointerdown", "keydown"]) {
+        boundWindow.removeEventListener(type, onInput, { capture: true });
+      }
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };

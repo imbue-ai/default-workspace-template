@@ -14,10 +14,12 @@ from imbue.chat.chat_naming import MAX_NAMING_ATTEMPTS
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_naming import parse_generated_chat_name
 from imbue.chat.chat_naming import read_chat_naming_state
+from imbue.chat.chat_naming import shortened_chat_name
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatAccountBinding
@@ -136,7 +138,6 @@ def test_parse_generated_chat_name_keeps_a_short_title(answer: str, expected: st
         "",
         "Map app: build a simple map application",
         "Five days in Rome\nA second line",
-        "A title that runs well past what a chat name can hold",
         "!!!",
         "確定申告の手順",
         "React 待办应用",
@@ -144,6 +145,38 @@ def test_parse_generated_chat_name_keeps_a_short_title(answer: str, expected: st
 )
 def test_parse_generated_chat_name_refuses_an_answer_that_is_not_a_usable_name(answer: str) -> None:
     assert parse_generated_chat_name(answer) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Five days in Rome", "Five days in Rome"),
+        ("A title of exactly forty characters long", "A title of exactly forty characters long"),
+        ("Information flow diagram for Obsidian and output apps", "Information flow diagram for Obsidian..."),
+        ("Budget planning for the kitchen remodel, and more", "Budget planning for the kitchen..."),
+        ("Supercalifragilisticexpialidociousnessfulness", "Supercalifragilisticexpialidociousnes..."),
+    ],
+)
+def test_a_name_too_long_for_the_chat_list_is_cut_at_a_word_and_ends_in_an_ellipsis(name: str, expected: str) -> None:
+    shortened = shortened_chat_name(name)
+
+    assert shortened == expected
+    assert len(shortened) <= 40
+
+
+def test_a_long_generated_name_is_cut_with_an_ellipsis_and_a_warning(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 1", ["Information flow diagram for Obsidian and output apps"])
+
+    harness.namer.consider_message(_CHAT_ID, "Make a diagram of how information flows between my apps")
+
+    assert harness.renames == ["Information flow diagram for Obsidian..."]
+    assert harness.naming_state().is_settled
+    assert any(
+        record.startswith(f"WARNING The name generated for chat {_CHAT_ID} ran past 40 characters")
+        for record in loguru_records
+    )
 
 
 def test_a_minted_chat_is_named_from_its_first_message_and_never_again(tmp_path: Path) -> None:
@@ -155,6 +188,16 @@ def test_a_minted_chat_is_named_from_its_first_message_and_never_again(tmp_path:
     assert harness.renames == ["Five days in Rome"]
     assert harness.completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome in May")]
     assert harness.naming_state().is_settled
+
+
+def test_a_name_is_asked_of_the_small_model_with_no_thinking_and_a_minute_to_answer(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Five days in Rome"])
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome in May")
+
+    assert harness.completion.model_tiers == [OneShotModelTier.SMALL]
+    assert harness.completion.thinking_token_allowances == [None]
+    assert harness.completion.timeouts_seconds == [60.0]
 
 
 def test_a_message_with_no_subject_leaves_the_minted_name_and_the_next_message_names_it(tmp_path: Path) -> None:
