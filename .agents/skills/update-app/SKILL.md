@@ -64,9 +64,7 @@ window keeps showing the old page until it is refreshed. The live change loop
 
 - **Verify before the user can see it, not after.** Your checks belong where
   you are the only one looking: before the window exists, or against a
-  throwaway instance of your own. Before you start one, read
-  `references/verify-against-a-copy.md`, which has the command that boots it
-  over a copy of the data. Once a window is open the user is the
+  throwaway instance of your own. Once a window is open the user is the
   verifier for anything they can perceive. Driving an app they are watching
   lands your test actions in their view and, for anything wired to real data
   or real agents, in their state.
@@ -77,7 +75,7 @@ window keeps showing the old page until it is refreshed. The live change loop
   Never let a check or a preview write to it, and never "clean up" by deleting
   from it. A check that must write runs against a copy, and a change that must
   itself rewrite the store (a data migration) takes a snapshot first: both are
-  in that reference.
+  in `references/verify-against-a-copy.md`.
 - **Never restart an app with `supervisorctl restart`.** It waits out the
   program's start window (30 s for a scaffolded app); step 4's call does not.
 - **The harden pass comes after the user's feedback, in the background.** Never
@@ -222,7 +220,10 @@ definition, and a restart of the whole services agent.
 freely, as a user would and not just "the process is up". With the app already
 on the user's screen, the call above is the whole check (it confirms the
 marker before it refreshes the window), plus the kind that cannot touch their
-view: a `curl`, a health probe, an exit code, a log line.
+view: a `curl`, a health probe, an exit code, a log line. To try the change in
+a browser first, read `references/verify-against-a-copy.md` and boot the
+throwaway instance it gives the command for: never copy the store or start the
+app by hand.
 The thorough pass is the harden worker's, on its own instance.
 
 ## Step 5: Show it, and end the turn
