@@ -55,9 +55,9 @@ own cgroup v2 controller at `/sys/fs/cgroup` four times a second and writes the
 limit as MemTotal and, as MemAvailable, the limit minus the usage plus what the
 kernel frees before it kills in the cgroup: the file cache no process has
 mapped, on both the inactive and the active list, and the reclaimable slab. The
-VM-side publishers count the same cache and slab and hold back a fixed reserve
-in place of the mapped pages, since under gVisor the mapped figure is mostly
-the sandbox's own memory. It removes the
+VM-side publishers count the file cache on both lists, mapped or not, and the
+slab, and hold back a fixed reserve instead, since under gVisor the mapped
+figure is mostly the sandbox's own memory. The local program removes the
 file while the container is uncapped (and keeps checking, since `mngr docker
 resize` can cap a running container), and touches nothing where it has no
 answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own
