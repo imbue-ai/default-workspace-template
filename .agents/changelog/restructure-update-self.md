@@ -12,6 +12,8 @@
 
 - **One home each** for the ceiling's rules, what the pass does on each exit of the apply (what an exit means for any caller is the shared `apply-exit-codes.md`, read from its staged copy, and each exit's section names the part of it to read first), and the licence to stop chats and apps.
 
+- **A read every run needs is an instruction at its step**, ahead of the action ("Read `references/auditing-the-report.md` and check the report against it"), not a citation ("per", "as ... says"). A reference that takes over part of the work names the file to read itself, not the step of another file that names it.
+
 - **The skill-exemption commit is not an edit of the worker's.** The worker commits what `validate_skill.py --stamp` wrote, alone, as `Record skill-check exemptions`. That commit selects no suite, and does not end the clean-pull skip of the review gates.
 
 - **Description.** It is in the third person and no longer states the default target release, which its standing instructions carry.
