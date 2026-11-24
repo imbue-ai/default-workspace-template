@@ -101,7 +101,7 @@ uv run --no-sync app-manifest select-tests --diff-base <breaking commit>^ --diff
 ```
 
 If the test's suite is not among the lines, declare the coupling that would
-have selected it, the same way.
+have selected it, the same way as for a suite the selector left out.
 
 ## A command that dies from a signal
 

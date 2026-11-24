@@ -1,0 +1,25 @@
+The lifecycle skills, the harden worker and the shared references they rest on follow the skill authoring guide, and none of `crystallize-creation`, `update-creation`, `heal-creation`, `harden-worker`, `launch-task` and `fetch-process-show` carries an exemption.
+
+- **`harden-lead.md`** (new, under `.agents/shared/references/`) holds the dispatch steps the three lifecycle skills each spelled out: names and paths, the single-flight check, what the ticket's title and description are for, the task-file fields, the launch rules, polling, the checks before a merge, and the go-live by creation type.
+
+- **`crystallize-creation`, `update-creation`, `heal-creation`** are checklists: standing instructions, what to settle before starting, a numbered step list, each step's own commands and task-file template, and the shared section the step needs. Naming the pass is part of the step that opens its ticket, and `crystallize-creation`'s Step 1 carries the pointer to `when-to-crystallize.md` that a section restating the description used to. `update-creation`'s critical-app carve-outs moved to `references/critical-app-handoff.md`, which only a lead sent by `update-app`'s careful flow reads. Where these skills sent their reader into `update-app`'s critical-app reference, they name the `update-app` skill. Step numbers and the sections other skills cite are unchanged.
+
+- **`lead-proxy.md` and `harden-contention.md`** each split into a core that keeps its path and holds what every reader needs, and a directory of the same name with one file for each path only some take: `lead-proxy/liveness.md`, `lead-proxy/milestones.md`, `lead-proxy/intermediate-lead.md`, `lead-proxy/rsync.md`, `harden-contention/catch-up.md`, `harden-contention/takeover.md`, `harden-contention/supersede.md`. The core links each one where its condition arises, and the sections that only handed off are gone.
+
+- **The lead-proxy flow names no harden file.** The two checks every lead runs before merging a worker's branch are now `lead-proxy.md`'s "Before a merge": wait out an editing lease, and abort a conflicted merge when the lead's skill has a catch-up rule. `harden-contention.md` keeps the freshness check and everything else particular to a harden pass, and it and `harden-lead.md` link `lead-proxy.md` by path. The failure flow, `lead-proxy/worker-failure.md`, names no harden file; `harden-lead.md` says what becomes of a stopped harden pass. No shared reference names a file inside a skill: a lead's message tells the worker what to do, and the worker's own table routes it, and `harden-contention.md` says in its own terms that a critical app's merge is the `update-app` skill's.
+
+- **The harden worker.** `harden-creation.md` keeps the contract every pass follows; the data rules, splitting the pass, carried work and catching up moved to `data-and-storage.md`, `splitting-the-pass.md`, `carried-work.md` and `catching-up.md`. Running the test gate, and a run that is not a clean pass, are the shared `review-gates.md`'s alone: `harden-creation.md` keeps how a harden pass selects the gate. `harden-worker/SKILL.md` opens with its standing instructions and step list, which has a step for doing the pass, and its tables list every one of those files with the condition that loads it. It and its references name a shared reference by its full path wherever they name one. "Critical-app handoff" and "Critical-app exception" are headings.
+
+- **After a compaction**, the shared references a lead or a worker follows from start to end are named in a standing instruction of its skill, `launch-task` included, and no longer in a line inside `lead-proxy.md` or `harden-creation.md`, which a compaction drops.
+
+- **Checking whether a worker is alive** uses `mngr capture <worker> --full --no-start`, which reads the agent's pane on any harness and does not start a stopped one.
+
+- **`launch-task`** has a numbered step list, with its guidelines above it. **`fetch-process-show`** is under the 14,000-byte cap. **`interactive-delivery.md`** has a contents list and a shorter opening, and links nothing.
+
+- **Two rules made exact.** `crystallize-creation` says what to do with the freshness check while the skill it is building is not on the lead's branch yet (every merge before the first that brings it): skip it, since `pass-scope` refuses a creation that does not exist and nothing could have moved under it. `lead-proxy.md` has a lead close its ticket where its skill says to, which for the three lifecycle skills is after go-live, as they always did; it used to say before.
+
+- **Descriptions.** `crystallize-creation`, `update-creation` and `heal-creation` are in the third person, with their triggers unchanged.
+
+- **Wording.** A worker's own workers are called that, not sub-workers or siblings; a service is no longer said to have a tab; stale lines in `post-crystallize-migration.md` (a PR description, a missing `tk` list command) are corrected.
+
+The exemptions of `do-something-new`, `migrate-workspace` and `publish-template` lose the checks these shared files were the only cause of.

@@ -3,8 +3,6 @@ name: fetch-process-show
 description: "Fetch data from somewhere (an external service, an API, a third-party source, uploaded data) validating auth, process it, and show it to the user -- the \"go get all this stuff, do something to it, and put it in front of me\" task. Use when the ask is to retrieve real data or process real data the user uploaded, transform/summarize/classify it, and surface the result. Start here even when the ask names the surface rather than the data (\"build me a dashboard over this dump\"): this skill hands build-app the confirmed sample."
 metadata:
   author: imbue
-  exempt-checks: size contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Fetch, process, and show data
@@ -35,7 +33,6 @@ invent a second, different way of producing the data.
 - After confirmation: crystallize (background) and start surfaces (foreground)
 - Deliver surfaces -- one at a time, all from the single source of truth (skeleton phase 8)
 - Re-fetch while crystallize is running
-- Background crystallize gates
 
 ## Conventions
 
@@ -62,10 +59,8 @@ latchkey services list
 latchkey services info <svc>   # REQUIRED for each obviously-involved service
 ```
 
-Running `info` is essential: `list` only names the services latchkey knows; it
-doesn't tell you whether the specific service the user needs is already set up.
-Run `info` on each involved service to see its actual credential state and whether
-you'll need to trigger an auth flow next.
+`list` only names the services latchkey knows; `info` shows a service's actual
+credential state and whether you'll need to trigger an auth flow next.
 
 For a service latchkey does not cover, the skill's routing table names the next
 row to try; 1-2 web/docs searches are enough to tell which is workable. Stop as
@@ -201,11 +196,6 @@ script-centric **skill**):
    it. Either follow up on the interface the user named in their original prompt,
    or ask how they'd like to interact with the thing.
 
-Crystallization is essential: your work up to this point was potentially ad-hoc,
-with rounds of revisions, and any scripts you created may lack testing and review.
-That's fine -- you now delegate that work to a background agent while you move on
-to building surfaces.
-
 The skill's *flow* responsibility ends here; lead-proxy ownership for the
 dispatched worker continues until that worker reports terminal status.
 
@@ -263,10 +253,3 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
 This keeps the crystallized skill up-to-date with the user's requirements. When
 you review crystallization gates, check that the worker incorporated the newer
 requirements.
-
-## Background crystallize gates
-
-The standard lead-proxy mechanics for `crystallize-creation` apply -- nothing
-special. By default Gate 1 outline-approval is answered by the lead unless the
-worker has a genuine process question, and Gate 2 final-creation escalates to the
-user but is deferred until the user isn't actively working on something else.
