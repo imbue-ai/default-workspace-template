@@ -553,7 +553,9 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
     assert _box(composer) == composer_box, "the composer does not move"
-    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, "the line's words end 16px in from the box's edge"
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, (
+        "the line's words end 16px in from the box's edge"
+    )
     # The link sits immediately left of the button that hides the suggestions, 12px away, on the same line.
     assert abs(_box(toggle)["left"] - _box(disable)["right"] - 12) < 1
     assert abs(_box(toggle)["top"] - _box(disable)["top"]) < 1
@@ -585,7 +587,9 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     expect(pills).to_have_count(0)
     expect(column.locator(".suggestion-strip-disable")).to_have_count(0)
     assert _box(composer) == composer_box_before_the_set, "the set's arrival moves nothing"
-    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, "the line's words end 16px in from the box's edge"
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, (
+        "the line's words end 16px in from the box's edge"
+    )
     page.screenshot(path=str(tmp_path / "2-generated-set-line.png"))
 
     toggle.click()
@@ -650,7 +654,9 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         expect(column.get_by_role("button")).to_have_count(1)
         _assert_pills_are_a_list_on_the_users_side(pills, column)
         assert _box(disable)["top"] >= _box(pills.last)["bottom"]
-        assert abs(_box(composer)["right"] - 16 - _box(disable)["right"]) < 1, "the line's words end 16px in from the box's edge"
+        assert abs(_box(composer)["right"] - 16 - _box(disable)["right"]) < 1, (
+            "the line's words end 16px in from the box's edge"
+        )
         assert _box(line)["bottom"] <= _box(composer)["top"]
         page.screenshot(path=str(tmp_path / "new-chat-strip.png"))
 
