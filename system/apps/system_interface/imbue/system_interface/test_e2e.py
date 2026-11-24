@@ -2682,9 +2682,10 @@ def test_a_pages_ask_reaches_the_ask_launch_path_about_its_app_and_opens_the_ans
     tmp_path: Path, page: Page
 ) -> None:
     """A page's ``shell:ask-agent`` (a failure's "Ask an agent to fix this"): the shell runs the pinned app's launch
-    path that takes an ask's text, with the asking window's app and the text, never the one the balloon runs; the
-    page is told the ask went through, this client's pinned window is pointed at the page the launch answers, and
-    the two windows are snapped side by side, the pinned one on the right and on top."""
+    path that takes an ask's text, with the asking window's app and the message it wrote from the text (the assist
+    command, the app and the window, then the text), never the one the balloon runs; the page is told the ask went
+    through, this client's pinned window is pointed at the page the launch answers, and the two windows are snapped
+    side by side, the pinned one on the right and on top."""
     with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
@@ -2698,7 +2699,10 @@ def test_a_pages_ask_reaches_the_ask_launch_path_about_its_app_and_opens_the_ans
         asked = {
             _PINNED_APP_PARAM: _STUB_APP_NAME,
             _PINNED_APP_DISPLAY_NAME_PARAM: _STUB_APP_DISPLAY_NAME,
-            _PINNED_TEXT_PARAM: "The preview is blank. Fix it.",
+            _PINNED_TEXT_PARAM: (
+                f"/assist This is about the {_STUB_APP_DISPLAY_NAME} app (`{_STUB_APP_NAME}`, window `{window_id}`)."
+                "\n\nThe preview is blank. Fix it."
+            ),
         }
         (posted,) = _posted_launches(server.pinned_url)
         assert posted["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
