@@ -3753,13 +3753,21 @@ class AgentManager:
         delivery = self._held_send_delivery(capabilities)
         if harness is HarnessType.ROOM:
             return delivery
-
-        def deliver_carrying_pending_seed(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-            return self.carry_pending_seed(
-                chat_id, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
+        return delivery.model_copy_update(
+            to_update(
+                delivery.field_ref().deliver,
+                lambda agent_info, text, message_id: self._deliver_carrying_pending_seed(
+                    capabilities, chat_id, agent_info, text, message_id
+                ),
             )
+        )
 
-        return delivery.model_copy_update(to_update(delivery.field_ref().deliver, deliver_carrying_pending_seed))
+    def _deliver_carrying_pending_seed(
+        self, capabilities: HandoffCapabilities, chat_id: ChatId, agent_info: AgentInfo, text: str, message_id: str
+    ) -> SendOutcome:
+        return self.carry_pending_seed(
+            chat_id, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
+        )
 
     def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
         """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
