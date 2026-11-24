@@ -61,8 +61,10 @@ const QUIET_LINK_CLASS =
   "cursor-pointer text-(length:--font-size-helper) text-faint hover:text-secondary hover:underline " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-// One height whatever it holds, so a set that arrives moves nothing. What it holds sits at its right end.
-const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end gap-4";
+// One height whatever it holds, so a set that arrives moves nothing. Set in 16px each side, as a bubble sets in its
+// text and "You" its name, so its words line up with theirs: the toggle at the right end, the disable link (with
+// ``mr-auto``) at the left.
+const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end gap-4 px-4";
 
 /** The suggestions as pills, in order; a click picks that one. */
 export function suggestionPills(
@@ -100,7 +102,7 @@ function disableLink(placement: SuggestionPlacement, onDisable: () => void, isSh
     "button",
     {
       type: "button",
-      class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`,
+      class: `suggestion-strip-disable mr-auto ${QUIET_LINK_CLASS}`,
       onclick: onDisable,
       ...(isShort ? { "aria-label": words, ...hoverTooltipAttrs(words, "above") } : {}),
     },

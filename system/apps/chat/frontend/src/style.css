@@ -866,7 +866,9 @@
 
 .suggestion-pill {
   max-width: 100%;
-  padding: 4px 10px;
+  /* 15px and the 1px border set the label in 16px, as a bubble's px-4 sets its text: the pills' text ends where the
+     bubbles' does. */
+  padding: 4px 15px;
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--radius-md);
   background-color: var(--c-bg-chat);

@@ -4,6 +4,6 @@
 
 - Leaving the first run's provider page (Next or Skip) puts the keyboard in the message box of the chat on screen, so the user can type straight into the welcome chat.
 
-- The composer box (and the bar and suggestion line around it) starts where an agent's message bubbles start, with the agent's face hanging out to its left; suggestion pills end at the box's right edge.
+- The composer box (and the bar and suggestion line around it) starts where an agent's message bubbles start, with the agent's face hanging out to its left; suggestion pills end at the box's right edge, their labels set in as far as a bubble's text.
 
-- A reply's suggestion line reads "Disable" and "Hide" while its suggestions are shown, each naming itself in full in a tooltip and to screen readers ("Disable suggestions", "Hide suggestions"); the new-chat line keeps its link in full, capitalized ("Disable new chat suggestions").
+- A reply's suggestion line reads "Disable" at its left and "Hide" at its right, each set in to line up with the bubbles' text and "You", while its suggestions are shown, each naming itself in full in a tooltip and to screen readers ("Disable suggestions", "Hide suggestions"); the new-chat line keeps its link in full, capitalized ("Disable new chat suggestions").
