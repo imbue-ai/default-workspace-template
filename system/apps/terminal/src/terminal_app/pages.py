@@ -307,13 +307,15 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     ended.hidden = false;
   }
 
-  // The agent is what an ending that owes help offers, once the shell's handshake says one can be asked. A refused
-  // ask offers the same request as a draft where its failure owes help, and the bug report where the shell's
-  // embedder opens one. No shell means no bug report either, so there is none to show in the agent's place.
+  // The agent is what an ending that owes help offers, once the shell's handshake says one can be asked. An ask
+  // refused with a failure that owes help offers the same request as a draft, and the bug report where the shell's
+  // embedder opens one; an ask nothing answered is asked again. No shell means no bug report either, so there is
+  // none to show in the agent's place.
   function syncShellButtons() {
+    const isAskRefused = askFailure?.isHelpOwed === true;
     endedAsk.hidden = endedWhatFailed === null || connection === null || !connection.hasShell();
-    endedDraft.hidden = askFailure?.isHelpOwed !== true;
-    endedReport.hidden = askFailure === null || !connection.canReportBug();
+    endedDraft.hidden = !isAskRefused;
+    endedReport.hidden = !isAskRefused || !connection.canReportBug();
   }
 
   function endedFix() {
@@ -713,14 +715,16 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const connection = connectToShell({ onHandshake: syncShellButtons });
   // A failure that owes help offers the agent, once the shell's handshake says one can be asked. The bug report
   // (where the shell's embedder opens one) stands in the agent's place when the page names nothing to ask one, and
-  // beside the draft of the same request once an ask was refused.
+  // beside the draft of the same request once an ask was refused with a failure that owes help; an ask nothing
+  // answered is asked again.
   function syncShellButtons() {
     const isAgentOffered = config.is_help_owed && config.agent_fix !== null && connection.hasShell();
+    const isAskRefused = shownFailure?.isHelpOwed === true;
     ask.hidden = !isAgentOffered;
-    draft.hidden = shownFailure?.isHelpOwed !== true;
-    const reportRow = shownFailure === null ? "[data-page-actions]" : "[data-ask-failure-actions]";
+    draft.hidden = !isAskRefused;
+    const reportRow = isAskRefused ? "[data-ask-failure-actions]" : "[data-page-actions]";
     document.querySelector(reportRow).append(report);
-    report.hidden = !config.is_help_owed || (isAgentOffered && shownFailure === null) || !connection.canReportBug();
+    report.hidden = !config.is_help_owed || (isAgentOffered && !isAskRefused) || !connection.canReportBug();
   }
   function agentFix() {
     return { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details };
