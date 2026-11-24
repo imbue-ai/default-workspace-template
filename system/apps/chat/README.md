@@ -599,8 +599,9 @@ under its lanes; the first account connected there is pinned as the workspace's 
 and gives every other row a button that pins that account instead. Every row ends in Remove, which
 asks first (the chat's own remove-account dialog) and then signs the account out; with the last
 one removed the page offers Skip again and holds Next. The dialogs the page opens, that one and
-the provider chooser a tile opens, wear the page's cream and brown ink whatever theme the
-workspace wears, where the chooser opened from anywhere else wears the workspace's look. Leaving
+the provider chooser a tile opens, are white cards in the standard look's regular ink over the
+page's cream wash whatever theme the workspace wears (no dialog wears the cream itself), where
+the chooser opened from anywhere else wears the workspace's look. Leaving
 the provider page with a provider connected starts the chat's agent at once, on the default account and with no
 message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
 types, and that first send carries the welcome. For this chat the context block also says that
