@@ -68,7 +68,7 @@ export interface ResolvedShelf {
 export type TemplateCatalogState =
   | { kind: "loading" }
   | { kind: "loaded"; catalog: TemplateCatalog }
-  /** ``details`` is what went wrong, for the bug report the failure line offers. */
+  /** ``details`` is what went wrong, for the agent or the bug report the failure line offers. */
   | { kind: "failed"; details: string }
   | { kind: "disabled" };
 

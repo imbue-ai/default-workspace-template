@@ -39,25 +39,25 @@ WINDOW_GONE_SENTENCE: Final[str] = "That window is no longer here, so nothing wa
 DESKTOP_GONE_SENTENCE: Final[str] = "That desktop was just deleted, so nothing was changed."
 LAST_DESKTOP_SENTENCE: Final[str] = "You can't delete your only desktop. Add another one first."
 OUT_OF_SPACE_SENTENCE: Final[str] = "This workspace is out of space, so your change could not be saved."
-NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again. If this persists, report a bug."
+NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again."
 
 
 class ShellError(Exception):
     """Base error for everything in the shell subpackage. The message is the developer's reason, which the log,
     agents, and "See details" read; ``user_facing_message``, when set, is the sentence a person is shown in its place,
-    ``reportable`` whether that sentence asks for a bug report, and ``kind`` names the refusal for a frontend that
-    words it itself."""
+    ``expected`` whether the refusal is ordinary operation that sentence fully explains (nothing is broken, so no
+    help is owed), and ``kind`` names the refusal for a frontend that words it itself."""
 
     def __init__(
         self,
         message: str = "",
         user_facing_message: str | None = None,
         kind: RefusalKind | None = None,
-        reportable: bool | None = None,
+        expected: bool | None = None,
     ) -> None:
         self.user_facing_message = user_facing_message
         self.kind = kind
-        self.reportable = reportable
+        self.expected = expected
         super().__init__(message)
 
 
@@ -107,7 +107,10 @@ class DesktopNotFoundError(ShellError, LookupError):
     def __init__(self, desktop: str) -> None:
         self.desktop = desktop
         super().__init__(
-            f"Desktop '{desktop}' not found", user_facing_message=DESKTOP_GONE_SENTENCE, kind=RefusalKind.DESKTOP_GONE
+            f"Desktop '{desktop}' not found",
+            user_facing_message=DESKTOP_GONE_SENTENCE,
+            kind=RefusalKind.DESKTOP_GONE,
+            expected=True,
         )
 
 
@@ -119,7 +122,7 @@ class LastDesktopError(ShellError, ValueError):
     """The last remaining desktop cannot be deleted (answered 409)."""
 
     def __init__(self, message: str) -> None:
-        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE)
+        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE, expected=True)
 
 
 class DesktopValueError(ShellError, ValueError):
@@ -128,18 +131,19 @@ class DesktopValueError(ShellError, ValueError):
 
 class LaunchFailureError(ShellError):
     """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
-    sentence the app itself wrote for people about it, passed on as written, and ``reportable`` the app's own word on
-    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then).
-    ``kind`` is set only where the shell knows why the app could not take the launch (it is not running)."""
+    sentence the app itself wrote for people about it, passed on as written, and ``expected`` the app's own word that
+    the refusal is ordinary operation its sentence fully explains; both are None when the app gave none (the frontends
+    word it then). ``kind`` is set only where the shell knows why the app could not take the launch (it is not
+    running)."""
 
     def __init__(
         self,
         message: str,
         user_facing_message: str | None = None,
-        reportable: bool | None = None,
+        expected: bool | None = None,
         kind: RefusalKind | None = None,
     ) -> None:
-        super().__init__(message, user_facing_message=user_facing_message, kind=kind, reportable=reportable)
+        super().__init__(message, user_facing_message=user_facing_message, kind=kind, expected=expected)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -163,9 +167,17 @@ class LaunchedNotOpenedError(ShellError):
 class WindowNotFoundError(ShellError, LookupError):
     """No window on the desktop has the given id."""
 
-    def __init__(self, window: str, user_facing_message: str | None = None, kind: RefusalKind | None = None) -> None:
+    def __init__(
+        self,
+        window: str,
+        user_facing_message: str | None = None,
+        kind: RefusalKind | None = None,
+        expected: bool | None = None,
+    ) -> None:
         self.window = window
-        super().__init__(f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind)
+        super().__init__(
+            f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind, expected=expected
+        )
 
 
 class WindowPoppedOutError(ShellError, ValueError):

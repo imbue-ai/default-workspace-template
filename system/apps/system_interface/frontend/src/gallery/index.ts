@@ -14,7 +14,7 @@ import { afterPageLoad } from "../theme/pageLoad";
 import { setIconTheme } from "../views/themeIcons";
 import { FailureLine } from "../views/FailureLine";
 import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
-import { ThemeGallery, galleryFailureNotice, galleryStateOf, isGalleryFailureReportable } from "../views/ThemeGallery";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf } from "../views/ThemeGallery";
 
 async function start(): Promise<void> {
   const root = document.getElementById("app");
@@ -39,13 +39,13 @@ void start().catch((error: unknown) => {
   console.error("[gallery] could not load the themes or the apps", error);
   const root = document.getElementById("app");
   if (root === null) return;
-  // A shell that frames the gallery says whether Imbue Studio opens bug reports, which can arrive after the failure,
-  // and asks an agent for it.
+  // A shell that frames the gallery asks an agent about the failure, and says whether Imbue Studio opens bug reports,
+  // either of which can arrive after the failure.
   const connection = connectToShell({ onHandshake: () => m.redraw() });
   const reload = (): void => window.location.reload();
   m.mount(root, {
     view: () => {
-      const notice = galleryFailureNotice(error, reload, connection.canReportBug());
+      const notice = galleryFailureNotice(error, reload);
       return m("div", { class: "flex flex-col items-start gap-1" }, [
         m(FailureLine, { notice, onReportBug: null, marker: "theme-gallery-failure", messageClass: "text-primary" }),
         m(
@@ -53,11 +53,7 @@ void start().catch((error: unknown) => {
           { class: "flex flex-wrap gap-1" },
           m(FailureRemedies, {
             connection,
-            failure: {
-              message: notice.message,
-              details: notice.details,
-              isReportable: isGalleryFailureReportable(error),
-            },
+            failure: { message: notice.message, details: notice.details, isHelpOwed: notice.isHelpOwed },
             sm: true,
           }),
         ),

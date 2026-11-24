@@ -1244,8 +1244,9 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
             _PINNED_APP_PARAM: "ghost",
             _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
             _PINNED_TEXT_PARAM: (
-                "Imbue Studio showed the user that Ghost (the ghost app) isn't running in this workspace. Find out why "
-                "it stopped and start it again, then tell the user what was wrong."
+                "/assist This is about the Ghost app (`ghost`).\n\n"
+                "Imbue Studio showed the user this failure: Ghost isn't running.\n\n"
+                "Find out why it stopped and start it again, then tell the user what was wrong."
             ),
             "client_id": _client_id(page),
             "desktop_id": _HOME_DESKTOP_ID,

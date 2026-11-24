@@ -1,10 +1,12 @@
 /**
  * How the desktop shows a failure on its own surfaces (a toast, a dialog's line, the launcher, the backdrop, a
  * window's placeholder): a sentence, what goes behind "See details", and its buttons. A failed request's sentence is
- * ``failureSentence``'s; the store adds the buttons. "Report a bug" is not among them: the surface offers it as it
- * draws, wherever the embedder opens a bug report by then (the store's ``reportBugAction``).
+ * ``failureSentence``'s; the store adds the buttons, an agent's among them. "Report a bug" is not among them: the
+ * surface offers it as it draws, for a notice that says so, wherever the embedder opens a bug report by then (the
+ * store's ``reportBugAction``).
  */
 
+import { agentFixTask } from "@imbue/workspace-ui/src/app_contract";
 import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import type { AppRecord, LaunchPath } from "./records";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
@@ -19,9 +21,12 @@ export interface FailureNotice {
   readonly details: string | null;
   /** Its buttons, in order. */
   readonly actions: readonly ToastAction[];
-  /** The sentence asks for a bug report: the surface offers "Report a bug" after the buttons where it can, and a
-   *  toast of it stays even where it cannot. */
-  readonly isReportable: boolean;
+  /** The failure owes the person more help than its sentence gives: a toast of it stays. */
+  readonly isHelpOwed: boolean;
+  /** No agent's button is among ``actions`` for a failure that owes help (the ask would go through what failed, no
+   *  app takes one, or this is a refused ask's own failure): the surface offers "Report a bug" after the buttons
+   *  where it can. */
+  readonly isBugReportOffered: boolean;
   /** An app whose not running is all the notice says: a toast of it goes once the app list shows the app running. */
   readonly untilRunning?: string;
 }
@@ -54,23 +59,33 @@ export function stoppedSentence(app: AppRecord): string {
   return app.program === "" ? `${app.display_name} isn't running.` : `${app.display_name} is not running right now.`;
 }
 
-/** What an agent asked to start a stopped app is told, as Imbue Studio about the user. */
+/** What an agent asked to start a stopped app is told. */
 export function stoppedRequest(app: AppRecord): string {
-  return (
-    `Imbue Studio showed the user that ${app.display_name} (the ${app.name} app) isn't running in this workspace. ` +
-    "Find out why it stopped and start it again, then tell the user what was wrong."
-  );
+  return agentFixTask({
+    whatFailed: stoppedSentence(app),
+    details: null,
+    instruction: "Find out why it stopped and start it again, then tell the user what was wrong.",
+  });
 }
 
-/** What an agent asked to look at an app that could not start is told, as Imbue Studio about the user (the
+const COULD_NOT_START_INSTRUCTION =
+  "Find out why and get it running again, then tell the user what was wrong and what you changed.";
+
+/** What an agent asked to look at an app that could not start is told: where its log is, and what to do (the
  *  could-not-start page asks the same, ``port_parking.could_not_start_request``). */
 export function couldNotStartRequest(app: AppRecord): string {
-  return (
-    `Imbue Studio showed the user that ${app.display_name} couldn't start in this workspace. Its program's log may ` +
-    `say why (supervisorctl tail ${app.program} stderr). Find out why and get it running again, then tell the user ` +
-    "what was wrong and what you changed."
-  );
+  const logHint = `Its program's log may say why (supervisorctl tail ${app.program} stderr).`;
+  return agentFixTask({
+    whatFailed: `${app.display_name} couldn't start.`,
+    details: null,
+    instruction: `${logHint} ${COULD_NOT_START_INSTRUCTION}`,
+  });
 }
+
+/** What an agent asked to free up space is told to do about a failure a full disk caused (the shell's recovery
+ *  page asks the same, ``recovery_page.FREE_SPACE_INSTRUCTION``). */
+export const FREE_SPACE_INSTRUCTION =
+  "Free up disk space in this workspace, then tell the user what was taking up the space and what you removed.";
 
 /** How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
  *  into the app, or else the launch path by its label ("“New doc” went through in Docs"). The shell's
@@ -99,9 +114,9 @@ export function refusalKindOf(failure: Failure): RefusalKind | null {
   return failure.kind !== null && REFUSAL_KINDS.has(failure.kind) ? (failure.kind as RefusalKind) : null;
 }
 
-/** Whether pressing the same control again is what ``failure``'s words ask for: the fallback sentence ("Try again.
- *  If this persists, report a bug.", for a failure with no reason or a reason that is not a refusal) or a read nothing
- *  answered. Never a change nothing answered, which may have gone through, nor a refusal with its reason. */
+/** Whether pressing the same control again is what ``failure``'s words ask for: the fallback sentence ("Try
+ *  again.", for a failure with no reason or a reason that is not a refusal) or a read nothing answered. Never a
+ *  change nothing answered, which may have gone through, nor a refusal with its reason. */
 export function isRetryable(failure: Failure): boolean {
   switch (failure.cause) {
     case "no_reason":

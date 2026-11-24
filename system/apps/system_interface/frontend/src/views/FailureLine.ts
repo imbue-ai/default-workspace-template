@@ -1,7 +1,7 @@
 /**
  * A failure told on the surface it belongs to rather than in a toast (the launcher under its field, a dialog's line,
  * the backdrop, the update notice): its sentence, everything underneath it behind a collapsed "See details", and its
- * buttons, then "Report a bug" for a sentence that asks for one wherever a bug report can be opened as it draws.
+ * buttons, then "Report a bug" for a notice that offers one wherever a bug report can be opened as it draws.
  */
 
 import m from "mithril";
@@ -17,9 +17,9 @@ import type { BootFailure } from "../store/DesktopStore";
 /** Open the bug report about a failure; null where none can be opened now (the store's ``reportBugAction``). */
 export type ReportBug = ((failure: ReportedFailure) => void) | null;
 
-/** ``notice``'s buttons, then "Report a bug" about it where it asks for one and ``onReportBug`` can open one. */
+/** ``notice``'s buttons, then "Report a bug" about it where it offers one and ``onReportBug`` can open one. */
 export function failureActions(notice: FailureNotice, onReportBug: ReportBug): readonly ToastAction[] {
-  if (!notice.isReportable || onReportBug === null) return notice.actions;
+  if (!notice.isBugReportOffered || onReportBug === null) return notice.actions;
   const report = { message: notice.message, details: notice.details };
   return [...notice.actions, { label: REPORT_A_BUG_LABEL, run: () => onReportBug(report), keepsToast: true }];
 }

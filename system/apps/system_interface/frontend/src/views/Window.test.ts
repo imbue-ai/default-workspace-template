@@ -224,11 +224,17 @@ describe("Window", () => {
         message: "Docs isn't running.",
         details: null,
         actions: [{ label: "Ask an agent to start it", run: askAgent }],
-        isReportable: false,
+        isHelpOwed: true,
+        isBugReportOffered: false,
       },
+      // The agent is the remedy: no Report a bug is drawn beside it, though one could be opened.
+      onReportBug: vi.fn(),
     });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
     expect(placeholder.querySelector(".stopped-app-notice-message")?.textContent).toBe("Docs isn't running.");
+    expect([...placeholder.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Ask an agent to start it",
+    ]);
     (placeholder.querySelector("button") as HTMLButtonElement).click();
     expect(askAgent).toHaveBeenCalledTimes(1);
     unmountViews();
@@ -253,7 +259,8 @@ describe("Window", () => {
             pending: { isPending: () => isPending, label: "Asking an agent…" },
           },
         ],
-        isReportable: false,
+        isHelpOwed: true,
+        isBugReportOffered: false,
       },
     });
     const button = (): HTMLButtonElement => element.querySelector("[data-stopped-app] button") as HTMLButtonElement;
@@ -267,12 +274,13 @@ describe("Window", () => {
     expect(button().disabled).toBe(false);
   });
 
-  it("offers Report a bug about a stopped app's sentence that asks for one, decided as it draws", () => {
+  it("offers Report a bug about a stopped app no agent can be asked about, decided as it draws", () => {
     const stopped = {
-      message: "Chat is not running right now. If this persists, report a bug.",
+      message: "Chat is not running right now.",
       details: null,
       actions: [],
-      isReportable: true,
+      isHelpOwed: true,
+      isBugReportOffered: true,
     };
     const chat = appRecord("chat", { is_running: false });
     expect(render({ app: chat, stopped }).querySelector("[data-stopped-app] button")).toBeNull();
@@ -291,7 +299,8 @@ describe("Window", () => {
     const gone = {
       message: "This app couldn't be found in this workspace.",
       details: null,
-      isReportable: false,
+      isHelpOwed: true,
+      isBugReportOffered: false,
       actions: [{ label: "Close window", run: onClose }],
     };
     const element = render({ app: undefined, gone });

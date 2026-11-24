@@ -14,10 +14,11 @@ export function refusedWith(status: number, body: unknown, rawText: string | nul
   return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
 }
 
-/** A failed save as the store's ``changeFailureNotice`` words it for a dialog: the sentence, with Try again where the
- *  failure is one to try again. */
+/** A failed save as the store's ``changeFailureNotice`` words it for a dialog where no agent can be asked: the
+ *  sentence, with Try again where the failure is one to try again, and a bug report offered where help is owed. */
 export function wordFailureAsTheStoreDoes(whatFailed: string, error: unknown, retry: () => void): FailureNotice {
   const failure = describeRequestFailure(error);
   const actions = isRetryable(failure) ? [{ label: "Try again", run: retry }] : [];
-  return { ...failureSentence(failure, whatFailed), actions };
+  const told = failureSentence(failure, whatFailed);
+  return { ...told, isBugReportOffered: told.isHelpOwed, actions };
 }

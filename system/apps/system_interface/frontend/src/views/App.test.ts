@@ -866,6 +866,20 @@ describe("sharing a window's app", () => {
     expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
   });
 
+  it("offers Share in the window menu alone for an app that is part of the workspace itself", () => {
+    offerApps(api, socket, [appRecord("docs", { system: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    expect(titleBarShare()).toBeNull();
+
+    const chrome = framedUnderChrome();
+    const row = windowMenuShare() as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
   it("offers Share in neither the title bar nor the window menu for an internal app", () => {
     offerApps(api, socket, [appRecord("docs", { internal: true })]);
     store.setEmbedderPresent(true);
@@ -1676,8 +1690,9 @@ describe("a stopped app's window", () => {
       app: "docs",
       app_display_name: "Docs",
       message:
-        "Imbue Studio showed the user that Docs (the docs app) isn't running in this workspace. Find out why it " +
-        "stopped and start it again, then tell the user what was wrong.",
+        "/assist This is about the Docs app (`docs`, window `win-1`).\n\n" +
+        "Imbue Studio showed the user this failure: Docs isn't running.\n\n" +
+        "Find out why it stopped and start it again, then tell the user what was wrong.",
     })}:show:beside:win-1`;
 
     await pressAsk("[data-stopped-app]");

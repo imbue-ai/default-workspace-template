@@ -96,7 +96,8 @@ describe("AvatarChooserDialog", () => {
         message: "Avatar designs couldn't be loaded.",
         details: "HTTP 500",
         actions: [],
-        isReportable: false,
+        isHelpOwed: false,
+        isBugReportOffered: false,
       },
       onRetry,
     });

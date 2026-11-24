@@ -30,10 +30,16 @@ import { StalePlacementsSaveError } from "../model/api";
 import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { agentFixTask, assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, AskOrigin } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { ASK_AGENT_TO_FIX_LABEL, ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import {
+  ASK_AGENT_TO_FIX_LABEL,
+  ASKING_AN_AGENT_LABEL,
+  DRAFT_ASK_LABEL,
+} from "@imbue/workspace-ui/src/components/FailureButtons";
+import {
+  FREE_SPACE_INSTRUCTION,
   appNotFoundSentence,
   couldNotStartRequest,
   isRetryable,
@@ -45,6 +51,7 @@ import {
 import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
+  ASK_NOT_DRAFTED_REASON,
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
   appAskLaunchOf,
@@ -320,12 +327,34 @@ export type FailureReport = (notice: FailureNotice) => void;
  *  go through what failed or the surface recovers by itself. */
 type AgentAsk = { readonly about: AppRecord; readonly windowId: string | null } | "shell" | "withheld";
 
-/** Whether a notice owes an agent beyond a sentence that asks for a bug report, and where it is asked. */
+/** What an agent's button asks for where that is not to find and fix a fault (free up space, start a stopped app). */
+interface AgentTask {
+  readonly label: string;
+  /** The ask's text, as ``agentFixTask`` words it with the task's own instruction. */
+  readonly request: string;
+  /** ``main-chat`` for a task a new chat could not serve (a full disk); the chat about the app otherwise. */
+  readonly delivery?: AskDelivery;
+  /** Ahead of the notice's other buttons, which cannot help until the agent has (Try again on a full disk). */
+  readonly isFirst?: boolean;
+}
+
+/** Whether a notice owes an agent beyond a failure that says it owes help, where it is asked, and what for. */
 interface AgentOffer {
   readonly agent: AgentAsk;
-  /** The refusal leaves the person unable to do what they meant to, so it offers an agent though it asks for no bug
-   *  report. */
+  /** The refusal leaves the person unable to do what they meant to, so it owes help though its failure does not say
+   *  so. */
   readonly isStuck?: boolean;
+  /** The agent's button, in place of "Ask an agent to fix this". */
+  readonly task?: AgentTask;
+}
+
+/** An ask one of the shell's own buttons sends: the task as ``agentFixTask`` words it, the app it is about (null for
+ *  a failure of the shell's own), the window it was pressed in (null for a toast), and where it goes. */
+interface ShellAsk {
+  readonly task: string;
+  readonly about: AppRecord | null;
+  readonly windowId: string | null;
+  readonly delivery: AskDelivery;
 }
 
 /** What a refusal of a request the desktop built from the apps it held is worded with: the app and the launch path
@@ -342,6 +371,9 @@ interface AskedFor {
   /** The failure is the app's own (it answered with an error, or could not be quit), so an agent it owes is asked in
    *  the chat about the app rather than the main chat. */
   readonly isAboutApp?: boolean;
+  /** The request sent text the surface that ran it still holds (the launcher's field): where no agent can be asked
+   *  about its failure, the person is offered the app itself, to send the text there. */
+  readonly isTextKept?: boolean;
 }
 
 /** Why the startup read has not answered, as the backdrop shows it beside its spinner: nothing answered it, and it is
@@ -369,6 +401,17 @@ function isReadAgainFirst(failure: Failure): boolean {
   return (
     kind === "app_unavailable" || kind === "launch_path_gone" || kind === "window_gone" || kind === "desktop_gone"
   );
+}
+
+/** What a full disk offers about ``told``: an agent, in the main chat (a new chat needs disk), asked to free up
+ *  space, ahead of a Try again that cannot help until it has. */
+function freeSpaceTask(told: FailureMessage): AgentTask {
+  return {
+    label: "Ask an agent to free up space",
+    request: agentFixTask({ whatFailed: told.message, details: told.details, instruction: FREE_SPACE_INSTRUCTION }),
+    delivery: "main-chat",
+    isFirst: true,
+  };
 }
 
 /** Try again, where the request can be repeated as it was asked. */
@@ -825,30 +868,44 @@ export class DesktopStore {
     this.toasts.show(message);
   }
 
-  /** ``told`` as a surface shows it: ``actions``, then "Ask an agent to fix this" where one is owed (the sentence asks
-   *  for a bug report, or ``offer`` says the refusal leaves the person stuck) and can be asked where ``offer`` says. */
+  /** ``told`` as a surface shows it: ``actions``, and what a failure that owes help gets (it says so itself, or
+   *  ``offer`` says the refusal leaves the person stuck): an agent, asked where and for what ``offer`` says, or
+   *  "Report a bug" where none can be asked. */
   private noticeOf(told: FailureMessage, actions: readonly ToastAction[], offer: AgentOffer): FailureNotice {
-    const isOwed = told.isReportable || offer.isStuck === true;
-    const agent = isOwed ? this.fixAgentAction(told, offer.agent) : null;
-    return { ...told, actions: agent === null ? actions : [...actions, agent] };
+    const isHelpOwed = told.isHelpOwed || offer.isStuck === true;
+    const agent = isHelpOwed ? this.agentActionOf(told, offer) : null;
+    const withAgent =
+      agent === null ? actions : offer.task?.isFirst === true ? [agent, ...actions] : [...actions, agent];
+    return {
+      message: told.message,
+      details: told.details,
+      isHelpOwed,
+      isBugReportOffered: isHelpOwed && agent === null,
+      actions: withAgent,
+    };
   }
 
-  /** A sentence of the desktop's own that asks for no bug report and leaves nobody stuck, with ``actions``. */
+  /** A sentence of the desktop's own that owes no help, with ``actions``. */
   private plainNotice(message: string, actions: readonly ToastAction[] = []): FailureNotice {
-    return { message, details: null, isReportable: false, actions };
+    return { message, details: null, isHelpOwed: false, isBugReportOffered: false, actions };
   }
 
-  /** "Ask an agent to fix this" about ``told``, asked where ``agent`` says; null where it is withheld, where the ask
-   *  would go through the very app the failure is about (Chat), or where no agent can be asked at all. */
-  private fixAgentAction(told: FailureMessage, agent: AgentAsk): ToastAction | null {
+  /** The agent's button about ``told`` ("Ask an agent to fix this", or the task ``offer`` names), asked where
+   *  ``offer`` says; null where it is withheld, where the ask would go through the very app the failure is about
+   *  (Chat), or where no agent can be asked at all. */
+  private agentActionOf(told: FailureMessage, offer: AgentOffer): ToastAction | null {
+    const { agent, task } = offer;
     if (agent === "withheld") return null;
-    const task = agentFixTask({ whatFailed: told.message, details: told.details });
-    if (agent === "shell") {
-      if (freeTextRowsOf(openableApps(this.state)).length === 0) return null;
-      return this.askAgentAction(ASK_AGENT_TO_FIX_LABEL, task, () => this.askAgent(task, null));
-    }
-    if (this.isAskedThrough(agent.about)) return null;
-    return this.askAboutAppAction(ASK_AGENT_TO_FIX_LABEL, task, agent.about, agent.windowId);
+    const about = agent === "shell" ? null : agent.about;
+    const isUnaskable =
+      about === null ? freeTextRowsOf(openableApps(this.state)).length === 0 : this.isAskedThrough(about);
+    if (isUnaskable) return null;
+    return this.askAgentAction(task?.label ?? ASK_AGENT_TO_FIX_LABEL, {
+      task: task?.request ?? agentFixTask({ whatFailed: told.message, details: told.details }),
+      about,
+      windowId: agent === "shell" ? null : agent.windowId,
+      delivery: task?.delivery ?? "app-chat",
+    });
   }
 
   /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
@@ -867,10 +924,25 @@ export class DesktopStore {
   }
 
   /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
-   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). It
-   *  is an ask's own failure, so it offers no second ask. */
-  showStartFailure(failure: FailureMessage): void {
-    this.toastNotice({ ...failure, actions: [] }, { isLasting: failure.details !== null || failure.isReportable });
+   *  sentence (a launch's reason, help it owes), a plain note otherwise (no app takes text, a refusal). ``draft``
+   *  leaves a refused ask unsent in a chat's message box; null for a start that was no ask. */
+  showStartFailure(failure: FailureMessage, draft: (() => void) | null = null): void {
+    this.toastNotice(this.refusedStartNotice(failure, draft), {
+      isLasting: failure.details !== null || failure.isHelpOwed,
+    });
+  }
+
+  /** A refused start as its toast tells it. It is an ask's own failure, so it offers no second ask: one that owes
+   *  help offers the same request as a draft for the person to send (``draft``), beside "Report a bug". */
+  private refusedStartNotice(failure: FailureMessage, draft: (() => void) | null): FailureNotice {
+    const isDraftOffered = failure.isHelpOwed && draft !== null;
+    return {
+      message: failure.message,
+      details: failure.details,
+      isHelpOwed: failure.isHelpOwed,
+      isBugReportOffered: failure.isHelpOwed,
+      actions: isDraftOffered ? [{ label: DRAFT_ASK_LABEL, run: draft, keepsToast: true }] : [],
+    };
   }
 
   /** A failed change in ``noticeFor``'s words for ``whatFailed``, for a surface that shows it itself (a dialog's
@@ -882,12 +954,13 @@ export class DesktopStore {
   /**
    * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note, which
    * still holds the details behind "See details"; any other shows one that stays, with its details and buttons, and
-   * so does any notice that asks for a bug report or carries a button, which a note that leaves on its own cannot
-   * hold. A toast that asks for a bug report offers "Report a bug" wherever the embedder opens one when the toast is
-   * drawn (``reportBugAction``); its agent is among the notice's own buttons, since only the store knows where to ask.
+   * so does any notice that owes help or carries a button, which a note that leaves on its own cannot hold. A
+   * notice's agent is among its own buttons, since only the store knows where to ask, so the toasts are given no
+   * agent to ask: one marked as owing help draws "Report a bug" wherever the embedder opens one when it is drawn
+   * (``reportBugAction``), which is said only of a notice that offers a bug report.
    */
   private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
-    if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
+    if (!isLasting && !notice.isHelpOwed && notice.actions.length === 0) {
       this.toasts.show(notice.message, { isLasting: false, details: notice.details });
       return;
     }
@@ -895,7 +968,7 @@ export class DesktopStore {
       isLasting: true,
       details: notice.details,
       actions: notice.actions,
-      isReportable: notice.isReportable,
+      isHelpOwed: notice.isBugReportOffered,
     });
     const toasts = this.toasts.current();
     const shown = toasts[toasts.length - 1];
@@ -947,7 +1020,7 @@ export class DesktopStore {
           {
             message: appNotFoundSentence(app?.display_name ?? "This app", outcome),
             details: failure.details,
-            isReportable: false,
+            isHelpOwed: false,
           },
           this.shortcutRemoval(asked.shortcut),
           { agent: aboutApp, isStuck: true },
@@ -960,7 +1033,7 @@ export class DesktopStore {
                 ? told.message
                 : `${app.display_name} no longer offers “${asked.launchLabel}”, so ${outcome}.`,
             details: failure.details,
-            isReportable: false,
+            isHelpOwed: false,
           },
           this.shortcutRemoval(asked.shortcut),
           { agent: aboutApp, isStuck: true },
@@ -970,7 +1043,7 @@ export class DesktopStore {
       case "desktop_gone":
         return this.desktopGoneNotice(failure.details, null, outcome, tryAgain);
       case "out_of_space":
-        return this.noticeOf(told, [this.freeSpaceAction(told), ...tryAgain], { agent: "withheld" });
+        return this.noticeOf(told, tryAgain, { agent: "shell", task: freeSpaceTask(told) });
       case "not_saved":
         return this.noticeOf(told, tryAgain, { agent: "shell" });
       case "app_stopped":
@@ -985,14 +1058,16 @@ export class DesktopStore {
       case "app_still_starting":
         return this.noticeOf(told, tryAgain, { agent: "withheld" });
       case "launched_not_opened_out_of_space":
-        return this.noticeOf(told, [this.freeSpaceAction(told)], { agent: "withheld" });
+        return this.noticeOf(told, [], { agent: "shell", task: freeSpaceTask(told) });
       case "launched_not_opened":
         return this.noticeOf(told, app === undefined ? [] : [this.openAppAction(app)], { agent: "shell" });
       case null:
         break;
     }
     const agent: AgentAsk = asked.isAboutApp === true ? aboutApp : "shell";
-    return this.noticeOf(told, isRetryable(failure) ? tryAgain : [], { agent });
+    const notice = this.noticeOf(told, isRetryable(failure) ? tryAgain : [], { agent });
+    if (asked.isTextKept !== true || app === undefined || !notice.isBugReportOffered) return notice;
+    return { ...notice, actions: [...notice.actions, this.openAppAction(app)] };
   }
 
   /** Tell ``tell`` (a toast, or the surface that ran the request) that a request this window built failed, in
@@ -1029,7 +1104,7 @@ export class DesktopStore {
       desktopName === null
         ? `The desktop you were on was deleted in another window, so ${outcome}.`
         : `The desktop you were on was deleted in another window, so ${outcome}. You're now on “${desktopName}”.`;
-    return this.noticeOf({ message, details, isReportable: false }, tryAgain, { agent: "withheld" });
+    return this.noticeOf({ message, details, isHelpOwed: false }, tryAgain, { agent: "withheld" });
   }
 
   /** "Remove shortcut" for the shortcut a request ran, while the active desktop still holds it; nothing otherwise. */
@@ -1045,27 +1120,14 @@ export class DesktopStore {
     return { label: `Open ${app.display_name}`, run: () => void this.openWindowAt(app.name, "/", "focus") };
   }
 
-  /** What a full disk offers: an agent, in the main chat, asked to free up space about ``told``; its toast stays
-   *  up. */
-  private freeSpaceAction(told: FailureMessage): ToastAction {
-    const request = assistRequest(agentFixTask({ whatFailed: told.message, details: told.details }));
-    return this.askAgentAction("Ask an agent to free up space", request, () => this.startWithText(request));
-  }
-
-  /** An "Ask an agent to ..." button about ``app``, for a window of it (``windowId``) or a toast (null): the ask
-   *  goes to the chat about the app, beside the window when there is one. */
-  private askAboutAppAction(label: string, request: string, app: AppRecord, windowId: string | null): ToastAction {
-    return this.askAgentAction(label, request, () => this.askAgentAbout(request, app, windowId));
-  }
-
   /** An "Ask an agent to ..." button: it reads "Asking an agent…" and takes no press while its ask is out, and its
-   *  toast stays up. ``start`` sends the ask where it goes. */
-  private askAgentAction(label: string, request: string, start: () => Promise<StartOutcome>): ToastAction {
+   *  toast stays up. */
+  private askAgentAction(label: string, ask: ShellAsk): ToastAction {
     return {
       label,
-      run: () => void this.askOnce(request, start),
+      run: () => void this.askOnce(ask),
       keepsToast: true,
-      pending: { isPending: () => this.isAskingAgent(request), label: ASKING_AN_AGENT_LABEL },
+      pending: { isPending: () => this.isAskingAgent(ask.task), label: ASKING_AN_AGENT_LABEL },
     };
   }
 
@@ -1077,22 +1139,32 @@ export class DesktopStore {
   /** Ask an agent ``request`` from a button of the shell's own that is about no app (an update left unfinished):
    *  in the main chat, as ``askAgent`` sends an ask with no window. */
   async askAgentFromShell(request: string): Promise<void> {
-    return this.askOnce(request, () => this.askAgent(request, null));
+    return this.askOnce({ task: request, about: null, windowId: null, delivery: "app-chat" });
   }
 
-  /** Send ``request`` with ``start`` from one of the shell's own buttons, once at a time per request; a failure is
-   *  toasted here, since ``askAgent`` and ``startWithText`` leave that to their caller. */
-  private async askOnce(request: string, start: () => Promise<StartOutcome>): Promise<void> {
-    if (this.agentAsks.has(request) || this.refuseWhileViewing("ask an agent")) return;
-    this.agentAsks.add(request);
+  /** Send ``ask`` from one of the shell's own buttons, once at a time per task; a failure is toasted here, since
+   *  ``askAgentAbout`` leaves that to its caller. */
+  private async askOnce(ask: ShellAsk): Promise<void> {
+    if (this.agentAsks.has(ask.task) || this.refuseWhileViewing("ask an agent")) return;
+    this.agentAsks.add(ask.task);
     this.notifyListeners();
     try {
-      const outcome = await start();
-      if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
+      const outcome = await this.askAgentAbout(ask.task, ask.about, ask.windowId, ask.delivery);
+      if (!outcome.isOpened) {
+        const draft = (): void => this.draftAsk(ask);
+        this.toastNotice(this.refusedStartNotice(outcome.failure, draft), { isLasting: true });
+      }
     } finally {
-      this.agentAsks.delete(request);
+      this.agentAsks.delete(ask.task);
       this.notifyListeners();
     }
+  }
+
+  /** Leave ``ask`` unsent in a chat's message box, for the person to send. A draft that could not be made is told by
+   *  ``draftText`` itself. */
+  private draftAsk(ask: ShellAsk): void {
+    if (this.refuseWhileViewing("ask an agent")) return;
+    void this.askAgentAbout(ask.task, ask.about, ask.windowId, "draft");
   }
 
   /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
@@ -1103,24 +1175,10 @@ export class DesktopStore {
     details: string | null,
     actions: readonly ToastAction[],
   ): FailureNotice {
-    if (this.isAskedThrough(app)) {
-      return this.noticeOf(
-        { message: `${sentence} If this persists, report a bug.`, details, isReportable: true },
-        actions,
-        {
-          agent: "withheld",
-        },
-      );
-    }
-    return {
-      message: sentence,
-      details,
-      isReportable: false,
-      actions: [
-        ...actions,
-        this.askAboutAppAction("Ask an agent to look at it", couldNotStartRequest(app), app, null),
-      ],
-    };
+    return this.noticeOf({ message: sentence, details, isHelpOwed: true }, actions, {
+      agent: { about: app, windowId: null },
+      task: { label: "Ask an agent to look at it", request: couldNotStartRequest(app) },
+    });
   }
 
   /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``tellFailure`` and
@@ -1143,7 +1201,13 @@ export class DesktopStore {
     if (failure === null) return null;
     const isLong = this.bootUnansweredSince !== null && Date.now() - this.bootUnansweredSince >= BOOT_REPORT_AFTER_MS;
     return {
-      notice: { message: BOOT_STILL_TRYING_SENTENCE, details: failure.details, isReportable: isLong, actions: [] },
+      notice: {
+        message: BOOT_STILL_TRYING_SENTENCE,
+        details: failure.details,
+        isHelpOwed: isLong,
+        isBugReportOffered: isLong,
+        actions: [],
+      },
     };
   }
 
@@ -1209,7 +1273,7 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+  /** What a toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
    *  opens none. */
   reportBugAction(): ((failure: ReportedFailure) => void) | null {
     return this.canReportBug ? (failure) => this.reportBug(failure) : null;
@@ -1423,19 +1487,10 @@ export class DesktopStore {
    *  asked to start it, in the chat about the app, unless the app is the one agents are asked through, which can
    *  only be reported. */
   stoppedNotice(app: AppRecord, windowId: string | null): FailureNotice {
-    const sentence = stoppedSentence(app);
-    if (this.isAskedThrough(app)) {
-      return this.noticeOf(
-        { message: `${sentence} If this persists, report a bug.`, details: null, isReportable: true },
-        [],
-        {
-          agent: "withheld",
-        },
-      );
-    }
-    return this.plainNotice(sentence, [
-      this.askAboutAppAction("Ask an agent to start it", stoppedRequest(app), app, windowId),
-    ]);
+    return this.noticeOf({ message: stoppedSentence(app), details: null, isHelpOwed: true }, [], {
+      agent: { about: app, windowId },
+      task: { label: "Ask an agent to start it", request: stoppedRequest(app) },
+    });
   }
 
   /** What a window of ``appName``, an app the app list no longer has, says in place of its page: that the app
@@ -1447,7 +1502,7 @@ export class DesktopStore {
       {
         message: appNotFoundSentence("This app", null),
         details: `The window shows the app registered as "${appName}", which the workspace's app list does not have.`,
-        isReportable: false,
+        isHelpOwed: false,
       },
       [{ label: "Close window", run: onClose }],
       { agent: "shell", isStuck: true },
@@ -3421,7 +3476,7 @@ export class DesktopStore {
       case "app_gone": {
         const name = shortcut?.app_display_name ?? "This shortcut's app";
         const message = appNotFoundSentence(name, NOTHING_OPENED);
-        return this.noticeOf({ message, details: null, isReportable: false }, removal, {
+        return this.noticeOf({ message, details: null, isHelpOwed: false }, removal, {
           agent: "shell",
           isStuck: true,
         });
@@ -3434,7 +3489,7 @@ export class DesktopStore {
             : `${reason.displayName} no longer offers “${label}”, so ${NOTHING_OPENED}.`;
         const known = appByName(this.state, app);
         const agent: AgentAsk = known === undefined ? "shell" : { about: known, windowId: null };
-        return this.noticeOf({ message, details: null, isReportable: false }, removal, { agent, isStuck: true });
+        return this.noticeOf({ message, details: null, isHelpOwed: false }, removal, { agent, isStuck: true });
       }
       case "no_desktop":
         return this.plainNotice("Choose a desktop in the tray, then try again.");
@@ -3567,15 +3622,15 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles once the window
-   *  is on the desktop, or with the failure for the caller to show where the press was: nothing is toasted. */
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text (the
+   *  main chat on a stock machine). Settles once the window is on the desktop, or with the failure for the caller to
+   *  show where the press was: nothing is toasted. */
   async startWithText(text: string): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
     const [row] = freeTextRowsOf(openableApps(this.state));
     if (row === undefined) {
-      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
+      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isHelpOwed: false } };
     }
     return this.startOutcomeOf(row.app, (report, whatFailed) =>
       this.runFreeText(row.app.name, row.launchPath.id, text, report, whatFailed),
@@ -3583,30 +3638,39 @@ export class DesktopStore {
   }
 
   /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
-   *  an ask of the shell's own): the text is sent to the chat about that window's app, through the first launch
-   *  path of the machine that takes an ask's text, whose page is put on screen by the show rule and laid out beside
-   *  the window, as "Chat about this app" lays it out. With no such window, a window of an internal app, or no such
-   *  launch path, the primary text action runs with the text instead, behind the assist command (the ask launch
-   *  path's chat puts it in front of its own lead-in). Settles as ``startWithText`` does. */
-  async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
+   *  an ask of the shell's own): an ask about that window's app, pressed in that window, sent as ``askAgentAbout``
+   *  sends one. Settles as ``startWithText`` does. */
+  async askAgent(text: string, windowId: string | null, delivery: AskDelivery = "app-chat"): Promise<StartOutcome> {
     const asking = windowId === null ? null : findWindow(this.state, windowId);
     const about = asking === null ? undefined : appByName(this.state, asking.window.app);
-    return this.askAgentAbout(text, about ?? null, asking?.window.id ?? null);
+    return this.askAgentAbout(text, about ?? null, asking?.window.id ?? null, delivery);
   }
 
-  /** Send ``text`` to the chat about ``about``, as ``askAgent`` does for the app of a window: laid out beside
-   *  ``besideWindowId`` when the ask was pressed in a window, else wherever the show rule puts it. With no app, an
-   *  internal one, or no launch path that takes an ask's text, the primary text action runs with the text instead. */
+  /** The one place an ask becomes the message an agent reads: the assist command and the app and window it came
+   *  from (``about``, and ``besideWindowId`` when it was pressed in a window) go in front of ``text``
+   *  (``assistRequest``). It is sent to the chat about ``about``, through the first launch path of the machine that
+   *  takes an ask's text, whose page is put on screen by the show rule and laid out beside the window, as "Chat about
+   *  this app" lays it out. With no app, an internal one, no such launch path, or the ``main-chat`` delivery, the
+   *  primary text action runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. */
   private async askAgentAbout(
     text: string,
     about: AppRecord | null,
     besideWindowId: string | null,
+    delivery: AskDelivery = "app-chat",
   ): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
-    const launch = this.askLaunchAbout(about);
-    if (about === null || launch === null) return this.startWithText(assistRequest(text));
-    const params = appAskParams(launch.launchPath, about, text);
+    const origin: AskOrigin | null =
+      about === null ? null : { appName: about.name, appDisplayName: about.display_name, windowId: besideWindowId };
+    const message = assistRequest(text, origin);
+    if (delivery === "draft") {
+      // ``draftText`` tells a draft that could not be made itself.
+      if (await this.draftText(message)) return { isOpened: true };
+      return { isOpened: false, failure: { message: `${ASK_NOT_DRAFTED_REASON}.`, details: null, isHelpOwed: false } };
+    }
+    const launch = delivery === "main-chat" ? null : this.askLaunchAbout(about);
+    if (about === null || launch === null) return this.startWithText(message);
+    const params = appAskParams(launch.launchPath, about, message);
     return this.startOutcomeOf(launch.app, async (report, whatFailed) => {
       const target: LaunchTarget = besideWindowId === null ? { kind: "show" } : { kind: "show", besideWindowId };
       const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, target, { whatFailed, report });
@@ -3627,7 +3691,7 @@ export class DesktopStore {
     console.info("[si] refused to start a chat while viewing somebody else's desktop");
     return {
       isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isHelpOwed: false },
     };
   }
 
@@ -3646,11 +3710,11 @@ export class DesktopStore {
     const told: FailureMessage = failure ?? {
       message: fallbackSentence(whatFailed),
       details: null,
-      isReportable: true,
+      isHelpOwed: true,
     };
     return {
       isOpened: false,
-      failure: { message: told.message, details: told.details, isReportable: told.isReportable },
+      failure: { message: told.message, details: told.details, isHelpOwed: told.isHelpOwed },
     };
   }
 
@@ -3748,6 +3812,7 @@ export class DesktopStore {
         launchLabel: launchPath?.label,
         isOpen: true,
         isAboutApp: true,
+        isTextKept: copy.report !== undefined && launchPath !== null && launchPath.text_param !== null,
         shortcut: copy.shortcut,
         retry:
           copy.report !== undefined
@@ -3786,15 +3851,15 @@ export class DesktopStore {
       const told = {
         message: `${lead}, but this workspace is out of space, so window changes can't be saved.`,
         details: null,
-        isReportable: false,
+        isHelpOwed: true,
       };
-      return this.noticeOf(told, [this.freeSpaceAction(told)], { agent: "withheld" });
+      return this.noticeOf(told, [], { agent: "shell", task: freeSpaceTask(told) });
     }
     return this.noticeOf(
       {
         message: `${lead}, but its window's position couldn't be saved, so it may move back after a reload.`,
         details: null,
-        isReportable: true,
+        isHelpOwed: true,
       },
       [],
       { agent: "shell" },

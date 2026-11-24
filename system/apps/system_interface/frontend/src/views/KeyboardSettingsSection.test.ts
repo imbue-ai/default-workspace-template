@@ -135,7 +135,7 @@ describe("the section's failures", () => {
     const root = await mountSection();
 
     expect(root.querySelector(".keyboard-settings-failure-message")?.textContent).toBe(
-      "Your keyboard shortcuts couldn't be loaded. Try again. If this persists, report a bug.",
+      "Your keyboard shortcuts couldn't be loaded. Try again.",
     );
     expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 500\nthe registry could not be read");
 

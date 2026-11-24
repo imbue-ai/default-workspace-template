@@ -263,7 +263,9 @@ def _recovery_launch() -> ResponseReturnValue:
     agent would be asked about load now; a launch's own failures answer as the launch route's do. A preview refuses,
     since either would act on the live workspace."""
     if get_state().is_preview:
-        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL)
+        return detail_response(
+            PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL, expected=True
+        )
     launch_request = parse_request_body(RecoveryLaunchRequest)
     shell = _shell()
     entries = shell.inventory.entries()
@@ -277,6 +279,7 @@ def _recovery_launch() -> ResponseReturnValue:
                     "the desktops and apps load now, so there is nothing to ask an agent about",
                     HTTP_CONFLICT,
                     user_facing_message=_DESKTOPS_LOAD_NOW_SENTENCE,
+                    expected=True,
                 )
             found = repair_agent_launch(entries, message)
         case _ as unreachable:

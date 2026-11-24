@@ -38,9 +38,9 @@ WINDOW_PATH_FIELD: Final[str] = "window_path"
 # The one field a POST launch answers.
 PATH_FIELD: Final[str] = "path"
 # The fields of an app's failed launch answer that the shell passes on as they are: a sentence the app wrote for
-# people, and whether that sentence asks for a bug report.
+# people, and whether the refusal is ordinary operation that sentence fully explains.
 USER_FACING_MESSAGE_FIELD: Final[str] = "user_facing_message"
-REPORTABLE_FIELD: Final[str] = "reportable"
+EXPECTED_FIELD: Final[str] = "expected"
 
 # A launch is one loopback request an app answers once it has decided what to show; an app that takes longer
 # than this has hung.
@@ -152,9 +152,9 @@ def _string_field(body: Any, field: str) -> str:
 
 
 @pure
-def _reportable_field(body: Any) -> bool | None:
-    if isinstance(body, dict) and isinstance(body.get(REPORTABLE_FIELD), bool):
-        return body[REPORTABLE_FIELD]
+def _expected_field(body: Any) -> bool | None:
+    if isinstance(body, dict) and isinstance(body.get(EXPECTED_FIELD), bool):
+        return body[EXPECTED_FIELD]
     return None
 
 
@@ -164,18 +164,18 @@ def launched_path(app: str, outcome: LaunchPostOutcome) -> WindowPath:
     LaunchRefusedError with that detail; anything else that is not a 200 carrying a window path (a 4xx with no
     detail among them: a missing or GET-only route, not a refusal the app wrote) is LaunchUnavailableError, which
     carries the app's ``detail`` too when it gave one, whatever the status. A failed answer's ``user_facing_message``
-    and ``reportable`` go with either as the app wrote them; the shell writes no sentence of its own."""
+    and ``expected`` go with either as the app wrote them; the shell writes no sentence of its own."""
     if outcome.status_code != 200:
         detail = _string_field(outcome.body, "detail")[:_DETAIL_LIMIT]
         user_facing_message = _string_field(outcome.body, USER_FACING_MESSAGE_FIELD) or None
-        reportable = _reportable_field(outcome.body) if user_facing_message is not None else None
+        expected = _expected_field(outcome.body) if user_facing_message is not None else None
         if 400 <= outcome.status_code < 500 and detail:
-            raise LaunchRefusedError(f"{app} refused the launch: {detail}", user_facing_message, reportable)
+            raise LaunchRefusedError(f"{app} refused the launch: {detail}", user_facing_message, expected)
         answered_with = f"{app} answered the launch with {outcome.status_code}"
         raise LaunchUnavailableError(
             f"{answered_with}: {detail}" if detail else f"{answered_with} and no reason",
             user_facing_message,
-            reportable,
+            expected,
         )
     answered = outcome.body.get(PATH_FIELD) if isinstance(outcome.body, dict) else None
     if not isinstance(answered, str):

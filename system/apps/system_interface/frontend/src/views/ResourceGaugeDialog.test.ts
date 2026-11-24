@@ -97,7 +97,7 @@ describe("ResourceGaugeDialog", () => {
     mount(onSave, onClose);
     await save();
     expect(card().querySelector(".resource-gauge-error-message")?.textContent).toBe(
-      "The resource gauge settings couldn't be saved. Try again. If this persists, report a bug.",
+      "The resource gauge settings couldn't be saved. Try again.",
     );
     expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 500\ncannot write shell state file");
     expect(onClose).not.toHaveBeenCalled();

@@ -299,6 +299,8 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
         never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
     assert still_starting.value.kind is RefusalKind.APP_STILL_STARTING
     assert still_starting.value.user_facing_message == "Docs is still starting. Try again in a moment."
+    # Ordinary operation the sentence fully explains, so it owes no help.
+    assert still_starting.value.expected is True
     assert started == ["docs", "docs"] and len(posts) == 1
 
     # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
@@ -430,7 +432,7 @@ class _DesktopStoreWhoseWindowWriteFails(DesktopStore):
 
 
 @pytest.mark.parametrize(
-    ("write_errno", "is_text_path", "expected_kind", "expected_message", "is_reportable"),
+    ("write_errno", "is_text_path", "expected_kind", "expected_message"),
     [
         (
             errno.ENOSPC,
@@ -438,21 +440,18 @@ class _DesktopStoreWhoseWindowWriteFails(DesktopStore):
             RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE,
             "\u201cNew doc\u201d went through in Docs, but this workspace is out of space, so its window couldn't be "
             "opened.",
-            False,
         ),
         (
             errno.EIO,
             False,
             RefusalKind.LAUNCHED_NOT_OPENED,
             "\u201cNew doc\u201d went through in Docs, but its window couldn't be opened.",
-            True,
         ),
         (
             errno.EIO,
             True,
             RefusalKind.LAUNCHED_NOT_OPENED,
             "Your message was sent to Docs, but its window couldn't be opened.",
-            True,
         ),
     ],
 )
@@ -463,12 +462,11 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
     is_text_path: bool,
     expected_kind: RefusalKind,
     expected_message: str,
-    is_reportable: bool,
 ) -> None:
     """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
     to try again (which would ask the app a second time) but as launched and not opened, naming the launch (a
-    message sent, else the launch path by its label), saying a full disk is one, and asking for a bug report for
-    any other failed write; nothing opens."""
+    message sent, else the launch path by its label) and saying a full disk is one. Neither is an expected refusal:
+    each owes the person help. Nothing opens."""
     registry_path = write_registry(
         tmp_path / "apps.toml",
         registry_row_toml(
@@ -515,7 +513,7 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
 
     assert not_opened.value.kind is expected_kind
     assert not_opened.value.user_facing_message == expected_message
-    assert not_opened.value.reportable is is_reportable
+    assert not_opened.value.expected is None
     assert len(posts) == 1
     (still,) = shell.list_desktops()
     assert still.windows == home.windows

@@ -1,4 +1,4 @@
-A failure toast on the workspace desktop whose sentence asks for a bug report offers "Report a bug" where the desktop app opens its bug report.
+A failure toast on the workspace desktop that owes the person help (anything but a request nothing answered, a refusal with only a reason, or one the app called expected) offers "Report a bug" where the desktop app opens its bug report.
 
 - "Report a bug" is decided as the toast draws, so a toast shown before the desktop app said it opens one (a failed startup read) gains the button once it does, and the report it opens carries the toast's sentence and details. Pressing it leaves the toast up.
 

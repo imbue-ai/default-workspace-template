@@ -56,17 +56,20 @@ _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
 # How often the not-built page asks whether the page has been built since, so a rebuild by any route brings it back.
 NOT_BUILT_POLL_SECONDS: Final[int] = 10
 
-# What an agent asked to rebuild the page is told, as Imbue Studio about the user.
-_REBUILD_REQUEST: Final[str] = (
-    "Imbue Studio showed the user that the Getting Started page isn't available: its built files are missing. "
-    "Rebuild it (npm run build in system/) so it comes back, then tell the user what was wrong and what you changed."
-)
+# What an agent asked to rebuild the page is told, as the contract module's ``askAgentToFix`` takes it: what the page
+# says, what is behind its "See details", and what to do.
+_REBUILD_REQUEST: Final[dict[str, str]] = {
+    "whatFailed": "The Getting Started page isn't available right now.",
+    "details": "Its built files are missing. They are rebuilt with npm run build in system/.",
+    "instruction": "Rebuild it so the page comes back, then tell the user what was wrong and what you changed.",
+}
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
 # on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command, and a failed
-# ask's reason, are behind "See details". The contract module it asks the shell with is the shell's, served from this
-# origin; when it cannot be loaded (the shell's frontend is not built either), or no shell greets the page, the agent
-# button stays hidden.
+# ask's reason, are behind "See details". A failed ask that owes help offers the same request as a draft in a chat, and
+# a bug report where the shell can open one. The contract module it asks the shell with is the shell's, served from
+# this origin; when it cannot be loaded (the shell's frontend is not built either), or no shell greets the page, the
+# agent button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
     """<!doctype html>
 <html><head><meta charset="utf-8"><title>Getting Started</title>
@@ -80,7 +83,8 @@ summary{cursor:pointer}</style></head>
 <p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
 rebuild it</button></p>
 <p id="ask-agent-failure" hidden></p>
-<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>
+<p><button type="button" id="ask-agent-draft" hidden>Draft it in a chat</button><button type="button"
+id="ask-agent-report" hidden>Report a bug</button></p>
 <details><summary>See details</summary>
 <pre id="ask-agent-failure-details" hidden></pre>
 <p>Its built files are missing. They are rebuilt with <code>npm run build</code> in <code>system/</code>.</p></details>
@@ -98,21 +102,28 @@ rebuild it</button></p>
   }, __POLL_SECONDS__ * 1000);
   if (window.parent !== window) {
     import("__CONTRACT_PATH__")
-      .then(({ connectToShell }) => {
+      .then(({ connectToShell, askAgentToFix }) => {
         const ask = document.getElementById("ask-agent");
+        const draft = document.getElementById("ask-agent-draft");
         const report = document.getElementById("ask-agent-report");
+        const request = __REBUILD_REQUEST__;
         let shown = null;
-        // A failure that asks for a bug report offers one while the shell's latest handshake says it can open one.
-        const showReport = () => {
-          report.hidden = !(shown !== null && shown.isReportable && shell.canReportBug());
+        // A failed ask that owes help offers the request as a draft, and a bug report while the shell's latest
+        // handshake says it can open one.
+        const showRemedies = () => {
+          const isHelpOwed = shown !== null && shown.isHelpOwed;
+          draft.hidden = !isHelpOwed;
+          report.hidden = !(isHelpOwed && shell.canReportBug());
         };
         // Only a shell can ask an agent, so the ask button waits for one to greet the page.
         const shell = connectToShell({
           onHandshake: () => {
             ask.hidden = false;
-            showReport();
+            showRemedies();
           },
         });
+        // The shell tells a draft that could not be made itself.
+        draft.addEventListener("click", () => void askAgentToFix(shell, request, { showsOutcome: true }, "draft"));
         report.addEventListener("click", () => {
           if (shown !== null) shell.reportBug({ message: shown.message, details: shown.details });
         });
@@ -121,7 +132,7 @@ rebuild it</button></p>
         const askLabel = ask.textContent;
         const show = (outcome) => {
           shown = outcome.isOpened ? null : outcome.failure;
-          showReport();
+          showRemedies();
           failure.hidden = outcome.isOpened;
           failureDetails.hidden = outcome.isOpened || outcome.failure.details === null;
           if (outcome.isOpened) return;
@@ -138,7 +149,7 @@ rebuild it</button></p>
           ask.disabled = true;
           ask.textContent = "Asking an agent\u2026";
           show({ isOpened: true });
-          const outcome = await shell.askAgent(__REBUILD_REQUEST__, {
+          const outcome = await askAgentToFix(shell, request, {
             showsOutcome: true,
             onLateAnswer: (late) => {
               if (press === presses) show(late);

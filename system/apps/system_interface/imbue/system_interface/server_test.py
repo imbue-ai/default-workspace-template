@@ -5,7 +5,6 @@ import html
 import json
 import os
 import re
-import subprocess
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
@@ -476,7 +475,7 @@ def test_not_built_repair_message_names_the_heading_the_reader_is_looking_at_beh
     assert heading is not None, "the page no longer carries a heading"
 
     assert message.startswith("/assist ")
-    assert f"Imbue Studio showed the user this failure: {heading.group(1).strip()}." in message
+    assert f"Imbue Studio showed the user this failure: {heading.group(1).strip()}.\n\n" in message
     assert message == INTERFACE_NOT_BUILT_REPAIR_MESSAGE
 
 
@@ -518,7 +517,7 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     assert shown == INTERFACE_NOT_BUILT_PAGE.repair_command
 
 
-def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
+def test_not_built_repair_line_splits_the_way_a_shell_splits_it(tmp_path: Path) -> None:
     """The argv the CLI validates has to be the argv the reader's shell builds.
 
     The readable line is the source of truth and the argv is parsed back out of
@@ -541,14 +540,8 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
             "would execute rather than report: word it out of the message"
         )
 
-    printed_words = subprocess.run(
-        ["sh", "-c", f'set -- {INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=30,
-    )
-    assert printed_words.stdout.splitlines() == list(INTERFACE_NOT_BUILT_REPAIR_ARGV)
+    words = words_a_shell_splits(INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND, tmp_path)
+    assert words == list(INTERFACE_NOT_BUILT_REPAIR_ARGV)
 
 
 def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
@@ -604,6 +597,8 @@ def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_
     )
     assert refused.status_code == 403
     assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]
+    # A rule the sentence fully explains, so it owes no help.
+    assert refused.get_json()["expected"] is True
     assert posts == [] and preview_posts == []
 
 
@@ -681,6 +676,7 @@ def test_the_desktops_recovery_page_goes_back_to_the_desktop_once_they_load_and_
     refused = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"})
     assert refused.status_code == 409
     assert refused.get_json()["user_facing_message"] == "This workspace's desktops load now."
+    assert refused.get_json()["expected"] is True
     assert posts == []
 
 
@@ -707,6 +703,11 @@ def test_the_desktops_recovery_page_on_a_full_disk_says_so_and_asks_an_agent_to_
     assert post.body["message"].startswith(
         "/assist Imbue Studio showed the user this failure: This workspace is out of space, so its desktops couldn't "
         "be loaded.\n\nDetails:\n```\ncannot write shell state file "
+    )
+    # The agent is told what the button asks for, which is not to find a fault.
+    assert post.body["message"].endswith(
+        "\n\nFree up disk space in this workspace, then tell the user what was taking up the space and what you "
+        "removed."
     )
     assert _launch_message_on(page.text, tmp_path) == post.body["message"]
 
@@ -860,7 +861,7 @@ def test_a_page_that_fails_to_load_shows_a_sentence_and_a_try_again_and_a_call_k
     page = test_client.get("/", headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
 
     assert page.status_code == 500 and page.mimetype == "text/html"
-    assert "This workspace couldn't load. Try again. If this persists, report a bug." in page.text
+    assert "This workspace couldn't load. Try again." in page.text
     assert 'id="try-again">Try again</button>' in page.text
     # Try again is bound from the page's own script, which its policy admits by hash; no inline handler would run.
     script = page.text.split("<script>")[1].split("</script>")[0]

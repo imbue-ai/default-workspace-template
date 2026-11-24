@@ -14,6 +14,9 @@ from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import PortInUseError
 from imbue.system_interface.shell.port_parking import ASKING_AN_AGENT_LABEL
 from imbue.system_interface.shell.port_parking import CHANGE_NOT_ANSWERED_SENTENCE
+from imbue.system_interface.shell.port_parking import COULD_NOT_START_INSTRUCTION
+from imbue.system_interface.shell.port_parking import DRAFT_ASK_LABEL
+from imbue.system_interface.shell.port_parking import DRAFT_DELIVERY
 from imbue.system_interface.shell.port_parking import FAILED_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
@@ -23,6 +26,8 @@ from imbue.system_interface.shell.port_parking import SHELL_ASK_AGENT_TYPE
 from imbue.system_interface.shell.port_parking import SHELL_HANDSHAKE_TYPE
 from imbue.system_interface.shell.port_parking import SHELL_REPORT_BUG_TYPE
 from imbue.system_interface.shell.port_parking import STARTING_REFRESH_SECONDS
+from imbue.system_interface.shell.port_parking import could_not_start_log_hint
+from imbue.system_interface.shell.port_parking import could_not_start_request
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parked_response_bytes
 from imbue.system_interface.shell.port_parking import parking_target_of
@@ -204,9 +209,28 @@ def test_the_could_not_start_pages_wire_is_the_app_contracts() -> None:
         (app_contract_ts, "SHELL_REPORT_BUG", SHELL_REPORT_BUG_TYPE),
         (app_contract_ts, "CHANGE_NOT_ANSWERED_SENTENCE", CHANGE_NOT_ANSWERED_SENTENCE),
         (failure_buttons_ts, "ASKING_AN_AGENT_LABEL", ASKING_AN_AGENT_LABEL),
+        (failure_buttons_ts, "DRAFT_ASK_LABEL", DRAFT_ASK_LABEL),
     ):
         declared = re.search(rf'export const {name} =\s*"([^"]+)";', source)
         assert declared is not None and declared.group(1) == value, name
+    deliveries = re.search(r"export type AskDelivery = ([^;]+);", app_contract_ts)
+    assert deliveries is not None and f'"{DRAFT_DELIVERY}"' in deliveries.group(1)
+
+
+@pytest.mark.frontend
+def test_the_could_not_start_pages_agent_is_asked_what_the_desktops_is() -> None:
+    """A launch that finds the app could not start offers the same agent in a toast of the desktop's, so the two word
+    the ask alike; this pins the page's words to the desktop's ``couldNotStartRequest``."""
+    failures_ts = (Path(__file__).parents[3] / "frontend" / "src" / "model" / "failures.ts").read_text()
+    declared = re.search(r'const COULD_NOT_START_INSTRUCTION =\s*"([^"]+)";', failures_ts)
+    assert declared is not None and declared.group(1) == COULD_NOT_START_INSTRUCTION
+    assert f"`{could_not_start_log_hint('${app.program}')}`" in failures_ts
+    assert "whatFailed: `${app.display_name} couldn't start.`" in failures_ts
+    assert could_not_start_request("Docs", "docs") == (
+        "Imbue Studio showed the user this failure: Docs couldn't start.\n\n"
+        "Its program's log may say why (supervisorctl tail docs stderr). Find out why and get it running again, then "
+        "tell the user what was wrong and what you changed."
+    )
 
 
 def _sha256_source(text: str) -> str:

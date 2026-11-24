@@ -635,27 +635,31 @@ with both on the default provider when there is none (so the chat app's own
 windows open "Chat Chat"), with a pending intake whose `hint` the chat root puts
 on the composer as its placeholder, "How do you want to change <App>?", and
 focuses. A page's ask (`shell:ask-agent`, `store/DesktopStore.ts` `askAgent`;
-a failure's "Ask an agent to fix this" sends it) reaches that same chat: for a
+a failure's "Ask an agent to fix this" sends it) reaches that same chat. The
+shell writes the message the agent reads, the one place that does
+(`assistRequest`): `/assist `, so the agent runs the workspace's assist flow,
+then the app and the window the ask was pressed in, then the ask's text. For a
 page in a window of an app that is not internal, the shell runs the first
 launch path of the machine whose `app_params` names a `text` param (the chat
-app's `app-ask`) with the app's name, its display name, and the ask's text,
+app's `app-ask`) with the app's name, its display name, and the message,
 through the same `show` target beside the page's window, and the chat app sends
-the text to the chat about the app as a message (making that chat with it when
-there is none, and sending it to the main chat when that chat cannot take it).
-With no such launch path, an internal app, or no window (an ask of the shell's
-own that is about no app), the ask runs the primary free-text row instead, as
-`shell:start-with-text` does, with the text behind `/assist ` (`assistRequest`),
-so the agent runs the workspace's assist flow either way (the chat app puts the
-command in front of its own lead-in on the other path). The shell's own "Ask an
-agent to ..." buttons follow the same rule (`askAgentAbout`): one about an app
-(a stopped app's "Ask an agent to start it", an app that couldn't start's "Ask
-an agent to look at it") goes to the chat about that app, beside the app's
-window when it is pressed in one and wherever the `show` target puts it when it
-is pressed in a toast; one about no app (the update notice's "Ask an agent to
-finish it") runs the primary free-text row. Where the app an ask would go
-through is the app the ask is about (the chat app, stopped or unable to start),
-no agent is offered, and the sentence asks for a bug report instead. The shell
-names no app in any of this.
+it to the chat about the app as a message (making that chat with it when there
+is none, and sending it to the main chat when that chat cannot take it). With
+no such launch path, an internal app, no window (an ask of the shell's own that
+is about no app), or an ask sent with the `main-chat` delivery, the ask runs
+the primary free-text row instead, as `shell:start-with-text` does; the `draft`
+delivery leaves the message unsent in a chat's message box. The shell's own
+"Ask an agent to ..." buttons follow the same rule (`askAgentAbout`), each with
+a task `agentFixTask` words (what the person was shown, the details, and what
+to do): one about an app (a stopped app's "Ask an agent to start it", an app
+that couldn't start's "Ask an agent to look at it") goes to the chat about that
+app, beside the app's window when it is pressed in one and wherever the `show`
+target puts it when it is pressed in a toast; one about no app (the update
+notice's "Ask an agent to finish it") runs the primary free-text row, and so
+does a full disk's "Ask an agent to free up space" whatever it is about, since
+a new chat needs disk. Where the app an ask would go through is the app the ask
+is about (the chat app, stopped or unable to start), no agent can be asked, and
+"Report a bug" is offered in its place. The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a
@@ -734,7 +738,7 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it, and "Ask an agent to free up space") and then
+intents and templates use it) and then
 telling the page how it went with `shell:start-with-text-result`, asks an
 agent about its own app through `shell:ask-agent` (see "App chat" above; a
 failure's "Ask an agent to fix this" uses it), which the shell answers with
@@ -750,27 +754,34 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert. A failure whose sentence asks for a bug report, and a
+than a browser alert. A failure that owes the person help (one the server did
+not explain, or wrote a sentence about without calling it expected), and a
 refusal that leaves the person unable to do what they meant to (an app that
-couldn't be found, a launch path an app no longer offers), offers "Ask an agent
-to fix this", decided in one place (the store's notice builder): asked in the
-chat about the app when the failure is the app's (a launch it answered with an
-error, a quit, a message it refused), else in the main chat behind `/assist`,
-with the failure's sentence and details as `agentFixTask` words them. None is
-offered where the ask would go through what failed (a failure of the app agents
-are asked through, Chat on a stock workspace), where the shell recovers by
-itself (a gone window or desktop, which it reads again), for a deliberate rule,
-for an app still starting, or before the app list has loaded. A toast whose
-sentence asks for a bug report then offers
-"Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
-the toast draws, and the report it opens carries the toast's sentence and
-details (`minds:open-help {errorDetails}`); a failure told in place (a dialog's
-line, the launcher, the backdrop, a stopped window) does the same, and so does a
-page's `shell:report-bug` with the failure the page sent. "Ask an agent to ..."
-and "Report a bug" leave their toast up; Try again takes it down. Pressed, an
-"Ask an agent to ..." button reads "Asking an agent…" and takes no second press
-until the agent's chat is on the desktop, and an ask that fails is told in a
-toast of its own.
+couldn't be found, a launch path an app no longer offers), offers an agent,
+decided in one place (the store's notice builder): "Ask an agent to fix this",
+asked in the chat about the app when the failure is the app's (a launch it
+answered with an error, a quit, a message it refused), else in the main chat,
+with the failure's sentence and details as `agentFixTask` words them; a full
+disk offers "Ask an agent to free up space" instead, whose task says so. No
+help is owed where the shell recovers by itself (a gone window or desktop,
+which it reads again), for a deliberate rule, for an app still starting, or for
+a request nothing answered. "Report a bug" stands in for the agent only where
+none can be asked: the ask would go through what failed (a failure of the app
+agents are asked through, Chat on a stock workspace), or no app that takes one
+is known (the workspace has none, or the app list has not loaded). It is
+offered whenever the Imbue Studio chrome says it opens one, decided as the
+toast draws, and the report it opens carries the toast's sentence and details
+(`minds:open-help {errorDetails}`); a failure told in place (a dialog's line,
+the launcher, the backdrop, a stopped window) does the same, and so does a
+page's `shell:report-bug` with the failure the page sent. A send from the
+launcher that Chat itself refused, whose line keeps the typed text in the
+field, also offers "Open Chat", where the person can send it themselves. "Ask
+an agent to ..." and "Report a bug" leave their toast up; Try again takes it
+down. Pressed, an "Ask an agent to ..." button reads "Asking an agent…" and
+takes no second press until the agent's chat is on the desktop. An ask that
+fails is told in a toast of its own, which offers no second ask: where the
+failure owes help it offers "Draft it in a chat", which leaves the same request
+unsent in a chat's message box for the person to send, beside "Report a bug".
 
 ### The phone layout
 
@@ -921,8 +932,10 @@ loaded." with "Ask an agent to free up space" in place of "Ask an agent to fix
 this", offers Reload (back to the desktop), and keeps the failure's details
 first behind "See details". Its agent and its command are told the sentence and
 the details as every ask of the desktop's is worded (workspace_ui's
-`assistRequest(agentFixTask(...))`, which `recovery_page.py` words again in
-Python; a `frontend` test pins the two). A read nothing answered stays on the
+`agentFixTask`, which `shell/agent_asks.py` words again in Python; a `frontend`
+test pins the two), and on a full disk to free up space rather than to find a
+fault. The page puts `/assist` first itself, since its asks reach a chat with
+no shell to write it. A read nothing answered stays on the
 desktop's spinner, which tries again on its own. The page offers no "Report a
 bug": the embed endpoint that opens Imbue Studio's bug report is part of the
 frontend.
@@ -953,7 +966,9 @@ desktops it reads them again, so the agent is told the failure as it stands. The
 command, for an interface that is not built:
 
 ```
-env -u TMUX mngr create --connect --template chat --label user_created=true --message "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. Find out why it failed and fix it, then tell the user what was wrong and what you changed."
+env -u TMUX mngr create --connect --template chat --label user_created=true --message "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt.
+
+Find out why it failed and fix it, then tell the user what was wrong and what you changed."
 ```
 
 The desktops' line carries their message the same way: in double quotes, with

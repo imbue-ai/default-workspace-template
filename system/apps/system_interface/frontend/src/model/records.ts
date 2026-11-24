@@ -210,6 +210,8 @@ export interface AppRecord {
   readonly label: string;
   readonly url: string;
   readonly internal: boolean;
+  /** Whether the app is part of the workspace itself rather than one built on it. */
+  readonly system: boolean;
   readonly program: string;
   readonly critical: boolean;
   /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
@@ -654,6 +656,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     label: typeof record.label === "string" ? record.label : "",
     url: asString(record.url, "app.url"),
     internal: record.internal === true,
+    system: record.system === true,
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,

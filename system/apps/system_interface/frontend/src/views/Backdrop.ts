@@ -34,7 +34,7 @@ import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
-import { isAppShareable } from "./WindowMenu";
+import { isAppSharedFromTitleBar } from "./WindowMenu";
 
 export interface BackdropAttrs {
   readonly store: DesktopStore;
@@ -226,7 +226,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           isTouch: state.modes.isTouch,
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
-                          hasShare: attrs.isAppShareOffered && isAppShareable(app),
+                          hasShare: attrs.isAppShareOffered && isAppSharedFromTitleBar(app),
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           stopped:

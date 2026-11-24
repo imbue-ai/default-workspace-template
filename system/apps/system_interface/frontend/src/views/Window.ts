@@ -99,7 +99,7 @@ export interface WindowAttrs {
    *  program), with the next step the workspace has; null otherwise. A stoppable app's window keeps its page, which
    *  the shell's parker answers with a loading page until the app is up. */
   readonly stopped: FailureNotice | null;
-  /** Report a bug about the stopped notice where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about the stopped notice where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
   /** What the window says in place of a page it can never show when its app couldn't be found (the app list has
    *  landed without it), with its close (the store's ``goneAppNotice``); null otherwise. */

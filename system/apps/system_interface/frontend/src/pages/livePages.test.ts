@@ -964,7 +964,7 @@ describe("the contract", () => {
   });
 
   it("opens the bug report about a page's shell:report-bug failure only while the embedder opens one", () => {
-    const failure = { message: "Docs couldn't save. Try again. If this persists, report a bug.", details: "HTTP 500" };
+    const failure = { message: "Docs couldn't save. Try again.", details: "HTTP 500" };
     messageFromPage("win-1", { type: SHELL_REPORT_BUG, ...failure });
     expect(bugReportsOpened).toEqual([]);
     store.setCanReportBug(true);
@@ -1450,10 +1450,24 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-1" });
     await settle();
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
-      'launch:home:chat:app-ask:{"app":"docs","app_display_name":"Docs","message":"Fix this."}:show:beside:win-1',
+      `launch:home:chat:app-ask:${JSON.stringify({
+        app: "docs",
+        app_display_name: "Docs",
+        message: "/assist This is about the Docs app (`docs`, window `win-1`).\n\nFix this.",
+      })}:show:beside:win-1`,
     ]);
     expect(spy).toHaveBeenCalledWith({ type: SHELL_ASK_AGENT_RESULT, requestId: "req-1", isOpened: true }, "*");
     expect(store.toasts.current()).toEqual([]);
+
+    // A page that asks for the main chat gets the primary text action; a delivery the shell does not know is the
+    // default one.
+    const launches = (): string[] => api.calls.filter((call) => call.startsWith("launch"));
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-2", delivery: "main-chat" });
+    await settle();
+    expect(launches()[1]).toMatch(/^launch:home:chat:main:/);
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-3", delivery: "elsewhere" });
+    await settle();
+    expect(launches()[2]).toMatch(/^launch:home:chat:app-ask:/);
   });
 
   it("answers a refused ask with the failure, and toasts it only for a page that does not show the outcome", async () => {
@@ -1462,7 +1476,7 @@ describe("the contract", () => {
     const failure = {
       message: "Chat couldn't open that.",
       details: "HTTP 400\nchat refused the launch: no account is signed in",
-      isReportable: false,
+      isHelpOwed: false,
     };
     const spy = spyOnFrame("win-1");
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-2", showsOutcome: true });
@@ -1482,6 +1496,28 @@ describe("the contract", () => {
     expect(store.toasts.current()).toMatchObject([
       { message: failure.message, details: failure.details, isLasting: true },
     ]);
+  });
+
+  it("offers a refused ask that owes help as a draft on its toast, for a page that does not show the outcome", async () => {
+    const failure = { message: "Chat couldn't open that. Try again.", details: "HTTP 502", isHelpOwed: true };
+    const askAgent = vi.spyOn(store, "askAgent").mockResolvedValue({ isOpened: false, failure });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-4" });
+    await settle();
+    const [toast] = store.toasts.current();
+    // The ask's own failure offers no second ask: the same request as a draft, and Report a bug.
+    expect(toast).toMatchObject({ message: failure.message, isLasting: true, isHelpOwed: true });
+    expect(toast.actions.map((action) => action.label)).toEqual(["Draft it in a chat"]);
+    toast.actions[0].run();
+    expect(askAgent.mock.calls).toEqual([
+      ["Fix this.", "win-1", "app-chat"],
+      ["Fix this.", "win-1", "draft"],
+    ]);
+
+    // A draft that could not be made is not offered as a draft again: its toast, saying the same, takes the place
+    // of the first.
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-5", delivery: "draft" });
+    await settle();
+    expect(store.toasts.current().map((shown) => shown.actions)).toEqual([[]]);
   });
 
   it("toasts a refused start itself when the page does not show the outcome, as for Routines' add field", async () => {
@@ -1531,19 +1567,19 @@ describe("the contract", () => {
         requestId: "req-3",
         isOpened: false,
         failure: {
-          message: "The workspace couldn't do that. Try again. If this persists, report a bug.",
+          message: "The workspace couldn't do that. Try again.",
           details: "layout state is gone",
-          isReportable: true,
+          isHelpOwed: true,
         },
       },
       "*",
     );
-    // Not shown by the page, so the shell's own toast carries it, reportable (with Report a bug where it can open).
+    // Not shown by the page, so the shell's own toast carries it, owing help (with Report a bug where it can open).
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "The workspace couldn't do that. Try again. If this persists, report a bug.",
+        message: "The workspace couldn't do that. Try again.",
         isLasting: true,
-        isReportable: true,
+        isHelpOwed: true,
       },
     ]);
     error.mockRestore();

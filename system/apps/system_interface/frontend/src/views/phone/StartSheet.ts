@@ -26,7 +26,7 @@ export interface StartSheetAttrs {
   readonly onDismiss: () => void;
   /** Why the last row the sheet ran failed, shown under its field, which still holds its text. */
   readonly failure: FailureNotice | null;
-  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about that failure where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
 }
 

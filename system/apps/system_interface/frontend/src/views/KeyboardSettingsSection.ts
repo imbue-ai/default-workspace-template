@@ -29,7 +29,7 @@ export interface KeyboardSettingsSectionAttrs {
   /** A failed read or change as the section's line says it, from what failed (a sentence stem) and the error, with
    *  ``retry`` where the failure is one to try again. */
   readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
-  /** Report a bug about a failure where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about a failure where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
 }
 

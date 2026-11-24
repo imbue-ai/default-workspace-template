@@ -628,12 +628,14 @@ class ShellState(MutableModel):
                 str(request.target.window_id),
                 user_facing_message=WINDOW_GONE_SENTENCE,
                 kind=RefusalKind.WINDOW_GONE,
+                expected=True,
             )
         if window.app != request.app:
             raise DesktopValueError(
                 f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}",
                 user_facing_message=WINDOW_GONE_SENTENCE,
                 kind=RefusalKind.WINDOW_GONE,
+                expected=True,
             )
         return effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
 
@@ -1264,8 +1266,7 @@ def _launch_lead(entry: AppInventoryEntry, launch_path: RegistryLaunchPath) -> s
 def _launched_not_opened(
     entry: AppInventoryEntry, launch_path: RegistryLaunchPath, error: ShellStateError
 ) -> LaunchedNotOpenedError:
-    """The refusal of a launch the app took when no window could be written to show it: a full disk named as such,
-    anything else asking for a bug report."""
+    """The refusal of a launch the app took when no window could be written to show it, a full disk named as such."""
     lead = _launch_lead(entry, launch_path)
     is_out_of_space = error.kind is RefusalKind.OUT_OF_SPACE
     return LaunchedNotOpenedError(
@@ -1276,7 +1277,6 @@ def _launched_not_opened(
             else f"{lead}, but its window couldn't be opened."
         ),
         kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
-        reportable=not is_out_of_space,
     )
 
 
@@ -1303,6 +1303,7 @@ def _raise_unless_up(entry: AppInventoryEntry, outcome: WakeOutcome) -> None:
             raise LaunchUnavailableError(
                 f"{entry.row.name} was started for the launch but did not answer in time",
                 f"{name} is still starting. Try again in a moment.",
+                expected=True,
                 kind=RefusalKind.APP_STILL_STARTING,
             )
         case _ as unreachable:

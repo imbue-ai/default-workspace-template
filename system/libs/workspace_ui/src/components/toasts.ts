@@ -6,10 +6,10 @@
  * the shell's never stand between the user and what is under them, while a page whose notes run longer (Files lists
  * what failed) gives each a close button. A plain toast with details takes presses either way, for its "See details"
  * and close button; opening the details holds it up (``onHold``). A lasting toast (one that stays until dismissed)
- * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose message
- * asks for a bug report gets "Ask an agent to fix this" while the page gives ``onAskAgent`` (unless the toast withholds
- * it) and "Report a bug" while the page gives ``onReportBug``, each decided as it draws: whether a shell frames the page
- * and whether the embedder opens a bug report can be learned after the toast went up.
+ * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose failure
+ * owes help gets "Ask an agent to fix this" while the page gives ``onAskAgent`` (unless the toast withholds it), and
+ * "Report a bug" in its place while the page gives only ``onReportBug``, each decided as it draws: whether a shell
+ * frames the page and whether the embedder opens a bug report can be learned after the toast went up.
  */
 
 import m from "mithril";
@@ -35,10 +35,10 @@ export interface ToastsAttrs {
   readonly closesPlainToasts?: boolean;
   /** Keep a plain toast up until dismissed: its reader opened its details. */
   readonly onHold?: (id: number) => void;
-  /** Open the bug report about a reportable toast's failure; absent or null where none can be opened now. */
+  /** Open the bug report about a toast's failure that owes help; absent or null where none can be opened now. */
   readonly onReportBug?: ((failure: ReportedFailure) => void) | null;
-  /** Ask an agent to fix a reportable toast's failure, settling once the ask has; absent or null where no agent can
-   *  be asked now (``askAgentFromToasts``). */
+  /** Ask an agent to fix a toast's failure that owes help, settling once the ask has; absent or null where no agent
+   *  can be asked now (``askAgentFromToasts``). */
   readonly onAskAgent?: ((failure: ReportedFailure) => Promise<unknown>) | null;
 }
 
@@ -110,8 +110,10 @@ function lastingToastBody(
           pending: { isPending: () => asking.has(toast.id), label: ASKING_AN_AGENT_LABEL },
         }
       : null;
+  // The agent's assist flow reports a fault in built-in code itself, so the bug report is only for where none can
+  // be asked.
   const reportBug: ToastAction | null =
-    toast.isReportable && onReportBug !== null
+    toast.isHelpOwed && askAgent === null && onReportBug !== null
       ? { label: REPORT_A_BUG_LABEL, run: () => onReportBug(failure), keepsToast: true }
       : null;
   const remedies = [askAgent, reportBug].filter((action): action is ToastAction => action !== null);

@@ -2,7 +2,6 @@
 import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
 import { catalogTemplateRecord } from "../testing/records";
@@ -33,14 +32,12 @@ interface Rendered {
   readonly root: HTMLElement;
   readonly started: string[];
   readonly retries: number[];
-  readonly bugReports: ReportedFailure[];
   readonly asks: string[];
 }
 
-function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Rendered {
+function render(catalog: TemplateCatalogState = LOADED): Rendered {
   const started: string[] = [];
   const retries: number[] = [];
-  const bugReports: ReportedFailure[] = [];
   const asks: string[] = [];
   const root = mountView(() =>
     m(GettingStartedPage, {
@@ -53,12 +50,12 @@ function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Re
           asks.push(text);
           return Promise.resolve({ isOpened: true });
         },
-        canReportBug: () => canReportBug,
-        reportBug: (failure) => bugReports.push(failure),
+        canReportBug: () => true,
+        reportBug: () => undefined,
       },
     }),
   );
-  return { root, started, retries, bugReports, asks };
+  return { root, started, retries, asks };
 }
 
 function typeQuery(root: HTMLElement, query: string): void {
@@ -150,7 +147,7 @@ describe("the Getting Started page", () => {
     unmountViews();
     const failed = render({ kind: "failed", details: "HTTP 502" });
     expect(failed.root.querySelector(".getting-started-templates-status")!.textContent).toBe(
-      "Templates couldn't be loaded. Try again. If this persists, report a bug.",
+      "Templates couldn't be loaded. Try again.",
     );
     // The reason waits behind a collapsed "See details" under the line.
     const seeDetails = failed.root.querySelector<HTMLDetailsElement>(".getting-started-templates-failed details")!;
@@ -160,27 +157,16 @@ describe("the Getting Started page", () => {
     // Its next step is on the line: Try again fetches again, in place.
     failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
     expect(failed.retries).toEqual([1]);
-    // Then an agent, asked in the chat about this page's app with the failure, and Report a bug.
+    // Then an agent, asked in the chat about this page's app with the failure. Report a bug waits for an ask that
+    // was refused, though the shell can open one.
     const remedies = [...failed.root.querySelectorAll<HTMLElement>(".getting-started-templates-remedy")];
-    expect(remedies.map((button) => button.textContent)).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    expect(remedies.map((button) => button.textContent)).toEqual(["Ask an agent to fix this"]);
     remedies[0].click();
     expect(failed.asks).toHaveLength(1);
     expect(failed.asks[0]).toContain(
-      "Imbue Studio showed the user this failure: Templates couldn't be loaded. Try again. If this persists, " +
-        "report a bug.",
+      "Imbue Studio showed the user this failure: Templates couldn't be loaded. Try again.",
     );
     expect(failed.asks[0]).toContain("HTTP 502");
-    const report = remedies[1];
-    report.click();
-    expect(failed.bugReports).toEqual([
-      { message: "Templates couldn't be loaded. Try again. If this persists, report a bug.", details: "HTTP 502" },
-    ]);
-    unmountViews();
-    // Where the shell says Imbue Studio opens no bug report, the line offers none, and still offers the agent.
-    const unreportable = render({ kind: "failed", details: "HTTP 502" }, false);
-    expect(
-      [...unreportable.root.querySelectorAll(".getting-started-templates-remedy")].map((button) => button.textContent),
-    ).toEqual(["Ask an agent to fix this"]);
     unmountViews();
     const disabled = render({ kind: "disabled" });
     expect(disabled.root.querySelector('[data-section="templates"]')).toBeNull();

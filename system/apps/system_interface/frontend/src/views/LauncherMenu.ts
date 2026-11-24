@@ -67,7 +67,7 @@ export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"
   readonly bottomOffsetPx: number;
   /** Why the last row the launcher ran failed, shown at the card's foot, by the field that still holds its text. */
   readonly failure: FailureNotice | null;
-  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about that failure where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
 }
 

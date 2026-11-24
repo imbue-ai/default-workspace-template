@@ -22,7 +22,7 @@ p{{line-height:1.5;color:#b6bcc4}}button{{font:inherit;padding:0.4rem 1rem;color
 border:1px solid #3a414b;border-radius:6px;cursor:pointer}}button:hover{{background:#333a44}}
 details{{margin-top:1.5rem;font-size:0.85em;color:#8a929c}}summary{{cursor:pointer}}
 pre{{white-space:pre-wrap;overflow-wrap:anywhere}}</style></head>
-<body><main><p>This workspace couldn't load. Try again. If this persists, report a bug.</p>
+<body><main><p>This workspace couldn't load. Try again.</p>
 <p><button type="button" id="try-again">Try again</button></p>
 <details><summary>See details</summary><pre>{details}</pre></details></main>
 <script>document.getElementById("try-again").addEventListener("click", function () {{ location.reload(); }});</script>

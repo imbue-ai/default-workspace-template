@@ -13,6 +13,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.shell.agent_asks import agent_fix_task
 from imbue.system_interface.shell.recovery_launches import RecoveryReason
 
 # The route the page runs its launches through: the shell posts them to the apps over loopback, since the page cannot
@@ -29,15 +30,16 @@ _INVENTORY_PATH: Final[str] = "/api/inventory"
 # both routes behave the same.
 RECOVERY_POLL_SECONDS: Final[int] = 10
 
-# The pieces of workspace_ui's ``agentFixTask`` and ``assistRequest`` (``app_contract.ts``), which this page cannot
-# import: it is served exactly when the bundle may be missing. A ``frontend`` test pins them to that source.
+# The command workspace_ui's ``assistRequest`` (``app_contract.ts``) puts first, which this page cannot import: it is
+# served exactly when the bundle may be missing. The desktop's shell writes it for every ask that passes through it;
+# this page's asks reach a chat with no shell (the server's own launch, and the ``mngr create`` line), so they carry
+# it themselves. A ``frontend`` test pins it to that source.
 ASSIST_COMMAND: Final[str] = "/assist"
-AGENT_FIX_TASK_LEAD: Final[str] = "Imbue Studio showed the user this failure: "
-AGENT_FIX_TASK_DETAILS_LABEL: Final[str] = "Details:"
-AGENT_FIX_TASK_CLOSING: Final[str] = (
-    "Find out why it failed and fix it, then tell the user what was wrong and what you changed."
+
+# What an agent asked to free up space is told to do, as the desktop's ``FREE_SPACE_INSTRUCTION`` says it.
+FREE_SPACE_INSTRUCTION: Final[str] = (
+    "Free up disk space in this workspace, then tell the user what was taking up the space and what you removed."
 )
-_SHORTEST_FENCE_LENGTH: Final[int] = 3
 
 INTERFACE_NOT_BUILT_HEADING: Final[str] = "This workspace's interface needs to be rebuilt"
 DESKTOPS_NOT_LOADED_SENTENCE: Final[str] = "This workspace's desktops couldn't be loaded."
@@ -49,20 +51,6 @@ def assist_request(request: str) -> str:
     """``request`` behind the command that runs the workspace's assist flow, which a chat runs only at the start of its
     first message (``assistRequest``)."""
     return f"{ASSIST_COMMAND} {request}"
-
-
-@pure
-def agent_fix_task(what_failed: str, details: str | None) -> str:
-    """The task every "Ask an agent to fix this" gives the agent, as ``agentFixTask`` words it: what failed, the details
-    fenced as they are, and what to do, said by Imbue Studio about the user."""
-    stem = what_failed.strip()
-    parts = [f"{AGENT_FIX_TASK_LEAD}{stem if re.search(r'[.!?]$', stem) else f'{stem}.'}"]
-    if details is not None and details.strip() != "":
-        longest_run = max((len(run) for run in re.findall(r"`+", details)), default=0)
-        fence = "`" * max(_SHORTEST_FENCE_LENGTH, longest_run + 1)
-        parts.append(f"{AGENT_FIX_TASK_DETAILS_LABEL}\n{fence}\n{details}\n{fence}")
-    parts.append(AGENT_FIX_TASK_CLOSING)
-    return "\n\n".join(parts)
 
 
 # The ``mngr`` invocation the page offers for standing up an agent to repair the workspace, before its message. It
@@ -133,9 +121,7 @@ def repair_command(message: str) -> str:
 
 # What the repair agent is told while the interface is not built: the page's own heading, the one detail a reader on
 # this page can be certain of and the one the agent can act on without being told anything else.
-INTERFACE_NOT_BUILT_REPAIR_MESSAGE: Final[str] = assist_request(
-    f"{AGENT_FIX_TASK_LEAD}{INTERFACE_NOT_BUILT_HEADING}. {AGENT_FIX_TASK_CLOSING}"
-)
+INTERFACE_NOT_BUILT_REPAIR_MESSAGE: Final[str] = assist_request(agent_fix_task(INTERFACE_NOT_BUILT_HEADING, None))
 INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = repair_mngr_command(INTERFACE_NOT_BUILT_REPAIR_MESSAGE)
 INTERFACE_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND))
 
@@ -155,8 +141,9 @@ def desktops_failure_sentence(failure: DesktopsLoadFailure) -> str:
 @pure
 def desktops_repair_message(failure: DesktopsLoadFailure) -> str:
     """What the repair agent is told when the desktops couldn't be loaded: the page's sentence and the failure's
-    details, as every ask of the desktop's is worded."""
-    return assist_request(agent_fix_task(desktops_failure_sentence(failure), failure.details))
+    details, as every ask of the desktop's is worded, and to free up space where the disk is full."""
+    instruction = FREE_SPACE_INSTRUCTION if failure.is_out_of_space else None
+    return assist_request(agent_fix_task(desktops_failure_sentence(failure), failure.details, instruction))
 
 
 class RecoveryPageContent(FrozenModel):
@@ -424,13 +411,13 @@ _RECOVERY_PAGE_TEMPLATE: Final[str] = """<!doctype html>
         if (response.ok) return body;
         var failure = new Error(["HTTP " + response.status, body.detail || ""].join("\\n").trim());
         failure.sentence = body.user_facing_message ||
-          (response.status < 500 ? whatFailed + "." : whatFailed + ". Try again. If this persists, report a bug.");
+          (response.status < 500 ? whatFailed + "." : whatFailed + ". Try again.");
         throw failure;
       });
     }, function (error) {
       // The request may have reached the workspace before the answer was lost.
       var failure = new Error(error && error.message ? error.message : String(error));
-      failure.sentence = "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
+      failure.sentence = "The workspace didn't answer. This may not have gone through.";
       throw failure;
     });
   }

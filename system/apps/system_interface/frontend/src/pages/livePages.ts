@@ -64,7 +64,7 @@ import {
   coachCardPlaceOf,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellCoachCardPlace, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, ShellCoachCardPlace, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
@@ -1173,30 +1173,44 @@ export class LivePagesLayer implements PageDriver {
    *  active desktop (a page can only be pressed there), and the page is answered with
    *  ``shell:start-with-text-result``; the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    this.startAndAnswer(frame, payload, SHELL_START_WITH_TEXT, SHELL_START_WITH_TEXT_RESULT, (text) =>
-      this.store.startWithText(text),
+    this.startAndAnswer(
+      frame,
+      payload,
+      SHELL_START_WITH_TEXT,
+      SHELL_START_WITH_TEXT_RESULT,
+      (text) => this.store.startWithText(text),
+      null,
     );
   }
 
-  /** ``shell:ask-agent {text, requestId}`` from a page ("Ask an agent to fix this"): the text is sent to the chat
-   *  about the app of the page's window, shown beside that window, and the page is answered with
-   *  ``shell:ask-agent-result``. */
+  /** ``shell:ask-agent {text, requestId, delivery?}`` from a page ("Ask an agent to fix this"): the text is sent to
+   *  the chat about the app of the page's window, shown beside that window (or where ``delivery`` says), and the page
+   *  is answered with ``shell:ask-agent-result``. */
   private takeAskAgent(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const windowId = this.pageOfFrame(frame)?.windowId ?? null;
-    this.startAndAnswer(frame, payload, SHELL_ASK_AGENT, SHELL_ASK_AGENT_RESULT, (text) =>
-      this.store.askAgent(text, windowId),
+    const delivery: AskDelivery =
+      payload.delivery === "main-chat" || payload.delivery === "draft" ? payload.delivery : "app-chat";
+    this.startAndAnswer(
+      frame,
+      payload,
+      SHELL_ASK_AGENT,
+      SHELL_ASK_AGENT_RESULT,
+      (text) => this.store.askAgent(text, windowId, delivery),
+      delivery === "draft" ? null : (text) => void this.store.askAgent(text, windowId, "draft"),
     );
   }
 
   /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
    *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. A failure
-   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told. */
+   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told, and a
+   *  refused ask's toast offers ``draft`` (null for a start that is no ask). */
   private startAndAnswer(
     frame: HTMLIFrameElement,
     payload: Record<string, unknown>,
     type: string,
     resultType: string,
     start: (text: string) => Promise<StartOutcome>,
+    draft: ((text: string) => void) | null,
   ): void {
     const text = this.textFromPage(frame, payload, type);
     if (text === null) return;
@@ -1213,13 +1227,15 @@ export class LivePagesLayer implements PageDriver {
           failure: {
             message: fallbackSentence(DEFAULT_WHAT_FAILED),
             details: error instanceof Error ? error.message : String(error),
-            isReportable: true,
+            isHelpOwed: true,
           },
         };
       })
       .then((outcome) => {
         sendToChildFrame(frame, resultType, { requestId, ...outcome });
-        if (!outcome.isOpened && payload.showsOutcome !== true) this.store.showStartFailure(outcome.failure);
+        if (!outcome.isOpened && payload.showsOutcome !== true) {
+          this.store.showStartFailure(outcome.failure, draft === null ? null : () => draft(text));
+        }
       });
   }
 

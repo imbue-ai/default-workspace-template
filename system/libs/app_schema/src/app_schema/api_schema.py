@@ -70,10 +70,10 @@ class ErrorResponse(FrozenModel):
         exclude_if=lambda value: value is None,
         description="A sentence written for the person using the workspace, shown as written in place of detail",
     )
-    reportable: bool | None = Field(
+    expected: bool | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
-        description="Whether user_facing_message asks for a bug report",
+        description="Whether the refusal is ordinary operation that user_facing_message fully explains",
     )
     kind: str | None = Field(
         default=None,

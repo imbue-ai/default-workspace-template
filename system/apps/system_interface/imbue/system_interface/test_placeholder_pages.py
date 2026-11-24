@@ -139,9 +139,7 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
         expect(page.locator("#ask-agent-failure-details")).not_to_be_visible()
         see_details.click()
         expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent couldn't be asked:")
-        expect(page.locator("#ask-agent-failure-sentence")).to_have_text(
-            "Couldn't ask an agent. Try again. If this persists, report a bug."
-        )
+        expect(page.locator("#ask-agent-failure-sentence")).to_have_text("Couldn't ask an agent. Try again.")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("HTTP 502")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
         expect(page.locator("#repair-intro")).to_be_hidden()
@@ -285,7 +283,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
             {
                 "requestId": asked["requestId"],
                 "isOpened": False,
-                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isReportable": True},
+                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isHelpOwed": True},
             },
         )
         expect(ask).to_have_text("Ask an agent to look at it")
@@ -293,7 +291,15 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(framed.locator("#ask-agent-failure")).to_have_text("Chat couldn't open that.")
         framed.get_by_text("See details", exact=True).click()
         expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
-        # The failure asks for a bug report and the shell can open one, so the page offers it, carrying the failure.
+        # The refused ask owes help, so the page offers the same request as a draft for the person to send.
+        draft = framed.get_by_role("button", name="Draft it in a chat")
+        expect(draft).to_be_visible()
+        draft.click()
+        page.wait_for_function("window.received.some((message) => message.delivery === 'draft')")
+        (drafted,) = page.evaluate("window.received.filter((message) => message.delivery === 'draft')")
+        assert drafted["type"] == "shell:ask-agent" and drafted["text"] == asked["text"]
+        assert drafted["showsOutcome"] is True
+        # The shell can open a bug report, so the page offers one beside the draft, carrying the failure.
         report = framed.get_by_role("button", name="Report a bug")
         expect(report).to_be_visible()
         report.click()
@@ -315,7 +321,10 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         ask.click()
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
         expect(report).to_be_hidden()
-        asks = "window.received.filter((message) => message.type === 'shell:ask-agent')"
+        expect(draft).to_be_hidden()
+        asks = (
+            "window.received.filter((message) => message.type === 'shell:ask-agent' && message.delivery !== 'draft')"
+        )
         page.wait_for_function(f"{asks}.length === 2")
         second = page.evaluate(f"{asks}[1]")
         page.evaluate(_GREET_FRAMED_PAGE, "shell-1")
@@ -327,10 +336,11 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         page.evaluate(_GREET_FRAMED_PAGE, "shell-2")
         expect(ask).to_be_enabled()
         expect(framed.locator("#ask-agent-failure")).to_have_text(
-            "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
+            "The workspace didn't answer. This may not have gone through."
         )
-        # Not answered asks for no bug report.
+        # Not answered owes no help: trying again is the whole remedy.
         expect(report).to_be_hidden()
+        expect(draft).to_be_hidden()
         page.evaluate(_ANSWER_FRAMED_PAGE, {"requestId": second["requestId"], "isOpened": True})
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
     finally:
@@ -366,7 +376,7 @@ def test_a_page_whose_wake_budget_is_spent_offers_the_agent_and_no_try_again(clo
             {
                 "requestId": asked["requestId"],
                 "isOpened": False,
-                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isReportable": True},
+                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isHelpOwed": True},
             },
         )
         expect(framed.locator("#ask-agent-failure")).to_have_text("Chat couldn't open that.")

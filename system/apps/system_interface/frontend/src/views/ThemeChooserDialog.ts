@@ -23,7 +23,7 @@ export interface ThemeChooserDialogAttrs {
   /** A failed save as the dialog's line says it, from what failed (a sentence stem) and the error, with ``retry``
    *  where the failure is one to try again. */
   readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
-  /** Report a bug about a failed save where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about a failed save where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
   readonly onSave: (themeChoice: ThemeChoice) => Promise<void>;
   readonly onCancel: () => void;

@@ -41,7 +41,7 @@ export interface AvatarChooserDialogAttrs {
   readonly designs: readonly AvatarDesign[] | null;
   /** Why the designs could not be read, in place of the grid; null while they load or once they have. */
   readonly loadError: FailureNotice | null;
-  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about that failure where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
   /** Read the designs again. */
   readonly onRetry: () => void;

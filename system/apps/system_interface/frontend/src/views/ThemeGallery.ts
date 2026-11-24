@@ -72,21 +72,18 @@ export interface GalleryState {
 
 const GALLERY_NOT_LOADED = "The theme gallery couldn't load";
 
-/** Whether the gallery's failed load is one that owes a bug report and an agent (W0's ``FailureRemedies``, where a
- *  shell frames the gallery), whatever its sentence says where no bug report can be opened. */
-export function isGalleryFailureReportable(error: unknown): boolean {
-  return failureSentence(describeRequestFailure(error), GALLERY_NOT_LOADED).isReportable;
-}
-
-/** Why the gallery could not load its themes or apps, with a Try again that loads the page again; a sentence that
- *  would ask for a bug report asks only for the Try again where none can be opened (``canReportBug``). */
-export function galleryFailureNotice(error: unknown, reload: () => void, canReportBug: boolean): FailureNotice {
+/** Why the gallery could not load its themes or apps, with a Try again that loads the page again. The gallery is a
+ *  page of its own, with no store to ask an agent through: what a failure that owes help gets is drawn beside the
+ *  notice by ``FailureRemedies``, through the shell that frames the gallery. */
+export function galleryFailureNotice(error: unknown, reload: () => void): FailureNotice {
   const told = failureSentence(describeRequestFailure(error), GALLERY_NOT_LOADED);
-  const actions = [{ label: "Try again", run: reload }];
-  if (told.isReportable && !canReportBug) {
-    return { message: `${GALLERY_NOT_LOADED}. Try again.`, details: told.details, isReportable: false, actions };
-  }
-  return { ...told, actions };
+  return {
+    message: told.message,
+    details: told.details,
+    isHelpOwed: told.isHelpOwed,
+    isBugReportOffered: false,
+    actions: [{ label: "Try again", run: reload }],
+  };
 }
 
 /** The gallery of the theme `requested` names, or null when the catalog has no such theme. */

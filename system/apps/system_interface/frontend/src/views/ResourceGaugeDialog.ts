@@ -30,7 +30,7 @@ export interface ResourceGaugeDialogAttrs {
   /** A failed save as the dialog's line says it, from what failed (a sentence stem) and the error, with ``retry``
    *  where the failure is one to try again. */
   readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
-  /** Report a bug about a failed save where it asks for one; null where no bug report can be opened. */
+  /** Report a bug about a failed save where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
   readonly onSave: (settings: ResourceGaugeSettings) => Promise<void>;
   readonly onClose: () => void;
@@ -107,7 +107,8 @@ const RANGE_ERROR: FailureNotice = {
     `memory and CPU are whole numbers from ${MIN_WARNING_PERCENT} to ${MAX_WARNING_PERCENT}.`,
   details: null,
   actions: [],
-  isReportable: false,
+  isHelpOwed: false,
+  isBugReportOffered: false,
 };
 
 const SETTINGS_NOT_SAVED = "The resource gauge settings couldn't be saved";

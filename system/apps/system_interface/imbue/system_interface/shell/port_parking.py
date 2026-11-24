@@ -31,6 +31,7 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.agent_asks import agent_fix_task
 from imbue.system_interface.shell.errors import PortInUseError
 from imbue.system_interface.shell.errors import PortParkingError
 from imbue.system_interface.shell.errors import ShellError
@@ -99,9 +100,9 @@ SHELL_ASK_AGENT_TYPE: Final[str] = "shell:ask-agent"
 SHELL_ASK_AGENT_RESULT_TYPE: Final[str] = "shell:ask-agent-result"
 SHELL_REPORT_BUG_TYPE: Final[str] = "shell:report-bug"
 ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
-CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
-    "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
-)
+DRAFT_ASK_LABEL: Final[str] = "Draft it in a chat"
+DRAFT_DELIVERY: Final[str] = "draft"
+CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = "The workspace didn't answer. This may not have gone through."
 
 # What a page that could not start offers: a Try again that asks once more (left out when the wake budget is spent:
 # the budget refuses the next wake too, so a press could not help), the end of the program's error log behind "See
@@ -110,8 +111,9 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
 # details"). A handshake from a shell with another ``shellId`` means the
 # shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
-# reasons); the old shell's answer, if it still comes, replaces that. A failed ask that asks for a bug report offers
-# "Report a bug" while the shell's latest handshake says it can open one.
+# reasons); the old shell's answer, if it still comes, replaces that. A failed ask that owes help offers "Draft it in
+# a chat", which leaves the same request unsent in a chat's message box (the shell tells a draft that could not be
+# made), and "Report a bug" while the shell's latest handshake says it can open one.
 _TRY_AGAIN_BUTTON: Final[str] = '<button type="button" id="try-again">Try again</button> '
 _TRY_AGAIN_BINDING: Final[str] = (
     'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
@@ -120,7 +122,8 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "{sentence}<p>{try_again_button}"
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
     '<p id="ask-agent-failure" hidden></p>'
-    '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
+    '<p><button type="button" id="ask-agent-draft" hidden>{draft_label}</button> '
+    '<button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
     '<details id="page-details"{details_hidden}><summary>See details</summary>'
     '<pre id="ask-agent-failure-details" hidden></pre>'
     "{stderr_tail}</details>"
@@ -129,6 +132,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     'var ask = document.getElementById("ask-agent");'
     'var failure = document.getElementById("ask-agent-failure");'
     'var failureDetails = document.getElementById("ask-agent-failure-details");'
+    'var draft = document.getElementById("ask-agent-draft");'
     'var report = document.getElementById("ask-agent-report");'
     "var shown = null;"
     "var canReportBug = false;"
@@ -137,12 +141,17 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "var unansweredId = null;"
     "var shellId = null;"
     "if (window.parent === window) return;"
-    "function showReport() {"
-    "report.hidden = !(canReportBug && shown !== null && shown.isReportable === true);"
+    "function newRequestId() {"
+    "return Math.random().toString(16).slice(2) + Date.now().toString(16);"
+    "}"
+    "function showRemedies() {"
+    "var isHelpOwed = shown !== null && shown.isHelpOwed === true;"
+    "draft.hidden = !isHelpOwed;"
+    "report.hidden = !(canReportBug && isHelpOwed);"
     "}"
     "function show(told) {"
     "shown = told;"
-    "showReport();"
+    "showRemedies();"
     "failure.hidden = told === null;"
     "failureDetails.hidden = told === null || !told.details;"
     'document.getElementById("page-details").hidden = failureDetails.hidden && {has_log} === false;'
@@ -162,7 +171,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "if (data.type === {handshake}) {"
     "ask.hidden = false;"
     "canReportBug = data.canReportBug === true;"
-    "showReport();"
+    "showRemedies();"
     'var greeter = typeof data.shellId === "string" ? data.shellId : "";'
     "if (shellId !== null && greeter !== shellId && pendingId !== null) {"
     "unansweredId = pendingId;"
@@ -181,10 +190,15 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     'window.parent.postMessage({ type: {report_bug}, message: shown.message, details: shown.details || null }, "*");'
     "}"
     "});"
+    'draft.addEventListener("click", function () {'
+    "window.parent.postMessage("
+    "{ type: {ask_agent}, text: {request}, requestId: newRequestId(), showsOutcome: true, delivery: {draft} },"
+    ' "*");'
+    "});"
     'ask.addEventListener("click", function () {'
     "if (pendingId !== null) return;"
     "unansweredId = null;"
-    "pendingId = Math.random().toString(16).slice(2) + Date.now().toString(16);"
+    "pendingId = newRequestId();"
     "ask.disabled = true;"
     "ask.textContent = {asking};"
     "show(null);"
@@ -201,15 +215,23 @@ def _script_literal(value: str) -> str:
     return json.dumps(value).replace("<", "\\u003c")
 
 
+COULD_NOT_START_INSTRUCTION: Final[str] = (
+    "Find out why and get it running again, then tell the user what was wrong and what you changed."
+)
+
+
+@pure
+def could_not_start_log_hint(program: str) -> str:
+    return f"Its program's log may say why (supervisorctl tail {program} stderr)."
+
+
 @pure
 def could_not_start_request(display_name: str, program: str) -> str:
-    """What an agent asked to look at an app that could not start is told, as Imbue Studio about the user: the app,
-    and where its log is (the desktop's ``couldNotStartRequest`` asks the same)."""
-    return (
-        f"Imbue Studio showed the user that {display_name} couldn't start in this workspace. Its program's log may "
-        f"say why (supervisorctl tail {program} stderr). Find out why and get it running again, then tell the user "
-        "what was wrong and what you changed."
-    )
+    """What an agent asked to look at an app that could not start is told: what the page says, where the app's log
+    is, and what to do (the desktop's ``couldNotStartRequest`` asks the same). The shell that carries the ask says
+    which app and window it is about."""
+    instruction = f"{could_not_start_log_hint(program)} {COULD_NOT_START_INSTRUCTION}"
+    return agent_fix_task(could_not_start_sentence(display_name), None, instruction)
 
 
 @pure
@@ -262,6 +284,8 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stde
         .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))
         .replace("{report_bug}", _script_literal(SHELL_REPORT_BUG_TYPE))
         .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
+        .replace("{draft_label}", html.escape(DRAFT_ASK_LABEL))
+        .replace("{draft}", _script_literal(DRAFT_DELIVERY))
         .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))
         .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
     )

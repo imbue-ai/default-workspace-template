@@ -159,9 +159,8 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  /** The failure line, with the next steps in it: Try again (a fresh fetch), then an agent (where a shell frames
-   *  the page) and Report a bug (where the shell says Imbue Studio opens one), and the reason under it behind "See
-   *  details". */
+  /** The failure line, with the next steps in it: Try again (a fresh fetch), then an agent, or Report a bug where
+   *  none can be asked or the ask was refused (``FailureRemedies``), and the reason under it behind "See details". */
   function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
     const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
       m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
@@ -172,7 +171,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       action("Try again", "getting-started-templates-retry", attrs.onRetryTemplates),
       m(FailureRemedies, {
         connection: attrs.connection,
-        failure: { message: TEMPLATES_FAILED_MESSAGE, details, isReportable: true },
+        failure: { message: TEMPLATES_FAILED_MESSAGE, details, isHelpOwed: true },
         variant: "ghost",
         sm: true,
         extra: "getting-started-templates-remedy",

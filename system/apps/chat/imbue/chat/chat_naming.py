@@ -63,6 +63,8 @@ _MAX_NAME_NUMBER: Final[int] = 9
 # Well under the pipe buffer the prompt is written to stdin through (16KiB on macOS) at four
 # bytes a character; the opening of a long message says what it is about.
 _MAX_PROMPT_CHARACTERS: Final[int] = 3000
+# How long one model may take over a name.
+_COMPLETION_TIMEOUT_SECONDS: Final[float] = 60.0
 # How long a chat created with its first message may take to come up before naming gives up on it.
 _AGENT_WAIT_SECONDS: Final[float] = 600.0
 _AGENT_POLL_SECONDS: Final[float] = 2.0
@@ -352,6 +354,7 @@ class ChatNamer(MutableModel):
                 chat_naming_prompt(message),
                 model_tier=OneShotModelTier.SMALL,
                 thinking_token_allowance=None,
+                timeout_seconds=_COMPLETION_TIMEOUT_SECONDS,
             )
         except OneShotCompletionError as e:
             logger.warning("Failed to generate a name for chat {}: {}", chat_id, e)

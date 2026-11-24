@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { agentFixTask } from "@imbue/workspace-ui/src/app_contract";
 import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
@@ -43,15 +44,17 @@ const ROLLBACK_FAILED = "Couldn't roll back";
 const NOTICE_NOT_CLOSED = "Couldn't close this notice";
 /** What a settled notice of such an update holds behind "See details": the command that finishes the rollback. */
 export const SYSTEM_SERVICES_RESTART_SETTLED_DETAILS = `The workspace's system services restart with: ${SYSTEM_SERVICES_RESTART_COMMAND}`;
-/** What an agent asked to finish a rollback is told, as Imbue Studio about the user: how the rollback ended, as the
- *  notice shows it, and the command that finishes one (a failed one may need looking at first). */
+/** What an agent asked to finish a rollback is told: how the rollback ended, as the notice shows it, and the command
+ *  that finishes one (a failed one may need looking at first). */
 export function finishRollbackRequest(outcome: string): string {
-  return (
-    "Imbue Studio showed the user how the rollback of the last workspace update, which had changed how the " +
-    `workspace starts, ended: "${outcome}" Finish what it leaves to do; restarting the workspace's system ` +
-    `services (\`${SYSTEM_SERVICES_RESTART_COMMAND}\`) is what finishes such a rollback. Then tell the user what ` +
-    "you did."
-  );
+  return agentFixTask({
+    whatFailed: outcome,
+    details: null,
+    instruction:
+      "That is how the rollback of the last workspace update, which had changed how the workspace starts, ended. " +
+      "Finish what it leaves to do; restarting the workspace's system services " +
+      `(\`${SYSTEM_SERVICES_RESTART_COMMAND}\`) is what finishes such a rollback. Then tell the user what you did.`,
+  });
 }
 
 /** The shell's display name is "Workspace", which reads as the whole workspace in a sentence. */
@@ -156,7 +159,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
       await verb();
     } catch (caught) {
       // A rollback the update-self script refused leaves the notice where it was, which only the workspace can
-      // change, so it owes an agent though it asks for no bug report.
+      // change, so it owes an agent though a refusal with a reason owes none by itself.
       const isStuck = refusalKindOf(describeRequestFailure(caught)) === "rollback_refused";
       error = store.failureNotice(whatFailed, caught, [], isStuck);
       errorState = stateKey(notice);

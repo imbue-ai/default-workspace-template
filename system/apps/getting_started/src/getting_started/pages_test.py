@@ -38,6 +38,8 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     page = response.text
     assert "The Getting Started page isn't available right now. It comes back on its own once it is rebuilt." in page
     assert 'id="reload">Reload</button>' in page and "Ask an agent to\nrebuild it" in page
+    # A refused ask's remedies wait hidden until one is refused.
+    assert 'id="ask-agent-draft" hidden>Draft it in a chat</button>' in page
     # The build command is behind "See details", and the page asks its health probe whether it has been built since.
     assert page.index("<summary>See details</summary>") < page.index("<code>npm run build</code>")
     assert 'fetch("api/health"' in page and 'import("/_static/app_contract.js")' in page

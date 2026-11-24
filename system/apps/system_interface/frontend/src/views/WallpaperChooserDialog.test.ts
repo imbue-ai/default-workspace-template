@@ -83,7 +83,7 @@ describe("WallpaperChooserDialog", () => {
     const attrs = render({ onSave: vi.fn(async () => Promise.reject(refusedWith(500, null, "boom"))) });
     save();
     await settled();
-    const message = "The wallpaper couldn't be changed. Try again. If this persists, report a bug.";
+    const message = "The wallpaper couldn't be changed. Try again.";
     expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(message);
     const buttons = [...card().querySelectorAll<HTMLButtonElement>(".wallpaper-chooser-error-action")];
     expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Report a bug"]);
