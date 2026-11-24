@@ -147,7 +147,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   #ended { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; font-size: 14px; }
   #ended p { margin: 0; max-width: 36em; }
   #ended-cause { color: #aaa; }
-  #ended .actions { display: flex; gap: 8px; }
+  #ended .actions { display: flex; justify-content: center; gap: 8px; }
+  #ended-ask-failure .actions { margin-top: 8px; }
   #ended button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; cursor: pointer; }
   #ended details { max-width: 36em; font-size: 12px; color: #888; }
   #ended summary { cursor: pointer; }
@@ -171,12 +172,15 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     <button type="button" id="ended-retry" hidden>Try again</button>
     <button type="button" id="ended-new" hidden>Start a new terminal</button>
     <button type="button" id="ended-ask" hidden>Ask an agent to fix this</button>
-    <button type="button" id="ended-report" hidden>Report a bug</button>
   </div>
   <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
   <div id="ended-ask-failure" role="alert" hidden>
     <p id="ended-ask-failure-message"></p>
     <details id="ended-ask-failure-details" hidden><summary>See details</summary><pre id="ended-ask-failure-details-text"></pre></details>
+    <div class="actions">
+      <button type="button" id="ended-draft" hidden>Draft it in a chat</button>
+      <button type="button" id="ended-report" hidden>Report a bug</button>
+    </div>
   </div>
 </div>
 <div id="keys" role="toolbar" aria-label="Terminal keys" hidden>
@@ -203,6 +207,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const endedRetry = document.getElementById("ended-retry");
   const endedAsk = document.getElementById("ended-ask");
   const endedNew = document.getElementById("ended-new");
+  const endedDraft = document.getElementById("ended-draft");
   const endedReport = document.getElementById("ended-report");
   const keys = document.getElementById("keys");
   const ctrlKey = keys.querySelector("[data-ctrl]");
@@ -249,20 +254,23 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 
   // What the pty page says the terminal ended for (dispatch.py's kinds), and what the person can do about it.
   // The user's own exit sends nothing, so ttyd's overlay, which reconnects, stays the answer to that. An ending that
-  // asks for a bug report offers an agent first, told what failed (``whatFailed``, read when the ending is shown).
+  // owes the person more help than its own buttons give (``isHelpOwed``) offers an agent, told what failed
+  // (``whatFailed``, read when the ending is shown).
   const NOT_STARTED = {
-    message: "This terminal couldn't start. Try again. If this persists, report a bug.",
+    message: "This terminal couldn't start. Try again.",
     cause: "",
-    actions: ["retry", "report"],
+    actions: ["retry"],
+    isHelpOwed: true,
     whatFailed: () => `The terminal ${current} couldn't start`,
   };
   const ENDINGS = {
     "__ENDED_NOT_STARTED__": NOT_STARTED,
-    "__ENDED_WITH_ERROR__": { message: "This terminal closed.", cause: "", actions: ["new"] },
+    "__ENDED_WITH_ERROR__": { message: "This terminal closed.", cause: "", actions: ["new"], isHelpOwed: false },
     "__ENDED_MISSING_FOLDER__": {
       message: "This terminal closed.",
       cause: "This terminal's folder no longer exists, so it can't open.",
       actions: ["new"],
+      isHelpOwed: false,
     },
   };
   let endedActions = [];
@@ -283,7 +291,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     endedActions = ending.actions;
     endedDetail = detail;
     endedSentence = ending.cause === "" ? ending.message : `${ending.message} ${ending.cause}`;
-    endedWhatFailed = endedActions.includes("report") ? ending.whatFailed() : null;
+    endedWhatFailed = ending.isHelpOwed ? ending.whatFailed() : null;
     document.getElementById("ended-message").textContent = ending.message;
     const cause = document.getElementById("ended-cause");
     cause.textContent = ending.cause;
@@ -299,13 +307,17 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     ended.hidden = false;
   }
 
-  // The two buttons that go through the shell show once its handshake says they can work: the agent with any shell,
-  // the bug report where the shell's embedder opens one.
+  // The agent is what an ending that owes help offers, once the shell's handshake says one can be asked. A refused
+  // ask offers the same request as a draft where its failure owes help, and the bug report where the shell's
+  // embedder opens one. No shell means no bug report either, so there is none to show in the agent's place.
   function syncShellButtons() {
     endedAsk.hidden = endedWhatFailed === null || connection === null || !connection.hasShell();
-    // One Report a bug files the ending and a failed ask's failure together.
-    const isReportable = endedActions.includes("report") || askFailure?.isReportable === true;
-    endedReport.hidden = !isReportable || connection === null || !connection.canReportBug();
+    endedDraft.hidden = askFailure?.isHelpOwed !== true;
+    endedReport.hidden = askFailure === null || !connection.canReportBug();
+  }
+
+  function endedFix() {
+    return { whatFailed: endedWhatFailed, details: endedDetail || null };
   }
 
   // The kind comes from the pty's output, so only ENDINGS' own keys count (not "constructor" and the like).
@@ -326,7 +338,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     endedAsk.textContent = isAsking ? "Asking an agent…" : "Ask an agent to fix this";
   }
 
-  // Under the button when the shell says the chat could not open.
+  // Under the ending when the shell says the chat could not open.
   function showAskFailure(failure) {
     askFailure = failure;
     document.getElementById("ended-ask-failure").hidden = failure === null;
@@ -346,15 +358,14 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     const showOutcome = (outcome) => {
       if (endingCount === askedAbout && askPresses === press) showAskFailure(outcome.isOpened ? null : outcome.failure);
     };
-    const outcome = await askAgentToFix(
-      connection,
-      { whatFailed: endedWhatFailed, details: endedDetail || null },
-      { showsOutcome: true, onLateAnswer: showOutcome },
-    );
+    const outcome = await askAgentToFix(connection, endedFix(), { showsOutcome: true, onLateAnswer: showOutcome });
     if (askingAbout === askedAbout && askPresses === press) askingAbout = null;
     syncAskButton();
     showOutcome(outcome);
   });
+  // The shell tells a draft that could not be made itself.
+  endedDraft.addEventListener("click", () => void askAgentToFix(connection, endedFix(), { showsOutcome: true }, "draft"));
+  // One Report a bug files the ending and the refused ask's failure together.
   endedReport.addEventListener("click", () =>
     connection.reportBug(withAskFailure({ message: endedSentence, details: endedDetail || null }, askFailure)),
   );
@@ -367,9 +378,10 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     } catch (error) {
       showEnding(
         {
-          message: "A new terminal couldn't be opened. Try again. If this persists, report a bug.",
+          message: "A new terminal couldn't be opened. Try again.",
           cause: "",
-          actions: ["new", "report"],
+          actions: ["new"],
+          isHelpOwed: true,
           whatFailed: () => "A new terminal couldn't be opened",
         },
         String(error?.message ?? error),
@@ -662,7 +674,8 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   html { height: 100%; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; box-sizing: border-box; height: 100%; height: 100dvh; margin: 0; padding: 24px; background: #000; color: #ddd; font: 14px system-ui, sans-serif; text-align: center; }
   p { margin: 0; max-width: 36em; }
-  .actions { display: flex; gap: 8px; }
+  .actions { display: flex; justify-content: center; gap: 8px; }
+  [data-ask-failure] .actions { margin-top: 8px; }
   button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; cursor: pointer; }
   details { max-width: 36em; font-size: 12px; color: #888; }
   summary { cursor: pointer; }
@@ -672,7 +685,7 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 </head>
 <body>
 <p class="failure-message">__MESSAGE__</p>
-<div class="actions">
+<div class="actions" data-page-actions>
   <button type="button" data-action="retry"__RETRY_HIDDEN__>Try again</button>
   <button type="button" data-action="ask" hidden>Ask an agent to fix this</button>
   <button type="button" data-action="report" hidden>Report a bug</button>
@@ -681,6 +694,9 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <div data-ask-failure role="alert" hidden>
   <p data-ask-failure-message></p>
   <details data-ask-failure-details hidden><summary>See details</summary><pre></pre></details>
+  <div class="actions" data-ask-failure-actions>
+    <button type="button" data-action="draft" hidden>Draft it in a chat</button>
+  </div>
 </div>
 <script type="application/json" id="terminal-failure">__CONFIG__</script>
 <script>
@@ -690,17 +706,24 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   import { askAgentToFix, connectToShell, withAskFailure } from "__CONTRACT_PATH__";
   const config = JSON.parse(document.getElementById("terminal-failure").textContent);
   const ask = document.querySelector('[data-action="ask"]');
+  const draft = document.querySelector('[data-action="draft"]');
   const report = document.querySelector('[data-action="report"]');
   let askPresses = 0;
   let shownFailure = null;
   const connection = connectToShell({ onHandshake: syncShellButtons });
-  // Each shows once the shell's handshake says it can work: the agent with any shell, the bug report where the
-  // shell's embedder opens one.
+  // A failure that owes help offers the agent, once the shell's handshake says one can be asked. The bug report
+  // (where the shell's embedder opens one) stands in the agent's place when the page names nothing to ask one, and
+  // beside the draft of the same request once an ask was refused.
   function syncShellButtons() {
-    ask.hidden = config.agent_fix === null || !connection.hasShell();
-    // One Report a bug files the page's failure and a failed ask's together.
-    const isReportable = config.is_reportable || shownFailure?.isReportable === true;
-    report.hidden = !isReportable || !connection.canReportBug();
+    const isAgentOffered = config.is_help_owed && config.agent_fix !== null && connection.hasShell();
+    ask.hidden = !isAgentOffered;
+    draft.hidden = shownFailure?.isHelpOwed !== true;
+    const reportRow = shownFailure === null ? "[data-page-actions]" : "[data-ask-failure-actions]";
+    document.querySelector(reportRow).append(report);
+    report.hidden = !config.is_help_owed || (isAgentOffered && shownFailure === null) || !connection.canReportBug();
+  }
+  function agentFix() {
+    return { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details };
   }
   const askFailure = document.querySelector("[data-ask-failure]");
   const askFailureDetails = document.querySelector("[data-ask-failure-details]");
@@ -723,18 +746,16 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
     const show = (outcome) => {
       if (askPresses === press) showAskFailure(outcome.isOpened ? null : outcome.failure);
     };
-    const outcome = await askAgentToFix(
-      connection,
-      { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details },
-      { showsOutcome: true, onLateAnswer: show },
-    );
+    const outcome = await askAgentToFix(connection, agentFix(), { showsOutcome: true, onLateAnswer: show });
     if (askPresses === press) {
       ask.disabled = false;
       ask.textContent = "Ask an agent to fix this";
     }
     show(outcome);
   });
-  // The report carries what this page says and what its "See details" holds, and a failed ask's failure.
+  // The shell tells a draft that could not be made itself.
+  draft.addEventListener("click", () => void askAgentToFix(connection, agentFix(), { showsOutcome: true }, "draft"));
+  // The report carries what this page says and what its "See details" holds, and a refused ask's failure.
   report.addEventListener("click", () => {
     const details = document.querySelector("details pre").textContent;
     const page = { message: document.querySelector(".failure-message").textContent, details: details || null };
@@ -760,8 +781,11 @@ class PageFailure(FrozenModel):
     message: str = Field(description="Our sentence")
     details: str = Field(description="The raw reason, behind See details")
     is_retryable: bool = Field(description="Whether a Try again (a reload) can help")
-    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can")
-    is_reportable: bool = Field(description="Whether the sentence asks the person to report a bug")
+    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can be asked")
+    is_help_owed: bool = Field(
+        description="Whether the failure owes the person more help than its sentence and Try again give: "
+        "the agent, or a bug report where none can be asked"
+    )
     status: int = Field(description="The HTTP status the page is answered with")
 
 
@@ -776,17 +800,18 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 details=details,
                 is_retryable=False,
                 agent_fix=None,
-                is_reportable=False,
+                is_help_owed=False,
                 status=HTTP_NOT_FOUND,
             )
         case TmuxCommandError():
-            # Every agent runs in this same tmux server, so none could answer while it does not.
+            # Every agent runs in this same tmux server, so none could answer while it does not, and Try again is
+            # the whole remedy the page offers.
             return PageFailure(
                 message="Terminals aren't responding in this workspace right now. Try again in a moment.",
                 details=details,
                 is_retryable=True,
                 agent_fix=None,
-                is_reportable=False,
+                is_help_owed=False,
                 status=HTTP_INTERNAL_ERROR,
             )
         case TerminalStoreVersionError():
@@ -800,7 +825,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                     "written by a newer version of the app",
                     details=details,
                 ),
-                is_reportable=False,
+                is_help_owed=True,
                 status=HTTP_INTERNAL_ERROR,
             )
         case TerminalStoreError():
@@ -813,12 +838,12 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                     "terminals",
                     details=details,
                 ),
-                is_reportable=False,
+                is_help_owed=True,
                 status=HTTP_INTERNAL_ERROR,
             )
         case _:
             return PageFailure(
-                message="This terminal couldn't be opened. Try again. If this persists, report a bug.",
+                message="This terminal couldn't be opened. Try again.",
                 details=details,
                 is_retryable=True,
                 agent_fix=AgentFix(
@@ -827,7 +852,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                     else "A terminal couldn't be opened",
                     details=details,
                 ),
-                is_reportable=True,
+                is_help_owed=True,
                 status=HTTP_INTERNAL_ERROR,
             )
 
@@ -836,7 +861,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
 def render_failure_page(failure: PageFailure) -> str:
     config = {
         "agent_fix": None if failure.agent_fix is None else failure.agent_fix.model_dump(mode="json"),
-        "is_reportable": failure.is_reportable,
+        "is_help_owed": failure.is_help_owed,
     }
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
     encoded = json.dumps(config).replace("</", "<\\/")

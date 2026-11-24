@@ -39,6 +39,7 @@ from terminal_app.dispatch import (
 from terminal_app.errors import TerminalAppError, TerminalStoreError, TmuxCommandError
 from terminal_app.pages import (
     PageConfig,
+    PageFailure,
     SessionPage,
     page_failure,
     render_failure_page,
@@ -134,7 +135,7 @@ def _print_end(pty: Frame, kind: str, detail: str) -> None:
     pty.evaluate("(text) => new Promise((resolve) => term.write(text, resolve))", f"\x1b]{TERMINAL_ENDED_OSC};{kind};{encoded}\x07")
 
 
-def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_and_a_bug_report(
+def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_and_an_agent_then_a_bug_report_once_refused(
     desktop_context: BrowserContext,
 ) -> None:
     _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
@@ -143,21 +144,22 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     _print_end(pty, ENDED_NOT_STARTED, "no server running on /tmp/tmux-1000/default")
 
     ended = wrapper.locator("#ended")
-    expect(ended.locator("#ended-message")).to_have_text(
-        "This terminal couldn't start. Try again. If this persists, report a bug."
-    )
+    expect(ended.locator("#ended-message")).to_have_text("This terminal couldn't start. Try again.")
     expect(wrapper.locator("#pty")).to_be_hidden()
     ended.locator("#ended-details").get_by_text("See details").click()
     expect(ended.locator("#ended-details-text")).to_have_text("no server running on /tmp/tmux-1000/default")
-    expect(ended.get_by_role("button", name="Start a new terminal")).to_be_hidden()
+    # The agent is the remedy: no Report a bug stands beside it, though the shell could open one.
+    expect(ended.locator("button:visible")).to_have_text(["Try again", "Ask an agent to fix this"])
 
     ended.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
     [asked] = shell_messages(page, "shell:ask-agent")
     # The page shows the outcome under the button, so the shell toasts nothing of its own.
     assert asked["showsOutcome"] is True
+    # The chat about the terminal takes it: the default delivery is left off the message.
+    assert "delivery" not in asked
     task = str(asked["text"])
-    # Imbue Studio says what the user saw; the chat about the terminal puts the assist command in front of it.
+    # Imbue Studio says what the user saw; the shell puts the assist command and the window in front of it.
     assert task.startswith("Imbue Studio showed the user this failure: The terminal terminal-1 couldn't start.\n\n")
     assert "\n\nDetails:\n```\n" in task
     assert "no server running on /tmp/tmux-1000/default\n```" in task
@@ -168,11 +170,14 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
         "document.getElementById('ended-ask-failure')) & Node.DOCUMENT_POSITION_FOLLOWING"
     )
 
-    ended.get_by_role("button", name="Report a bug").click()
+    # The refused ask brings Report a bug under its failure; a refusal that owes no help offers no draft.
+    told = ended.get_by_role("alert")
+    expect(told.locator("button:visible")).to_have_text(["Report a bug"])
+    told.get_by_role("button", name="Report a bug").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     [reported] = shell_messages(page, "shell:report-bug")
-    assert reported["message"] == "This terminal couldn't start. Try again. If this persists, report a bug."
-    # The report also carries the failed ask still shown under the agent button.
+    assert reported["message"] == "This terminal couldn't start. Try again."
+    # The report also carries the refused ask still shown under the ending.
     assert reported["details"] == (
         "no server running on /tmp/tmux-1000/default\n\n"
         "Asking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400"
@@ -209,7 +214,7 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
     assert locations[-1] == {"type": "shell:location", "path": "/?session=terminal-2", "title": "Terminal 2"}
 
 
-def test_a_new_terminal_that_could_not_be_opened_offers_an_agent_before_report_a_bug(
+def test_a_new_terminal_that_could_not_be_opened_offers_an_agent_and_no_bug_report_beside_it(
     desktop_context: BrowserContext,
 ) -> None:
     _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True, is_new_refused=True)
@@ -219,12 +224,9 @@ def test_a_new_terminal_that_could_not_be_opened_offers_an_agent_before_report_a
 
     ended.get_by_role("button", name="Start a new terminal").click()
 
-    expect(ended.locator("#ended-message")).to_have_text(
-        "A new terminal couldn't be opened. Try again. If this persists, report a bug."
-    )
-    buttons = ended.locator(".actions button:visible")
-    # The surface's own way out leads, then the agent, then the report.
-    expect(buttons).to_have_text(["Start a new terminal", "Ask an agent to fix this", "Report a bug"])
+    expect(ended.locator("#ended-message")).to_have_text("A new terminal couldn't be opened. Try again.")
+    # The surface's own way out leads, then the agent.
+    expect(ended.locator("button:visible")).to_have_text(["Start a new terminal", "Ask an agent to fix this"])
     ended.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
     [asked] = shell_messages(page, "shell:ask-agent")
@@ -252,7 +254,7 @@ def _expect_asking_then_told_why(page: Page, surface: Locator) -> None:
     expect(asking).to_be_disabled()
     answer_ask_agent(
         page,
-        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": "HTTP 400", "isReportable": False}},
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": "HTTP 400", "isHelpOwed": False}},
     )
     expect(surface.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
     told = surface.get_by_role("alert")
@@ -282,18 +284,25 @@ def test_a_pending_ask_survives_the_shell_greeting_again_and_takes_its_late_answ
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
     answer_ask_agent(
         page,
-        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
+        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isHelpOwed": True}},
     )
     told = ended.get_by_role("alert")
     expect(told).to_contain_text("The workspace couldn't do that.")
-    # One Report a bug, the page's, files the ending and the failed ask together.
-    expect(told.get_by_role("button", name="Report a bug")).to_have_count(0)
+    # A refused ask that owes help offers the same request as a draft, beside the one Report a bug.
+    expect(told.locator("button:visible")).to_have_text(["Draft it in a chat", "Report a bug"])
+    told.get_by_role("button", name="Draft it in a chat").click()
+    page.wait_for_function(
+        "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 2"
+    )
+    asked, drafted = shell_messages(page, "shell:ask-agent")
+    assert (drafted["text"], drafted["delivery"], drafted["showsOutcome"]) == (asked["text"], "draft", True)
+    # The report files the ending and the refused ask together.
     report = ended.get_by_role("button", name="Report a bug")
     expect(report).to_have_count(1)
     report.click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     [reported] = shell_messages(page, "shell:report-bug")
-    assert reported["message"] == "This terminal couldn't start. Try again. If this persists, report a bug."
+    assert reported["message"] == "This terminal couldn't start. Try again."
     assert reported["details"] == (
         "no server running on /tmp/tmux-1000/default\n\n"
         "Asking an agent to fix this failed too:\nThe workspace couldn't do that.\nboom"
@@ -312,14 +321,14 @@ def test_an_ask_about_an_earlier_ending_never_shows_under_a_later_one(desktop_co
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
     answer_ask_agent(
         page,
-        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": None, "isReportable": False}},
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": None, "isHelpOwed": False}},
     )
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
     expect(ended.get_by_role("alert")).to_be_hidden()
 
 
-def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
-    _serve(context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug)
+def _open_failure_page(context: BrowserContext, failure: PageFailure, can_report_bug: bool) -> tuple[Page, Frame]:
+    _serve(context, render_failure_page(failure), can_report_bug)
     page = context.new_page()
     page.goto(_SHELL_URL)
     wrapper = page.frame(url=_WRAPPER_URL)
@@ -332,11 +341,10 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     desktop_context: BrowserContext,
 ) -> None:
     error = TerminalStoreError("the terminal store /x/instances.json is not valid JSON: x")
-    page, wrapper = _open_failure_page(desktop_context, error, can_report_bug=True)
+    page, wrapper = _open_failure_page(desktop_context, page_failure(error, "terminal-1"), can_report_bug=True)
 
-    # Saved terminals an agent can repair do not ask for a bug report.
-    expect(wrapper.get_by_role("button", name="Try again")).to_be_hidden()
-    expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
+    # The agent is the one remedy: a reload cannot help, and no Report a bug stands beside the ask.
+    expect(wrapper.locator("button:visible")).to_have_text(["Ask an agent to fix this"])
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
 
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
@@ -350,17 +358,21 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     )
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
     _expect_asking_then_told_why(page, wrapper.locator("body"))
-    expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
+    # The refused ask brings the page's Report a bug under its failure; a refusal that owes no help offers no draft.
+    told = wrapper.get_by_role("alert")
+    expect(told.locator("button:visible")).to_have_text(["Report a bug"])
 
-    # An ask that fails in a way to report brings the page's one Report a bug, which files both failures.
+    # Asking again takes the refused ask's buttons away until this one is answered.
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function(
         "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 2"
     )
+    expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
     answer_ask_agent(
         page,
-        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
+        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isHelpOwed": True}},
     )
+    expect(told.locator("button:visible")).to_have_text(["Draft it in a chat", "Report a bug"])
     report = wrapper.get_by_role("button", name="Report a bug")
     expect(report).to_have_count(1)
     report.click()
@@ -374,7 +386,7 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
 
 def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop_context: BrowserContext) -> None:
     error = TmuxCommandError("tmux did not finish list-sessions within 5.0s")
-    _page, wrapper = _open_failure_page(desktop_context, error, can_report_bug=True)
+    _page, wrapper = _open_failure_page(desktop_context, page_failure(error, "terminal-1"), can_report_bug=True)
 
     expect(wrapper.get_by_role("button", name="Try again")).to_be_visible()
     expect(wrapper.get_by_role("button", name="Ask an agent to fix this")).to_be_hidden()
@@ -382,28 +394,71 @@ def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop
 
 
 @pytest.mark.parametrize("can_report_bug", [True, False], ids=["embedder-opens-reports", "no-bug-report"])
-def test_a_failure_page_that_asks_for_a_bug_report_offers_an_agent_and_a_report_only_where_the_shell_can_open_it(
+def test_a_failure_page_that_owes_help_offers_an_agent_then_a_draft_and_a_report_only_where_the_shell_can_open_it(
     desktop_context: BrowserContext, can_report_bug: bool
 ) -> None:
-    page, wrapper = _open_failure_page(desktop_context, TerminalAppError("unexpected"), can_report_bug)
+    failure = page_failure(TerminalAppError("unexpected"), "terminal-1")
+    page, wrapper = _open_failure_page(desktop_context, failure, can_report_bug)
 
-    expect(wrapper.get_by_role("button", name="Try again")).to_be_visible()
+    # No Report a bug stands beside the ask, whether or not the shell could open one.
+    expect(wrapper.locator("button:visible")).to_have_text(["Try again", "Ask an agent to fix this"])
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
     [asked] = shell_messages(page, "shell:ask-agent")
     assert asked["showsOutcome"] is True
+    assert "delivery" not in asked
     assert str(asked["text"]).startswith(
         "Imbue Studio showed the user this failure: The terminal terminal-1 couldn't be opened.\n\n"
     )
-    report = wrapper.get_by_role("button", name="Report a bug")
+
+    # A refused ask offers the same request as a draft for the person to send, and the bug report beside it.
+    answer_ask_agent(
+        page,
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that. Try again.", "details": "HTTP 502", "isHelpOwed": True}},
+    )
+    told = wrapper.get_by_role("alert")
+    expect(told.locator("button:visible")).to_have_text(
+        ["Draft it in a chat", "Report a bug"] if can_report_bug else ["Draft it in a chat"]
+    )
+    told.get_by_role("button", name="Draft it in a chat").click()
+    page.wait_for_function(
+        "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 2"
+    )
+    drafted = shell_messages(page, "shell:ask-agent")[-1]
+    assert (drafted["text"], drafted["delivery"], drafted["showsOutcome"]) == (asked["text"], "draft", True)
     if not can_report_bug:
-        expect(report).to_be_hidden()
         return
-    report.click()
+    told.get_by_role("button", name="Report a bug").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     [reported] = shell_messages(page, "shell:report-bug")
-    assert reported["message"] == "This terminal couldn't be opened. Try again. If this persists, report a bug."
-    assert reported["details"] == "unexpected"
+    assert reported["message"] == "This terminal couldn't be opened. Try again."
+    assert reported["details"] == (
+        "unexpected\n\nAsking an agent to fix this failed too:\nChat couldn't open that. Try again.\nHTTP 502"
+    )
+
+
+def test_a_failure_page_that_owes_help_with_no_agent_to_ask_offers_the_bug_report_in_its_place(
+    desktop_context: BrowserContext,
+) -> None:
+    failure = PageFailure(
+        message="This terminal couldn't be opened. Try again.",
+        details="unexpected",
+        is_retryable=True,
+        agent_fix=None,
+        is_help_owed=True,
+        status=500,
+    )
+    page, wrapper = _open_failure_page(desktop_context, failure, can_report_bug=True)
+
+    expect(wrapper.locator("button:visible")).to_have_text(["Try again", "Report a bug"])
+    wrapper.get_by_role("button", name="Report a bug").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert reported == {
+        "type": "shell:report-bug",
+        "message": "This terminal couldn't be opened. Try again.",
+        "details": "unexpected",
+    }
 
 
 def test_a_failure_page_opened_on_its_own_offers_no_agent(desktop_context: BrowserContext) -> None:

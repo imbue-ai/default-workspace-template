@@ -123,7 +123,7 @@ def test_an_unregistered_pty_leaves_the_label_empty(
 
 def _failure_page_parts(page_html: str) -> tuple[str, str, bool, dict[str, object]]:
     """The failure page's sentence, its "See details" text, whether it offers Try again, and what its buttons through
-    the shell read (``agent_fix``, ``is_reportable``)."""
+    the shell read (``agent_fix``, ``is_help_owed``)."""
     message = html.unescape(page_html.split('<p class="failure-message">', 1)[1].split("</p>", 1)[0])
     details = html.unescape(page_html.split("<pre>", 1)[1].split("</pre>", 1)[0])
     is_retryable = '<button type="button" data-action="retry">' in page_html
@@ -140,7 +140,7 @@ def test_a_window_on_a_name_that_cannot_be_a_session_gets_a_page_saying_so(pages
     message, details, is_retryable, shell_buttons = _failure_page_parts(response.text)
     assert message == "There is no terminal named a.b. Open a terminal from the launcher."
     assert details == "no terminal has the name 'a.b'"
-    assert (is_retryable, shell_buttons) == (False, {"agent_fix": None, "is_reportable": False})
+    assert (is_retryable, shell_buttons) == (False, {"agent_fix": None, "is_help_owed": False})
     # The page's own refresh reads the same refusal as JSON.
     assert "no terminal has the name" in pages_client.get("/api/sessions/a.b").get_json()["detail"]
 
@@ -162,7 +162,7 @@ def test_a_window_whose_saved_terminals_cannot_be_read_offers_to_ask_an_agent(
     assert is_retryable is False
     agent_fix = shell_buttons["agent_fix"]
     assert isinstance(agent_fix, dict) and agent_fix["details"] == details
-    assert shell_buttons["is_reportable"] is False
+    assert shell_buttons["is_help_owed"] is True
 
 
 def test_a_window_whose_saved_terminals_are_from_a_newer_version_says_so(
@@ -202,7 +202,7 @@ def test_a_window_while_tmux_cannot_run_asks_to_try_again(
     message, details, is_retryable, shell_buttons = _failure_page_parts(page.text)
     assert message == "Terminals aren't responding in this workspace right now. Try again in a moment."
     assert "cannot run" in details
-    assert (is_retryable, shell_buttons) == (True, {"agent_fix": None, "is_reportable": False})
+    assert (is_retryable, shell_buttons) == (True, {"agent_fix": None, "is_help_owed": False})
     # A launch is answered to the shell, as JSON.
     assert "cannot run" in launch.get_json()["detail"]
 
@@ -218,11 +218,13 @@ def test_a_window_while_tmux_cannot_run_asks_to_try_again(
     ],
     ids=lambda error: type(error).__name__,
 )
-def test_every_failure_page_that_asks_for_a_bug_report_offers_an_agent_first(error: TerminalAppError) -> None:
+def test_every_failure_page_that_owes_help_hands_an_agent_the_raw_reason(error: TerminalAppError) -> None:
     failure = page_failure(error, "terminal-1")
 
-    if failure.is_reportable:
+    if failure.is_help_owed:
         assert failure.agent_fix is not None and failure.agent_fix.details == str(error)
+    else:
+        assert failure.agent_fix is None
 
 
 def test_the_fallback_failure_page_asks_an_agent_about_the_terminal_it_could_not_open() -> None:
