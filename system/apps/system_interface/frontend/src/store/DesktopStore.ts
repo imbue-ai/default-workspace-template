@@ -2911,9 +2911,10 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles once the window
-   *  is on the desktop, or with the failure for the caller to show where the press was: nothing is toasted. */
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and where an ask goes that has no chat about
+   *  an app to take it: the primary text action runs with the text (the main chat on a stock machine). Settles once
+   *  the window is on the desktop, or with the failure for the caller to show where the press was: nothing is
+   *  toasted. */
   async startWithText(text: string): Promise<StartOutcome> {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
