@@ -367,6 +367,7 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
         ]
     assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
+    assert all(refusal.get_json()["expected"] is True for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
     assert received == []
     _register_client(application, "c1", "home")
