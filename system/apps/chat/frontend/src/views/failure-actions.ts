@@ -1,9 +1,9 @@
 /**
  * What a failure that owes help offers, as actions of a notice dialog, whose buttons are data rather than components:
  * what ``FailureRemedies`` draws elsewhere. "Ask an agent to fix this" where an agent can be asked, and "Report a bug"
- * only where none can or once the ask was refused, when the same request can also be left as a draft in a chat. The
- * notice makes the ask and shows how it went; the report is offered only where the shell's handshake said Imbue Studio
- * opens a bug report.
+ * only where none can or once the ask was refused with a failure that owes help itself, when the same request can
+ * also be left as a draft in a chat. The notice makes the ask and shows how it went; the report is offered only where
+ * the shell's handshake said Imbue Studio opens a bug report.
  */
 
 import type { NoticeAction } from "@imbue/workspace-ui/src/components/NoticeDialog";
@@ -30,9 +30,10 @@ export interface NoticeAsk {
 
 /** What a notice offers for the failure ``lines`` tell (a refused ask's sentence among them): "Ask an agent to fix
  *  this" (``ask``; null where the notice offers none: a failure that owes no help and leaves a way out, or one whose
- *  ask would go through what failed or that nothing could carry), then, once that ask was refused, "Draft it in a
- *  chat" and, for a failure that owes help, "Report a bug". With no agent to ask, "Report a bug" alone for a failure
- *  that owes help. */
+ *  ask would go through what failed or that nothing could carry), then, once that ask was refused with a failure that
+ *  owes help, "Draft it in a chat" and "Report a bug"; an ask refused for a reason that owes none (nothing answered,
+ *  a view to stop first) is only asked again. With no agent to ask, "Report a bug" alone for a failure that owes
+ *  help. */
 export function failureRemedyActions(
   connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null,
   lines: FailureLines,
@@ -45,20 +46,16 @@ export function failureRemedyActions(
     isSecondary: true,
     run: ask.run,
   };
-  if (ask.refusal === null) return [askAction];
+  if (ask.refusal === null || !ask.refusal.isHelpOwed) return [askAction];
   return [
     askAction,
-    ...(ask.refusal.isHelpOwed
-      ? [
-          {
-            label: DRAFT_ASK_LABEL,
-            tooltip: "Leaves the same request in a chat's message box, for you to send",
-            isSecondary: true,
-            run: ask.draft,
-          },
-        ]
-      : []),
-    ...(lines.isHelpOwed ? reportBugActions(connection, lines) : []),
+    {
+      label: DRAFT_ASK_LABEL,
+      tooltip: "Leaves the same request in a chat's message box, for you to send",
+      isSecondary: true,
+      run: ask.draft,
+    },
+    ...reportBugActions(connection, lines),
   ];
 }
 

@@ -5085,7 +5085,7 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(renderedText(render())).not.toContain("Your message wasn't delivered");
   });
 
-  it("offers no draft under an ask that was refused for a reason of the person's own to clear", async () => {
+  it("offers only to ask again after an ask refused for a reason of the person's own to clear", async () => {
     const connection = stubShellConnection(true);
     const refused = { message: "Stop viewing first.", details: null, isHelpOwed: false };
     vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: false, failure: refused });
@@ -5098,8 +5098,9 @@ describe("MessageInput tells each way a send can fail", () => {
 
     const told = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(told)).toContain("Stop viewing first.");
+    expect(findButton(told, "Ask an agent to fix this")).toBeDefined();
     expect(findButton(told, "Draft it in a chat")).toBeUndefined();
-    expect(findButton(told, "Report a bug")).toBeDefined();
+    expect(findButton(told, "Report a bug")).toBeUndefined();
   });
 
   it("offers Report a bug, and no agent, for a send refused because the chat app can't read its agent list, which an ask would meet too", async () => {
@@ -5642,18 +5643,20 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     },
   );
 
-  it("files the refused ask with the failure it was about", async () => {
+  it("files an ask refused by a fault with the failure it was about", async () => {
     const connection = stubShellConnection(true);
     const render = await composerAfterRefusedSend(startFailed());
-    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
     press(render(), "Ask an agent to fix this");
     await flushAsync();
 
     press(render(), "Report a bug");
 
     expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
-      message: `${START_FAILED_SENTENCE} ${ASK_REFUSED_SENTENCE}`,
-      details: "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1\n\n" + ASK_REFUSED_DETAILS,
+      message: `${START_FAILED_SENTENCE} Couldn't ask "Main chat". Try again.`,
+      details:
+        "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1\n\n" +
+        'Asking "Main chat":\nHTTP 500\nmngr message exited 1',
     });
   });
 
@@ -5688,7 +5691,7 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
   });
 
   it("leaves no button of the notice to press while the ask is on its way, and gives them back once it is refused", async () => {
-    const connection = stubShellConnection(true);
+    stubShellConnection(true);
     const render = await composerAfterRefusedSend(startFailed());
     let refuse: (error: unknown) => void = () => undefined;
     mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((_accept, reject) => (refuse = reject)));
@@ -5705,17 +5708,14 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     refuse(askRefused());
     await flushAsync();
 
-    // The bug report comes with the refused ask; the chat that was asked is only waiting on its terminal, so there
-    // is no draft to offer in its place.
+    // The chat that was asked is only waiting on its terminal, which owes no help: the ask is there to make again,
+    // with no draft or bug report in its place.
     expect(noticeButtons(render())).toEqual([
       { label: "Cancel", isDisabled: false },
       { label: "Retry", isDisabled: false },
       { label: "Switch provider", isDisabled: false },
       { label: "Ask an agent to fix this", isDisabled: false },
-      { label: "Report a bug", isDisabled: false },
     ]);
-    press(render(), "Report a bug");
-    expect(connection.reportBug).toHaveBeenCalledOnce();
   });
 
   it("leaves no button of the notice to press while a retry is on its way", async () => {

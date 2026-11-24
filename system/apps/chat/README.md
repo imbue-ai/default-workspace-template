@@ -1422,13 +1422,14 @@ shown beside another chat's failure, so it leads with the chat that was asked
 (`Couldn't ask "<chat>".`, then the send route's own sentence), and its
 details are headed `Asking "<chat>":`. The composer's notice tells it as its
 last paragraph and keeps one "See details", holding the failure's details and
-then the ask's. "Report a bug" comes only with a refused ask, files both, and
-is offered when either owes help; beside it "Draft it in a chat" leaves the
-same request unsent in a chat's message box when the refused ask owes help
-(the shell makes the draft, and writes `/assist` in front of it). On the
-failed-create page the shared button (`AskAgentToFixButton` in `workspace_ui`)
-draws the refused ask under itself, on a line of its own with a "See details"
-of its own and the draft.
+then the ask's. An ask refused with a failure that owes help brings "Draft it
+in a chat", which leaves the same request unsent in a chat's message box (the
+shell makes the draft, and writes `/assist` in front of it), and "Report a
+bug", which files both; one refused for a reason that owes none (the chat
+that was asked is waiting on its terminal, nothing answered) is only there to
+ask again. On the failed-create page the shared button (`AskAgentToFixButton`
+in `workspace_ui`) draws the refused ask under itself, on a line of its own
+with a "See details" of its own, the draft and the bug report.
 
 **The failed-create page.** Its sentence is picked by the failure's kind
 (`failure_kind` on the provisional chat, `CreateFailureKind` in `models.py`),
@@ -1437,12 +1438,12 @@ in `chat_handoffs.py`). A Codex create whose plugin installer
 (`system/scripts/codex_update_plugin.sh`) refused prints the installer's
 `codex-plugin-install-refused` marker, and its page reads "This chat's agent
 couldn't be set up."; any other failure reads "The agent for this chat
-couldn't be started." The page offers "Report a bug" (where the shell opens
-one) only where it has no agent to ask (no other agent chat exists) and once
-an ask was refused, last in its row, filing the page's sentence and what mngr
-printed, and a refused ask's sentence and details with them; the refused ask
-then has no "Report a bug" of its own. A failed chat that names no account
-offers neither. A switch's failed create
+couldn't be started." Its "Report a bug" (where the shell opens one) files the
+page's sentence and what mngr printed. It stands in the ask's place, last in
+its row, where the page has no agent to ask (no other agent chat exists), and
+sits under an ask refused with a failure that owes help, filing that refusal's
+sentence and details with them. A failed chat that names no account offers
+neither. A switch's failed create
 (`frontend/src/views/HandoffFailedNotice.ts`) names the harness it could not
 start and is not worded by kind.
 
