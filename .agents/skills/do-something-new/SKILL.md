@@ -45,7 +45,8 @@ Pick the flow that fits the ask:
 - **Neither cleanly applies** -- the task is genuinely net-new and not a data
   fetch or a web view. Run the same loop yourself, in this order:
   1. Ask only the questions whose answers change what you do next, in the
-     user's terms; zero is fine. Default everything else and say so in a line.
+     user's terms; zero is fine. Default everything else to the simplest
+     choice, for one user and the data at hand, and say so in a line.
   2. A fast feasibility pass: a few minutes, enough to know the task is
      possible.
   3. Propose a small plan (the approach, and what they will see at the end)
@@ -54,10 +55,13 @@ Pick the flow that fits the ask:
      (an external API, an auth flow).
   5. Put the smallest real, throwaway version in front of the user and loop on
      it, each round visibly applying their feedback, until they **explicitly
-     confirm** the shape. Build nothing production-grade before that.
+     confirm** the shape. Build nothing production-grade before that. Your
+     own check ends at "it came up", before they see it: once it is in front
+     of them, do not drive it yourself.
   6. Only then harden it (tests, review gates), in a background worker through
      the `crystallize-creation` skill, never in this chat.
-  7. Each further capability is its own delivery with its own confirmation.
+  7. Each further capability is its own delivery with its own confirmation:
+     ask whether to build the next one, and wait.
 
 Load the routed skill and proceed; do not re-implement its flow here.
 
