@@ -31,7 +31,7 @@ window keeps showing the old page until it is refreshed. The live change loop
 - **A critical app, or a library the critical apps share: follow the careful
   flow, `references/critical-app.md`, for the whole change, in place of the
   steps below.** It sends you back here only for what it shares: the standing
-  instructions, step 2's lease and step 3's list of what a change owes. That
+  instructions, step 2's lease and what step 3 says a change owes. That
   is an app whose manifest says `critical = true` (the shell
   `system_interface`, the chat, the terminal, and any user app that declares
   it), or a change under `system/libs/workspace_ui/` (the library both critical
@@ -64,7 +64,9 @@ window keeps showing the old page until it is refreshed. The live change loop
 
 - **Verify before the user can see it, not after.** Your checks belong where
   you are the only one looking: before the window exists, or against a
-  throwaway instance of your own. Once a window is open the user is the
+  throwaway instance of your own. Before you start one, read
+  `references/verify-against-a-copy.md`, which has the command that boots it
+  over a copy of the data. Once a window is open the user is the
   verifier for anything they can perceive. Driving an app they are watching
   lands your test actions in their view and, for anything wired to real data
   or real agents, in their state.
@@ -75,7 +77,7 @@ window keeps showing the old page until it is refreshed. The live change loop
   Never let a check or a preview write to it, and never "clean up" by deleting
   from it. A check that must write runs against a copy, and a change that must
   itself rewrite the store (a data migration) takes a snapshot first: both are
-  in `references/verify-against-a-copy.md`.
+  in that reference.
 - **Never restart an app with `supervisorctl restart`.** It waits out the
   program's start window (30 s for a scaffolded app); step 4's call does not.
 - **The harden pass comes after the user's feedback, in the background.** Never
@@ -169,13 +171,14 @@ time.
 
 ## Step 3: Make the change
 
-Edit the code under `system/apps/<package>/`, or wherever the program's
-command points. Four things the change may owe:
+Before you first edit an app's code, read
+`.agents/shared/references/apps/code.md`, the rules that code keeps: state
+under `DATA_DIR`, the shell page script on every page, the content-security
+policy, a "view raw" control on derived data.
 
-- **The rules an app's code keeps.** Before a change to an app's code, read
-  `.agents/shared/references/apps/code.md`: state under `DATA_DIR`, the shell
-  page script on every page, the content-security policy, a "view raw" control
-  on derived data.
+Then edit the code under `system/apps/<package>/`, or wherever the program's
+command points. Three more things the change may owe:
+
 - **The manifest.** Anything the change creates for the app outside its own
   directory is registered under `[[references]]`. If the change gives the app
   work between requests, or takes it away, `stop_when_no_windows` changes

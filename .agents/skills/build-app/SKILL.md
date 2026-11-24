@@ -80,11 +80,10 @@ choice and to a **single user**. Choices that are cheap to reverse
 block: pick the obvious default and let them surface in the mock loop or as a
 later follow-up, where the user reacts to something concrete.
 
-Ask a blocking question and end the turn. With none, say what you will build
-and each default in a line or two, then go on to step 2 in the same turn: the
-user approves the shape at the mock.
+Ask a blocking question and end the turn. With none, go on to step 2 in the
+same turn: the user approves the shape at the mock.
 
-Record the defaults you stated: they are the architecture you build once, after
+Record the defaults you chose: they are the architecture you build once, after
 the mock converges.
 
 ## Step 2: Choose the path, the name and the icon
