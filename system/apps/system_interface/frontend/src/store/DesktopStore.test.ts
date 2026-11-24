@@ -911,7 +911,7 @@ describe("failure toasts", () => {
 
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+        message: "Docs couldn't open that. Try again.",
         details: "HTTP 502\ndocs answered the launch with 500: boom",
         actions: [],
         isLasting: true,
@@ -924,18 +924,18 @@ describe("failure toasts", () => {
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
+      expected: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 500: index unreadable",
-      user_facing_message: "Docs couldn't read its notes. If this persists, report a bug.",
-      reportable: true,
+      user_facing_message: "Docs couldn't read its notes.",
     });
     await store.runLaunch("docs", "new", "new");
 
     expect(store.toasts.current().map((toast) => toast.message)).toEqual([
       "Docs is still starting. Try again in a few seconds.",
-      "Docs couldn't read its notes. If this persists, report a bug.",
+      "Docs couldn't read its notes.",
     ]);
   });
 
@@ -973,7 +973,7 @@ describe("failure toasts", () => {
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Could not close the window. Try again. If this persists, report a bug.",
+        message: "Could not close the window. Try again.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
       },
@@ -1696,7 +1696,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar. Try again. If this persists, report a bug."]);
+    expect(notices()).toEqual(["Could not change the avatar. Try again."]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {

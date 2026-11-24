@@ -55,7 +55,7 @@ describe("Toasts", () => {
   it("gives a lasting note a close control, its buttons, and its details, and takes it away once one is pressed", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     const retry = vi.fn();
-    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+    queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
       details: "HTTP 500",
       actions: [{ label: "Try again", run: retry }],
@@ -64,9 +64,7 @@ describe("Toasts", () => {
     const root = mountQueue(queue);
 
     const [first, second] = Array.from(root.querySelectorAll("[data-toast]")) as HTMLElement[];
-    expect(first.querySelector(".toast-message")?.textContent).toBe(
-      "This window couldn't be closed. Try again. If this persists, report a bug.",
-    );
+    expect(first.querySelector(".toast-message")?.textContent).toBe("This window couldn't be closed. Try again.");
     expect(first.querySelector(".see-details pre")?.textContent).toBe("HTTP 500");
     (first.querySelector(".toast-action") as HTMLButtonElement).click();
     expect(retry).toHaveBeenCalledTimes(1);

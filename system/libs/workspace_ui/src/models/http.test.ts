@@ -30,16 +30,15 @@ describe("postJson", () => {
   it("reads a sentence the server wrote for people as such, its developer detail behind the details", async () => {
     answering(502, {
       detail: "chat answered the launch with 500: boom",
-      user_facing_message: "Chat couldn't read its agent list. If this persists, report a bug.",
-      reportable: true,
+      user_facing_message: "Chat couldn't read its agent list.",
       kind: "launch_failed",
     });
     const { failure } = await failureOf(postJson("/api/x", {}));
     expect(failure).toEqual({
       cause: "user_facing",
-      userFacingMessage: "Chat couldn't read its agent list. If this persists, report a bug.",
+      userFacingMessage: "Chat couldn't read its agent list.",
       reason: "chat answered the launch with 500: boom",
-      isReportable: true,
+      isExpected: false,
       requestKind: "change",
       status: 502,
       details: "HTTP 502\nchat answered the launch with 500: boom",

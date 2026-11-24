@@ -689,12 +689,12 @@ export class DesktopStore {
   /**
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
-   * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
+   * retry is the control just pressed asks for a plain note; any other, and any failure that owes the person help,
    * shows one that stays.
    */
   private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
     const told = failureSentence(describeRequestFailure(error), whatFailed);
-    this.toasts.show(told.message, { isLasting: isLasting || told.isReportable, details: told.details });
+    this.toasts.show(told.message, { isLasting: isLasting || told.isHelpOwed, details: told.details });
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
