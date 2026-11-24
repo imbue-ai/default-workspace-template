@@ -12,6 +12,8 @@ The lifecycle skills, the harden worker and the shared references they rest on f
 
 - **After a compaction**, the shared references a lead or a worker follows from start to end are named in a standing instruction of its skill, `launch-task` included, and no longer in a line inside `lead-proxy.md` or `harden-creation.md`, which a compaction drops.
 
+- **Each step says what to read before it acts.** In the lead skills, the harden worker's references and these shared references, a file a step cannot be done without is an instruction at that step ("Before you act on the poll's first message, read `lead-proxy.md`"), not a citation ("as `lead-proxy.md` says"). `update-creation` names `critical-app-handoff.md` at the top of Step 1.
+
 - **Checking whether a worker is alive** uses `mngr capture <worker> --full --no-start`, which reads the agent's pane on any harness and does not start a stopped one.
 
 - **`launch-task`** has a numbered step list, with its guidelines above it. **`fetch-process-show`** is under the 14,000-byte cap. **`interactive-delivery.md`** has a contents list and a shorter opening, and links nothing.
