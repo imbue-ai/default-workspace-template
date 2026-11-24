@@ -309,6 +309,18 @@ describe("what the page reads of a chat for its new-chat strip", () => {
 });
 
 describe("the new-chat strip", () => {
+  it("notes its open pills' width for the line under them, and forgets it once they are gone", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 312, 120));
+    newAndEmpty();
+    await drawAndSettle();
+
+    expect(isOpen("new_chat")).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--suggestion-pills-width")).toBe("312px");
+
+    m.render(root, null);
+    expect(document.documentElement.style.getPropertyValue("--suggestion-pills-width")).toBe("");
+  });
+
   it("is there as soon as a chat nobody has spoken in is on screen: its pills over the line with its link", async () => {
     newAndEmpty();
     await drawAndSettle();
@@ -321,7 +333,9 @@ describe("the new-chat strip", () => {
     expect(nextStepLineText()).toBe("Disable new chat suggestions");
     const line = root.querySelector<HTMLElement>(".suggestion-line")!;
     expect(line.parentElement).toBe(strip("new_chat"));
-    expect([...line.children].map((child) => child.className.split(" ")[0])).toEqual(["suggestion-strip-disable"]);
+    const span = line.querySelector(".suggestion-line-span")!;
+    expect([...line.children]).toEqual([span]);
+    expect([...span.children].map((child) => child.className.split(" ")[0])).toEqual(["suggestion-strip-disable"]);
     expect(root.querySelector(".chat-suggestions")?.children).toHaveLength(1);
   });
 

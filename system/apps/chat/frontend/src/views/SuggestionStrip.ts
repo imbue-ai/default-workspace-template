@@ -61,10 +61,19 @@ const QUIET_LINK_CLASS =
   "cursor-pointer text-(length:--font-size-helper) text-faint hover:text-secondary hover:underline " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-// One height whatever it holds, so a set that arrives moves nothing. Set in 16px each side, as a bubble sets in its
-// text and "You" its name, so its words line up with theirs: the toggle at the right end, the disable link (with
-// ``mr-auto``) at the left.
-const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end gap-4 px-4";
+// One height whatever it holds, so a set that arrives moves nothing. What it holds sits at its right end.
+const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end";
+
+// The line's words, in a group as wide as the open pills over the transcript (``--suggestion-pills-width``, which
+// views/SuggestionLayer.ts keeps) and, like them, at the column's right end; just as wide as the words with no pills
+// open. Set in 16px each side, as a pill sets in its label and a bubble its text, so the words line up with theirs.
+const PILLS_SPAN_CLASS = "suggestion-line-span flex h-full items-center gap-4 px-4";
+const PILLS_SPAN_STYLE = "width: var(--suggestion-pills-width, auto)";
+
+/** The line's words under the pills, spread across their width by ``justify``. */
+function underPills(justify: "justify-between" | "justify-start" | "justify-end", children: m.Children[]): m.Vnode {
+  return m("div", { class: `${PILLS_SPAN_CLASS} ${justify}`, style: PILLS_SPAN_STYLE }, children);
+}
 
 /** The suggestions as pills, in order; a click picks that one. */
 export function suggestionPills(
@@ -102,7 +111,7 @@ function disableLink(placement: SuggestionPlacement, onDisable: () => void, isSh
     "button",
     {
       type: "button",
-      class: `suggestion-strip-disable mr-auto ${QUIET_LINK_CLASS}`,
+      class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`,
       onclick: onDisable,
       ...(isShort ? { "aria-label": words, ...hoverTooltipAttrs(words, "above") } : {}),
     },
@@ -128,20 +137,25 @@ export interface SuggestionLineAttrs {
 export function suggestionLine(attrs: SuggestionLineAttrs | null): m.Vnode {
   if (attrs === null) return m("div", { class: LINE_CLASS });
   const seeLabel = attrs.count === 1 ? "See 1 suggestion" : `See ${attrs.count} suggestions`;
-  return m("div", { class: LINE_CLASS }, [
-    attrs.isOpen && attrs.onDisable !== null ? disableLink("next_step", attrs.onDisable, true) : null,
-    m(
-      "button",
-      {
-        type: "button",
-        class: `suggestion-line-toggle ${QUIET_LINK_CLASS}`,
-        "aria-expanded": attrs.isOpen ? "true" : "false",
-        onclick: attrs.onToggle,
-        ...(attrs.isOpen ? { "aria-label": HIDE_LINK, ...hoverTooltipAttrs(HIDE_LINK, "above") } : {}),
-      },
-      attrs.isOpen ? HIDE_SHORT : seeLabel,
-    ),
-  ]);
+  const toggle = m(
+    "button",
+    {
+      type: "button",
+      class: `suggestion-line-toggle ${QUIET_LINK_CLASS}`,
+      "aria-expanded": attrs.isOpen ? "true" : "false",
+      onclick: attrs.onToggle,
+      ...(attrs.isOpen ? { "aria-label": HIDE_LINK, ...hoverTooltipAttrs(HIDE_LINK, "above") } : {}),
+    },
+    attrs.isOpen ? HIDE_SHORT : seeLabel,
+  );
+  // Disable at the pills' left edge and Hide at their right; the toggle alone at the right.
+  return m(
+    "div",
+    { class: LINE_CLASS },
+    attrs.isOpen && attrs.onDisable !== null
+      ? underPills("justify-between", [disableLink("next_step", attrs.onDisable, true), toggle])
+      : underPills("justify-end", [toggle]),
+  );
 }
 
 /** The next-step line with no set to speak of, which keeps its height above the composer. */
@@ -151,7 +165,11 @@ export function emptyNextStepLine(): m.Vnode {
 
 /** The line under a strip whose pills are always shown: its link alone, at the height of a reply's line. */
 function linkLine(placement: SuggestionPlacement, onDisable: (() => void) | null): m.Vnode {
-  return m("div", { class: LINE_CLASS }, onDisable === null ? null : disableLink(placement, onDisable, false));
+  return m(
+    "div",
+    { class: LINE_CLASS },
+    onDisable === null ? null : underPills("justify-start", [disableLink(placement, onDisable, false)]),
+  );
 }
 
 /** A strip's part in the footer: its line. */

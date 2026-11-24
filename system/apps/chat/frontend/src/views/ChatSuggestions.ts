@@ -56,7 +56,7 @@ export function openStrip(chatId: string): PlacementStrip | null {
   return strip !== null && strip.isOpen ? strip : null;
 }
 
-export function ChatSuggestions(): m.Component<{ chatId: string }> {
+export function ChatSuggestions(): m.Component<{ chatId: string; isCompact?: boolean }> {
   let shownChatId: string | null = null;
   let stopFollowingNextStep: () => void = () => undefined;
   const links: Record<SuggestionPlacement, SuggestionSwitchLink> = {
@@ -107,7 +107,7 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
         );
       }
       if (children.length === 0) return null;
-      return m("div", { class: `${COLUMN_CLASS}${faceGutterInset()}` }, children);
+      return m("div", { class: `${COLUMN_CLASS}${faceGutterInset(vnode.attrs.isCompact === true)}` }, children);
     },
   };
 }

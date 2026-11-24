@@ -1054,14 +1054,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-6"}` }, [
+              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-4" : "px-6"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
                 m(AgentWorkingReport, { chatId }),
-                m(ChatSuggestions, { chatId }),
+                m(ChatSuggestions, { chatId, isCompact }),
                 m(MessageInput, {
                   chatId,
                   leading:
@@ -1086,7 +1086,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-6"}` },
+            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-4" : "px-6"}` },
             m(
               "div",
               {
@@ -1096,7 +1096,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // on a phone, where the chip is the settings button, only as tall as a notice in it.
                 class:
                   `composer-under-bar relative mx-auto mt-1 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
-                  `max-w-(--width-message-column) items-center gap-2${faceGutterInset()}`,
+                  `max-w-(--width-message-column) items-center gap-2${faceGutterInset(isCompact)}`,
               },
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.

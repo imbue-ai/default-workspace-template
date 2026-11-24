@@ -118,10 +118,12 @@ describe("the new-chat strip", () => {
     expect([...strip!.children]).toEqual([line]);
     expect(pills(root)).toEqual([]);
     expect(root.querySelector(".suggestion-rise")).toBeNull();
-    // The line is a reply's line in height and look, and holds the link alone, at its left end.
+    // The line is a reply's line in height and look, and holds the link alone, at the left of the pills' width.
     expect([...line!.classList]).toEqual(expect.arrayContaining(["h-5", "justify-end"]));
-    expect([...line!.children]).toEqual([link]);
-    expect(link?.classList.contains("mr-auto")).toBe(true);
+    const span = line!.querySelector<HTMLElement>(".suggestion-line-span")!;
+    expect([...line!.children]).toEqual([span]);
+    expect([...span.children]).toEqual([link]);
+    expect(span.classList.contains("justify-start")).toBe(true);
     expect(link?.textContent).toBe("Disable new chat suggestions");
     expect(lineToggle(root)).toBeNull();
 
@@ -177,12 +179,13 @@ describe("the next-step strip", () => {
     // Short beside each other, with the full words as their names (and tooltips).
     expect(toggle?.getAttribute("aria-label")).toBe("Hide suggestions");
     expect(link?.getAttribute("aria-label")).toBe("Disable suggestions");
-    // The link at the line's left end and the button at its right, each set in 16px as a bubble sets its text.
-    const line = toggle!.parentElement!;
-    expect([...line.children]).toEqual([link, toggle]);
-    expect([...line.classList]).toEqual(expect.arrayContaining(["flex", "justify-end", "gap-4", "px-4"]));
-    expect(link!.classList.contains("mr-auto")).toBe(true);
-    expect(toggle!.classList.contains("ml-auto")).toBe(false);
+    // Spread across the open pills' width, the link at its left and the button at its right, each set in 16px as a
+    // pill sets its label and a bubble its text.
+    const span = toggle!.parentElement!;
+    expect([...span.children]).toEqual([link, toggle]);
+    expect([...span.classList]).toEqual(expect.arrayContaining(["flex", "justify-between", "gap-4", "px-4"]));
+    expect(span.style.width).toBe("var(--suggestion-pills-width, auto)");
+    expect(span.parentElement!.classList.contains("justify-end")).toBe(true);
 
     link!.click();
     expect(attrs.onDisable).toHaveBeenCalledTimes(1);

@@ -576,10 +576,14 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 }
 
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
- *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. */
+ *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. ``leading`` takes
+ *  the face gutter, ending where the box begins, so the box starts where an agent's bubbles do; a control wider than
+ *  the gutter reaches out past its left edge into the footer's padding. */
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
-  return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
-    leading ?? null,
+  return m("div", { class: "message-input-compose-row flex items-end" }, [
+    leading === undefined
+      ? null
+      : m("div", { class: "message-input-leading flex w-(--width-face-gutter) shrink-0 justify-end" }, leading),
     m(
       "div",
       { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") },
@@ -2416,7 +2420,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       return m(
         "div",
         {
-          class: `message-input mx-auto w-full max-w-(--width-message-column)${faceGutterInset()}`,
+          class: `message-input mx-auto w-full max-w-(--width-message-column)${faceGutterInset(vnode.attrs.leading !== undefined)}`,
           oncreate: isDictationShown ? attachDictationToPage : undefined,
           onremove: isDictationShown ? detachDictationFromPage : undefined,
         },
