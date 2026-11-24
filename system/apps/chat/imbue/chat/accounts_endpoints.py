@@ -332,7 +332,7 @@ def start_flow() -> Response:
         return _error_response(str(e), status_code=404)
     except FlowError as e:
         logger.warning("A sign-in could not be started: {}", e)
-        return refusal_response(str(e), 400, user_facing_message=e.user_facing_message)
+        return refusal_response(str(e), 400, user_facing_message=e.user_facing_message, is_expected=e.is_expected)
     return model_response(started)
 
 

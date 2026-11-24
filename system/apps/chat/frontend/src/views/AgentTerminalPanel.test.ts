@@ -139,13 +139,12 @@ describe("the agent terminal's liveness gate", () => {
 
     // The auto-start on open already failed; the face must say so, in a sentence of ours, with the server's words
     // behind See details.
-    const sentence = "The agent couldn't be started. Try again. If this persists, report a bug.";
+    const sentence = "The agent couldn't be started. Try again.";
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
     expect(root.querySelector(".agent-terminal-start-error")?.textContent).toBe(sentence);
     expect(root.querySelector(".see-details-text")?.textContent).toContain("no such agent");
-    (root.querySelector(".report-bug") as HTMLElement).click();
-    expect(shell.posted("shell:report-bug")).toHaveLength(1);
-    // An agent is offered first, and is asked about the failure as the face words it.
+    // An agent is offered, in place of a bug report, and is asked about the failure as the face words it.
+    expect(root.querySelector(".report-bug")).toBeNull();
     (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
     const [ask] = shell.posted("shell:ask-agent");
     expect(String(ask?.text)).toMatch(new RegExp(`^Imbue Studio showed the user this failure: ${sentence}`));

@@ -421,7 +421,9 @@ def explicit_chat_name(requested_name: str) -> str:
     explicit_name = requested_name.strip()
     if explicit_name and not canonical_agent_name(explicit_name):
         raise AgentCreationError(
-            f"Chat name '{explicit_name}' contains no usable characters", NO_USABLE_NAME_CHARACTERS_SENTENCE
+            f"Chat name '{explicit_name}' contains no usable characters",
+            NO_USABLE_NAME_CHARACTERS_SENTENCE,
+            is_expected=True,
         )
     return explicit_name
 
@@ -1110,18 +1112,19 @@ def _resolve_switch_target(account_id: str, kind: ChatKind) -> _SwitchTarget:
     try:
         account = resolve_account(account_id)
     except AccountError as e:
-        raise HandoffError(str(e), e.user_facing_message) from e
+        raise HandoffError(str(e), e.user_facing_message, is_expected=e.is_expected) from e
     harness = harness_for(account)
     if harness is None:
         raise HandoffError(
             f"Account {account_id} is on a lane this build does not have",
             AccountLaneUnavailableError.user_facing_message,
+            is_expected=AccountLaneUnavailableError.is_expected,
         )
     # Numbered among the accounts on lanes this build has, so the lane check comes first.
     try:
         label = account_label_for(account_id)
     except AccountError as e:
-        raise HandoffError(str(e), e.user_facing_message) from e
+        raise HandoffError(str(e), e.user_facing_message, is_expected=e.is_expected) from e
     return _SwitchTarget(account=account, harness=harness, label=label)
 
 
@@ -3275,6 +3278,7 @@ class AgentManager:
                     "it is on another harness or lane",
                     CANNOT_MOVE_TO_ACCOUNT_SENTENCE,
                     kind=CANNOT_MOVE_TO_ACCOUNT_KIND,
+                    is_expected=True,
                 )
             rebind = self._open_rebind_locked(
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick
@@ -3319,6 +3323,7 @@ class AgentManager:
                 f"Chat '{chat_id}' has no active agent to move",
                 CANNOT_MOVE_TO_ACCOUNT_SENTENCE,
                 kind=CANNOT_MOVE_TO_ACCOUNT_KIND,
+                is_expected=True,
             )
         if chat.transition is not None:
             raise ChatConvergingError(_converging_detail_of(chat.transition))
@@ -3327,13 +3332,15 @@ class AgentManager:
                 "The workspace's services agent is not a chat",
                 CANNOT_MOVE_TO_ACCOUNT_SENTENCE,
                 kind=CANNOT_MOVE_TO_ACCOUNT_KIND,
+                is_expected=True,
             )
         if target.account is None and agent_state.harness is HarnessType.ROOM:
-            raise HandoffError(f"Chat '{chat_id}' is a room already", "This chat is a room already.")
+            raise HandoffError(f"Chat '{chat_id}' is a room already", "This chat is a room already.", is_expected=True)
         if target.account is not None and account_id_of(agent_state.harness, agent_state.labels) == target.account.id:
             raise HandoffError(
                 f"Chat '{chat_id}' already runs on account {target.account.id}",
                 "This chat already runs on that account.",
+                is_expected=True,
             )
         return agent_state
 
@@ -3453,6 +3460,7 @@ class AgentManager:
                     f"Chat '{chat_id}' is not moving to another agent",
                     NOTHING_TO_CANCEL_SENTENCE,
                     kind=NOTHING_TO_CANCEL_KIND,
+                    is_expected=True,
                 )
             if isinstance(transition, ChatRebindRecord):
                 raise ChatConvergingError(rebind_cancel_refused_detail(transition.target_label))
@@ -3507,13 +3515,16 @@ class AgentManager:
             transition = record.converging if record is not None else None
             if record is None or transition is None or transition.phase is not HandoffPhase.FAILED:
                 raise HandoffError(
-                    f"Chat '{chat_id}' has no failed switch to retry", "This chat has no failed move to try again."
+                    f"Chat '{chat_id}' has no failed switch to retry",
+                    "This chat has no failed move to try again.",
+                    is_expected=True,
                 )
             if isinstance(transition, ChatRebindRecord):
                 if transition.agent_id not in self._agents:
                     raise HandoffError(
                         f"Chat '{chat_id}' no longer has the agent its switch was restarting",
                         "This chat's agent is gone, so its move can't be tried again. Start a new chat instead.",
+                        is_expected=True,
                     )
                 if not _is_rebind_retry_target(transition, target):
                     raise HandoffError(
@@ -3521,6 +3532,7 @@ class AgentManager:
                         "start a new chat to move it elsewhere",
                         "Pick an account from the same provider to try again, or start a new chat to move this one "
                         "somewhere else.",
+                        is_expected=True,
                     )
                 # The pick survives: a rebind retry stays on the same harness and lane, whose models it named.
                 retried_rebind = transition.model_copy_update(
@@ -3548,6 +3560,7 @@ class AgentManager:
                         f"Chat '{chat_id}' has already moved to its new agent; its switch can only be "
                         "retried on the account it moved to",
                         "This chat has already moved -- try again on the account it moved to.",
+                        is_expected=True,
                     )
                 # A successor an earlier attempt created (a pick that failed leaves one running)
                 # is adopted by a retry on the same account, since the create step finds it
@@ -3796,6 +3809,7 @@ class AgentManager:
             raise HandoffError(
                 f"Chat '{chat_id}' cannot change account from a preview; switch it from the live chat",
                 "This chat can't be switched from here. Open the chat itself and switch it there.",
+                is_expected=True,
             )
 
     def _require_switch_capabilities(self) -> HandoffCapabilities:
@@ -3804,6 +3818,7 @@ class AgentManager:
             raise HandoffError(
                 "This chat app cannot move a chat between agents or accounts: switches are not wired",
                 "This chat can't be switched from here. Open the chat itself and switch it there.",
+                is_expected=True,
             )
         return capabilities
 
@@ -5484,7 +5499,7 @@ class AgentManager:
                         "The account this chat was going to start on was signed out. Choose a provider to start it on."
                     ) from e
                 except (AccountError, BindingError) as e:
-                    raise AgentCreationError(str(e), e.user_facing_message) from e
+                    raise AgentCreationError(str(e), e.user_facing_message, is_expected=e.is_expected) from e
                 harness = harness_for(account)
                 assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
                 return account, harness

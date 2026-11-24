@@ -45,10 +45,12 @@ class EmptySeedError(ValueError):
 class AgentCreationError(ValueError):
     """Raised when agent creation fails due to invalid input."""
 
-    def __init__(self, detail: str, user_facing_message: str | None = None) -> None:
+    def __init__(self, detail: str, user_facing_message: str | None = None, is_expected: bool = False) -> None:
         super().__init__(detail)
         # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
         self.user_facing_message = user_facing_message
+        # Whether the refusal is ordinary operation the sentence fully explains, so it owes the person no more help.
+        self.is_expected = is_expected
 
 
 class NoProviderAccountError(AgentCreationError):
@@ -455,10 +457,18 @@ class ChatConvergingError(RuntimeError):
 class HandoffError(ValueError):
     """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
-    def __init__(self, detail: str, user_facing_message: str | None = None, kind: str | None = None) -> None:
+    def __init__(
+        self,
+        detail: str,
+        user_facing_message: str | None = None,
+        kind: str | None = None,
+        is_expected: bool = False,
+    ) -> None:
         super().__init__(detail)
         # The sentence a page shows for this refusal, beside the developer's reason.
         self.user_facing_message = user_facing_message
+        # Whether the refusal is ordinary operation the sentence fully explains, so it owes the person no more help.
+        self.is_expected = is_expected
         # Names a refusal a page answers differently from a failure (a cancel with nothing left to cancel).
         self.kind = kind
 

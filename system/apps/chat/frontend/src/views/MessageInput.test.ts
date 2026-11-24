@@ -483,7 +483,7 @@ function noAnswer(): Error {
 
 /** A sibling's notice that says ``text`` whatever failed. */
 function linesOf(text: string): FailureLines {
-  return { body: [text], details: null, isReportable: false };
+  return { body: [text], details: null, isHelpOwed: false };
 }
 
 /** A composer with a way to turn its chat over, and how often it was asked to. */
@@ -504,6 +504,12 @@ function composerWithSourceView(): { component: m.Component<MessageInputAttrs>; 
  *  returns lifecycle hooks rather than an attribute -- so the label is the stable handle. */
 function findButton(node: unknown, label: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === "button" && renderedText(vnode).includes(label));
+}
+
+/** Neither remedy of a failure that owes help is on offer. */
+function expectNoHelpOffered(node: unknown): void {
+  expect(findButton(node, "Ask an agent to fix this")).toBeUndefined();
+  expect(findButton(node, "Report a bug")).toBeUndefined();
 }
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
@@ -1570,7 +1576,7 @@ describe("MessageInput send to a chat still being created", () => {
     // The chat has no agent to send to again or to restart.
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
-    expect(findButton(after, "Report a bug")).toBeUndefined();
+    expectNoHelpOffered(after);
     // Nothing is on offer, so the notice is acknowledged rather than cancelled.
     expect(renderedText(findByClass(after, "notice-dismiss")).trim()).toBe("OK");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
@@ -1965,7 +1971,7 @@ describe("MessageInput send failure notice", () => {
     // stands as written.
     for (const [kind, sentence] of [
       ["not_ready", "This chat is still waking up. Try again in a moment."],
-      ["agent_start_failed", "This chat's agent couldn't be started. Try again. If this persists, report a bug."],
+      ["agent_start_failed", "This chat's agent couldn't be started. Try again."],
       ["chat_gone", "This chat is no longer here -- it was deleted."],
     ]) {
       mocks.sendMessage.mockRejectedValueOnce(
@@ -2034,8 +2040,8 @@ describe("MessageInput send failure notice", () => {
     expect(findButton(after, "Send again")).toBeTruthy();
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
-    // The notice says what happened in its own words, which ask for no bug report.
-    expect(findButton(after, "Report a bug")).toBeUndefined();
+    // Checking the terminal and sending again are the whole remedy.
+    expectNoHelpOffered(after);
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 
@@ -2144,7 +2150,7 @@ describe("MessageInput send failure notice", () => {
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
     expect(findButton(after, "Turn on Source view")).toBeUndefined();
-    expect(findButton(after, "Report a bug")).toBeUndefined();
+    expectNoHelpOffered(after);
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
 
     (findButton(after, "Send again")!.attrs!.onclick as () => void)();
@@ -2177,7 +2183,7 @@ describe("MessageInput send failure notice", () => {
     expect(findButton(after, "Retry")).toBeUndefined();
   });
 
-  it("words a gateway's 502 that carries only its own reason as a send nothing answered, with no Report a bug", async () => {
+  it("words a gateway's 502 that carries only its own reason as a send nothing answered, which owes no help", async () => {
     stubShellConnection(true);
     mocks.sendMessage.mockRejectedValueOnce(refusal(502, { error: "upstream connection reset" }));
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
@@ -2188,7 +2194,7 @@ describe("MessageInput send failure notice", () => {
     );
     expect(text).not.toContain("Your message wasn't delivered");
     expect(findButton(after, "Send again")).toBeTruthy();
-    expect(findButton(after, "Report a bug")).toBeUndefined();
+    expectNoHelpOffered(after);
   });
 
   it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
@@ -2269,7 +2275,10 @@ describe("MessageInput send failure notice", () => {
     "shows a /compact the server declined (%s) as a declined command, keeping the typed text",
     async (kind, detail) => {
       mocks.sendMessage.mockRejectedValueOnce(
-        Object.assign(new Error("{}"), { code: 409, response: { detail, user_facing_message: detail, kind } }),
+        Object.assign(new Error("{}"), {
+          code: 409,
+          response: { detail, user_facing_message: detail, kind, expected: true },
+        }),
       );
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
       const component = MessageInput();
@@ -2354,7 +2363,7 @@ describe("MessageInput send failure notice", () => {
       "agent-1",
       Object.assign(new Error("[object Object]"), {
         code: 409,
-        response: { detail: sentence, user_facing_message: sentence, phase: "summarizing" },
+        response: { detail: sentence, user_facing_message: sentence, expected: true, phase: "summarizing" },
       }),
     );
 
@@ -2566,6 +2575,7 @@ describe("MessageInput switching harness", () => {
         detail: "Chat 'agent-1' cannot change to account acct-openai in place; it is on another harness or lane",
         user_facing_message: "This chat can't be moved to that account. Start a new chat on it instead.",
         kind: "cannot_move_to_account",
+        expected: true,
       }),
     );
     const component = MessageInput();
@@ -3343,7 +3353,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.sendMessage.mockRejectedValueOnce(
       Object.assign(new Error("{}"), {
         code: 409,
-        response: { detail, kind: "account_signed_out", user_facing_message: detail },
+        response: { detail, kind: "account_signed_out", user_facing_message: detail, expected: true },
       }),
     );
     const component = MessageInput();
@@ -4923,14 +4933,15 @@ describe("MessageInput tells each way a send can fail", () => {
         detail: "The agent is in shell mode with an unsubmitted command.",
         user_facing_message: sentence,
         kind: "input_blocked",
+        expected: true,
       }),
     );
     stubShellConnection(true);
     const { component, turned } = composerWithSourceView();
 
     const after = await typeAndSend(component, "agent-1", "hello");
-    // Answering the dialog is the way forward, so this is no bug to report.
-    expect(findButton(after, "Report a bug")).toBeUndefined();
+    // Answering the dialog is the way forward, so the chat app calls the refusal expected.
+    expectNoHelpOffered(after);
 
     expect(renderedText(findByClass(after, "modal-message"))).toContain(sentence);
     expect(renderedText(findByClass(after, "see-details"))).toContain("shell mode with an unsubmitted command");
@@ -4940,13 +4951,12 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(turned()).toBe(1);
   });
 
-  it("offers Retry and Report a bug for an agent whose start failed, as its sentence asks, and no Restart", async () => {
+  it("offers Retry and an agent for an agent whose start failed, and no Restart", async () => {
     stubShellConnection(true);
     mocks.sendMessage.mockRejectedValueOnce(
       refusal(500, {
         detail: "Could not start agent 'Chat-1' for a send: mngr start exited 1",
-        user_facing_message: "This chat's agent couldn't be started. Try again. If this persists, report a bug.",
-        reportable: true,
+        user_facing_message: "This chat's agent couldn't be started. Try again.",
         kind: "agent_start_failed",
       }),
     );
@@ -4955,10 +4965,12 @@ describe("MessageInput tells each way a send can fail", () => {
     const after = await typeAndSend(component, "agent-1", "hello");
 
     expect(renderedText(findByClass(after, "modal-message")).trim()).toBe(
-      "This chat's agent couldn't be started. Try again. If this persists, report a bug.",
+      "This chat's agent couldn't be started. Try again.",
     );
     expect(findButton(after, "Retry")).toBeDefined();
-    expect(findButton(after, "Report a bug")).toBeDefined();
+    expect(findButton(after, "Ask an agent to fix this")).toBeDefined();
+    // The bug report is for where no agent can be asked.
+    expect(findButton(after, "Report a bug")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
     expect(findButton(after, "Turn on Source view")).toBeUndefined();
   });
@@ -4969,14 +4981,17 @@ describe("MessageInput tells each way a send can fail", () => {
         detail: "The chat app has not read its agent list from mngr yet; try again shortly.",
         user_facing_message: "This workspace is still starting up. Try again in a few seconds.",
         kind: "chat_starting",
+        expected: true,
       }),
     );
+    stubShellConnection(true);
     const { component } = composerWithSourceView();
 
     const after = await typeAndSend(component, "agent-1", "hello");
 
     expect(renderedText(findByClass(after, "modal-message"))).toContain("This workspace is still starting up.");
     expect(findButton(after, "Retry")).toBeDefined();
+    expectNoHelpOffered(after);
     expect(findButton(after, "Restart")).toBeUndefined();
     expect(findButton(after, "Turn on Source view")).toBeUndefined();
   });
@@ -4992,33 +5007,19 @@ describe("MessageInput tells each way a send can fail", () => {
     }
   });
 
-  it("ends a refusal with no reason by asking for a bug report, with a button that asks the shell to open one", async () => {
-    const connection = stubShellConnection(true);
+  it("says to try again after a refusal with no reason, and offers an agent for it in place of Report a bug", async () => {
+    stubShellConnection(true);
     mocks.sendMessage.mockRejectedValueOnce(refusal(500, { oops: true }));
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 
     expect(renderedText(after)).toContain("Your message wasn't delivered. Your text is back in the box. Try again.");
     expect(renderedText(findByClass(after, "see-details"))).toContain("HTTP 500");
-    (findButton(after, "Report a bug")!.attrs!.onclick as () => void)();
-    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
-      message:
-        "Your message wasn't delivered. Your text is back in the box. Try again. If this persists, report a bug.",
-      details: 'HTTP 500\n{"oops":true}',
-    });
-  });
-
-  it("offers no Report a bug where the shell said Imbue Studio cannot open one", async () => {
-    stubShellConnection(false);
-    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { oops: true }));
-
-    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
-
-    expect(renderedText(after)).toContain("If this persists, report a bug.");
+    expect(findButton(after, "Ask an agent to fix this")).toBeDefined();
     expect(findButton(after, "Report a bug")).toBeUndefined();
   });
 
-  it("offers an agent before Report a bug, asking as Imbue Studio, and closes once the agent's chat opened", async () => {
+  it("offers an agent after Retry, asking as Imbue Studio, and closes once the agent's chat opened", async () => {
     const connection = stubShellConnection(true);
     let answer: (outcome: StartOutcome) => void = () => undefined;
     vi.mocked(connection.askAgent).mockReturnValueOnce(
@@ -5034,16 +5035,16 @@ describe("MessageInput tells each way a send can fail", () => {
     const labels = flatten(after)
       .filter((vnode) => vnode.tag === "button")
       .map((vnode) => renderedText(vnode).trim());
-    expect(labels.indexOf("Ask an agent to fix this")).toBeLessThan(labels.indexOf("Report a bug"));
+    expect(labels.indexOf("Retry")).toBeGreaterThanOrEqual(0);
     expect(labels.indexOf("Ask an agent to fix this")).toBeGreaterThan(labels.indexOf("Retry"));
 
     (findButton(after, "Ask an agent to fix this")!.attrs!.onclick as () => void)();
     const [text, options] = vi.mocked(connection.askAgent).mock.calls[0]!;
     expect(text).toMatch(
-      /^Imbue Studio showed the user this failure: Your message wasn't delivered\. Your text is back in the box\. Try again\. If this persists, report a bug\.\n\n/,
+      /^Imbue Studio showed the user this failure: Your message wasn't delivered\. Your text is back in the box\. Try again\.\n\n/,
     );
     expect(text).toContain('HTTP 500\n{"oops":true}');
-    expect(options).toEqual({ showsOutcome: true, onLateAnswer: undefined });
+    expect(options).toEqual({ showsOutcome: true });
     const asking = render();
     expect(findButton(asking, "Asking an agent…")).toBeDefined();
     expect(findButton(asking, "Retry")!.attrs!["aria-disabled"]).toBe("true");
@@ -5053,9 +5054,9 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(renderedText(render())).not.toContain("Your message wasn't delivered");
   });
 
-  it("tells a refused ask in the notice, and files it in the notice's one bug report", async () => {
+  it("tells a refused ask in the notice, then offers a draft of it and one bug report that files both", async () => {
     const connection = stubShellConnection(true);
-    const refused = { message: "Chat couldn't open that.", details: "HTTP 503", isReportable: true };
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 503", isHelpOwed: true };
     vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: false, failure: refused });
     mocks.sendMessage.mockRejectedValueOnce(refusal(500, { oops: true }));
     const component = MessageInput();
@@ -5070,35 +5071,62 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(findButton(told, "Ask an agent to fix this")).toBeDefined();
     (findButton(told, "Report a bug")!.attrs!.onclick as () => void)();
     expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
-      message:
-        "Your message wasn't delivered. Your text is back in the box. Try again. If this persists, report a bug. " +
-        "Chat couldn't open that.",
+      message: "Your message wasn't delivered. Your text is back in the box. Try again. Chat couldn't open that.",
       details: 'HTTP 500\n{"oops":true}\n\nHTTP 503',
     });
+
+    // The draft leaves the same request unsent in a chat's message box, and a draft that was made closes the notice.
+    vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: true });
+    (findButton(told, "Draft it in a chat")!.attrs!.onclick as () => void)();
+    const [asked, drafted] = vi.mocked(connection.askAgent).mock.calls;
+    expect(drafted).toEqual([asked![0], { showsOutcome: true }, "draft"]);
+    await flushAsync();
+    expect(renderedText(render())).not.toContain("Your message wasn't delivered");
   });
 
-  it("offers no agent for a send refused because the chat app can't read its agent list, which an ask would meet too", async () => {
-    stubShellConnection(true);
-    mocks.sendMessage.mockRejectedValueOnce(
-      refusal(503, {
-        detail: "mngr observe is down",
-        user_facing_message:
-          "Imbue Studio can't read this workspace's chats. Try again. If this persists, report a bug.",
-        reportable: true,
-        kind: "agent_list_unreadable",
-      }),
-    );
+  it("offers no draft under an ask that was refused for a reason of the person's own to clear", async () => {
+    const connection = stubShellConnection(true);
+    const refused = { message: "Stop viewing first.", details: null, isHelpOwed: false };
+    vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: false, failure: refused });
+    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { oops: true }));
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-1", "hello");
+    (findButton(after, "Ask an agent to fix this")!.attrs!.onclick as () => void)();
+    await flushAsync();
+
+    const told = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(told)).toContain("Stop viewing first.");
+    expect(findButton(told, "Draft it in a chat")).toBeUndefined();
+    expect(findButton(told, "Report a bug")).toBeDefined();
+  });
+
+  it("offers Report a bug, and no agent, for a send refused because the chat app can't read its agent list, which an ask would meet too", async () => {
+    const sentence = "Chat couldn't load this workspace's chats. Restart the workspace.";
+    const unreadable = (): unknown =>
+      refusal(503, { detail: "mngr observe is down", user_facing_message: sentence, kind: "agent_list_unreadable" });
+    const connection = stubShellConnection(true);
+    mocks.sendMessage.mockRejectedValueOnce(unreadable());
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 
-    expect(findButton(after, "Report a bug")).toBeDefined();
     expect(findButton(after, "Ask an agent to fix this")).toBeUndefined();
+    (findButton(after, "Report a bug")!.attrs!.onclick as () => void)();
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message: sentence,
+      details: expect.stringContaining("mngr observe is down"),
+    });
+
+    // Where the shell said Imbue Studio opens no bug report, the sentence stands alone.
+    stubShellConnection(false);
+    mocks.sendMessage.mockRejectedValueOnce(unreadable());
+    expectNoHelpOffered(await typeAndSend(MessageInput(), "agent-1", "hello"));
   });
 
   it("offers neither Retry nor Restart for a chat whose account was signed out, which neither can clear", async () => {
     const sentence = "You signed out of the account this chat runs on. Choose a provider to continue it on.";
     mocks.sendMessage.mockRejectedValueOnce(
-      refusal(409, { detail: sentence, user_facing_message: sentence, kind: "account_signed_out" }),
+      refusal(409, { detail: sentence, user_facing_message: sentence, kind: "account_signed_out", expected: true }),
     );
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
@@ -5116,13 +5144,16 @@ describe("MessageInput tells each way a send can fail", () => {
           "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it " +
           "into a new chat.",
         kind: "chat_gone",
+        expected: true,
       }),
     );
     mocks.selectedAccount = { id: "acct-1" };
+    stubShellConnection(true);
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 
     expect(renderedText(after)).toContain("This chat is no longer here -- it was deleted.");
+    expectNoHelpOffered(after);
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
     (findButton(after, "Start a new chat")!.attrs!.onclick as () => void)();
@@ -5139,10 +5170,8 @@ describe("MessageInput tells each way a send can fail", () => {
     await (findByAttr(render(), "aria-label", "Interrupt agent")!.attrs!.onclick as () => Promise<void>)();
 
     const failed = render();
-    expect(renderedText(findByClass(failed, "modal-message"))).toContain(
-      "Couldn't stop the agent. Try again. If this persists, report a bug.",
-    );
-    expect(findButton(failed, "Report a bug")).toBeDefined();
+    expect(renderedText(findByClass(failed, "modal-message"))).toContain("Couldn't stop the agent. Try again.");
+    expect(findButton(failed, "Ask an agent to fix this")).toBeDefined();
     (findButton(failed, "Try again")!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledTimes(2);
@@ -5153,7 +5182,12 @@ describe("MessageInput tells each way a send can fail", () => {
     mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
     const sentence = "This chat has already finished moving -- there's nothing to cancel.";
     mocks.cancelHandoff.mockRejectedValueOnce(
-      refusal(400, { detail: "not moving", user_facing_message: sentence, kind: "nothing_to_cancel" }),
+      refusal(400, {
+        detail: "not moving",
+        user_facing_message: sentence,
+        kind: "nothing_to_cancel",
+        expected: true,
+      }),
     );
     const component = MessageInput();
     const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
@@ -5215,6 +5249,33 @@ describe("MessageInput first send whose launch fails", () => {
     expect(mocks.launchChat).toHaveBeenLastCalledWith("agent-1", "acct-1", "Let's build something", "agent");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("Let's build something");
+  });
+
+  it("shows the chat app's sentence for a refused launch, with an agent to ask about it", async () => {
+    stubShellConnection(true);
+    mocks.launchChat.mockRejectedValueOnce(
+      refusal(400, { detail: "bad template", user_facing_message: "This chat couldn't be started. Try again." }),
+    );
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    const text = renderedText(after);
+    expect(text).toContain("This chat couldn't be started. Try again.");
+    expect(text).toContain("Your message is back in the box.");
+    expect(findButton(after, "Ask an agent to fix this")).toBeDefined();
+  });
+
+  it("offers no agent for a launch the chat app refused as ordinary operation", async () => {
+    stubShellConnection(true);
+    const sentence = "That account is signed out. Sign in to it again, or pick another one.";
+    mocks.launchChat.mockRejectedValueOnce(
+      refusal(400, { detail: "no such account", user_facing_message: sentence, expected: true }),
+    );
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    expect(renderedText(findByClass(after, "modal-message"))).toContain(sentence);
+    expectNoHelpOffered(after);
   });
 });
 

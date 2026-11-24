@@ -79,6 +79,8 @@ import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay"
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
+  /** Opened from the first run's provider page, whose cream the dialog then wears in place of the workspace's look. */
+  isFirstRun?: boolean;
 }
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
@@ -458,7 +460,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       await loadLanesAndAccountsWithRetry();
     } catch (e) {
       const lines = plainFailureLines(e, "Couldn't load the list of providers", { requestKind: "read" });
-      loadError = { message: plainFailureSentence(lines), details: lines.details, isReportable: lines.isReportable };
+      loadError = { message: plainFailureSentence(lines), details: lines.details, isHelpOwed: lines.isHelpOwed };
     } finally {
       busy = false;
       m.redraw();
@@ -597,7 +599,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   return {
                     message: plainFailureSentence(lines),
                     details: lines.details,
-                    isReportable: lines.isReportable,
+                    isHelpOwed: lines.isHelpOwed,
                   };
                 },
               );
@@ -1035,7 +1037,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       } else if (isFailed || error !== null) {
         const failure: ChooserFailure | null =
           isFailed && flow.status.detail !== null
-            ? { message: flow.status.detail, details: flow.status.details ?? null, isReportable: false }
+            ? { message: flow.status.detail, details: flow.status.details ?? null, isHelpOwed: false }
             : error;
         body = statusScreen("error", "That didn't work", failure?.message ?? null, failureMark(failure));
         footer = [
@@ -1114,7 +1116,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         // wherever the press ENDED: selecting the device code or the several-hundred
         // character sign-in URL and releasing past the dialog's edge would otherwise read
         // as "close this" and abort the flow the code was being copied out of.
-        { class: MODAL_OVERLAY_CLASS, ...backdropDismissAttrs(onClose) },
+        {
+          class:
+            vnode.attrs.isFirstRun === true ? `${MODAL_OVERLAY_CLASS} ${css.FIRST_RUN_DIALOG}` : MODAL_OVERLAY_CLASS,
+          ...backdropDismissAttrs(onClose),
+        },
         [
           m(
             "div",
@@ -1194,23 +1200,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   };
 }
 
-/** A failure on one of the chooser's screens: the sentence, what goes behind "See details", and whether to offer
- *  "Report a bug". */
+/** A failure on one of the chooser's screens: the sentence, what goes behind "See details", and whether it owes the
+ *  person help. */
 interface ChooserFailure {
   readonly message: string;
   readonly details: string | null;
-  readonly isReportable: boolean;
+  readonly isHelpOwed: boolean;
 }
 
-const SIGN_IN_FAILED_WITH_NO_REASON =
-  "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.";
+const SIGN_IN_FAILED_WITH_NO_REASON = "The sign-in didn't complete. Try again, or try another way in.";
 
 /** A refused or unanswered sign-in request: the server's own sentence where it wrote one, else ours. */
 function signInFailure(e: unknown): ChooserFailure {
   const failure = describeRequestFailure(e);
   const told = failureSentence(failure, "The sign-in didn't complete. Try again, or try another way in");
-  if (failure.cause !== "user_facing" && told.isReportable) {
-    return { message: SIGN_IN_FAILED_WITH_NO_REASON, details: told.details, isReportable: true };
+  if (failure.cause !== "user_facing" && told.isHelpOwed) {
+    return { message: SIGN_IN_FAILED_WITH_NO_REASON, details: told.details, isHelpOwed: true };
   }
   return told;
 }
@@ -1219,8 +1224,8 @@ function failureMark(failure: ChooserFailure | null): m.Children {
   return failure === null ? null : m(SeeDetails, { details: failure.details });
 }
 
-/** What a failure on the chooser offers when it asks for a bug report: "Ask an agent to fix this", then "Report a
- *  bug". No agent while nothing is signed in, since an agent needs an account to run on. */
+/** What a failure on the chooser offers when it owes help: "Ask an agent to fix this", or "Report a bug" while
+ *  nothing is signed in, since an agent needs an account to run on. */
 function failureRemedies(failure: ChooserFailure | null): m.Children {
   return failure === null
     ? null

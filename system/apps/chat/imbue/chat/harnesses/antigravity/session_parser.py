@@ -24,6 +24,7 @@ from imbue.chat.harnesses.antigravity.agy_transcript import DecodedStep
 from imbue.chat.harnesses.antigravity.tool_labels import shell_command
 from imbue.chat.harnesses.antigravity.tool_labels import tool_labels
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
+from imbue.chat.harnesses.error_patterns import failed_turn_text_fields
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
@@ -103,6 +104,8 @@ def _assistant_message(
         "is_api_error": False,
         "api_error_kind": None,
         "is_provider_fault": False,
+        "api_error_message": None,
+        "is_error_text_raw": False,
     }
     # agy records readable reasoning; only the FLAG is resident (the payload-free wire
     # contract) -- the text itself is served by the detail endpoint's row re-query.
@@ -200,6 +203,7 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
         # just a failed turn. agy passes the provider's own words through, so the shared
         # vocabulary reads them.
         event["is_auth_error"] = is_auth_error_text(step.error_text)
+        event.update(failed_turn_text_fields(step.error_text, is_api_error=True, is_auth_error=event["is_auth_error"]))
         return [event]
     return []
 

@@ -23,9 +23,6 @@ from imbue.chat.errors import ChatAppError
 # The peer addresses a loopback-only route answers, as the shell's routes of that kind do.
 _LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 
-# How a sentence for people that asks for a bug report ends.
-_REPORT_A_BUG_ENDING: Final[str] = "If this persists, report a bug."
-
 
 def json_response(content: Any, status_code: int = 200) -> Response:
     """Build a compact JSON response, matching the wire format the frontend expects."""
@@ -33,22 +30,28 @@ def json_response(content: Any, status_code: int = 200) -> Response:
     return Response(body, status=status_code, mimetype="application/json")
 
 
-def refusal_answer(detail: str, user_facing_message: str | None = None, kind: str | None = None) -> ErrorResponse:
+def refusal_answer(
+    detail: str, user_facing_message: str | None = None, kind: str | None = None, is_expected: bool = False
+) -> ErrorResponse:
     """A refusal's answer. ``detail`` is the developer's reason, which scripts and logs read; ``user_facing_message``,
-    when given, is the sentence a page shows in its place (the details keep ``detail``), with ``reportable: true``
-    when it asks for a bug report, so the page offers the button for one; ``kind`` names the case for a page that
-    offers different controls per case."""
-    is_reportable = user_facing_message is not None and user_facing_message.endswith(_REPORT_A_BUG_ENDING)
+    when given, is the sentence a page shows in its place (the details keep ``detail``); ``kind`` names the case for a
+    page that offers different controls per case. A sentence owes the person help (an agent to ask, a bug report)
+    unless ``is_expected`` says the refusal is ordinary operation the sentence fully explains: a chat still starting,
+    an account to sign in to first, a chat that is gone."""
     return ErrorResponse(
-        detail=detail, user_facing_message=user_facing_message, reportable=True if is_reportable else None, kind=kind
+        detail=detail, user_facing_message=user_facing_message, expected=True if is_expected else None, kind=kind
     )
 
 
 def refusal_response(
-    detail: str, status_code: int, user_facing_message: str | None = None, kind: str | None = None
+    detail: str,
+    status_code: int,
+    user_facing_message: str | None = None,
+    kind: str | None = None,
+    is_expected: bool = False,
 ) -> Response:
     """``refusal_answer`` as the response under ``status_code``."""
-    return model_response(refusal_answer(detail, user_facing_message, kind), status_code)
+    return model_response(refusal_answer(detail, user_facing_message, kind, is_expected), status_code)
 
 
 def require_loopback() -> Response | None:

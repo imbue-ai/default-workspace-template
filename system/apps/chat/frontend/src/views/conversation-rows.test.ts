@@ -38,6 +38,8 @@ function assistantText(ts: string, text: string, stopReason: string | null = nul
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -64,6 +66,8 @@ function tkMsg(ts: string, command: string, callId: string): AssistantMessageEve
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -99,6 +103,8 @@ function toolMsg(ts: string, callId: string, note: string): AssistantMessageEven
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -118,6 +124,8 @@ function agentMsg(ts: string, callId: string, description: string): AssistantMes
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 

@@ -204,21 +204,19 @@ describe("renderSecretCard", () => {
       true,
       idleState({
         error: {
-          body: [
-            "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug.",
-          ],
+          body: ["Imbue Studio couldn't save these values in this workspace. Try again."],
           details: "HTTP 500\nCould not write data/.secrets/svc.env: disk full",
-          isReportable: true,
+          isHelpOwed: true,
         },
       }),
       recordingHandlers(),
     );
     expect(root.querySelector(".secret-request-error")?.textContent).toBe(
-      "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug.",
+      "Imbue Studio couldn't save these values in this workspace. Try again.",
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("disk full");
-    (root.querySelector(".report-bug") as HTMLElement).click();
-    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
+    expect(String(shell.posted("shell:ask-agent")[0]?.text)).toContain("disk full");
     shell.release();
   });
 
@@ -230,7 +228,7 @@ describe("renderSecretCard", () => {
       null,
       true,
       idleState({
-        error: { body: ["This request can't be answered any more."], details: null, isReportable: false },
+        error: { body: ["This request can't be answered any more."], details: null, isHelpOwed: false },
         isRequestGone: true,
       }),
       handlers,
@@ -337,7 +335,7 @@ describe("submit and decline", () => {
     const refused = await submitSecret("secret-1", { SVC_TOKEN: "t" });
     expect(refused).toMatchObject({
       ok: false,
-      lines: { body: ["These values couldn't be saved."], isReportable: false },
+      lines: { body: ["These values couldn't be saved."], isHelpOwed: false },
     });
     expect(refused.ok === false && refused.lines.details).toContain("Request secret-1 is not pending");
     expect(await declineSecret("secret-1", "")).toMatchObject({

@@ -97,26 +97,28 @@ class AccountError(RuntimeError):
 
     # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
     user_facing_message: str | None = None
+    # Whether the refusal is ordinary operation the sentence fully explains, so it owes the person no more help.
+    is_expected: bool = False
 
 
 class NoAccountsError(AccountError):
     """No provider account is signed in, so there is nothing to bind an agent to."""
 
     user_facing_message = "No providers are signed in yet. Sign in to start this chat."
+    is_expected = True
 
 
 class AccountSignedOutError(AccountError):
     """The named account is no longer signed in: its row or its folder is gone."""
 
     user_facing_message = "That account is signed out. Sign in to it again, or pick another one."
+    is_expected = True
 
 
 class AccountIndexUnreadableError(AccountError):
     """The account index could not be read, so nothing can be said about any account."""
 
-    user_facing_message = (
-        "Imbue Studio couldn't read this workspace's accounts. Try again. If this persists, report a bug."
-    )
+    user_facing_message = "Imbue Studio couldn't read this workspace's accounts. Try again."
 
 
 class Account(FrozenModel):
