@@ -6677,6 +6677,34 @@ def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the
         manager.stop()
 
 
+def test_intake_held_for_a_chat_awaiting_its_first_send_is_kept_for_the_agent_a_launch_began_before_the_apply(
+    app: Flask, client: FlaskClient
+) -> None:
+    """A text the root has yet to apply when something else launches the chat (the sign-in that gives it a
+    provider) is kept for that agent: the chat no longer awaits a first message to be launched with."""
+    agent_manager: AgentManager = state_of(app).agent_manager
+    chat_id = agent_manager.mint_awaiting_chat("").chat_id
+    token = _token_of(_intake(client, message="Begin here", target="chat", chat_id=str(chat_id)).get_json()["path"])
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = agent_manager._provisional_chats[chat_id].model_copy_update(
+            to_update(agent_manager._provisional_chats[chat_id].field_ref().phase, ProvisionalChatPhase.CREATING)
+        )
+
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": str(chat_id),
+        "composer_text": None,
+        "first_message": None,
+        "hint": None,
+    }
+    creating = agent_manager.get_provisional_chat(str(chat_id))
+    assert creating is not None
+    assert [held.text for held in creating.held_sends] == ["Begin here"]
+
+
 def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
     app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

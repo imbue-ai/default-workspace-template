@@ -2582,10 +2582,10 @@ def _deliver_intake_send(
 def _hold_intake_send_for_chat_being_created(
     state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> bool:
-    """Hold an intake's text for the agent a chat's running create lands as, as the message route holds a send to
-    such a chat; False when the chat is not being created."""
+    """Hold the text an intake sends for the agent a chat's running create lands as, as the message route holds a
+    send to such a chat; False for a draft, for no text, and when the chat is not being created."""
     # Attributed only for a chat being created: the annotation is a file under the chat's folder.
-    if not _is_chat_being_created(state.agent_manager, chat_id):
+    if intake.is_draft or not intake.message or not _is_chat_being_created(state.agent_manager, chat_id):
         return False
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
@@ -2708,7 +2708,7 @@ def _intake_into_listed_chat(state: ChatAppState, chat_id: ChatId, intake: Intak
     send path."""
     if not intake.message:
         return model_response(IntakeResponse(path=intake_path(chat_id, None)))
-    if not intake.is_draft and _hold_intake_send_for_chat_being_created(state, chat_id, intake, request_identity()):
+    if _hold_intake_send_for_chat_being_created(state, chat_id, intake, request_identity()):
         return model_response(IntakeResponse(path=intake_path(chat_id, None)))
     if intake.is_draft or _agent_chat_snapshot(state.agent_manager, chat_id) is None:
         token = state.pending_intakes.mint(intake, chat_id, needs_pick=False)
@@ -2767,12 +2767,17 @@ def _apply_pending_intake(token: str) -> Response:
     intake = pending.request
     provisional: ProvisionalChat | None = agent_manager.get_provisional_chat(str(chat_id))
     is_awaiting = provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    # Tried before the chat is looked up as an agent, so a create that lands in between is found as one.
+    is_held = _hold_intake_send_for_chat_being_created(state, chat_id, intake, request_identity())
     is_agent = _agent_chat_snapshot(agent_manager, chat_id) is not None
     composer_text: str | None = None
     first_message: str | None = None
-    # Section 3.6.1's three outcomes: a draft, or a text for a chat that can neither take a message nor be launched
-    # by one, goes to the composer; a chat awaiting its first send is launched with the text; an agent is sent it.
-    if intake.is_draft or (not is_agent and not is_awaiting):
+    # Section 3.6.1's outcomes: a chat being created keeps the text for its agent; a draft, or a text for a chat
+    # that can neither take a message nor be launched by one, goes to the composer; a chat awaiting its first send
+    # is launched with the text; an agent is sent it.
+    if is_held:
+        pass
+    elif intake.is_draft or (not is_agent and not is_awaiting):
         composer_text = intake.message or None
     elif is_awaiting:
         first_message = intake.message or None
