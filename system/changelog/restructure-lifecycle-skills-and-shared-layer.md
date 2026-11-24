@@ -1,0 +1,1 @@
+The skills best-practices plan (`docs/system/blueprint/skills-best-practices/plan-skills-best-practices.md`) records that `interactive-delivery.md` is deleted and why: `build-app`, `update-app`, `fetch-process-show` and `do-something-new` state the loop themselves.
