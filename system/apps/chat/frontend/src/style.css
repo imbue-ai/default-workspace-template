@@ -1005,6 +1005,14 @@
   background: var(--first-run-ground);
   color: var(--first-run-ink);
 }
+/* A dialog over the page (the provider sign-in) fades the page into its cream rather than dimming it, and its white
+ * card goes without a border, as Imbue Studio's first-run sign-in does. Every other dialog keeps the standard scrim. */
+.first-run-page .modal-overlay {
+  background-color: rgb(from var(--first-run-ground) r g b / 0.9);
+}
+.first-run-page .modal-overlay > [role="dialog"] {
+  border-color: transparent;
+}
 /* The first-run sizes match Imbue Studio's own first-run pages (mngr apps/minds/frontend/src/style.css): Besley
  * Medium for the headline at the welcome's 40px, the type ramp's 18px semibold heading for the line under it, and
  * the same button. Fixed rather than themed: this page wears the first run's brand, whatever the workspace's theme. */
@@ -1078,7 +1086,7 @@
   color: var(--first-run-ink);
 }
 .first-run-next {
-  padding: 16px 28px;
+  padding: 12px 20px;
   border-radius: 9999px;
   background: var(--first-run-ink);
   color: var(--first-run-ground);
