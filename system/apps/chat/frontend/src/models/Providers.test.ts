@@ -13,10 +13,12 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   closeProviderChooser,
+  finishFirstRunProviderStep,
   getAccounts,
   getFlow,
   isProviderChooserOpen,
   loadAccountsWithRetry,
+  onFirstRunProviderStepDoneElsewhere,
   openProviderChooser,
   pickAccount,
   startFlow,
@@ -308,5 +310,29 @@ describe("the provider chooser's hooks", () => {
     closeProviderChooser();
     expect(onDismissed).not.toHaveBeenCalled();
     expect(onSignedIn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the first run's provider step, across frames", () => {
+  beforeEach(() => {
+    mockRequest.mockReset();
+    localStorage.clear();
+  });
+
+  it("tells the app's other frames when the owner leaves the provider page, and only then", async () => {
+    const onDone = vi.fn();
+    onFirstRunProviderStepDoneElsewhere(onDone);
+    window.dispatchEvent(new StorageEvent("storage", { key: "chat:rail-width", newValue: "300" }));
+    expect(onDone).not.toHaveBeenCalled();
+
+    mockRequest.mockResolvedValueOnce({});
+    await finishFirstRunProviderStep();
+    const written = localStorage.getItem("chat:first-run-provider-step-done");
+    expect(written).not.toBeNull();
+
+    // The write reaches the other frames as a storage event; jsdom does not raise it for the writer, so it is raised
+    // here as the browser raises it in a sibling frame.
+    window.dispatchEvent(new StorageEvent("storage", { key: "chat:first-run-provider-step-done", newValue: written }));
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 });

@@ -127,6 +127,19 @@ describe("InnerFramePool", () => {
     expect(pageA.focus).toHaveBeenCalledTimes(1);
   });
 
+  it("hands the keyboard to the shown chat when asked, and to nothing when none is shown and loaded", () => {
+    pool.show("agent-a");
+    expect(pool.focusShown()).toBe(false);
+    const pageA = loadPage("agent-a");
+
+    expect(pool.focusShown()).toBe(true);
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+
+    pool.show(null);
+    expect(pool.focusShown()).toBe(false);
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("hands no keyboard while the root itself is off screen", () => {
     pool.show("agent-a");
     const pageA = loadPage("agent-a");
