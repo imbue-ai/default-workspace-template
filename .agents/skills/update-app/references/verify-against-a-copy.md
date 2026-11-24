@@ -7,9 +7,7 @@ into the live store and then "cleaning up" with a delete or reset whose
 predicate is too broad and takes real records with it. The delete is where the
 data dies.
 
-Read this when checking a change would write, change or delete data, when the
-user must see a change before it lands, or when a change must rewrite the live
-store. The sections run cheapest first.
+The sections run cheapest first.
 
 ## Contents
 
