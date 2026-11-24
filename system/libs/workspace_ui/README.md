@@ -89,8 +89,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   agent to fix this", and "Report a bug" only where no agent can be asked
   (no shell frames the page, or the surface passes `isAgentWithheld` because
   the ask would go through what failed, such as the chat app's own server not
-  answering) or once the ask was refused, when its report files the refused
-  ask too; nothing for a failure that owes none (its surface offers its own
+  answering); once an ask was refused with a failure that owes help, the
+  draft and a "Report a bug" that files both failures sit under the ask's
+  failure. Nothing for a failure that owes none (its surface offers its own
   remedy). `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,

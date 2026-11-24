@@ -5084,7 +5084,7 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(renderedText(render())).not.toContain("Your message wasn't delivered");
   });
 
-  it("offers no draft under an ask that was refused for a reason of the person's own to clear", async () => {
+  it("offers only to ask again after an ask refused for a reason of the person's own to clear", async () => {
     const connection = stubShellConnection(true);
     const refused = { message: "Stop viewing first.", details: null, isHelpOwed: false };
     vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: false, failure: refused });
@@ -5097,8 +5097,9 @@ describe("MessageInput tells each way a send can fail", () => {
 
     const told = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(told)).toContain("Stop viewing first.");
+    expect(findButton(told, "Ask an agent to fix this")).toBeDefined();
     expect(findButton(told, "Draft it in a chat")).toBeUndefined();
-    expect(findButton(told, "Report a bug")).toBeDefined();
+    expect(findButton(told, "Report a bug")).toBeUndefined();
   });
 
   it("offers Report a bug, and no agent, for a send refused because the chat app can't read its agent list, which an ask would meet too", async () => {
