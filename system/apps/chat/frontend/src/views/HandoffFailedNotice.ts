@@ -72,7 +72,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
           await retryHandoff(chatId, chosenAccountId ?? failedTargetId);
         } catch (error) {
           retryError = plainFailureLines(error, "Couldn't try the move again", {
-            notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether the move was tried again.",
+            notAnswered: "The workspace didn't answer. The move may not have been tried again.",
           });
         } finally {
           isRetrying = false;
