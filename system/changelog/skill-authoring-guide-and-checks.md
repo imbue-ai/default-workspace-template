@@ -17,3 +17,5 @@
 - `.reviewer/code-issue-categories.md` gains a `skill_hygiene` category, which reviews skill markdown against the guide for what the validator cannot check.
 
 - The mngr pin moves to a commit that carries the guide.
+
+- `.reviewer/settings.json` sets code-guardian's `stop_hook.reviewable_markdown_paths` (from code-guardian 0.7.0) to `.agents/skills` and `.agents/shared`, so a branch that changes only skill markdown gets autofix and the other review gates, including `skill_hygiene`. Before, the Stop hook skipped any branch whose changes were all markdown.
