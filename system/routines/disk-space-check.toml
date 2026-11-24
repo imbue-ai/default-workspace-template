@@ -1,0 +1,7 @@
+title = "Disk space check"
+what = "Checks how full the disk is and opens the cleanup helper when it passes the alert line."
+every = "10m"
+command = ["system/apps/disk_space/.venv/bin/disk-space", "check"]
+app = "disk-space"
+timeout = "15m"
+retry_after = "5m"

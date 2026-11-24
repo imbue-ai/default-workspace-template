@@ -1,0 +1,63 @@
+[project]
+name = "disk-space"
+version = "0.1.0"
+description = "Shows what is filling the workspace's disk as a treemap, sorts it into safe to delete, ask first and keep, and helps free space when the disk passes 90%."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-schema",
+    "disk-headroom",
+    "flask>=3.0",
+    "flask-sock>=0.7",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+    # The shell's layout client, for putting the cleanup helper's chat on screen (app-schema brings it in; the app
+    # imports it directly, so it is named here).
+    "workspace-layout",
+]
+
+[project.scripts]
+disk-space = "disk_space.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/disk_space"]
+
+[dependency-groups]
+dev = [
+    # The app's tests run from its own venv, which its sync gives the dev group: pytest
+    # and what the ratchets check with.
+    "imbue-common[testing]",
+    # What runner_test.py asserts the API document with.
+    "app-schema[testing]",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+    # The browser tests: the rendered page on a desktop and on a phone, driven against this app's own venv (the
+    # repo-root conftest, which offers a browser, does not reach a user-built app's suite).
+    "playwright==1.58.0",
+    "pytest-timeout==2.4.0",
+]
+
+# Makes this directory the tests' own pytest root, so they run against this app's venv
+# rather than the workspace's root configuration.
+[tool.pytest.ini_options]
+testpaths = ["."]
+markers = [
+    "browser: drives a browser",
+    "frontend: reads the page's source without running it",
+]
+
+# The workspace's shared code, live and editable. app-schema's own workspace sources
+# apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
+# here as well would be a second URL for one package, which uv refuses to lock.
+[tool.uv.sources]
+app-schema = { path = "../../libs/app_schema", editable = true }
+disk-headroom = { path = "../../libs/disk_headroom", editable = true }
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

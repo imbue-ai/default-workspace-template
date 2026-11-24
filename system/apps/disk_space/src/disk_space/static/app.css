@@ -1,0 +1,167 @@
+/* Design tokens copied by name and value from system/libs/workspace_ui/src/base.css (plain HTML, no build step). */
+:root {
+  --c-bg: #fafaf8;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #f3f2ef;
+  --c-text-primary: #202020;
+  --c-text-secondary: #666666;
+  --c-text-faint: #8c8c8c;
+  --c-border: #e4e3df;
+  --c-border-strong: #cfcdc7;
+  --c-accent: #2f6b4f;
+  --c-accent-light: #e9f2ee;
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-warning: #b45309;
+  --c-fill-hover: rgb(0 0 0 / 0.07);
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  --font-size-row: 13px;
+  --font-size-helper: 12px;
+  --weight-semibold: 600;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --dur-base: 120ms;
+  --safe: #4f9a74;
+  --safe-bg: #dcefe4;
+  --ask: #c98a2b;
+  --ask-bg: #f7e6c8;
+  --keep: #9a978f;
+  --keep-bg: #e9e7e2;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 24px 80px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); margin: 0; }
+h2 { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-secondary); margin: 0 0 10px; }
+h2.sub { margin-top: 18px; }
+h3 { font-size: var(--font-size-body); font-weight: var(--weight-semibold); margin: 0; display: flex; align-items: center; gap: 8px; }
+p { margin: 0; }
+section { padding: 18px 0; border-top: 1px solid var(--c-border); }
+section:first-of-type { border-top: 0; padding-top: 6px; }
+.small { font-size: var(--font-size-helper); }
+.faint { color: var(--c-text-faint); }
+.secondary { color: var(--c-text-secondary); }
+.num { font-variant-numeric: tabular-nums; }
+.hint { color: var(--c-text-faint); font-size: var(--font-size-helper); margin: 2px 0 8px; }
+.section-head, .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-head h2 { margin: 0; }
+
+button { font: inherit; font-size: var(--font-size-row); padding: 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--c-border-strong); background: var(--c-surface); color: var(--c-text-primary); cursor: pointer; }
+button:hover { background: var(--c-surface-secondary); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.danger { background: var(--c-danger); border-color: var(--c-danger); color: #fff; }
+button.danger:hover { background: var(--c-danger-hover); }
+button.link { border: 0; background: none; padding: 2px 4px; color: var(--c-accent); }
+button.link:hover { text-decoration: underline; background: none; }
+
+/* The gauge. */
+.big { font-size: 26px; font-weight: var(--weight-semibold); line-height: 1.25; }
+.big small { font-size: var(--font-size-body); font-weight: 400; color: var(--c-text-secondary); }
+.bar { height: 10px; border-radius: var(--radius-sm); background: var(--c-border); margin: 10px 0 6px; display: flex; }
+.bar > span { display: block; height: 100%; border-radius: var(--radius-sm); background: var(--c-accent); transition: width 300ms; }
+.bar.full > span { background: var(--c-danger); }
+.guard-bar { position: relative; }
+.guard-bar .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--c-danger); opacity: 0.75; }
+.row { display: flex; justify-content: space-between; gap: 12px; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+.alert { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--c-danger) 9%, var(--c-surface)); border: 1px solid color-mix(in srgb, var(--c-danger) 25%, var(--c-surface)); display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--font-size-row); }
+.alert strong { display: block; color: var(--c-danger-hover); }
+.alert[hidden] { display: none; }
+
+/* The treemap. */
+.crumbs { margin: 10px 0 8px; font-size: var(--font-size-row); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.crumbs a { color: var(--c-accent); text-decoration: none; cursor: pointer; }
+.crumbs a:hover { text-decoration: underline; }
+.crumbs .sep { color: var(--c-text-faint); }
+.treemap { position: relative; width: 100%; height: 340px; border-radius: var(--radius-lg); overflow: hidden; background: var(--c-surface-secondary); }
+.tile { user-select: none; position: absolute; border: 2px solid var(--c-bg); border-radius: var(--radius-md); padding: 6px 8px; overflow: hidden; cursor: default; transition: filter var(--dur-base); font-size: var(--font-size-row); line-height: 1.3; }
+.tile.can-open { cursor: pointer; }
+.tile:hover { filter: brightness(0.95); }
+.tile .name { font-weight: var(--weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .size { color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+.tile .open { position: absolute; right: 6px; top: 4px; color: var(--c-text-faint); font-size: var(--font-size-helper); }
+.tile.safe { background: var(--safe-bg); box-shadow: inset 4px 0 0 var(--safe); }
+.tile.ask { background: var(--ask-bg); box-shadow: inset 4px 0 0 var(--ask); }
+.tile.keep { background: var(--keep-bg); box-shadow: inset 4px 0 0 var(--keep); }
+.tile.mixed { background: var(--c-surface); box-shadow: inset 0 -5px 0 var(--mix, var(--c-border)); }
+.legend { display: flex; gap: 16px; margin-top: 8px; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.sw.safe { background: var(--safe); }
+.sw.ask { background: var(--ask); }
+.sw.keep { background: var(--keep); }
+.hover-info { margin-top: 6px; min-height: 18px; }
+
+/* The lists. */
+.group { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-lg); background: var(--c-surface); }
+details.group summary { list-style: none; cursor: pointer; }
+details.group summary::-webkit-details-marker { display: none; }
+details.group summary h3::after { content: "Show"; margin-left: auto; font-weight: 400; color: var(--c-accent); font-size: var(--font-size-row); }
+details.group[open] summary h3::after { content: "Hide"; }
+.items { list-style: none; margin: 0; padding: 0; }
+.items li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--c-border); font-size: var(--font-size-row); }
+.items li:first-child { border-top: 0; }
+.items li .what { min-width: 0; }
+.items li .what .n { overflow-wrap: anywhere; }
+.items li .what .why { color: var(--c-text-faint); font-size: var(--font-size-helper); }
+/* A long path gives way to the item's name rather than squeezing it out. */
+.items li .where { color: var(--c-text-faint); font-size: 11px; font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.items li .sz { font-variant-numeric: tabular-nums; color: var(--c-text-secondary); text-align: right; min-width: 56px; }
+.items.no-check li { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.items li .ask-action { justify-self: end; }
+.items.compact li { grid-template-columns: 1fr auto; padding: 6px 0; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+/* Settings and history. */
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--font-size-row); }
+.setting input { width: 56px; font: inherit; padding: 4px 6px; border: 1px solid var(--c-border-strong); border-radius: var(--radius-sm); text-align: right; }
+.setting input:disabled { opacity: 0.45; }
+.owner-note { margin: 0 0 12px; }
+#last-check { margin-top: 8px; }
+.history { list-style: none; margin: 0; padding: 0; font-size: var(--font-size-row); }
+.history li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--c-border); }
+.history li:first-child { border-top: 0; }
+.history a { color: var(--c-accent); font-size: var(--font-size-helper); }
+
+/* Confirmation sheet and toast. */
+.sheet-backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.3); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.sheet-backdrop[hidden] { display: none; }
+.sheet { user-select: none; background: var(--c-surface); border-radius: var(--radius-lg); padding: 18px 20px; width: 100%; max-width: 440px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
+.sheet h2 { text-transform: none; letter-spacing: 0; font-size: var(--font-size-heading); color: var(--c-text-primary); }
+#sheet-note { margin-top: 8px; }
+.toast { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); background: #202020; color: #fff; padding: 10px 16px; border-radius: var(--radius-md); font-size: var(--font-size-row); max-width: 90vw; }
+.toast[hidden] { display: none; }
+
+#snapshot-age a { color: inherit; }
+.offline { color: var(--c-danger-hover); }
+.offline[hidden] { display: none; }
+.treemap-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--c-text-secondary); font-size: var(--font-size-row); }
+.items li input[disabled] { visibility: hidden; }
+
+@media (max-width: 520px) {
+  main { padding-left: 14px; padding-right: 14px; }
+  .alert { flex-direction: column; align-items: stretch; }
+  .treemap { height: 280px; }
+  .items li .where { display: none; }
+}
+
+/* A finger instead of a mouse: targets big enough to tap, and a text field big enough that a phone does not zoom the
+   page when it gains focus. Keyed on the pointer as well as the width, so it holds in landscape (852 wide) too. */
+@media (pointer: coarse) {
+  button { min-height: 44px; padding: 10px 14px; }
+  button.link { min-height: 44px; padding: 10px 6px; }
+  .items li { padding: 12px 0; }
+  .items li input[type="checkbox"] { width: 22px; height: 22px; margin: 0; }
+  .setting { flex-wrap: wrap; }
+  .setting input { font-size: 16px; width: 76px; padding: 8px; }
+  .treemap { height: 260px; }
+  .sheet .actions button { flex: 1; }
+  .history li { align-items: center; }
+  .history a { padding: 10px 4px; }
+  .tile .name { font-size: var(--font-size-body); }
+}

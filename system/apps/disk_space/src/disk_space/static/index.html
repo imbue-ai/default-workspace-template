@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Space</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Disk Space</h1>
+    <span class="faint small"><span class="offline" id="offline" hidden>Can't reach the app; retrying. </span><span id="snapshot-age"></span></span>
+  </header>
+
+  <p class="secondary small owner-note" id="owner-note" hidden>Someone shared this workspace with you, so you can look
+    through the breakdown, but only its owner can free space from here.</p>
+
+  <section id="gauge-section">
+    <div class="big num" id="used-text"></div>
+    <div class="bar guard-bar" id="gauge"><span id="gauge-fill"></span><i class="mark" id="gauge-mark" title="Alert line"></i></div>
+    <div class="row"><span id="free-text"></span><span id="alert-line-text"></span></div>
+    <div class="alert" id="alert" hidden>
+      <div>
+        <strong>The disk is almost full.</strong>
+        <span>When it fills up, chats and apps stop working. The cleanup helper can walk you through what to delete.</span>
+      </div>
+      <button class="primary" id="alert-helper" type="button">Talk to the cleanup helper</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>What's using the disk</h2>
+      <button class="link" id="rescan" type="button">Measure again</button>
+    </div>
+    <nav class="crumbs" id="crumbs"></nav>
+    <div class="treemap" id="treemap"></div>
+    <div class="legend">
+      <span><i class="sw safe"></i>Safe to delete</span>
+      <span><i class="sw ask"></i>Ask first</span>
+      <span><i class="sw keep"></i>Keep</span>
+    </div>
+    <div class="hover-info faint small" id="hover-info">Click a block to look inside it.</div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>What can go</h2>
+      <button class="link" id="helper-inline" type="button">Ask the cleanup helper</button>
+    </div>
+
+    <div class="group">
+      <div class="group-head">
+        <h3><i class="sw safe"></i>Safe to delete <span class="faint num" id="safe-total"></span></h3>
+        <button class="link" id="select-all" type="button">Select all</button>
+      </div>
+      <p class="hint">These rebuild themselves, or are leftovers nothing uses any more.</p>
+      <ul class="items" id="safe-list"></ul>
+      <div class="actions">
+        <button class="primary" id="delete-selected" type="button" disabled>Delete selected</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><h3><i class="sw ask"></i>Ask first <span class="faint num" id="ask-total"></span></h3></div>
+      <p class="hint">Your files, old chats and side projects. Only you can say whether they still matter.</p>
+      <ul class="items" id="ask-list"></ul>
+    </div>
+
+    <details class="group">
+      <summary><h3><i class="sw keep"></i>Keep <span class="faint num" id="keep-total"></span></h3></summary>
+      <p class="hint">The system and the workspace's own code. Deleting these breaks things.</p>
+      <ul class="items" id="keep-list"></ul>
+    </details>
+  </section>
+
+  <section>
+    <h2>Watching the disk</h2>
+    <div class="setting">
+      <label for="threshold">Start the cleanup helper when the disk passes</label>
+      <span><input id="threshold" type="number" min="50" max="99" value="90"> %</span>
+    </div>
+    <p class="secondary small" id="last-check"></p>
+    <h2 class="sub">History</h2>
+    <ul class="history" id="history"></ul>
+  </section>
+
+</main>
+
+<div class="sheet-backdrop" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="sheet-title">
+    <h2 id="sheet-title">Delete these?</h2>
+    <ul class="items compact" id="sheet-list"></ul>
+    <p class="secondary small" id="sheet-note"></p>
+    <div class="actions">
+      <button type="button" id="sheet-cancel">Cancel</button>
+      <button type="button" class="danger" id="sheet-confirm">Delete</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+SHELL_PAGE_SCRIPT
+</body>
+</html>
