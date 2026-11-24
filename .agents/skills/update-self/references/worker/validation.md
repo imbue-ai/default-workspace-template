@@ -94,9 +94,10 @@ STAMP=$(git log -1 --format=%H --fixed-strings \
 a lock that upgraded a package selects the suites that depend on it.
 
 Run every printed line, in order, plus `uv run --no-sync ruff check` when a
-Python file is in the list. Handle a failing test and a shed command the way
+Python file is in the list. When a test fails or a command is shed, read
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/review-gates.md`
-says, naming a flaky test under your report's Validation.
+and handle it the way it says, naming a flaky test under your report's
+Validation.
 The tree before your change, for attributing a failure, is `$MERGE^1` (a test
 absent there arrived with the update). mngr's own suite runs in its repo, not
 here.
@@ -128,7 +129,7 @@ For the shell, build the frontends in your worktree: `uv sync
 --all-packages`, then `cd system && npm ci && npm run build`. One npm
 workspace emits all eight bundles: the shell's, the chat app's, the Getting
 Started app's, the Files app's, the Routines app's, the Screen's, the Style
-Guide's, and the Onboarding checklist's. Drive it per
+Guide's, and the Onboarding checklist's. Before you drive it, read
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`.
 
 Those eight bundles are what the lead's apply installs live

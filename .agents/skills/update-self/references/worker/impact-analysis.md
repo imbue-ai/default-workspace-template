@@ -211,8 +211,8 @@ an impacted skill gets validated per its own contract.
 
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
-even though nothing imports them. Work them per
-`worker/provisioning-changes.md` and report each there.
+even though nothing imports them. Read `worker/provisioning-changes.md`, then
+work them by it and report each there.
 
 A workspace-added app whose program line or runner uses port 8090 or 8091 is
 moved: `worker/older-workspaces.md` ("A user app on the Screen's ports").

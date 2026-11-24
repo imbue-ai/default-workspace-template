@@ -117,12 +117,11 @@ git merge --no-commit --no-ff "$TARGET_REF"
 git diff --name-only --diff-filter=U
 ```
 
-- **A conflict listed**: triage each per
-  `references/worker/conflict-triage.md`. The first rule there that applies
-  wins.
+- **A conflict listed**: read `references/worker/conflict-triage.md` and
+  triage each by it. The first rule there that applies wins.
 - **A lockfile (`uv.lock`, `package-lock.json`) that `classify-merge` shows
-  changed on both sides**, even with no conflict reported: discard git's
-  auto-merge and regenerate it, per the same file ("Lockfiles").
+  changed on both sides**, even with no conflict reported: read the same
+  file's "Lockfiles", then discard git's auto-merge and regenerate it.
 - **Neither**: a clean pull. Commit.
 
 ## 3. Commit with the marker subject
@@ -189,8 +188,9 @@ built-in, restarted by the apply and tested upstream, so do only this:
    the same way, per `references/worker/older-workspaces.md` ("Cron entries
    from before routines"). A hit in either is a user-created consumer: run
    the analysis in full after all.
-3. Work the provisioning files and global-dependency bumps, which always
-   count as impacted, per `references/worker/provisioning-changes.md`.
+3. Read `references/worker/provisioning-changes.md`, then work the
+   provisioning files and global-dependency bumps by it; they always count as
+   impacted.
 4. Record the footprint evidence in your report: `has_local_footprint: false`
    plus the `local_only` paths.
 
@@ -218,6 +218,10 @@ commit below.
 | Playwright | a web surface needed nontrivial merge work |
 | Customization survival | the update touches a user creation |
 
+When the environment gate's condition holds, read
+`references/worker/validation.md` ("Environment gate") and run that gate
+before the block below.
+
 **Skill exemptions run on every pass.** First sync the venv if the merge
 changed a `pyproject.toml` or `uv.lock` at all, merged or pulled in:
 everything in this step runs `uv run --no-sync`, which never syncs, so it
@@ -235,12 +239,11 @@ git add -A .agents/skills
 git diff --cached --quiet || git commit -m "Record skill-check exemptions"
 ```
 
-When the environment gate's condition holds, run that gate before this block
-(`references/worker/validation.md`, "Environment gate"). The stamp records
-which skill checks each of the workspace's existing skills fails, as an
-exemption in that skill's frontmatter, and removes one that has gone stale;
-it changes nothing else. List its output lines under your report's
-Validation. Never restructure a user's skill to clear what it reports.
+The stamp records which skill checks each of the workspace's existing skills
+fails, as an exemption in that skill's frontmatter, and removes one that has
+gone stale; it changes nothing else. List its output lines under your
+report's Validation. Never restructure a user's skill to clear what it
+reports.
 
 **That commit is not an edit of yours.** The block commits what the stamp
 wrote, alone, under the exact subject `Record skill-check exemptions`. A
@@ -266,6 +269,10 @@ and the conversion guide is
 
 ### 4c. Review gates
 
+Before deciding either way, read `references/worker/review-gates.md`. It is
+the full rule: what counts as an edit of yours, the scope, and the
+keep-or-revert disposition for fix commits.
+
 **Skip the gates only on a pure clean pull**, when all three hold:
 `has_merge_work` is false; 4a found no user-created code depending on
 anything the update changed, and no global-dependency bump with a
@@ -276,10 +283,6 @@ user-created dependent; and you authored no in-branch edits of your own
 scoped to every file whose merged content differs from the target release.
 4b's suites are their test gate, so select tests again only over what you
 commit after it.
-
-`references/worker/review-gates.md` is the full rule: what counts as an edit
-of yours, the scope, and the keep-or-revert disposition for fix commits. Read
-it before deciding either way.
 
 ### 4d. Decide whether running agents need a restart
 
@@ -397,8 +400,9 @@ Valid `name:` values:
     why it failed, the before/after evidence (paths in your worktree), and
     the options. Only this one reaches the user.
 - **`done`** (`type: status`): merged, triaged and validated on
-  `mngr/update-self`. `references/worker/report.md` lists the sections its
-  body must carry; a report missing one is sent back.
+  `mngr/update-self`. Before you write its body, read
+  `references/worker/report.md`, which lists the sections it must carry; a
+  report missing one is sent back.
 - **`stuck`** (`type: status`): you could not reach a clean, validated merge,
   or you hit the provisioning escape hatch. One sentence on what blocked you
   and where the work stands. Never report `done` on a merge whose suites or
@@ -415,5 +419,5 @@ your branch and validate only what they change.
 ## 8. Retry after the apply rolled back
 
 When the lead's apply of your branch rolls back, the lead deals with the
-cause and asks you to retry: `references/worker/catch-up.md` ("Retry after
-the apply rolled back").
+cause and asks you to retry: follow `references/worker/catch-up.md` ("Retry
+after the apply rolled back").
