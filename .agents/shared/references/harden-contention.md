@@ -86,9 +86,9 @@ done
     whole change rather than the half that overlapped.
   - **Orphaned** (holder gone, worker still there -- often waiting on a gate
     nobody relayed): the pass is neither stale nor abandoned, since the worker
-    holds verified work and is waiting for a lead. Become that lead rather
-    than replacing the pass, as
-    `.agents/shared/references/harden-contention/takeover.md` says.
+    holds verified work and is waiting for a lead. Read
+    `.agents/shared/references/harden-contention/takeover.md` and become that
+    lead as it says, rather than replacing the pass.
   - **Abandoned** (holder and worker both gone): replace it with your own
     pass covering the union, keeping whatever it committed, as
     `.agents/shared/references/harden-contention/supersede.md` says. Read it
@@ -102,10 +102,10 @@ states; the live pass, caught up, covers the union instead.
 Run these in order before any merge from a worker branch -- the merge on `done`
 or a provisional milestone merge:
 
-1. **Wait out the foreground lease (apps and services only)**, as
-   `.agents/shared/references/lead-proxy.md` ("Before a merge") says, for
-   every app or service in the pass. Their edit will usually make your pass
-   stale anyway, which the next check catches.
+1. **Wait out the foreground lease (apps and services only).** Read
+   `.agents/shared/references/lead-proxy.md` ("Before a merge") and wait as
+   it says, for every app or service in the pass. Their edit will usually make
+   your pass stale anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if no creation in it has
    changed since the worker branched. The paths to diff are every creation's
@@ -206,8 +206,9 @@ you merge. **Keep the worker**: its branch, its worktree and anything it
 built (a critical app's bundles) are the verified work the catch-up builds on.
 Never destroy it to make room for a new pass.
 
-`.agents/shared/references/harden-contention/catch-up.md` has the reply that
-asks the worker to catch up, how to add a creation to the pass, what the
+Before you send a pass back, read
+`.agents/shared/references/harden-contention/catch-up.md`: it has the reply
+that asks the worker to catch up, how to add a creation to the pass, what the
 worker does, and what happens to its next `done`.
 
 A pass with no worker left to catch up (one stopped after a failure the user

@@ -31,9 +31,9 @@ what is usable, what `## Tested` covers at that commit, and what is
   more recent user work" rule applies -- handle the milestone once their
   request is finished).
 
-Before merging, run the checks before a merge exactly as for `done`: the two
-in `.agents/shared/references/lead-proxy.md` ("Before a merge"), and any your
-skill adds to them. A milestone whose merge conflicts is never resolved,
+Before merging, read `.agents/shared/references/lead-proxy.md` ("Before a
+merge") and run its two checks, and any your skill adds to them, exactly as
+for `done`. A milestone whose merge conflicts is never resolved,
 whatever your skill: abort the merge and leave the milestone unmerged. Do not
 re-run a check `## Tested` names as passing at this commit; you may run ones
 it does not name.

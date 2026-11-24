@@ -12,8 +12,9 @@ still there. `lead-proxy.md` below is
    `lead_work_dir` must be your own checkout (`$MNGR_AGENT_WORK_DIR`; the chats
    of one workspace share it), since the worker delivers every report there.
    If it names another checkout, you cannot receive its reports, so no one
-   here can lead it: supersede the pass instead, although its worker is still
-   there (`.agents/shared/references/harden-contention/supersede.md`). An
+   here can lead it: read
+   `.agents/shared/references/harden-contention/supersede.md` and supersede
+   the pass instead as it says, although its worker is still there. An
    update or heal pass's `creations` are the `$CREATIONS` you lead it with.
 2. Move the ticket to yourself, and say why on it:
 
@@ -47,8 +48,8 @@ still there. `lead-proxy.md` below is
    ```
 
    It prints that report's path. Exit 1 means no agent has the worker's
-   name, so the worker is gone: supersede the pass instead
-   (`supersede.md`, beside this file).
+   name, so the worker is gone: read `supersede.md`, beside this file, and
+   supersede the pass instead.
    Exit 2 means the agent list could not be read, which says nothing about the
    worker: run the block again. No
    output means the worker has reported nothing yet. A worker that is
@@ -56,16 +57,17 @@ still there. `lead-proxy.md` below is
    report reaches you through the poll in step 4. Otherwise the holder read
    that report but stopped before acting on it, so act on it now, by what it
    is:
-   - A `gate` or `question` was never answered. Handle it as `lead-proxy.md`
-     says ("Deciding: answer gate yourself vs. escalate"). A
-     `final-creation` gate goes to the user, with a sentence saying it comes
-     from an earlier check of this creation that has been waiting on them.
+   - A `gate` or `question` was never answered. Read `lead-proxy.md`
+     ("Deciding: answer gate yourself vs. escalate") and handle it as it
+     says. A `final-creation` gate goes to the user, with a sentence saying
+     it comes from an earlier check of this creation that has been waiting on
+     them.
    - A `done` was never merged: run the dispatching skill's merge for it now,
      its checks before merge first ("Before merge: lease, freshness,
      conflicts" in `harden-contention.md`). They catch the pass up when your
      commits moved its base.
-   - A `no-update-needed` or `stuck` is handled as `lead-proxy.md`'s
-     "Terminal status: act and stop polling" says.
+   - For a `no-update-needed` or `stuck`, read `lead-proxy.md` ("Terminal
+     status: act and stop polling") and handle it as it says.
 
    A worker that crashed restarts with your reply, or with `continue` when
    there is nothing to answer.
