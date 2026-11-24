@@ -708,6 +708,18 @@ describe("askAgentToFix", () => {
     expect(message.text).toBe(`Imbue Studio showed the user this failure: Terminal isn't running.\n\n${instruction}`);
     expect(message.delivery).toBe("main-chat");
 
+    // An ask about a notice that reports no failure leads with that.
+    askAgentToFix(connection as ShellConnection, {
+      whatFailed: "The previous version is restored.",
+      details: null,
+      instruction,
+      shown: "notice",
+    });
+    const [notice] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(notice.text).toBe(
+      `Imbue Studio showed the user this notice: The previous version is restored.\n\n${instruction}`,
+    );
+
     // The default delivery is left off the wire.
     askAgentToFix(connection as ShellConnection, { whatFailed: "Terminal isn't running.", details: null });
     const [plain] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
