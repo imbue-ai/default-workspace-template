@@ -1421,10 +1421,12 @@ shown beside another chat's failure, so it leads with the chat that was asked
 (`Couldn't ask "<chat>".`, then the send route's own sentence), and its
 details are headed `Asking "<chat>":`. The composer's notice tells it as its
 last paragraph and keeps one "See details", holding the failure's details and
-then the ask's. "Report a bug" comes only with a refused ask, files both, and
-is offered when either owes help; beside it "Draft it in a chat" leaves the
-same request unsent in a chat's message box when the refused ask owes help
-(the shell makes the draft, and writes `/assist` in front of it). On the
+then the ask's. An ask refused with a failure that owes help brings "Draft it
+in a chat", which leaves the same request unsent in a chat's message box (the
+shell makes the draft, and writes `/assist` in front of it), and "Report a
+bug", which files both; one refused for a reason that owes none (the chat
+that was asked is waiting on its terminal, nothing answered) is only there to
+ask again. On the
 failed-create page the shared remedies (`FailureRemedies` in `workspace_ui`)
 draw the refused ask under the button, with a "See details" of its own, the
 draft and the bug report, so the button is the last in its row and the
