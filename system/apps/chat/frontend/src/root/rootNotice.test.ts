@@ -225,9 +225,7 @@ describe("the chat list's failed verbs", () => {
     select("delete");
     const root = await rendered();
 
-    expect(root.textContent).toContain(
-      `The workspace didn't answer, so Imbue Studio can't tell whether "Plan the trip" was deleted.`,
-    );
+    expect(root.textContent).toContain(`The workspace didn't answer. "Plan the trip" may not have been deleted.`);
     expect(button(root, "Try again")).toBeUndefined();
     expect(hasPendingDelete()).toBe(true);
 
@@ -283,7 +281,7 @@ describe("a message from outside a chat that the chat would not take", () => {
     const { describeIntakeApplyFailure } = await import("./rootNotice");
     const unanswered = httpError(504, null);
     expect(describeIntakeApplyFailure(unanswered, false).body).toEqual([
-      "The workspace didn't answer, so Imbue Studio can't tell whether your message reached this chat.",
+      "The workspace didn't answer. Your message may not have reached this chat.",
     ]);
   });
 });

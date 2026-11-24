@@ -130,9 +130,7 @@ export function describeRunVerbFailure(error: unknown, title: string, isRestart:
   const named = `"${title}"`;
   if (failure.cause === "not_answered") {
     return {
-      body: [
-        `The workspace didn't answer, so Imbue Studio can't tell whether ${named} ${isRestart ? "restarted" : "stopped"}.`,
-      ],
+      body: [`The workspace didn't answer. ${named} may not have ${isRestart ? "restarted" : "stopped"}.`],
       details: failure.details,
       isHelpOwed: false,
     };
@@ -161,7 +159,7 @@ export function describeDeleteFailure(error: unknown, title: string): FailureLin
   const named = `"${title}"`;
   if (failure.cause === "not_answered") {
     return {
-      body: [`The workspace didn't answer, so Imbue Studio can't tell whether ${named} was deleted.`],
+      body: [`The workspace didn't answer. ${named} may not have been deleted.`],
       details: failure.details,
       isHelpOwed: false,
     };
@@ -176,7 +174,7 @@ export function describeIntakeApplyFailure(error: unknown, isDrafted: boolean): 
   const failure = describeRequestFailure(error);
   if (failure.cause === "not_answered") {
     return {
-      body: ["The workspace didn't answer, so Imbue Studio can't tell whether your message reached this chat."],
+      body: ["The workspace didn't answer. Your message may not have reached this chat."],
       details: failure.details,
       isHelpOwed: false,
     };

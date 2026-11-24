@@ -1,7 +1,7 @@
 /**
  * What the chat page says about a failed request: the sentences on screen and what goes behind "See details". Each
  * surface names what failed and ``failureSentence`` words it; a surface whose request nothing answered may say what
- * that leaves unknown in its own words ("can't tell whether the agent stopped") in place of the general sentence.
+ * that leaves unknown in its own words ("The agent may not have stopped.") in place of the general sentence.
  */
 
 import type { ReportedFailure, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
