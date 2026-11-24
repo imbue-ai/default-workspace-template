@@ -1,0 +1,31 @@
+name = "disk-space"
+display_name = "Disk Space"
+# What the app is for, in the person's terms: what an agent reads to decide whether this app
+# does what it needs. The app's API document (served at api_schema_path) carries it too.
+description = "Shows what is filling the workspace's disk as a treemap, sorts it into safe to delete, ask first and keep, and helps free space when the disk passes 90%."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+priority = "user"
+program = "disk-space"
+# The shell stops the app once no window shows it (a minute after the last one
+# closes) and starts it again on the next request; false keeps it running for
+# the life of the workspace. Set false if the app does work between requests
+# (a background thread, a poller, a subscription to an outside service, a job
+# that outlives the window): a stop loses that work. Periodic work (a refresh
+# every N minutes, a nightly sync) is a routine, not a loop in the service:
+# see the manage-routines skill.
+stop_when_no_windows = true
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/python/update_app_skill/preview_app.py).
+[preview]
+env = {DISK_SPACE_PORT = "{port:main}", DISK_SPACE_HOST = "{host}", DISK_SPACE_DATA_DIR = "{copy:data}"}
+copies = {data = "data/.apps/disk-space"}
+
+[[references]]
+path = ".agents/skills/free-disk-space/SKILL.md"
+note = "The cleanup helper chat's instructions: reads disk-space status, deletes through disk-space delete"
+
+[[references]]
+path = "system/routines/disk-space-check.toml"
+note = "The 10-minute check that runs disk-space check and starts the cleanup helper past the alert line"
