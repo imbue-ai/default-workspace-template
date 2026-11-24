@@ -31,10 +31,10 @@ function rows(root: HTMLElement): HTMLElement[] {
 }
 
 describe("the Onboarding checklist page", () => {
-  it("is titled Onboarding checklist and lists the items in order with their words", () => {
+  it("is headed Click to learn more and lists the items in order with their words", () => {
     const { root } = render(ITEMS);
 
-    expect(root.querySelector("[data-checklist-title]")?.textContent).toBe("Onboarding checklist");
+    expect(root.querySelector("[data-checklist-title]")?.textContent).toBe("Click to learn more");
     expect(rows(root).map((row) => [row.dataset.checklistItem, row.textContent])).toEqual([
       ["new_chat", "Work in parallel by starting a new chat"],
       ["phone_access", "Access Studio from your phone"],
@@ -43,17 +43,31 @@ describe("the Onboarding checklist page", () => {
     ]);
   });
 
-  it("says nothing but its title and the items' words", () => {
+  it("says nothing but its heading and the items' words", () => {
     const { root } = render(ITEMS);
 
-    expect(root.textContent).toBe(`Onboarding checklist${ITEMS.map((item) => item.label).join("")}`);
+    expect(root.textContent).toBe(`Click to learn more${ITEMS.map((item) => item.label).join("")}`);
   });
 
   it("draws a check on the done items and an empty mark on the others", () => {
     const { root } = render(ITEMS);
 
     expect(rows(root).map((row) => row.dataset.done)).toEqual(["true", "false", "true", "false"]);
-    expect(rows(root).map((row) => row.querySelector("svg") !== null)).toEqual([true, false, true, false]);
+    expect(rows(root).map((row) => row.querySelector("[data-checklist-check] svg") !== null)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it("ends each row that can be clicked with an arrow, after its words", () => {
+    const { root } = render(ITEMS);
+
+    for (const row of rows(root)) {
+      expect(row.lastElementChild?.matches("[data-checklist-arrow]"), row.dataset.checklistItem).toBe(true);
+      expect(row.querySelector("[data-checklist-arrow] svg"), row.dataset.checklistItem).not.toBeNull();
+    }
   });
 
   it("shows an item's pointer on a click of its row, done or not", () => {
@@ -71,10 +85,16 @@ describe("the Onboarding checklist page", () => {
     for (const row of rows(root)) row.click();
 
     expect(rows(root).map((row) => row.tagName)).toEqual(["BUTTON", "DIV", "BUTTON", "DIV"]);
+    expect(rows(root).map((row) => row.querySelector("[data-checklist-arrow]") !== null)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
     expect(picked).toEqual(["new_chat", "build_app"]);
   });
 
-  it("shows its title alone until the items have been read", () => {
+  it("shows its heading alone until the items have been read", () => {
     const { root } = render(null);
 
     expect(root.querySelector("[data-checklist-title]")).not.toBeNull();
