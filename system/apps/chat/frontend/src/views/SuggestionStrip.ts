@@ -16,6 +16,7 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { Suggestion, SuggestionPlacement } from "../models/Suggestions";
 
 /** What a placement's strip says of itself. */
@@ -86,11 +87,24 @@ export function suggestionPills(
   );
 }
 
-function disableLink(placement: SuggestionPlacement, onDisable: () => void): m.Vnode {
+// The words on a link beside its partner in a reply's line, which say what they act on in their name and tooltip.
+const DISABLE_SHORT = "Disable";
+const HIDE_SHORT = "Hide";
+const HIDE_LINK = "Hide suggestions";
+
+/** The link that switches ``placement`` off: in full where it stands alone, or ``short`` beside Hide with the full
+ *  words as its name and tooltip. */
+function disableLink(placement: SuggestionPlacement, onDisable: () => void, isShort: boolean): m.Vnode {
+  const words = SUGGESTION_PLACEMENT_WORDS[placement].disableLink;
   return m(
     "button",
-    { type: "button", class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`, onclick: onDisable },
-    SUGGESTION_PLACEMENT_WORDS[placement].disableLink,
+    {
+      type: "button",
+      class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`,
+      onclick: onDisable,
+      ...(isShort ? { "aria-label": words, ...hoverTooltipAttrs(words, "above") } : {}),
+    },
+    isShort ? DISABLE_SHORT : words,
   );
 }
 
@@ -113,7 +127,7 @@ export function suggestionLine(attrs: SuggestionLineAttrs | null): m.Vnode {
   if (attrs === null) return m("div", { class: LINE_CLASS });
   const seeLabel = attrs.count === 1 ? "See 1 suggestion" : `See ${attrs.count} suggestions`;
   return m("div", { class: LINE_CLASS }, [
-    attrs.isOpen && attrs.onDisable !== null ? disableLink("next_step", attrs.onDisable) : null,
+    attrs.isOpen && attrs.onDisable !== null ? disableLink("next_step", attrs.onDisable, true) : null,
     m(
       "button",
       {
@@ -121,8 +135,9 @@ export function suggestionLine(attrs: SuggestionLineAttrs | null): m.Vnode {
         class: `suggestion-line-toggle ${QUIET_LINK_CLASS}`,
         "aria-expanded": attrs.isOpen ? "true" : "false",
         onclick: attrs.onToggle,
+        ...(attrs.isOpen ? { "aria-label": HIDE_LINK, ...hoverTooltipAttrs(HIDE_LINK, "above") } : {}),
       },
-      attrs.isOpen ? "Hide suggestions" : seeLabel,
+      attrs.isOpen ? HIDE_SHORT : seeLabel,
     ),
   ]);
 }
@@ -134,7 +149,7 @@ export function emptyNextStepLine(): m.Vnode {
 
 /** The line under a strip whose pills are always shown: its link alone, at the height of a reply's line. */
 function linkLine(placement: SuggestionPlacement, onDisable: (() => void) | null): m.Vnode {
-  return m("div", { class: LINE_CLASS }, onDisable === null ? null : disableLink(placement, onDisable));
+  return m("div", { class: LINE_CLASS }, onDisable === null ? null : disableLink(placement, onDisable, false));
 }
 
 /** A strip's part in the footer: its line. */

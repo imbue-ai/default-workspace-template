@@ -170,9 +170,12 @@ describe("the next-step strip", () => {
     const link = root.querySelector<HTMLButtonElement>(".suggestion-strip-disable");
 
     expect(root.querySelector(".suggestion-strip--open")).not.toBeNull();
-    expect(toggle?.textContent).toBe("Hide suggestions");
+    expect(toggle?.textContent).toBe("Hide");
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(link?.textContent).toBe("Disable suggestions");
+    expect(link?.textContent).toBe("Disable");
+    // Short beside each other, with the full words as their names (and tooltips).
+    expect(toggle?.getAttribute("aria-label")).toBe("Hide suggestions");
+    expect(link?.getAttribute("aria-label")).toBe("Disable suggestions");
     // Both sit at the line's right end, the link immediately left of the button, 16px apart.
     const line = toggle!.parentElement!;
     expect([...line.children]).toEqual([link, toggle]);
@@ -199,7 +202,7 @@ describe("the next-step strip", () => {
     const { root } = renderStrip({ placement: "next_step", onDisable: null });
 
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
-    expect(lineToggle(root)?.textContent).toBe("Hide suggestions");
+    expect(lineToggle(root)?.textContent).toBe("Hide");
   });
 });
 
@@ -220,11 +223,7 @@ describe("the line a reply's suggestions wait behind", () => {
     });
 
     for (const element of drawn) expect(element.classList.contains("h-5")).toBe(true);
-    expect(drawn.map((element) => element.textContent)).toEqual([
-      "",
-      "See 3 suggestions",
-      "Disable suggestionsHide suggestions",
-    ]);
+    expect(drawn.map((element) => element.textContent)).toEqual(["", "See 3 suggestions", "DisableHide"]);
   });
 
   it("keeps its height above the composer with no set to speak of, holding nothing to click", () => {

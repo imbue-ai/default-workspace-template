@@ -357,7 +357,7 @@ describe("the next-step strip", () => {
     firstAgentStarting();
     draw();
     expect(pillLabels()).toEqual(START_LABELS);
-    expect(lineText()).toContain("Hide suggestions");
+    expect(lineText()).toContain("Hide");
 
     // The agent is up, idle, and still has been sent nothing.
     mocks.provisional = undefined;
@@ -537,7 +537,7 @@ describe("the line above the composer", () => {
     const drawnPills = root.querySelectorAll(".suggestion-pill");
     const lastPill = drawnPills[drawnPills.length - 1];
     expect(pillLabels()).toEqual(START_LABELS);
-    expect(toggle.textContent).toBe("Hide suggestions");
+    expect(toggle.textContent).toBe("Hide");
     expect(lastPill.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
 
@@ -550,7 +550,7 @@ describe("the line above the composer", () => {
   it("starts a fixed set shown and a generated set hidden", async () => {
     await load();
     expect(pillLabels()).toEqual(START_LABELS);
-    expect(lineText()).toContain("Hide suggestions");
+    expect(lineText()).toContain("Hide");
 
     resetSuggestionsForTests();
     m.render(root, null);
@@ -570,7 +570,7 @@ describe("the line above the composer", () => {
 
     const link = root.querySelector<HTMLElement>(".suggestion-strip-disable")!;
     const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
-    expect(link.textContent).toBe("Disable suggestions");
+    expect(link.textContent).toBe("Disable");
     // Immediately left of the button that hides the suggestions, both at the line's right end.
     expect([...toggle.parentElement!.children]).toEqual([link, toggle]);
     expect(toggle.parentElement!.classList.contains("justify-end")).toBe(true);
@@ -606,7 +606,7 @@ describe("the line above the composer", () => {
 describe("the link that switches next-step suggestions off", () => {
   it("is shown to the workspace's owner only", async () => {
     await load();
-    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("Disable suggestions");
+    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("Disable");
 
     setParticipantsForTesting("user:owner-1", ownerAndVisitorRosterFixture());
     draw();

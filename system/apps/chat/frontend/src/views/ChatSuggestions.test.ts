@@ -611,9 +611,7 @@ describe("where a strip's two parts are drawn", () => {
     ]);
     expect(root.querySelectorAll("footer .suggestion-pill")).toHaveLength(0);
     expect(root.querySelectorAll("main .suggestion-line")).toHaveLength(0);
-    expect(root.querySelector("footer .chat-suggestions .suggestion-line")?.textContent).toBe(
-      "Disable suggestionsHide suggestions",
-    );
+    expect(root.querySelector("footer .chat-suggestions .suggestion-line")?.textContent).toBe("DisableHide");
   });
 
   it("ends the scroll element at its bottom edge, at most 60% of its height, scrolling a taller list inside", async () => {

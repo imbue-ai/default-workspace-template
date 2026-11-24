@@ -546,9 +546,9 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     first_reply_event_id = _offer_fixed_suggestions(e2e_server, fixed_labels)
 
     expect(pills).to_have_text(fixed_labels, timeout=15000)
-    expect(toggle).to_have_text("Hide suggestions")
+    expect(toggle).to_have_text("Hide")
     disable = column.locator(".suggestion-strip-disable")
-    expect(disable).to_have_text("Disable suggestions")
+    expect(disable).to_have_text("Disable")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
@@ -592,7 +592,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
 
     expect(pills).to_have_text(generated_labels)
     expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
-    expect(toggle).to_have_text("Hide suggestions")
+    expect(toggle).to_have_text("Hide")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(composer) == composer_box_before_the_set
     page.screenshot(path=str(tmp_path / "3-generated-set-shown.png"))
@@ -605,7 +605,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
 
     answered_pills = first_answered.locator(".suggestion-pill")
     expect(answered_pills).to_have_text(fixed_labels)
-    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(answered_toggle).to_have_text("Hide")
     expect(first_answered.locator(".suggestion-strip-disable")).to_have_count(0)
     assert _box(answered_toggle)["bottom"] <= _box(answered_pills.first)["top"]
     _assert_pills_are_a_list_on_the_users_side(answered_pills, chat.locator(".message-list"))
@@ -614,7 +614,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     answered_pills.nth(1).click()
 
     wait_for(lambda: (FIXTURE_AGENT_ID, fixed_labels[1]) in messenger.sent, timeout=10.0)
-    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(answered_toggle).to_have_text("Hide")
     # That send answered the second reply, whose set joins the first's in the transcript.
     expect(answered_lines).to_have_count(2)
     expect(toggle).to_have_count(0)
