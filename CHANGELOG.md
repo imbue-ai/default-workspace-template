@@ -6,6 +6,23 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ## [Unreleased]
 
+### Added
+
+- Added: The first run's provider page can remove a connected account (Remove asks first; removing the last brings back Skip), and its dialogs wear the page's cream look.
+- Added: `workspace_layout`'s `InventoryApp` gains `system`, true for apps that are part of the workspace itself (false from an older shell).
+
+### Changed
+
+- Changed: System apps (Chat, Terminal, Files, Getting Started, the onboarding checklist, etc.) no longer show Share in their title bar; their window menu still offers it.
+- Changed: Next-step suggestion generation may think for 20,000 tokens (was 4,000) and has 120 seconds (was 60).
+- Changed: The Onboarding checklist page is headed "Click to learn more" with an arrow on each clickable entry, and the connect-data pointer reads "Just ask your agent to connect anything!".
+- Changed: `first-run-onboarding`'s "Describe what you want to make" reply asks what's annoying or tedious in the user's digital life, with an example.
+
+### Fixed
+
+- Fixed: "See what Studio can do" opens Getting Started on the desktop's left half with the chat on the right, so the tour no longer covers it.
+- Fixed: Tour and coach cards about the title bar's Settings and Share controls sit under its right end, where those controls are.
+
 ## [minds-v0.10.6] - 2026-11-22
 
 This release carries chat suggestions (clickable replies after an agent's answer, and onboarding steps on a chat nobody has written in), a first conversation that opens on a short welcome with three start suggestions, the Onboarding checklist app the show-around tour ends on, a full-window provider sign-in page on a first run, long pastes as attachments, dictation that loads its speech model on demand, and compressed pages on a shared workspace.
