@@ -158,8 +158,9 @@ export interface FailureRemediesAttrs extends FailureButtonOptions {
 }
 
 /** What a failure that owes help offers by default: "Ask an agent to fix this", and "Report a bug" only where no
- *  agent can be asked (the surface withholds it, or no shell frames the page) or once the ask was refused, when its
- *  report carries the refused ask too. Nothing for a failure that owes none, whose surface offers its own remedy. */
+ *  agent can be asked (the surface withholds it, or no shell frames the page) or once the ask was refused with a
+ *  failure that owes help itself, when its report carries the refused ask too. An ask nothing answered leaves the
+ *  agent to be asked again. Nothing for a failure that owes none, whose surface offers its own remedy. */
 export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
   let askFailure: ShownFailure | null = null;
   return {
@@ -182,7 +183,7 @@ export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
               },
             })
           : null,
-        isAgentOffered && askFailure === null
+        isAgentOffered && askFailure?.isHelpOwed !== true
           ? null
           : m(ReportBugButton, {
               ...options,

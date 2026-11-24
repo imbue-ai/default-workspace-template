@@ -316,6 +316,19 @@ describe("FailureRemedies", () => {
     await answerLastAsk(parent, { isOpened: false, failure: refused });
     m.render(root, view());
 
+    expect(root.querySelector(".report-bug")).not.toBeNull();
+    // An ask nothing answered is asked again, not reported.
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    await answerLastAsk(parent, {
+      isOpened: false,
+      failure: { message: "The workspace didn't answer.", details: null, isHelpOwed: false },
+    });
+    m.render(root, view());
+    expect(root.querySelector(".report-bug")).toBeNull();
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    await answerLastAsk(parent, { isOpened: false, failure: refused });
+    m.render(root, view());
+
     root.querySelector<HTMLButtonElement>(".draft-ask")!.click();
     const [drafted] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
     expect([drafted.type, drafted.text, drafted.delivery]).toEqual([SHELL_ASK_AGENT, asked.text, "draft"]);
