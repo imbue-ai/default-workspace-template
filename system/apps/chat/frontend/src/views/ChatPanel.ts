@@ -101,7 +101,7 @@ import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveComp
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { AskAgentToFixButton, FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
@@ -466,10 +466,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const connection = askConnectionToChat(targetChatId);
     return {
       ...connection,
-      askAgent: async (text, options) => {
+      askAgent: async (text, options, delivery) => {
         askInFlight = true;
         try {
-          return await connection.askAgent(text, options);
+          return await connection.askAgent(text, options, delivery);
         } finally {
           askInFlight = false;
           m.redraw();
@@ -478,23 +478,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     };
   }
 
-  /** A failure line under a page's controls, with its details collapsed beneath it. ``isAgentWithheld`` where the
-   *  page's own "Ask an agent to fix this" already covers it. */
-  function renderFailureLines(lines: FailureLines | null, extraClass: string, isAgentWithheld = false): m.Children {
+  /** A failure line under a page's controls, with its details collapsed beneath it. ``isHelpLeftToPage`` where the
+   *  page's own remedies already cover the failure. */
+  function renderFailureLines(lines: FailureLines | null, extraClass: string, isHelpLeftToPage = false): m.Children {
     if (lines === null) return null;
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isHelpOwed
+      lines.isHelpOwed && !isHelpLeftToPage
         ? m(
             "div",
             { class: "flex flex-wrap items-center justify-center gap-2" },
-            m(FailureRemedies, {
-              connection: getShellConnection(),
-              failure: shownFailureOfLines(lines),
-              isAgentWithheld,
-              sm: true,
-            }),
+            m(FailureRemedies, { connection: getShellConnection(), failure: shownFailureOfLines(lines), sm: true }),
           )
         : null,
     ]);
@@ -664,8 +659,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             : "Sign in to a provider to start this chat.",
         ),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
-        // A Try again that failed again is the page's own failure, which the page's ask (a running chat's, or none
-        // where a new chat would meet it too) is about.
+        // A Try again that failed again is the page's own failure, which the page's remedies below are about.
         renderFailureLines(launchError, "message-list-create-retry-failed", true),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
         m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
@@ -715,17 +709,21 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          // Last in the row: the button says under itself what a refused ask came to, which then ends the page
-          // rather than sitting between its buttons.
-          chatToAskId === null
-            ? null
-            : m(AskAgentToFixButton, {
-                connection: pageAskConnection(chatToAskId),
+          // Last in the row: the ask says under itself what a refused one came to, which then ends the page, with
+          // its bug report, rather than sitting between the page's buttons. It goes to a chat that is already
+          // running; with none, a new chat would meet what stopped this one, so the bug report stands in for it. A
+          // chat that names no account needs a sign-in, which neither can make.
+          hasAccount
+            ? m(FailureRemedies, {
+                connection: chatToAskId === null ? getShellConnection() : pageAskConnection(chatToAskId),
                 failure: {
-                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
+                  message: `The chat "${provisional.name}" couldn't be started`,
                   details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                  isHelpOwed: true,
                 },
-              }),
+                isAgentWithheld: chatToAskId === null,
+              })
+            : null,
         ]),
       ],
     );

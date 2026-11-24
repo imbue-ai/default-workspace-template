@@ -1112,7 +1112,7 @@ describe("the ways out under a failed turn", () => {
 
   interface FailureNotice {
     title: string;
-    describe: (error: unknown) => { body: readonly (string | null)[]; details: string | null; isReportable: boolean };
+    describe: (error: unknown) => { body: readonly (string | null)[]; details: string | null; isHelpOwed: boolean };
     error: unknown;
     retry?: () => Promise<void>;
   }
@@ -1162,12 +1162,15 @@ describe("the ways out under a failed turn", () => {
 
   describe("Switch provider", () => {
     it.each([
-      ["a rate limit told as a status line", apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false)],
+      [
+        "a rate limit told as a status line",
+        apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false, RAW_TEXT),
+      ],
       [
         "a usage limit in the provider's own words",
         apiErrorEvent("You've hit your session limit \u00b7 resets 3pm", "rate_limit", false),
       ],
-      ["a provider whose servers failed", apiErrorEvent("API Error: 529 Overloaded", "overloaded", true)],
+      ["a provider whose servers failed", apiErrorEvent("API Error: 529 Overloaded", "overloaded", true, RAW_TEXT)],
     ])("moves the chat off the failing account for %s", (_case, event) => {
       findRemedy(render(event), "Switch provider")!.attrs.onclick();
 
@@ -1183,10 +1186,13 @@ describe("the ways out under a failed turn", () => {
     it.each([
       [
         "a request the provider refused",
-        apiErrorEvent("API Error: 400 max_tokens: too large", "invalid_request", false),
+        apiErrorEvent("API Error: 400 max_tokens: too large", "invalid_request", false, RAW_TEXT),
       ],
-      ["a failure nothing named", apiErrorEvent("API Error: Your computer went to sleep.", null, false, true)],
-      ["a conversation too long for the model", apiErrorEvent(TOO_LONG, "context_too_long", false)],
+      [
+        "a failure nothing named",
+        apiErrorEvent("API Error: Your computer went to sleep.", null, false, RAW_TEXT, true),
+      ],
+      ["a conversation too long for the model", apiErrorEvent(TOO_LONG, "context_too_long", false, RAW_TEXT)],
       ["an ordinary reply", apiErrorEvent("Here's the fix.", null, false)],
     ])("is not offered for %s, which another provider does not cure", (_case, event) => {
       expect(findRemedy(render(event), "Switch provider")).toBeNull();
@@ -1194,7 +1200,7 @@ describe("the ways out under a failed turn", () => {
 
     it("leaves a sign-in failure to its own note, which already offers the switch", () => {
       const children = render({
-        ...apiErrorEvent("API Error: 429 You're out of extra usage", "rate_limit", false),
+        ...apiErrorEvent("API Error: 429 You're out of extra usage", "rate_limit", false, RAW_TEXT),
         is_auth_error: true,
       });
 
@@ -1206,20 +1212,23 @@ describe("the ways out under a failed turn", () => {
       switching.chat = undefined;
 
       expect(
-        findRemedy(render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true)), "Switch provider"),
+        findRemedy(
+          render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true, RAW_TEXT)),
+          "Switch provider",
+        ),
       ).toBeNull();
     });
   });
 
   describe("a conversation too long for the model", () => {
-    const tooLong = (): AssistantMessageEvent => apiErrorEvent(TOO_LONG, "context_too_long", false);
+    const tooLong = (): AssistantMessageEvent => apiErrorEvent(TOO_LONG, "context_too_long", false, RAW_TEXT);
 
     it("offers a new chat and a compaction, and neither for any other failure", () => {
       const children = render(tooLong());
       expect(findRemedy(children, "Start a new chat")).not.toBeNull();
       expect(findRemedy(children, "Compact")).not.toBeNull();
 
-      const rateLimited = render(apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false));
+      const rateLimited = render(apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false, RAW_TEXT));
       expect(findRemedy(rateLimited, "Start a new chat")).toBeNull();
       expect(findRemedy(rateLimited, "Compact")).toBeNull();
     });
@@ -1299,8 +1308,8 @@ describe("the ways out under a failed turn", () => {
       const notice = raisedNotice();
       expect(notice.title).toBe("Couldn't compact this conversation");
       expect(notice.describe(notice.error)).toMatchObject({
-        body: ["This conversation couldn't be compacted. Try again. If this persists, report a bug."],
-        isReportable: true,
+        body: ["This conversation couldn't be compacted. Try again."],
+        isHelpOwed: true,
       });
       expect(notice.describe(notice.error).details).toContain("mngr message exited 1");
       expect(findRemedy(render(tooLong()), "Start a new chat")).not.toBeNull();
@@ -1330,8 +1339,8 @@ describe("the ways out under a failed turn", () => {
         selector.includes("system-interface-chat-session-id") ? { getAttribute: () => "session-1" } : null,
     });
 
-    const tooLong = render(apiErrorEvent(TOO_LONG, "context_too_long", false));
-    const overloaded = render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true));
+    const tooLong = render(apiErrorEvent(TOO_LONG, "context_too_long", false, RAW_TEXT));
+    const overloaded = render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true, RAW_TEXT));
 
     expect(findRemedy(tooLong, "Start a new chat")).toBeNull();
     expect(findRemedy(tooLong, "Compact")).toBeNull();

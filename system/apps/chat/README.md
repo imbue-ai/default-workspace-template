@@ -1402,26 +1402,32 @@ chat messaged most recently, and never to the failing chat (`chatToAskAbout`
 in `frontend/src/views/ask-running-agent.ts`). The task is the one every "Ask
 an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
 the details, what to do, written as Imbue Studio about the user), behind
-`/assist` (`assistRequest`), so the agent runs the workspace's assist flow as
-it does for an ask through the shell. It is sent as a message through
+`/assist`, so the agent runs the workspace's assist flow as it does for an ask
+through the shell. The shell writes that command for every ask that passes
+through it; this one never does, so the chat app puts it in front itself
+(`assistRequest`). It is sent as a message through
 `POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
 may create a chat for it, so these failures never offer the shell's ask, which
-every other failure that asks for a bug report offers first: with no other
-agent chat they offer none, and a Try again on the failed-create page that
-fails again offers none beside the page's. The button reads "Asking an agent…" until the send
-is answered, and the page then shows the chat the task went to. A failed chat
-that names no account offers neither button, since a sign-in is what it needs
-("Choose a provider").
+every other failure that owes help offers: with no other agent chat the ask is
+withheld and "Report a bug" stands in its place, and a Try again on the
+failed-create page that fails again offers nothing beside the page's own
+remedies. The button reads "Asking an agent…" until the send is answered, and
+the page then shows the chat the task went to. A failed chat that names no
+account offers neither button, since a sign-in is what it needs ("Choose a
+provider").
 
 A send that was refused leaves the user where they were. Its sentence is
 shown beside another chat's failure, so it leads with the chat that was asked
 (`Couldn't ask "<chat>".`, then the send route's own sentence), and its
 details are headed `Asking "<chat>":`. The composer's notice tells it as its
 last paragraph and keeps one "See details", holding the failure's details and
-then the ask's; its "Report a bug" files both, and is offered when either
-sentence asks for one. On the failed-create page the shared button
-(`AskAgentToFixButton` in `workspace_ui`) draws the refused ask under itself,
-with a "See details" of its own, so the button is the last in its row and the
+then the ask's. "Report a bug" comes only with a refused ask, files both, and
+is offered when either owes help; beside it "Draft it in a chat" leaves the
+same request unsent in a chat's message box when the refused ask owes help
+(the shell makes the draft, and writes `/assist` in front of it). On the
+failed-create page the shared remedies (`FailureRemedies` in `workspace_ui`)
+draw the refused ask under the button, with a "See details" of its own, the
+draft and the bug report, so the button is the last in its row and the
 refused ask ends the page.
 
 While one of the notice's actions runs (the ask, a retry, a restart), every

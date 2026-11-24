@@ -4,8 +4,8 @@
  * through the chat app's own send route rather than through the shell.
  */
 
-import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellConnection, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { CHANGE_NOT_ANSWERED_SENTENCE, assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellConnection, StartOptions, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById, getChats, getMainChatId } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
@@ -45,7 +45,7 @@ function describeAskFailure(error: unknown, targetChatId: string): FailureLines 
       ? {
           body: [`${lead}.`, failure.userFacingMessage],
           details: failure.details,
-          isReportable: failure.isReportable,
+          isHelpOwed: !failure.isExpected,
         }
       : plainFailureLinesOf(failure, lead, {
           notAnswered: `The workspace didn't answer, so Imbue Studio can't tell whether ${asked} was asked.`,
@@ -60,23 +60,36 @@ async function sendAsk(targetChatId: string, text: string): Promise<StartOutcome
     const lines = describeAskFailure(error, targetChatId);
     return {
       isOpened: false,
-      failure: { message: plainFailureSentence(lines), details: lines.details, isReportable: lines.isReportable },
+      failure: { message: plainFailureSentence(lines), details: lines.details, isHelpOwed: lines.isHelpOwed },
     };
   }
   openChatPage(targetChatId);
   return { isOpened: true };
 }
 
+/** A refused ask's request left unsent in a chat's message box, which only the shell can do; it writes the assist
+ *  command in front of the request itself. */
+function draftThroughShell(text: string, options: StartOptions | undefined): Promise<StartOutcome> {
+  const shell = getShellConnection();
+  if (shell !== null) return shell.askAgent(text, options, "draft");
+  return Promise.resolve({
+    isOpened: false,
+    failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
+  });
+}
+
 /** What ``askAgentToFix`` and ``AskAgentToFixButton`` take in place of the page's shell connection, so the ask is a
- *  message to ``targetChatId``, shown once it is sent. It is sent behind the assist command, as an ask through the
- *  shell is, so the agent runs the workspace's assist flow. A bug report about a refused ask still goes to the shell. */
+ *  message to ``targetChatId``, shown once it is sent. It never passes through the shell, which writes the assist
+ *  command for the asks that do, so it is put in front here for the agent to run the workspace's assist flow. A
+ *  draft of a refused ask, and a bug report about one, still go to the shell. */
 export function askConnectionToChat(
   targetChatId: string,
 ): Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> {
   return {
     // The send route carries the ask, so it can be made with or without a shell framing the page.
     hasShell: () => true,
-    askAgent: (text) => sendAsk(targetChatId, assistRequest(text)),
+    askAgent: (text, options, delivery) =>
+      delivery === "draft" ? draftThroughShell(text, options) : sendAsk(targetChatId, assistRequest(text)),
     canReportBug: () => getShellConnection()?.canReportBug() ?? false,
     reportBug: (failure) => getShellConnection()?.reportBug(failure),
   };

@@ -145,8 +145,8 @@ vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
-import { AskAgentToFixButton, FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
-import type { AskAgentToFixButtonAttrs } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import type { FailureRemediesAttrs } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
@@ -471,12 +471,12 @@ describe("ChatPanel over a provisional chat", () => {
     expect(detailsShown(refused)).toContain("mngr create exited with code 1");
     expect(renderedText(refused)).toContain("This chat couldn't be started. Try again.");
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
-    // The refused relaunch is the page's own failure again, so it gets no "Ask an agent" beside the page's.
-    expect(
-      flatten(refused)
-        .filter((vnode) => vnode.tag === FailureRemedies)
-        .map((vnode) => (vnode.attrs as { isAgentWithheld?: boolean }).isAgentWithheld),
-    ).toEqual([true]);
+    // The refused relaunch is the page's own failure again, so it gets no remedies beside the page's, which carry
+    // its details.
+    const remedies = flatten(refused).filter((vnode) => vnode.tag === FailureRemedies);
+    expect(remedies.map((vnode) => (vnode.attrs as unknown as FailureRemediesAttrs).failure.details)).toEqual([
+      expect.stringMatching(/mngr create exited with code 1[\s\S]*is on a lane this build does not have/),
+    ]);
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -498,11 +498,17 @@ describe("ChatPanel over a provisional chat", () => {
   describe("the ways out of a failed create beyond trying again", () => {
     afterEach(unmountViews);
 
+    /** What the page's remedies for the failed create are drawn from; undefined when the page offers none. */
+    function pageRemedies(tree: unknown): FailureRemediesAttrs | undefined {
+      const remedies = flatten(tree).find((vnode) => vnode.tag === FailureRemedies);
+      return remedies === undefined ? undefined : (remedies.attrs as unknown as FailureRemediesAttrs);
+    }
+
     /** The page's "Ask an agent to fix this", mounted so it can be pressed; null when the page offers none. */
     function mountAskButton(tree: unknown): HTMLElement | null {
-      const ask = flatten(tree).find((vnode) => vnode.tag === AskAgentToFixButton);
-      if (ask === undefined) return null;
-      return mountView(() => m(AskAgentToFixButton, ask.attrs as unknown as AskAgentToFixButtonAttrs));
+      const remedies = pageRemedies(tree);
+      if (remedies === undefined || remedies.isAgentWithheld === true) return null;
+      return mountView(() => m(FailureRemedies, remedies));
     }
 
     /** Press the mounted button and let the page draw what the press changed. */
@@ -533,7 +539,7 @@ describe("ChatPanel over a provisional chat", () => {
       const tree = mountPanel()();
 
       expect(findButton(tree, "message-list-switch-provider")).toBeUndefined();
-      expect(mountAskButton(tree)).toBeNull();
+      expect(pageRemedies(tree)).toBeUndefined();
     });
 
     it("asks the main chat to fix what stopped the create, and shows that chat", async () => {
@@ -582,14 +588,17 @@ describe("ChatPanel over a provisional chat", () => {
       expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith("chat-newer", expect.any(String), "minted-id");
     });
 
-    it("offers no agent when the workspace has no other agent chat to ask", () => {
+    it("withholds the agent, leaving the bug report, when the workspace has no other agent chat to ask", () => {
       mocks.chats = [chatSnapshotFixture(AGENT_ID), chatSnapshotFixture("chat-lounge", { kind: "room" })];
       mocks.mainChatId = AGENT_ID;
       failed("acct-1", "mngr create exited with code 1");
 
       const tree = mountPanel()();
 
-      expect(mountAskButton(tree)).toBeNull();
+      expect(pageRemedies(tree)).toMatchObject({
+        isAgentWithheld: true,
+        failure: { message: 'The chat "Chat 1" couldn\'t be started', isHelpOwed: true },
+      });
       expect(findButton(tree, "message-list-switch-provider")).toBeTruthy();
     });
 
@@ -604,6 +613,7 @@ describe("ChatPanel over a provisional chat", () => {
             detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
             user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
             kind: "input_blocked",
+            expected: true,
           },
         }),
       );
@@ -638,16 +648,26 @@ describe("ChatPanel over a provisional chat", () => {
       await flushAsync();
       m.redraw.sync();
 
-      const controls = [...page.querySelectorAll(".message-list-create-failed :is(button, .ask-agent-failure)")];
-      expect(controls.map((control) => control.textContent)).toContain("Remove this chat");
-      expect(controls[controls.length - 1].classList.contains("ask-agent-failure")).toBe(true);
+      const refusedAsk = page.querySelector(".message-list-create-failed .ask-agent-failure")!;
+      const pageButtons = [...page.querySelectorAll(".message-list-create-failed button")].filter(
+        (button) => !refusedAsk.contains(button),
+      );
+      expect(pageButtons.map((button) => button.textContent)).toContain("Remove this chat");
+      expect(
+        pageButtons.every(
+          (button) => (button.compareDocumentPosition(refusedAsk) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        ),
+      ).toBe(true);
+      // The refused ask owes help, so the same request can be left as a draft instead.
+      expect(refusedAsk.querySelector(".draft-ask")?.textContent).toBe("Draft it in a chat");
     });
 
     it.each([
-      { outcome: "sent", error: null },
+      { outcome: "sent", error: null, offeredAfter: [] },
       {
         outcome: "refused",
         error: Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+        offeredAfter: ["Draft it in a chat"],
       },
     ])("lets no way out be pressed while an ask is pending, and every one again once it is $outcome", async (ask) => {
       mocks.chats = [chatSnapshotFixture("chat-main")];
@@ -687,6 +707,7 @@ describe("ChatPanel over a provisional chat", () => {
         ["Switch provider", false],
         ["Remove this chat", false],
         ["Ask an agent to fix this", false],
+        ...ask.offeredAfter.map((label): [string, boolean] => [label, false]),
       ]);
     });
   });

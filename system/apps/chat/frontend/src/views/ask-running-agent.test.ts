@@ -118,6 +118,7 @@ describe("an ask sent to a running chat", () => {
         detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
         user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
         kind: "input_blocked",
+        expected: true,
       }),
     );
 
@@ -131,13 +132,13 @@ describe("an ask sent to a running chat", () => {
         details:
           'Asking "Main chat":\nHTTP 500\n' +
           "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
-        isReportable: false,
+        isHelpOwed: false,
       },
     });
     expect(mocks.openChatPage).not.toHaveBeenCalled();
   });
 
-  it("names the chat that was asked for a refusal nothing worded, and asks for a bug report", async () => {
+  it("names the chat that was asked for a refusal nothing worded, which owes help", async () => {
     mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
 
     const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE);
@@ -145,9 +146,9 @@ describe("an ask sent to a running chat", () => {
     expect(outcome).toMatchObject({
       isOpened: false,
       failure: {
-        message: 'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.',
+        message: 'Couldn\'t ask "Main chat". Try again.',
         details: expect.stringContaining("mngr message exited 1"),
-        isReportable: true,
+        isHelpOwed: true,
       },
     });
   });
@@ -161,7 +162,7 @@ describe("an ask sent to a running chat", () => {
       isOpened: false,
       failure: {
         message: "The workspace didn't answer, so Imbue Studio can't tell whether \"Main chat\" was asked.",
-        isReportable: false,
+        isHelpOwed: false,
       },
     });
   });
@@ -173,6 +174,28 @@ describe("an ask sent to a running chat", () => {
     const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE);
 
     expect(outcome).toMatchObject({ isOpened: false, failure: { message: "Couldn't ask the other chat." } });
+  });
+
+  it("leaves a refused ask's draft to the shell, which writes the assist command itself", async () => {
+    const askAgent = vi.fn(async () => ({ isOpened: true }));
+    mocks.shellConnection = { askAgent };
+
+    const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE, { showsOutcome: true }, "draft");
+
+    expect(outcome).toEqual({ isOpened: true });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(askAgent).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/^Imbue Studio showed the user this failure: The chat "Chat 3" couldn't be started\./),
+      { showsOutcome: true },
+      "draft",
+    );
+  });
+
+  it("drafts nothing, and sends nothing, where no shell frames the page", async () => {
+    const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE, { showsOutcome: true }, "draft");
+
+    expect(outcome.isOpened).toBe(false);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("reports a refused ask through the shell that frames the page", () => {
@@ -188,7 +211,7 @@ describe("an ask sent to a running chat", () => {
 });
 
 describe("a failure told together with the refused ask about it", () => {
-  const ASK_SENTENCE = 'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.';
+  const ASK_SENTENCE = 'Couldn\'t ask "Main chat". Try again.';
 
   it.each([
     [
@@ -202,21 +225,21 @@ describe("a failure told together with the refused ask about it", () => {
     ["neither has details", null, null, null],
   ])("keeps one set of details when %s", (_case, failureDetails, askDetails, expected) => {
     const told = withRefusedAsk(
-      { body: ["The agent isn't running and didn't start."], details: failureDetails, isReportable: false },
-      { message: ASK_SENTENCE, details: askDetails, isReportable: true },
+      { body: ["The agent isn't running and didn't start."], details: failureDetails, isHelpOwed: false },
+      { message: ASK_SENTENCE, details: askDetails, isHelpOwed: true },
     );
 
     expect(told.details).toBe(expected);
   });
 
-  it("says the ask's sentence last and asks for a bug report when either sentence does", () => {
+  it("says the ask's sentence last and owes help when either failure does", () => {
     const told = withRefusedAsk(
       {
         body: ["The agent isn't running and didn't start.", "Restart it to send your message."],
         details: null,
-        isReportable: false,
+        isHelpOwed: false,
       },
-      { message: ASK_SENTENCE, details: null, isReportable: true },
+      { message: ASK_SENTENCE, details: null, isHelpOwed: true },
     );
 
     expect(told.body).toEqual([
@@ -224,6 +247,6 @@ describe("a failure told together with the refused ask about it", () => {
       "Restart it to send your message.",
       ASK_SENTENCE,
     ]);
-    expect(told.isReportable).toBe(true);
+    expect(told.isHelpOwed).toBe(true);
   });
 });
