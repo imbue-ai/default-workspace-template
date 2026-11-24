@@ -12,6 +12,8 @@ Wire spelling is `snake_case` in JSON bodies and files, and `camelCase` in the c
 - A **window id** is `win-<16 hex>`, minted by the shell when a window is opened, never reused.
 - A **launch path id** matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique within its manifest; `open` is reserved for the synthesized one.
 - A **client id** is the uuid the browser keeps in local storage under `si-client-id`, held to `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+  In Imbue Studio the desktop app owns this value: it keeps one id per shell hostname and writes it under `si-client-id` in the shell frame's local storage before the shell's scripts run (`apps/minds/electron/shell-client-ids.js` in the mngr repository), so the shell takes a stored id as it finds it.
+  Renaming the key, keeping the id anywhere else, or replacing a stored id would make every Studio window a new client, with every window on its desktops minimized.
 - A **save id** is `save-<16 hex>`, minted by a window (browser sense) for each placements save it makes.
 - A **report id** is `report-<16 hex>`, minted by a window for each `client_state` report that moves its client (section 6).
 - A **page id** is `page-<16 hex>`, minted once by a window as its page loads, and carried on its `client_state` reports (section 6).
