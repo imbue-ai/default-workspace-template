@@ -749,9 +749,9 @@ file is pushed as `suggestions_updated`, and a page showing the chat reads the r
 chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no generated sets.
 
 A strip's suggestions are drawn as pills in a list on the user's side of the transcript's column
-(`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group set
-in 16px from the column's right edge, and a label too long for the column wrapping inside its
-pill. A pill has a dashed outline, small corners, the body text size, a light shadow and a solid
+(`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group
+ending at the column's right edge (where the composer's box ends) with each label set in 16px, as
+a bubble sets in its text, and a label too long for the column wrapping inside its pill. A pill has a dashed outline, small corners, the body text size, a light shadow and a solid
 fill, the chat's own background (`--c-bg-chat`), and the recommended one (at most one, and the
 first) is green. The pills rise into place over 150 ms.
 
@@ -789,8 +789,10 @@ from the page), which is how a first-run chat's start suggestions stay shown whi
 provider page started comes up. A generated set arrives a few seconds after its reply, with the
 push. Once a set is taken up, the line says "See N suggestions" ("See 1 suggestion" for one) at
 its right end, as quietly as a strip's disable link. A click shows the pills above the line and
-turns the words into "Hide suggestions", which hides them again; while they are shown the line
-carries "disable suggestions" immediately left of that, 16px away, for the workspace's owner.
+turns the words into "Hide", which hides them again; while they are shown the line carries
+"Disable" immediately left of that, 12px away, for the workspace's owner. Each names itself in
+full ("Hide suggestions", "Disable suggestions") in a tooltip and to screen readers, and the
+line's words end 16px in from the column's edge, in line with the pills' labels.
 A fixed set
 starts shown, so the first conversation's choices are never behind a click, and a generated set
 starts hidden. Every suggestion of a shown set is drawn.
@@ -807,7 +809,7 @@ The suggestions belong to the reply they were made for. When a message is sent, 
 or by typing, or a turn starts from anywhere else, the set leaves the composer at once and is
 drawn in the transcript under the assistant message it follows
 (`views/AnsweredReplySuggestions.ts`): the same line, "See N suggestions", always hidden to
-begin with, whose click shows the pills under it and turns it into "Hide suggestions". A pill
+begin with, whose click shows the pills under it and turns it into "Hide". A pill
 clicked there is sent now, through the composer like any other, and the line stays. It offers
 no way to switch the placement off. Every answered reply the page knows a set for keeps its
 line: the page keeps each set it is sent by the reply it follows (`sets`, and the stored set it
@@ -992,8 +994,8 @@ writer that knows fewer fields would reset the rest; `PUT /api/settings/suggesti
 either switch or both, changes only those (one left out or null stays as it is), and answers
 the settings as `GET /api/settings` does. The settings file and both routes drop a field the
 settings do not hold, so a file or a writer that carries one keeps every other value. Each
-placement's strip shows the workspace's owner its own link on its line ("disable suggestions"
-on the next-step line while its pills are shown, "disable new chat suggestions" on the
+placement's strip shows the workspace's owner its own link on its line ("Disable", named
+"Disable suggestions", on the next-step line while its pills are shown, "Disable new chat suggestions" on the
 new-chat strip's), which switches that placement off through that route: the strip goes, a
 notice with "Undo" takes its place for a few seconds, and where the Imbue Studio app says it
 opens workspace settings the link opens them on their Suggestions group, whose switches write
