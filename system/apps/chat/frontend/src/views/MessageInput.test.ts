@@ -1724,7 +1724,7 @@ describe("MessageInput first send of a seeded chat", () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
 
     const text = renderedText(findByClass(after, "modal-message"));
-    expect(text).toContain("The workspace didn't answer, so Imbue Studio can't tell whether this chat started.");
+    expect(text).toContain("The workspace didn't answer. This chat may not have started.");
     expect(text).not.toContain("report a bug");
   });
 
@@ -2142,8 +2142,7 @@ describe("MessageInput send failure notice", () => {
     const text = renderedText(after);
     expect(text).toContain("Your message may not have been sent");
     expect(text).toContain(
-      "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered. Your text is back " +
-        "in the box.",
+      "The workspace didn't answer. Your message may not have been delivered. Your text is back in the box.",
     );
     expect(text).not.toContain("Couldn't confirm your message arrived");
     expect(findButton(after, "Send again")).toBeTruthy();
@@ -2189,9 +2188,7 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Your message may not have been sent");
-    expect(text).toContain(
-      "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered.",
-    );
+    expect(text).toContain("The workspace didn't answer. Your message may not have been delivered.");
     expect(text).not.toContain("Your message wasn't delivered");
     expect(findButton(after, "Send again")).toBeTruthy();
     expectNoHelpOffered(after);
@@ -2564,7 +2561,7 @@ describe("MessageInput switching harness", () => {
     const text = renderedText(
       findByClass(component.view!({ attrs: { chatId: "agent-1" } } as never), "modal-message"),
     );
-    expect(text).toContain("The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to");
+    expect(text).toContain("The workspace didn't answer. This chat may not have moved to");
     expect(text).not.toContain("still running where it was");
   });
 

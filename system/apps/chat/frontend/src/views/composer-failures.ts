@@ -16,8 +16,7 @@ import { plainFailureLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
 const SEND_NOT_ANSWERED =
-  "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered. Your text is back in " +
-  "the box.";
+  "The workspace didn't answer. Your message may not have been delivered. Your text is back in the box.";
 const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the box, so nothing was lost.";
 
 /**
@@ -95,10 +94,7 @@ export function describeLaunchFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
   if (isUnanswered(error, failure)) {
     return {
-      body: [
-        "The workspace didn't answer, so Imbue Studio can't tell whether this chat started. Your message is back in " +
-          "the box.",
-      ],
+      body: ["The workspace didn't answer. This chat may not have started. Your message is back in the box."],
       details: failure.details,
       isHelpOwed: false,
     };
@@ -120,7 +116,7 @@ export function describeSwitchFailure(error: unknown, target: string, isSendPath
   const backInTheBox = isSendPath ? ". Your message is back in the box" : "";
   if (isUnanswered(error, failure)) {
     return {
-      body: [`The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to ${target}.`],
+      body: [`The workspace didn't answer. This chat may not have moved to ${target}.`],
       details: failure.details,
       isHelpOwed: false,
     };
@@ -151,7 +147,7 @@ export function isNothingToCancel(error: unknown): boolean {
 /** A Stop that was refused or got no answer. */
 export function describeStopFailure(error: unknown): FailureLines {
   return plainFailureLines(error, "Couldn't stop the agent", {
-    notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether the agent stopped.",
+    notAnswered: "The workspace didn't answer. The agent may not have stopped.",
   });
 }
 
@@ -159,14 +155,14 @@ export function describeStopFailure(error: unknown): FailureLines {
  *  refusal leaves the agent running. */
 export function describeMenuStopFailure(error: unknown): FailureLines {
   return plainFailureLines(error, "Couldn't stop the agent. It's still running", {
-    notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether the agent stopped.",
+    notAnswered: "The workspace didn't answer. The agent may not have stopped.",
   });
 }
 
 /** A shoulder tap that was refused or got no answer. */
 export function describeTapFailure(error: unknown): FailureLines {
   return plainFailureLines(error, "Your queued messages weren't sent", {
-    notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether your queued messages were sent.",
+    notAnswered: "The workspace didn't answer. Your queued messages may not have been sent.",
   });
 }
 
@@ -174,6 +170,6 @@ export function describeTapFailure(error: unknown): FailureLines {
  *  that was refused or got no answer. */
 export function describeNewChatFailure(error: unknown): FailureLines {
   return plainFailureLines(error, "The new chat couldn't be started", {
-    notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether the new chat was started.",
+    notAnswered: "The workspace didn't answer. The new chat may not have been started.",
   });
 }

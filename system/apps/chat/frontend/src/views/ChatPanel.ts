@@ -437,7 +437,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       await launchChat(chatId, accountId);
     } catch (error) {
       launchError = plainFailureLines(error, "This chat couldn't be started", {
-        notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether this chat started.",
+        notAnswered: "The workspace didn't answer. This chat may not have started.",
       });
     } finally {
       launchInFlight = false;
