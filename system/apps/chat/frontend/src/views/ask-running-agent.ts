@@ -38,6 +38,7 @@ export function chatToAskAboutFailedCreate(provisional: ProvisionalChat): string
 function describeAskFailure(error: unknown, targetChatId: string): FailureLines {
   const title = getChatById(targetChatId)?.title;
   const asked = title === undefined ? "the other chat" : `"${title}"`;
+  const askedAtStart = title === undefined ? "The other chat" : asked;
   const failure = describeRequestFailure(error, "change");
   const lead = `Couldn't ask ${asked}`;
   const lines: FailureLines =
@@ -48,7 +49,7 @@ function describeAskFailure(error: unknown, targetChatId: string): FailureLines 
           isHelpOwed: !failure.isExpected,
         }
       : plainFailureLinesOf(failure, lead, {
-          notAnswered: `The workspace didn't answer, so Imbue Studio can't tell whether ${asked} was asked.`,
+          notAnswered: `The workspace didn't answer. ${askedAtStart} may not have been asked.`,
         });
   return { ...lines, details: lines.details === null ? null : `Asking ${asked}:\n${lines.details}` };
 }

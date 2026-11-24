@@ -85,7 +85,7 @@ export function declinedCompactSentence(error: unknown): string {
 /** A /compact sent for the user (the transcript's Compact) that was refused or got no answer. */
 export function describeCompactFailure(error: unknown): FailureLines {
   return plainFailureLines(error, "This conversation couldn't be compacted", {
-    notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether /compact was sent.",
+    notAnswered: "The workspace didn't answer. /compact may not have been sent.",
   });
 }
 

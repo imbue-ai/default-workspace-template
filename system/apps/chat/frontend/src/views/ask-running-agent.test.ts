@@ -161,9 +161,21 @@ describe("an ask sent to a running chat", () => {
     expect(outcome).toMatchObject({
       isOpened: false,
       failure: {
-        message: "The workspace didn't answer, so Imbue Studio can't tell whether \"Main chat\" was asked.",
+        message: 'The workspace didn\'t answer. "Main chat" may not have been asked.',
         isHelpOwed: false,
       },
+    });
+  });
+
+  it("starts the unanswered sentence with the other chat once the list no longer names it", async () => {
+    mocks.chats = [];
+    mocks.sendMessage.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 0, response: null }));
+
+    const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE);
+
+    expect(outcome).toMatchObject({
+      isOpened: false,
+      failure: { message: "The workspace didn't answer. The other chat may not have been asked." },
     });
   });
 

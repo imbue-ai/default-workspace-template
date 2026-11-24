@@ -1327,7 +1327,7 @@ describe("the ways out under a failed turn", () => {
 
       const notice = raisedNotice();
       expect(notice.describe(notice.error).body).toEqual([
-        "The workspace didn't answer, so Imbue Studio can't tell whether /compact was sent.",
+        "The workspace didn't answer. /compact may not have been sent.",
       ]);
       expect(notice.retry).toBeUndefined();
     });
