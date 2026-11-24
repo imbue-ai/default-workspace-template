@@ -15,7 +15,9 @@ from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.claude.one_shot import ClaudeOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.suggestion_generation import ConversationEnd
+from imbue.chat.suggestion_generation import SUGGESTION_COMPLETION_TIMEOUT_SECONDS
 from imbue.chat.suggestion_generation import SUGGESTION_GENERATION_SYSTEM_PROMPT
+from imbue.chat.suggestion_generation import SUGGESTION_THINKING_TOKEN_ALLOWANCE
 from imbue.chat.suggestion_generation import parse_generated_suggestions
 from imbue.chat.suggestion_generation import suggestion_generation_prompt
 from imbue.chat.testing import StandInAnthropicApi
@@ -53,7 +55,8 @@ def test_the_suggestion_prompt_reaches_a_sonnet_model_and_its_answer_reads_back_
             SUGGESTION_GENERATION_SYSTEM_PROMPT,
             prompt,
             model_tier=OneShotModelTier.MEDIUM,
-            thinking_token_allowance=4000,
+            thinking_token_allowance=SUGGESTION_THINKING_TOKEN_ALLOWANCE,
+            timeout_seconds=SUGGESTION_COMPLETION_TIMEOUT_SECONDS,
         )
 
     assert [suggestion.label for suggestion in parse_generated_suggestions(answer)] == [
