@@ -1,6 +1,6 @@
 ---
 name: use-screen
-description: Use when you need a display -- to run a program with a window (a GUI app, a game, an editor, a test that needs X), to see what is on the workspace's desktop, to take a screenshot of it, to type or click into a program there, or to hold the control lease while you drive it. The Screen is the workspace's one streamed Linux desktop, shown to the user as a window; the browser runs on it too (see the agentic-browser-fleet skill for driving Chromium).
+description: Use when you need a display -- to run a program with a window (a GUI app, a game, an editor, a test that needs X), to see what is on the workspace's desktop, to take a screenshot of it, to type or click into a program there, or to hold the control lease while you drive it. The Screen is the workspace's one streamed Linux desktop, shown to the user as a window; the browser runs on it too (see the use-browser skill for driving Chromium).
 metadata:
   author: imbue
 ---
@@ -38,7 +38,7 @@ in the most expendable memory band, so under memory pressure they are shed befor
 ## The lease: the human always wins
 
 The Screen has one controller at a time, a human or an agent. Take the lease before you drive, with
-`screen control acquire` (or, for the browser, `agentic-browser-fleet acquire`, which is the same
+`screen control acquire` (or, for the browser, `browser acquire`, which is the same
 lease):
 
 - **`acquire` answers at once.** Exit 0 means the Screen is yours; 2 means a human holds it and you
@@ -66,7 +66,7 @@ the lease stops and ends its turn.
 
 Two input paths, by what you drive:
 
-- **Chromium**: the CDP proxy, through `playwright-cli` as the `agentic-browser-fleet` skill says.
+- **Chromium**: the CDP proxy, through `playwright-cli` as the `use-browser` skill says.
   It is gated on the lease per frame, so a refused command there means the human took control.
 - **Everything else**: `xdotool` against `DISPLAY=:99`, after `screen control acquire`:
 
