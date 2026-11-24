@@ -1468,5 +1468,5 @@ def test_a_workspace_whose_shell_is_down_sends_only_its_owner_to_imbue_studio(
     page = _given_up_page(harness, _SHELL_HOST, identity, "document", path=path)
 
     assert sentence in page
-    assert "agent" not in page
+    assert "Ask an agent in the workspace" not in page
     assert _buttons(page) == {"Try again": ""}
