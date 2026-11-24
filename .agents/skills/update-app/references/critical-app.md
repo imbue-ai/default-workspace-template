@@ -134,8 +134,7 @@ with whether it changes what the user sees: an obvious contained change (font,
 color, copy) you implement directly; a redesign or a non-obvious layout starts
 as a deliberately rough pass for fast signal. A critical app's preview
 defaults to the real edit in the worktree, however rough, shown through the
-real preview (the "janky real edit" of
-`.agents/shared/references/interactive-delivery.md`).
+real preview.
 
 ## Step 2: The live loop, in the worktree and its preview
 

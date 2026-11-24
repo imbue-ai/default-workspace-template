@@ -36,9 +36,7 @@ specifics, but the shape below holds for all of them.
 
 3. **Propose a small plan, wait for approval.** A short plan the user can react
    to -- the approach and what they'll see at the end -- not an exhaustive spec.
-   Wait for a go-ahead before building anything. When no question blocked and
-   the prototype in phase 5 is cheap, a specialization may fold this approval
-   into that one and go straight on.
+   Wait for a go-ahead before building anything.
 
 4. **Validate risky dependencies first.** Before any other work, exercise the
    operations whose failure could sink the whole task and that are *not under

@@ -4,8 +4,6 @@ description: "Create a new app for the user -- a page, dashboard, or tool they c
 metadata:
   author: imbue
   crystallized: true
-  exempt-checks: contents
-  exempt-reason: awaiting-restructure
 ---
 
 # How to build an app
@@ -18,14 +16,15 @@ existing app, use the `update-app` skill.
 
 ## Standing instructions
 
-- **Building an app is the interactive-delivery shape**, not "scaffold,
-  implement, ship": confirm the look and feel on a cheap throwaway mock, build
-  to a usable state in the chat, and leave thorough testing and the review
-  gates to a background harden pass.
+- **Building an app is a live loop**, not "scaffold, implement, ship":
+  confirm the look and feel on a cheap throwaway mock, build to a usable state
+  in the chat, and leave thorough testing and the review gates to a background
+  harden pass.
 - **Build nothing real before the user confirms the mock.** Scaffolding is
-  cheap and reversible; a data layer or a state architecture is not. This skill
-  exists to prevent building, testing and hardening a whole app before the
-  user has confirmed its basic shape.
+  cheap and reversible; a data layer or a state architecture is not.
+- **One delivery at a time.** A confirmation approves what the user saw: each
+  further piece (a second view, a follow-up action, a schedule) is built,
+  shown and confirmed on its own.
 - **Data from outside goes through `fetch-process-show` first.** If the app
   reads records from outside itself (an upload, an export, an API, a
   third-party service) and that skill did not send you here, stop and run it:
@@ -71,9 +70,6 @@ existing app, use the `update-app` skill.
    the working app.
 
 ## Step 1: Clarify and plan
-
-Before anything else, read `.agents/shared/references/interactive-delivery.md`,
-the shape this flow follows.
 
 Ask only the questions that block: a fork both genuinely uncertain and
 expensive to reverse. Most apps have none. Default to the simplest conventional
@@ -166,6 +162,9 @@ The note is one plain sentence in the user's terms naming what is not real:
 whether the content is made up or a sample of their real data (and how much of
 it), and which controls do nothing yet ("Showing 20 of your emails as a sample;
 refresh and archive don't work yet.").
+
+**Do not test the mock yourself.** Your check ends at that call: driving the
+page in a browser costs the speed this step exists for.
 
 Then loop: take feedback, change the mock so the change is *visible*, show it
 again. Never accept feedback and move on having only said you will apply it.

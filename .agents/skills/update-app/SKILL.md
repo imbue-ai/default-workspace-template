@@ -98,9 +98,8 @@ window keeps showing the old page until it is refreshed. The live change loop
 
 - **Larger scope**: a change that is costly to redo if its shape is wrong. A
   redesign, a new page, a meaningful shift in look and feel, a new user-facing
-  capability, a change that touches the user's data. Read
-  `.agents/shared/references/interactive-delivery.md` and run the mock-confirm
-  flow `build-app` used to create the app: put a cheap, throwaway **preview**
+  capability, a change that touches the user's data. Run the mock-confirm
+  loop `build-app` used to create the app: put a cheap, throwaway **preview**
   of the proposed change in front of the user, loop until they **explicitly
   confirm** the shape, and only then build it for real. Never build heavy
   against an unconfirmed shape.
@@ -114,8 +113,7 @@ When in doubt, a change that alters what the user *sees or perceives* is larger
 scope, and one that only alters behaviour behind an unchanged surface is
 contained.
 
-The preview takes whichever form is cheaper and still convincing (the two
-demonstrative-prototype types of `interactive-delivery.md`):
+The preview takes whichever form is cheaper and still convincing:
 
 - a throwaway mock page, the fastest for a look-and-feel loop;
 - the changed app itself, booted beside the live one as the labeled
