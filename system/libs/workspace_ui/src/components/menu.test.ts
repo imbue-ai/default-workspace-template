@@ -480,6 +480,7 @@ describe("a menu opened from a hover trigger", () => {
     const attrs = menu.hoverTriggerAttrs(onBeforeOpen);
     trigger.addEventListener("mouseenter", attrs.onmouseenter as EventListener);
     trigger.addEventListener("mouseleave", attrs.onmouseleave as EventListener);
+    trigger.addEventListener("pointerdown", attrs.onpointerdown as EventListener);
   });
 
   function fire(name: "mouseenter" | "mouseleave"): void {
@@ -502,6 +503,14 @@ describe("a menu opened from a hover trigger", () => {
     fire("mouseleave");
     vi.advanceTimersByTime(500);
     expect(menu.isOpen()).toBe(false);
+  });
+
+  it("does not open when the trigger is pressed before the delay is out", () => {
+    fire("mouseenter");
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    vi.advanceTimersByTime(500);
+    expect(menu.isOpen()).toBe(false);
+    expect(onBeforeOpen).not.toHaveBeenCalled();
   });
 
   it("closes once the pointer has left the trigger and the card alike, and not before", () => {

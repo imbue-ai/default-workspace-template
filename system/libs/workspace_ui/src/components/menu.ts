@@ -1048,6 +1048,9 @@ export function createMenu(options: MenuOptions): Menu {
           cancelTriggerHover();
           scheduleHoverClose();
         },
+        // A press before the pointer has rested is the user acting on the trigger, not resting on it: the open it
+        // started would land after the press had already moved or replaced the trigger.
+        onpointerdown: () => cancelTriggerHover(),
       };
     },
     view(rows: readonly MenuRow[]): m.Children {
