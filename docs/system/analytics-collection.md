@@ -50,12 +50,13 @@ template's System Monitor sampler and memory guard already record
   `data/.state/system-monitor/history.jsonl`;
 - the busy-CPU and high-memory stretches and the ten-minute snapshots of
   which chats and programs hold the most memory
-  (`data/.state/system-monitor/events/`). A chat is named by its agent id. A
-  program is named only when this template provides it (its supervisord
-  program exists in the template commit the workspace was created from or
-  updated to) or when it is a registered app, whose name the workspace-state
-  snapshot already carries; any other program is reported only as "a user
-  program";
+  (`data/.state/system-monitor/events/`), each with only its own figures. A
+  chat is named by its agent id. A program is named only when this template
+  provides it (its supervisord program exists in the template commit the
+  workspace was created from or updated to; a template a user published does
+  not count, only the commit of this template it was built on) or when it is
+  a registered app, whose name the workspace-state snapshot already carries;
+  any other program is reported only as "a user program";
 - the memory guard's record of each process it stopped
   (`data/.state/oom_priority/events/shed.jsonl`): when, how much memory it
   held, its shedding priority, and whether it was an agent (and if so,
