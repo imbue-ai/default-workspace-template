@@ -145,9 +145,11 @@ Once the chat is decided:
 
 - A send to a chat that is an agent goes through the ordinary send path (`_deliver_message`: held during a handoff, revived when stopped, attributed to the client when `client_id` and `desktop_id` are given).
   With `is_delivery_awaited` false it runs on a background thread and a failure is logged at warning level; with it true the route waits and answers the send route's own failure codes (`500` with the harness's detail, `503` not ready).
-- A draft, a send to a provisional chat, or a choice is held as a pending intake (section 3.6).
+- A send to a chat whose first agent is being created (a provisional chat in the `creating` phase, such as the main chat in the seconds after its owner leaves the first run's provider page, which starts that agent) is kept for the agent, as the message route keeps a send from the chat's own page: it is listed on the provisional record, every page shows it, and the agent receives it as it lands.
+  It is accepted at once, whatever `is_delivery_awaited` says.
+- A draft, a send to a provisional chat with no agent on its way (one awaiting its first send, or one whose create failed), or a choice is held as a pending intake (section 3.6).
 
-The route answers `200` with `{"path"}`: `/?chat=<id>` for a completed send or create, `/?chat=<id>&intake=<token>` for a held draft or a held first message, and `/?intake=<token>` for a choice.
+The route answers `200` with `{"path"}`: `/?chat=<id>` for a completed send or create, or a send kept for an agent being created; `/?chat=<id>&intake=<token>` for a held draft or a held first message; and `/?intake=<token>` for a choice.
 Like every create, it answers `503` until the agent list has been read from mngr once.
 
 ### 3.6 Pending intakes
@@ -168,9 +170,9 @@ Three routes, all for the chat root:
 `chat_id` is the receiving chat, and `path` is `/?chat=<chat_id>`.
 Exactly one of these holds:
 
-- `composer_text` is the text and `first_message` is null: a draft. The root puts the text into that chat's composer, unsent.
+- `composer_text` is the text and `first_message` is null: a draft, or a send to a chat whose create failed. The root puts the text into that chat's composer, unsent.
 - `first_message` is the text and `composer_text` is null: a send to a provisional chat awaiting its first send, with no account signed in when the intake arrived. The root launches the chat with it on an account that has appeared meanwhile, else drafts it into the chat's composer, whose page asks for a provider (section 4.6).
-- Both null: a send to a chat that is an agent, delivered by the server on apply through the ordinary send path (on a background thread), so a picked chat is messaged the way one named in the intake is.
+- Both null: a send to a chat that is an agent, delivered by the server on apply through the ordinary send path (on a background thread), so a picked chat is messaged the way one named in the intake is; or a send to a chat whose first agent is being created by then (its launch began after the intake was held), kept for that agent as section 3.5 has it.
 
 The token is consumed before the answer, so a second apply is a `404`.
 
