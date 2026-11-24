@@ -976,7 +976,7 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+  it("keeps a failure that owes help up with its details, wherever it happened", async () => {
     const store = await startedStore();
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
