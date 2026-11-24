@@ -218,12 +218,12 @@ definition, and a restart of the whole services agent.
 
 **What you may check depends on who is looking.** With no window open, check
 freely, as a user would and not just "the process is up". With the app already
-on the user's screen, the call above is the whole check (it confirms the
-marker before it refreshes the window), plus the kind that cannot touch their
-view: a `curl`, a health probe, an exit code, a log line. To try the change in
-a browser first, read `references/verify-against-a-copy.md` and boot the
-throwaway instance it gives the command for: never copy the store or start the
-app by hand.
+on the user's screen, the call above is the whole check of the live app (it
+confirms the marker before it refreshes the window), plus the kind that cannot
+touch their view: a `curl`, a health probe, an exit code, a log line. To try
+the change in a browser first, read `references/verify-against-a-copy.md` and
+boot the throwaway instance it gives the command for: never copy the store or
+start the app by hand.
 The thorough pass is the harden worker's, on its own instance.
 
 ## Step 5: Show it, and end the turn
