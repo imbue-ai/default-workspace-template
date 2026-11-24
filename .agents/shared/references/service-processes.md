@@ -169,7 +169,7 @@ than ~1s later, and it keeps the command self-documenting.
 
 For an app, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded web lib,
-`build-app`'s `cleanup.md` reference covers the full teardown.
+the `update-app` skill covers the full teardown.
 
 ## Modifying a service
 
