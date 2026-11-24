@@ -37,6 +37,8 @@ import re
 from typing import Any
 from typing import Final
 
+from loguru import logger
+
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 
 # HTTP status -> normalized kind. Sourced from the Anthropic API errors reference
@@ -89,6 +91,8 @@ _RAW_FAILURE_TEXT_RE: Final[re.Pattern[str]] = re.compile(
     r"[{}]|\bAPI Error:|^\s*\d{3}\b|\b(?:status|HTTP)\s*\d{3}\b", re.IGNORECASE
 )
 _WHITESPACE_RUN_RE: Final[re.Pattern[str]] = re.compile(r"\s+")
+# Where a response body begins in a failure text: a brace that opens a JSON object, not one in prose.
+_JSON_BODY_START_RE: Final[re.Pattern[str]] = re.compile(r'\{\s*"')
 
 
 def classify_api_error(text: str) -> str | None:
@@ -134,12 +138,13 @@ def provider_error_message(text: str) -> str | None:
     Reads the shapes providers answer with: Anthropic's and OpenAI's ``{"error": {"message": ...}}``, and a bare
     ``{"message": ...}``.
     """
-    body_start = text.find("{")
-    if body_start < 0:
+    body_start = _JSON_BODY_START_RE.search(text)
+    if body_start is None:
         return None
     try:
-        body, _ = json.JSONDecoder().raw_decode(text[body_start:])
-    except json.JSONDecodeError:
+        body, _ = json.JSONDecoder().raw_decode(text, body_start.start())
+    except json.JSONDecodeError as e:
+        logger.warning("A failed turn's response body could not be read for the provider's message: {}", e)
         return None
     if not isinstance(body, dict):
         return None

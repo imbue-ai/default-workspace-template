@@ -135,7 +135,13 @@ def test_a_providers_message_is_read_from_an_openai_shaped_body_too() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["API Error: 529 Overloaded", "API Error: 400 {not json", '{"error": "a string"}', '{"error": {"message": " "}}'],
+    [
+        "API Error: 529 Overloaded",
+        "API Error: 400 {not json",
+        'API Error: 400 {"error": {"message": "cut off',
+        '{"error": "a string"}',
+        '{"error": {"message": " "}}',
+    ],
 )
 def test_a_failure_with_no_message_in_a_body_carries_none(text: str) -> None:
     assert provider_error_message(text) is None
