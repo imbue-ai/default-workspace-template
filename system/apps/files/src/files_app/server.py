@@ -129,18 +129,22 @@ def _is_plain_text_asked() -> bool:
     return bool(_DOWNLOAD_QUERIES & request.args.keys()) or _is_page_asked()
 
 
-def _refusal(sentence: str, status: int, kind: str | None = None, detail: str | None = None) -> Response:
+def _refusal(
+    sentence: str, status: int, kind: str | None = None, detail: str | None = None, is_expected: bool = False
+) -> Response:
     """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
     page's own words name what failed), ``kind`` for a page that words the cause itself, ``detail`` for a script (the
-    sentence when there is nothing more to say). A download or a page load is answered with the sentence in plain
-    text instead."""
+    sentence when there is nothing more to say), and ``is_expected`` for a refusal that is ordinary operation the
+    sentence fully explains. A download or a page load is answered with the sentence in plain text instead."""
     if _is_plain_text_asked():
         return _text(sentence, status)
-    return error_response(detail or sentence, status, user_facing_message=sentence, kind=kind)
+    return error_response(
+        detail or sentence, status, user_facing_message=sentence, expected=True if is_expected else None, kind=kind
+    )
 
 
 def _unexplained_failure(detail: str) -> Response:
-    """A failure no sentence explains, which the page asks to have reported: ``detail`` only."""
+    """A failure no sentence explains, which the page can only say to try again: ``detail`` only."""
     if _is_plain_text_asked():
         return _text(detail, 500)
     return error_response(detail, 500)
@@ -195,7 +199,9 @@ def create_app(
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _refusal(error.message, error.status, kind=error.kind, detail=error.detail)
+        return _refusal(
+            error.message, error.status, kind=error.kind, detail=error.detail, is_expected=error.is_expected
+        )
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
@@ -248,7 +254,9 @@ def create_app(
                 if side is not None:
                     refusal = _MOVE_REFUSAL_BY_SIDE[side]
             logger.debug("{} {} refused as {}: {}", request.method, path, refusal.kind, error)
-            return _refusal(refusal.sentence, refusal.status, kind=refusal.kind, detail=detail)
+            return _refusal(
+                refusal.sentence, refusal.status, kind=refusal.kind, detail=detail, is_expected=refusal.is_expected
+            )
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:
@@ -322,7 +330,7 @@ def create_app(
         its page, ``?json`` ``{"kind": "file", "is_text": ...}``), or ``?zip`` a folder as a zip. PUT writes a file
         from the body, MKCOL makes a folder, MOVE (to the ``Destination`` header) renames, DELETE removes. A refusal
         is an ``ErrorResponse`` under its status: ``detail``, with ``user_facing_message`` and ``kind`` when the cause
-        is one a person can act on. A refused ``?download`` or ``?zip``, or a page the browser loads, is answered with
+        is one a person can act on, and ``expected`` when it is ordinary operation the sentence fully explains. A refused ``?download`` or ``?zip``, or a page the browser loads, is answered with
         the sentence as plain text instead.
         """
         return answer(local, "", _requested_path())

@@ -100,8 +100,8 @@ def shared_paths(permissions: object) -> Grants:
 def list_on_device(
     gateway: Gateway, device: str, has_device_paths: bool, path: str, depth: int
 ) -> list[DavEntry] | None:
-    """The PROPFIND of a path on a device (the path first, then its children with depth 1); None when the device
-    did not answer or refused."""
+    """The PROPFIND of a path on a device (the path first, then its children with depth 1); nothing when the device
+    says nothing is at the path, and None when it did not answer or refused."""
     try:
         response = gateway.request(
             "PROPFIND",
@@ -113,6 +113,8 @@ def list_on_device(
     except httpx.HTTPError as error:
         logger.debug("{} did not answer for {}: {}", device, path, error)
         return None
+    if response.status_code == 404:
+        return []
     if response.status_code != 207:
         logger.debug("{} answered {} for {}", device, response.status_code, path)
         return None
@@ -185,7 +187,8 @@ def probe_share(gateway: Gateway, device: str, has_device_paths: bool, path: str
         path=path,
         access=access,
         kind=kind,
-        is_reachable=remote is not None,
+        # A computer that says the path is gone is listed as one that did not answer for it.
+        is_reachable=bool(remote),
         synced_copy=None,
         sync=None,
     )

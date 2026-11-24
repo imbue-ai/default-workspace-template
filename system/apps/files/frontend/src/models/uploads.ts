@@ -40,7 +40,8 @@ export interface UploadFailure {
  *  server said go in the explanation. */
 export function uploadFailureOf(error: unknown, name: string): UploadFailure {
   const { status, kind } = describeRequestFailure(error, "change");
-  const told = toldFailure(error, `"${name}" couldn't be uploaded`, "into-folder");
+  const whatFailed = `"${name}" couldn't be uploaded`;
+  const told = toldFailure(error, { whatFailed, operation: "into-folder", tried: null, item: null });
   let line = "Failed";
   if (status === 0) line = "Interrupted";
   else if (isNotWritable(kind)) line = "Failed — read-only folder";

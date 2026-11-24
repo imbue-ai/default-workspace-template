@@ -12,37 +12,39 @@ def _os_error(number: int) -> OSError:
 
 
 @pytest.mark.parametrize(
-    ("number", "status", "kind"),
+    ("number", "status", "kind", "is_expected"),
     [
-        (errno.EACCES, 403, "permission_denied"),
-        (errno.EPERM, 403, "permission_denied"),
-        (errno.EROFS, 403, "read_only"),
-        (errno.ENOSPC, 507, "out_of_space"),
-        (errno.EDQUOT, 507, "out_of_space"),
-        (errno.ENOENT, 404, "not_found"),
-        (errno.EEXIST, 409, "already_exists"),
-        (errno.ENOTEMPTY, 409, "already_exists"),
-        (errno.ENAMETOOLONG, 400, "name_too_long"),
-        (errno.ENOTDIR, 409, "not_a_folder"),
-        (errno.EISDIR, 409, "is_a_folder"),
-        (errno.EBUSY, 409, "in_use"),
-        (errno.ETXTBSY, 409, "in_use"),
-        (errno.EFBIG, 413, "too_large"),
-        (errno.ELOOP, 400, "link_loop"),
+        (errno.EACCES, 403, "permission_denied", False),
+        (errno.EPERM, 403, "permission_denied", False),
+        (errno.EROFS, 403, "read_only", False),
+        (errno.ENOSPC, 507, "out_of_space", False),
+        (errno.EDQUOT, 507, "out_of_space", False),
+        (errno.ENOENT, 404, "not_found", False),
+        (errno.EEXIST, 409, "already_exists", False),
+        (errno.ENOTEMPTY, 409, "already_exists", False),
+        (errno.ENAMETOOLONG, 400, "name_too_long", True),
+        (errno.ENOTDIR, 409, "not_a_folder", False),
+        (errno.EISDIR, 409, "is_a_folder", False),
+        (errno.EBUSY, 409, "in_use", True),
+        (errno.ETXTBSY, 409, "in_use", True),
+        (errno.EFBIG, 413, "too_large", False),
+        (errno.ELOOP, 400, "link_loop", False),
     ],
 )
 def test_an_error_people_can_act_on_is_a_refusal_in_their_words_without_the_path(
-    number: int, status: int, kind: str
+    number: int, status: int, kind: str, is_expected: bool
 ) -> None:
     refusal = refusal_for_os_error(_os_error(number), is_read=False)
 
     assert isinstance(refusal, OsRefusal)
-    assert (refusal.status, refusal.kind) == (status, kind)
+    # Only a refusal that passes on its own, or that the person puts right by typing, is expected; any other leaves
+    # them unable to do what they meant, and the page offers an agent for it.
+    assert (refusal.status, refusal.kind, refusal.is_expected) == (status, kind, is_expected)
     assert "notes.txt" not in refusal.sentence
 
 
 @pytest.mark.parametrize("number", [errno.EIO, errno.EINVAL, None])
-def test_an_unexplained_error_is_left_to_be_reported(number: int | None) -> None:
+def test_an_unexplained_error_is_no_refusal(number: int | None) -> None:
     error = OSError("something odd") if number is None else _os_error(number)
 
     assert refusal_for_os_error(error, is_read=False) is None

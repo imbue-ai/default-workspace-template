@@ -552,13 +552,18 @@ def test_download_loads_in_a_frame_and_saves_a_folder_as_a_zip_and_a_file_under_
     assert [request.all_headers()["sec-fetch-dest"] for request in download_requests] == ["iframe", "iframe", "iframe"]
 
 
-def test_a_download_the_server_refuses_says_why_in_a_toast(open_files_page: OpenFilesPage, files_root: Path) -> None:
+def test_a_download_of_a_file_that_is_gone_says_so_in_a_toast_and_drops_it_from_the_listing(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
     page = open_files_page("/")
     expect(_entry(page, "/notes.txt")).to_be_visible()
     (files_root / "notes.txt").unlink()
     _entry(page, "/notes.txt").click(button="right")
     page.locator('[data-menu-row="download"]').click()
-    expect(page.locator("[data-toast]")).to_have_text("Couldn't download \"notes.txt\". It's no longer there.")
+    expect(page.locator("[data-toast]")).to_have_text(
+        '"notes.txt" isn\'t there anymore. It may have been moved or deleted.'
+    )
+    expect(_entry(page, "/notes.txt")).to_have_count(0)
 
 
 def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, files_root: Path) -> None:

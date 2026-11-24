@@ -17,6 +17,7 @@ vi.mock("../models/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/server")>()),
   readText: vi.fn(),
   writeFile: vi.fn(),
+  deletePath: vi.fn(),
 }));
 
 const PATH = "/home/user/workspace/notes.md";
@@ -29,7 +30,6 @@ type Reporter = FailureHost & {
 function reporter(canReport: boolean, hasShell: boolean): Reporter {
   return {
     hasShell: () => hasShell,
-    startWithText: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
     askAgent: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
     canReportBug: () => canReport,
     reportBug: vi.fn<(failure: ReportedFailure) => void>(),
@@ -65,9 +65,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const GONE = { detail: "It's no longer there.", user_facing_message: "It's no longer there.", kind: "not_found" };
+
 describe("a file whose text could not be loaded", () => {
-  it("says a file that is no longer there was moved or deleted, and asks for no bug report", async () => {
-    vi.mocked(server.readText).mockRejectedValueOnce(httpFailure(404, null, "read"));
+  it("says a file the server calls gone was moved or deleted, and offers no agent or bug report", async () => {
+    vi.mocked(server.readText).mockRejectedValueOnce(httpFailure(404, GONE, "read"));
     const { root } = await openedPage(true);
 
     expect(failureText(root)).toBe("This file is no longer there. It may have been moved or deleted.");
@@ -76,18 +78,15 @@ describe("a file whose text could not be loaded", () => {
     expect(root.querySelector(".ask-agent-to-fix")).toBeNull();
   });
 
-  it("says it couldn't be opened, with the server's text behind See details and Report a bug, and opens it again", async () => {
+  it("says it couldn't be opened, with the file and the server's text behind See details, and opens it again", async () => {
     vi.mocked(server.readText).mockRejectedValueOnce(httpFailure(500, { detail: "Input/output error" }, "read"));
     const { page, root } = await openedPage(true);
 
-    expect(failureText(root)).toBe("This file couldn't be opened. Try again. If this persists, report a bug.");
-    expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 500\nInput/output error");
-    (root.querySelector(".report-bug") as HTMLButtonElement).click();
-    // The report names the file, which the page shows in its title rather than says in its sentence.
-    expect(page.reporter.reportBug).toHaveBeenCalledWith({
-      message: "This file couldn't be opened. Try again. If this persists, report a bug.",
-      details: `${PATH}\nHTTP 500\nInput/output error`,
-    });
+    expect(failureText(root)).toBe("This file couldn't be opened. Try again.");
+    // The page shows the file in its title rather than says it in its sentence.
+    expect(root.querySelector(".see-details pre")?.textContent).toBe(
+      `Tried to open the file ${PATH}\nHTTP 500\nInput/output error`,
+    );
 
     vi.mocked(server.readText).mockResolvedValueOnce("# Notes");
     (root.querySelector('[data-action="retry-load"]') as HTMLButtonElement).click();
@@ -101,7 +100,7 @@ describe("a file whose text could not be loaded", () => {
     vi.mocked(server.readText).mockRejectedValueOnce(httpFailure(500, null, "read"));
     const { root } = await openedPage(false);
 
-    expect(failureText(root)).toBe("This file couldn't be opened. Try again. If this persists, report a bug.");
+    expect(failureText(root)).toBe("This file couldn't be opened. Try again.");
     expect(root.querySelector(".report-bug")).toBeNull();
     expect(root.querySelector('[data-action="retry-load"]')).not.toBeNull();
   });
@@ -113,7 +112,7 @@ describe("a file whose text could not be loaded", () => {
     host.askAgent.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
     const buttons = (): (string | null)[] =>
       Array.from(root.querySelectorAll(".files-load-failure button"), (button) => button.textContent);
-    expect(buttons()).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
+    expect(buttons()).toEqual(["Try again", "Ask an agent to fix this"]);
 
     const ask = root.querySelector(".ask-agent-to-fix") as HTMLButtonElement;
     ask.click();
@@ -122,22 +121,22 @@ describe("a file whose text could not be loaded", () => {
     expect([ask.textContent, ask.disabled]).toEqual(["Asking an agent…", true]);
     const [task, options] = host.askAgent.mock.calls[0];
     expect(task).toMatch(/^Imbue Studio showed the user this failure: This file couldn't be opened\./);
-    expect(task).toContain(`${PATH}\nHTTP 500\nInput/output error`);
+    expect(task).toContain(`Tried to open the file ${PATH}\nHTTP 500\nInput/output error`);
     expect(options?.showsOutcome).toBe(true);
 
     answer({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isReportable: true },
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isHelpOwed: true },
     });
     await vi.waitFor(() => expect(ask.disabled).toBe(false));
     m.redraw.sync();
     expect(ask.textContent).toBe("Ask an agent to fix this");
     expect(root.querySelector(".ask-agent-failure-message")?.textContent).toBe("Chat couldn't open that.");
-    expect(root.querySelectorAll(".report-bug")).toHaveLength(1);
+    expect(buttons()).toEqual(["Try again", "Ask an agent to fix this", "Draft it in a chat", "Report a bug"]);
     (root.querySelector(".report-bug") as HTMLButtonElement).click();
     expect(host.reportBug).toHaveBeenCalledWith({
-      message: "This file couldn't be opened. Try again. If this persists, report a bug.",
-      details: `${PATH}\nHTTP 500\nInput/output error\n\nAsking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400\nbad launch`,
+      message: "This file couldn't be opened. Try again.",
+      details: `Tried to open the file ${PATH}\nHTTP 500\nInput/output error\n\nAsking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400\nbad launch`,
     });
   });
 
@@ -145,22 +144,23 @@ describe("a file whose text could not be loaded", () => {
     vi.mocked(server.readText).mockRejectedValueOnce(httpFailure(500, null, "read"));
     const { root } = await openedPage(false, false);
 
-    expect(failureText(root)).toBe("This file couldn't be opened. Try again. If this persists, report a bug.");
+    expect(failureText(root)).toBe("This file couldn't be opened. Try again.");
     expect(root.querySelector(".ask-agent-to-fix")).toBeNull();
   });
 });
 
 describe("a file that could not be saved", () => {
-  it("shows a refusal it can name as a note with See details, which holds the note up once opened", async () => {
+  it("shows a refusal that passes on its own as a note with See details, which holds the note up once opened", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
     const { page, root } = await openedPage(true);
     page.draft = "draft, changed";
-    const said = "There's a folder where a file should be.";
+    const said = "It's in use right now. Try again in a moment.";
     vi.mocked(server.writeFile).mockRejectedValueOnce(
       httpFailure(409, {
         detail: "PUT /home/user/workspace/notes.md",
         user_facing_message: said,
-        kind: "is_a_folder",
+        kind: "in_use",
+        expected: true,
       }),
     );
     const hold = vi.spyOn(page.toasts, "hold");
@@ -171,47 +171,73 @@ describe("a file that could not be saved", () => {
     const [toast] = page.toasts.current();
     expect([toast.message, toast.isLasting]).toEqual([`Couldn't save "notes.md". ${said}`, false]);
     const disclosure = root.querySelector<HTMLDetailsElement>(".toast details.see-details");
-    expect(disclosure?.querySelector("pre")?.textContent).toBe("HTTP 409\nPUT /home/user/workspace/notes.md");
+    expect(disclosure?.querySelector("pre")?.textContent).toBe(
+      `Tried to save ${PATH}\nHTTP 409\nPUT /home/user/workspace/notes.md`,
+    );
     disclosure?.setAttribute("open", "");
     disclosure?.dispatchEvent(new Event("toggle"));
     expect(hold).toHaveBeenCalledWith(toast.id);
   });
 
-  it("names it, and keeps the note up with the details where nothing in the server's answer explains it", async () => {
+  it("names it, and keeps the note up with the details and Report a bug where no agent can be asked", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
-    const { page, root } = await openedPage(true);
+    const { page, root } = await openedPage(true, false);
     page.draft = "draft, changed";
     vi.mocked(server.writeFile).mockRejectedValueOnce(httpFailure(500, { detail: "No space left on device" }));
 
     await page.save();
 
     const [toast] = page.toasts.current();
-    expect(toast.message).toBe('Couldn\'t save "notes.md". Try again. If this persists, report a bug.');
+    expect(toast.message).toBe('Couldn\'t save "notes.md". Try again.');
     expect(toast.isLasting).toBe(true);
-    expect(toast.details).toBe("HTTP 500\nNo space left on device");
+    expect(toast.details).toBe(`Tried to save ${PATH}\nHTTP 500\nNo space left on device`);
     expect(page.isDirty).toBe(true);
     m.redraw.sync();
     root.querySelector<HTMLButtonElement>(".toast .report-bug")?.click();
     expect(page.reporter.reportBug).toHaveBeenCalledWith({ message: toast.message, details: toast.details });
   });
 
-  it("asks an agent to fix a save nothing explained from its toast, which stays up", async () => {
+  it("asks an agent to save what a read-only folder refused, from its toast, which stays up", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
     const { page, root, host } = await openedPage(true);
     page.draft = "draft, changed";
-    vi.mocked(server.writeFile).mockRejectedValueOnce(httpFailure(500, { detail: "PUT: [Errno 5]" }));
+    vi.mocked(server.writeFile).mockRejectedValueOnce(
+      httpFailure(403, {
+        detail: "PUT: [Errno 13]",
+        user_facing_message: "You don't have permission to change this.",
+        kind: "permission_denied",
+      }),
+    );
     await page.save();
     m.redraw.sync();
     const actions = (): (string | null)[] =>
       Array.from(root.querySelectorAll(".toast .toast-action"), (button) => button.textContent);
-    expect(actions()).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    // The agent stands in for the bug report, which is offered only where none can be asked.
+    expect(actions()).toEqual(["Ask an agent to fix this"]);
 
     root.querySelector<HTMLButtonElement>(".toast .toast-action")?.click();
     await vi.waitFor(() => expect(host.askAgent).toHaveBeenCalledTimes(1));
     m.redraw.sync();
 
-    expect(host.askAgent.mock.calls[0][0]).toContain('Couldn\'t save "notes.md".');
-    expect(host.askAgent.mock.calls[0][0]).toContain("PUT: [Errno 5]");
-    expect(actions()).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    const [task] = host.askAgent.mock.calls[0];
+    expect(task).toContain("Couldn't save \"notes.md\". The folder it's in is read-only.");
+    expect(task).toContain(`Tried to save ${PATH}\nHTTP 403\nPUT: [Errno 13]`);
+    expect(task).toMatch(/\n\nDo what the user was trying to do if you can; otherwise [^\n]*$/);
+    expect(actions()).toEqual(["Ask an agent to fix this"]);
+  });
+});
+
+describe("deleting the file", () => {
+  it("takes a file that is already gone as deleted, with no note", async () => {
+    vi.mocked(server.readText).mockResolvedValueOnce("draft");
+    const { page, root } = await openedPage(true);
+    vi.spyOn(page.dialogs, "confirmDelete").mockResolvedValueOnce(true);
+    vi.mocked(server.deletePath).mockRejectedValueOnce(httpFailure(404, GONE));
+
+    await page.delete();
+    m.redraw.sync();
+
+    expect(page.toasts.current()).toEqual([]);
+    expect(root.querySelector(".files-file-deleted")?.textContent).toContain('"notes.md" was deleted');
   });
 });

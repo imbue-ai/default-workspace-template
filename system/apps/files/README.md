@@ -50,13 +50,17 @@ act on is classified by its errno (`os_refusals.py`): no permission
 space (`out_of_space`, 507), gone, already there, a name too long, a file where a
 folder should be or the reverse, in use, too large, or a link loop. A MOVE refused
 for want of write access says which end refused (`destination_not_writable`,
-`source_not_writable`). Any other disk error carries a `detail` only, which the
-page asks to have reported. A computer's file server refusing a change is "Your
-computer only shares this to read." (`shared_read_only`), "It's no longer
-there." (`not_found`), or else "Your computer couldn't do this.", its status
-and own text behind "See details". A refusal to a `?download` or a `?zip` stays plain
-text, which is all the hidden frame a download loads in can read, and so does one to
-a page the browser loads (a window opening on a folder it cannot list).
+`source_not_writable`). Any other disk error carries a `detail` only, so the
+page can say no more than to try again. A computer's file server refusing a
+change is "Your computer only shares this to read." (`shared_read_only`), "It's
+no longer there." (`not_found`, which a read or a listing of a path the computer
+says is gone answers too), or else "Your computer couldn't do this.", its status
+and own text behind "See details". A refusal that is ordinary operation its
+sentence fully explains says `expected: true`, so the page offers no agent for
+it: in use, a name too long, and a computer that isn't answering. A refusal to a
+`?download` or a `?zip` stays plain text, which is all the hidden frame a
+download loads in can read, and so does one to a page the browser loads (a
+window opening on a folder it cannot list).
 
 `/__files/assets/` is the frontend's build, and `/__files/api/connections` lists
 what the user has shared with the workspace from their computers, read through
@@ -167,7 +171,9 @@ shared by every window.
 - Download, here and on a file's page, loads the file's `?download` (a folder's
   `?zip`) in a hidden frame (`workspace_ui`'s `startDownload`), so the request
   carries the workspace's session inside Imbue Studio; what the server says
-  instead of sending the file shows as a toast.
+  instead of sending the file shows as a toast. Those words cannot say whether
+  the item is gone, so the page then asks the server (`?json`), and for one that
+  is says it isn't there anymore and reads its folder again.
 - Files dragged in from outside upload into the folder under the pointer (a
   folder's tile or row, a column, a shortcut, a path segment) or else the folder
   on show, folders included; entries dragged onto a folder move into it, except
@@ -179,36 +185,54 @@ shared by every window.
 A failed request is told through `workspace_ui`'s reader (`models/failures.ts`):
 a sentence naming what failed, then the cause the server gave (`Couldn't move
 "notes.txt" into "reports". That folder is read-only.`), worded by Files where it
-depends on which folder refused, with the status and the server's text behind
-"See details". A request nothing answered says only that. One whose sentence asks
-for a bug report (nothing explained it) leaves a toast that stays, with "See
-details" and what the page's `Toasts` draws on a reportable toast: "Ask an agent
-to fix this" where a shell frames the page (`askAgentFromToasts`, the app
-contract's `askAgentToFix`: the shell sends what failed and the details to the
-chat about Files, opened beside the window, or to the main chat where there is
-none to take it, and toasts a refused ask itself) and, where the shell says
-Imbue Studio opens one, "Report a bug". A refusal with a known cause (a
-read-only folder, a name already taken, no permission, a full disk) offers no
-agent to fix it; a full disk leaves a toast that stays with "Ask an agent to
-free up space", which asks in the main chat (`startWithText`: it is already
-running, and a chat made for the ask would need disk), as Imbue Studio about
-the failure (`agentFixTask`) behind `/assist` (`assistRequest`). That button
-reads "Asking an agent…" until the shell says the chat opened and leaves its
-toast up, and a note says why when it could not, offering no agent of its own. Any other
-failure leaves a note that goes, its details behind "See details" (opening them
-keeps it up). A rename says it in the name field (one that asks for a bug
-report ends the rename and leaves the toast that stays), and a folder that cannot be
-listed says it in place of the listing, with Try again and, for a sentence that
-asks for a bug report, "Ask an agent to fix this" and "Report a bug"
-(`views/FailureActions.ts`, on `workspace_ui`'s `FailureRemedies`: the ask and
-the report carry the folder or file's path above the details, an ask the shell
-refused is said under the buttons, and the one Report a bug files it with the
-failure). A file whose text cannot be loaded says so in place of the editor, and
-a failed read of what your computers share says so in the sidebar, each with the
-same buttons; an upload that failed
-says why in its row (interrupted, a read-only folder, out of disk space, or
-failed), with the details on hover; and a file whose location is too long for a
-window of its own is told rather than asked of the shell.
+depends on which folder refused, with what was tried in full (`Tried to move
+/home/user/notes.txt into /home/user/reports/`), the status and the server's
+text behind "See details". A request nothing answered says only that.
+
+A failure that owes the person help leaves a toast that stays, on which the
+page's `Toasts` draws "Ask an agent to fix this" where a shell frames the page,
+and "Report a bug" only where no agent can be asked. That is every failure
+nothing explained and every refusal that leaves the person unable to do what
+they meant, known cause or not: a read-only folder, a name already taken, no
+permission, a computer that shares read-only. The ask (`askAgentAction`, the app
+contract's `askAgentToFix`) sends the sentence and the details, which say what
+was being done and where, to the chat about Files, opened beside the window (the
+main chat where there is none to take it), with the operation as the agent's
+task: to do what the person was trying to do if it can, and otherwise to say why
+it can't be done and what they can do instead. The shell writes the message's
+`/assist` lead and toasts a refused ask itself. No agent is offered where trying
+again is the whole remedy: a request nothing answered, and a refusal the server
+calls `expected` (in use, a name too long, a computer that isn't answering).
+Those leave a note that goes, its details behind "See details" (opening them
+keeps it up).
+
+A full disk leaves a toast that stays with "Ask an agent to free up space" in
+place of the toasts' own ask. It goes to the main chat (the `main-chat`
+delivery: that chat is already running, and one made for the ask would need
+disk) with freeing up space as its task. The button reads "Asking an agent…"
+until the shell says the chat opened and leaves its toast up; when it could
+not, a note says why, with "Draft it in a chat" (the same request, unsent, for
+the person to send) and "Report a bug".
+
+An item the server says is gone (`not_found`, never the sentence) is not told
+as a refusal. Deleting it is not a failure at all: no note, and the folder is
+read again, so it goes from the listing. A move, a rename, a save or a download
+of it says `"todo.md" isn't there anymore. It may have been moved or deleted.`
+in a note that goes, and the folder it was in is read again.
+
+A rename says a refusal in the name field, which has no room for a button, and
+reads the folder again; one nothing explained, or of an item that is gone, ends
+the rename and leaves a toast instead. A folder that cannot be listed says it in
+place of the listing, with Try again and what `workspace_ui`'s `FailureRemedies`
+draws for a failure that owes help (`views/FailureActions.ts`): "Ask an agent to
+fix this", under which an ask the shell refused is said with "Draft it in a
+chat", and then one "Report a bug" that files the refused ask with the failure.
+A file whose text cannot be loaded says so in place of the editor, and a failed
+read of what your computers share says so in the sidebar, each with the same
+buttons; an upload that failed says why in its row (interrupted, a read-only
+folder, out of disk space, or failed), with the details on hover; and a file
+whose location is too long for a window of its own is told rather than asked of
+the shell.
 
 Under 520px of the frame's own width the window lays itself out for a phone:
 the sidebar floats over the folder from a button at the toolbar's start, one

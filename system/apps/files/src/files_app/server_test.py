@@ -190,6 +190,7 @@ def test_a_file_asked_for_as_a_download_is_an_attachment_under_its_name_and_a_re
     assert "Content-Disposition" not in missing_here.headers
     missing_there = client.get(f"/__remote/{DEVICE}/Users/kim/gone.png?download")
     assert missing_there.status_code == 404
+    assert missing_there.get_data(as_text=True) == "It's no longer there."
     assert "Content-Disposition" not in missing_there.headers
     # A folder's download loads in the same frame.
     missing_folder = client.get("/missing/?zip", headers={"Accept": "text/html,*/*"})
@@ -328,6 +329,17 @@ def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_peo
     assert answer["user_facing_message"] == "You don't have permission to change this."
     assert "/reports/drafts" in answer["detail"]
     assert not (tmp_path / "root" / "reports" / "drafts").exists()
+
+
+def test_a_name_too_long_is_refused_as_expected_since_its_sentence_is_the_whole_remedy(tmp_path: Path) -> None:
+    client = _app(None, tmp_path)
+
+    response = client.open(f"/{'a' * 300}", method="MKCOL")
+
+    assert response.status_code == 400
+    answer = response.get_json()
+    assert (answer["kind"], answer["user_facing_message"]) == ("name_too_long", "That name is too long.")
+    assert answer["expected"] is True
 
 
 def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path) -> None:
@@ -646,6 +658,30 @@ def test_a_change_the_computer_refuses_in_its_own_words_keeps_them_behind_the_de
         "user_facing_message": "It's no longer there.",
         "kind": "not_found",
     }
+
+
+def test_a_path_the_computer_says_is_gone_is_answered_as_gone_for_a_read_and_a_listing(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={})
+    client = _app(computer, tmp_path)
+    said = "It's no longer there."
+    gone = {"detail": said, "user_facing_message": said, "kind": "not_found"}
+
+    read = client.get(f"/__remote/{DEVICE}/Users/kim/Atkinson/gone.otf")
+    listed = client.get(f"/__remote/{DEVICE}/Users/kim/Atkinson/gone/?json")
+
+    assert (read.status_code, read.get_json()) == (404, gone)
+    assert (listed.status_code, listed.get_json()) == (404, gone)
+
+
+def test_a_computer_that_is_not_answering_is_refused_as_expected(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={}, is_awake=False)
+
+    response = _app(computer, tmp_path).get(f"/__remote/{DEVICE}/Users/kim/Atkinson/?json")
+
+    assert response.status_code == 502
+    answer = response.get_json()
+    assert answer["user_facing_message"].startswith("Your computer isn't answering.")
+    assert answer["expected"] is True
 
 
 def test_a_change_the_computer_fails_says_so_with_its_status_only_behind_the_details(tmp_path: Path) -> None:

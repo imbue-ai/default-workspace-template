@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 
-import { exists, listFolder, movePath } from "./server";
+import { exists, isGone, listFolder, movePath } from "./server";
 
 function answering(status: number, body: string, contentType: string): void {
   vi.stubGlobal(
@@ -46,7 +46,7 @@ describe("a refused request to the Files server", () => {
     expect(failure).toMatchObject({ cause: "not_answered", requestKind: "read", details: "HTTP 502\nBad Gateway" });
   });
 
-  it("says a path that is a file is not a folder, the path kept behind the details", async () => {
+  it("says a path that is a file is not a folder, as a refusal that needs no more help, the path kept behind the details", async () => {
     answering(200, JSON.stringify({ kind: "file", is_text: true }), "application/json");
 
     const { failure } = await failureOf(listFolder("/home/notes.txt/"));
@@ -54,6 +54,7 @@ describe("a refused request to the Files server", () => {
     expect(failure).toMatchObject({
       cause: "user_facing",
       userFacingMessage: "It's a file, not a folder.",
+      isExpected: true,
       details: "HTTP 400\n/home/notes.txt/ is a file, not a folder.",
     });
   });
@@ -67,6 +68,23 @@ describe("a refused request to the Files server", () => {
     const { failure } = await failureOf(exists("/home/zeta/b.txt"));
 
     expect(failure).toMatchObject({ cause: "not_answered", requestKind: "read", details: "Failed to fetch" });
+  });
+
+  it("tells an item that is gone by the server's kind for it, not by the status", async () => {
+    const said = "It's no longer there.";
+    answering(404, JSON.stringify({ detail: said, user_facing_message: said, kind: "not_found" }), "application/json");
+    expect(await isGone("/home/notes.txt")).toBe(true);
+
+    const pipe = "It isn't a file that can be read.";
+    answering(
+      404,
+      JSON.stringify({ detail: pipe, user_facing_message: pipe, kind: "not_a_file" }),
+      "application/json",
+    );
+    expect(await isGone("/home/notes.txt")).toBe(false);
+
+    answering(200, JSON.stringify({ kind: "file", is_text: true }), "application/json");
+    expect(await isGone("/home/notes.txt")).toBe(false);
   });
 
   it("lists a folder that is not there as missing rather than failed", async () => {

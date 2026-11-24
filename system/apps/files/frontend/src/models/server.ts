@@ -93,7 +93,11 @@ export async function listFolder(folder: string, signal?: AbortSignal): Promise<
   if (!response.ok) throw await readResponseFailure(response, "read");
   const data = (await response.json()) as PageData;
   if (data.kind !== "folder") {
-    const body = { detail: `${folder} is a file, not a folder.`, user_facing_message: "It's a file, not a folder." };
+    const body = {
+      detail: `${folder} is a file, not a folder.`,
+      user_facing_message: "It's a file, not a folder.",
+      expected: true,
+    };
     throw new HttpError(readFailure({ status: 400, body, rawText: null, requestKind: "read" }));
   }
   return { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null };
@@ -112,6 +116,16 @@ export async function folderStamps(folders: readonly string[]): Promise<Record<s
 export async function exists(path: string): Promise<boolean> {
   const response = await fetchOrNotAnswered(urlOf(path.replace(/\/+$/, "")), { method: "HEAD" }, "read");
   return response.ok;
+}
+
+/** Whether the server says nothing is at `path` any more; false when something is, and when it could not say. */
+export async function isGone(path: string): Promise<boolean> {
+  try {
+    await send(`${urlOf(path)}?json`, {}, "read");
+    return false;
+  } catch (error) {
+    return error instanceof HttpError && error.failure.kind === "not_found";
+  }
 }
 
 export async function deletePath(path: string): Promise<void> {

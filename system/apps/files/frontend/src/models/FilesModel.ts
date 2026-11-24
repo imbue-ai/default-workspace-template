@@ -32,7 +32,14 @@ import {
 } from "./preferences";
 import { UploadQueue, type UploadSource } from "./uploads";
 import { fetchConnections, isLiveShared, targetOf, type Connections } from "./connections";
-import { plainFailure, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "./failures";
+import {
+  goneSentence,
+  plainFailure,
+  toastFailures,
+  toldFailure,
+  type FailureHost,
+  type FilesFailure,
+} from "./failures";
 
 export const WORKSPACE = "/home/user/workspace/";
 
@@ -118,12 +125,14 @@ export function compareEntries(a: Entry, b: Entry, sort: SortOrder): number {
 /** Rename `path` to `target` (named `name`), as a folder's name field and a file's page both do; what went wrong, or
  *  null once it is done. */
 export async function renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
+  const tried = `rename ${path} to ${target}`;
   try {
-    if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
+    if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`, tried);
     await server.movePath(path, target);
     return null;
   } catch (error) {
-    return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
+    const whatFailed = `Couldn't rename "${nameOf(path)}" to "${name}"`;
+    return toldFailure(error, { whatFailed, operation: "item", tried, item: nameOf(path) });
   }
 }
 
@@ -431,18 +440,19 @@ export class FilesModel {
     this.rename = { ...rename, isSaving: true };
     this.host.redraw();
     const failure = await renameOnServer(rename.path, target, name);
-    if (failure !== null && failure.isReportable) {
-      // No name typed can fix it, and the name field has no room for Report a bug: the rename ends, told as a toast.
-      this.rename = null;
-      toastFailures(this.toasts, [failure], this.host, () => this.host.redraw());
-      this.host.redraw();
-      return;
-    }
     if (failure !== null) {
-      // The name field says it where the name was typed; it has no room for the details, which go to the log.
-      if (failure.details !== null) console.warn(`[files] ${failure.message}`, failure.details);
-      this.rename = { ...rename, isSaving: false, error: failure.message };
+      if (failure.isGone || failure.isUnexplained) {
+        // No name typed can fix it, and the name field has no room for a button: the rename ends, told as a toast.
+        this.rename = null;
+        toastFailures(this.toasts, [failure], this.host, () => this.host.redraw());
+      } else {
+        // The name field says it where the name was typed; it has no room for the details, which go to the log.
+        if (failure.details !== null) console.warn(`[files] ${failure.message}`, failure.details);
+        this.rename = { ...rename, isSaving: false, error: failure.message };
+      }
       this.host.redraw();
+      // The listing the name was checked against may be what was out of date.
+      await this.load(parent);
       return;
     }
     this.rename = null;
@@ -465,7 +475,12 @@ export class FilesModel {
         await server.deletePath(entry.path);
         deleted.add(entry.path);
       } catch (error) {
-        failures.push(toldFailure(error, `Couldn't delete "${entry.name}"`, "item"));
+        const whatFailed = `Couldn't delete "${entry.name}"`;
+        const tried = `delete ${entry.path}`;
+        const failure = toldFailure(error, { whatFailed, operation: "item", tried, item: entry.name });
+        // Already gone is what was asked for.
+        if (failure.isGone) deleted.add(entry.path);
+        else failures.push(failure);
       }
     }
     this.selection = this.selection.filter((path) => !deleted.has(path));
@@ -519,15 +534,21 @@ export class FilesModel {
     isFolder: boolean,
     isLive: boolean,
   ): Promise<FilesFailure | null> {
+    const tried = `create the ${isFolder ? "folder" : "file"} ${path}`;
     try {
       if (this.isNameTaken(folder, name) || (isLive && (await server.exists(path)))) {
-        return plainFailure(`"${name}" is already taken.`);
+        return plainFailure(`"${name}" is already taken.`, tried);
       }
       if (isFolder) await server.createFolder(path);
       else await server.writeFile(path, "");
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't create "${name}"`, "into-folder");
+      return toldFailure(error, {
+        whatFailed: `Couldn't create "${name}"`,
+        operation: "into-folder",
+        tried,
+        item: null,
+      });
     }
   }
 
@@ -551,17 +572,31 @@ export class FilesModel {
 
   /** Move `path` into `folder`; what went wrong, or null once it is there. */
   private async moveOnServer(path: string, folder: string): Promise<FilesFailure | null> {
-    if (isLiveShared(path) || isLiveShared(folder)) return plainFailure(LIVE_MOVE_REFUSAL);
+    const tried = `move ${path} into ${folder}`;
+    if (isLiveShared(path) || isLiveShared(folder)) return plainFailure(LIVE_MOVE_REFUSAL, tried);
     const target = childPath(folder, nameOf(path), isFolderPath(path));
     try {
       if (await server.exists(target)) {
-        return plainFailure(`${nameOf(folder)} already has an item named "${nameOf(path)}".`);
+        return plainFailure(`${nameOf(folder)} already has an item named "${nameOf(path)}".`, tried);
       }
       await server.movePath(path, target);
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't move "${nameOf(path)}" into "${nameOf(folder) || folder}"`, "move");
+      const whatFailed = `Couldn't move "${nameOf(path)}" into "${nameOf(folder) || folder}"`;
+      return toldFailure(error, { whatFailed, operation: "move", tried, item: nameOf(path) });
     }
+  }
+
+  /** Say that a download of `path` did not start, in `note`, the download's own words for it. They cannot say
+   *  whether the item is gone, so the server is asked: one that is gone is told as that, and its folder read again. */
+  async tellDownloadFailure(path: string, note: string): Promise<void> {
+    if (!(await server.isGone(path))) {
+      this.toasts.show(note);
+      return;
+    }
+    this.toasts.show(goneSentence(nameOf(path)));
+    const folder = parentOf(path) ?? ROOT;
+    if (this.folders.has(folder)) await this.load(folder);
   }
 
   /** Send files into a folder, asking first about names that are already taken there. */
@@ -622,7 +657,12 @@ export class FilesModel {
         status: "error",
         exists: previous?.exists ?? true,
         entries: previous?.entries ?? [],
-        error: toldFailure(error, "Couldn't open this folder", "open"),
+        error: toldFailure(error, {
+          whatFailed: "Couldn't open this folder",
+          operation: "open",
+          tried: `open the folder ${folder}`,
+          item: null,
+        }),
       });
     } finally {
       if (this.loads.get(folder) === request) this.loads.delete(folder);
@@ -707,7 +747,12 @@ export class FilesModel {
       this.connections = await fetchConnections();
       this.connectionsError = null;
     } catch (error) {
-      this.connectionsError = toldFailure(error, "Couldn't read what your computers share", "open");
+      this.connectionsError = toldFailure(error, {
+        whatFailed: "Couldn't read what your computers share",
+        operation: "open",
+        tried: null,
+        item: null,
+      });
     }
     this.host.redraw();
   }

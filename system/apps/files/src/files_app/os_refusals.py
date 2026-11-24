@@ -1,6 +1,6 @@
 """What the disk's refusals mean to the person using Files: an ``OSError`` whose cause they can act on becomes a
 status, a kind the frontend words per action, and a sentence naming only the cause (the frontend's sentence already
-names the file). Anything else is a failure nobody explained, which the frontend asks to have reported."""
+names the file). Anything else is a failure nobody explained, which the frontend can only say to try again."""
 
 import errno
 from typing import Final
@@ -11,6 +11,8 @@ class OsRefusal(NamedTuple):
     status: int
     kind: str
     sentence: str
+    # Ordinary operation the sentence fully explains, so the person is owed no more help than it gives.
+    is_expected: bool = False
 
 
 # Refusals to change something the person may not change here; a MOVE answering one says which side refused.
@@ -22,7 +24,7 @@ _PERMISSION_DENIED_TO_READ: Final[OsRefusal] = OsRefusal(
     403, "permission_denied", "You don't have permission to open this."
 )
 _ALREADY_EXISTS: Final[OsRefusal] = OsRefusal(409, "already_exists", "Something with that name is already there.")
-_IN_USE: Final[OsRefusal] = OsRefusal(409, "in_use", "It's in use right now. Try again in a moment.")
+_IN_USE: Final[OsRefusal] = OsRefusal(409, "in_use", "It's in use right now. Try again in a moment.", is_expected=True)
 _OUT_OF_SPACE: Final[OsRefusal] = OsRefusal(507, "out_of_space", "This workspace is out of disk space.")
 
 _REFUSAL_BY_ERRNO: Final[dict[int, OsRefusal]] = {
@@ -34,7 +36,7 @@ _REFUSAL_BY_ERRNO: Final[dict[int, OsRefusal]] = {
     errno.ENOENT: OsRefusal(404, "not_found", "It's no longer there."),
     errno.EEXIST: _ALREADY_EXISTS,
     errno.ENOTEMPTY: _ALREADY_EXISTS,
-    errno.ENAMETOOLONG: OsRefusal(400, "name_too_long", "That name is too long."),
+    errno.ENAMETOOLONG: OsRefusal(400, "name_too_long", "That name is too long.", is_expected=True),
     errno.ENOTDIR: OsRefusal(409, "not_a_folder", "There's a file where a folder should be."),
     errno.EISDIR: OsRefusal(409, "is_a_folder", "There's a folder where a file should be."),
     errno.EBUSY: _IN_USE,

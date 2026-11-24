@@ -225,9 +225,7 @@ function columnBody(
     return m("div.files-column-failure", { class: "px-3 py-4 type-helper text-danger" }, [
       failure?.message,
       m(SeeDetails, { details: failure?.details ?? null }),
-      failure === null
-        ? null
-        : m(FailureActions, { host: app.failureHost, failure, path: folder, isCentred: false, extra: "mt-2" }),
+      failure === null ? null : m(FailureActions, { host: app.failureHost, failure, isCentred: false, extra: "mt-2" }),
     ]);
   }
   if (entries.length === 0) {

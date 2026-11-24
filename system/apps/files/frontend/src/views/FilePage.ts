@@ -11,14 +11,21 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { Toasts, askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import { reportBugAction, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "../models/failures";
+import {
+  askAgentAction,
+  goneSentence,
+  reportBugAction,
+  toastFailures,
+  toldFailure,
+  type FailureHost,
+  type FilesFailure,
+} from "../models/failures";
 import { renameOnServer } from "../models/FilesModel";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
@@ -40,17 +47,17 @@ export interface FilePageOptions {
 type TextState =
   { status: "loading" } | { status: "ready"; saved: string } | { status: "error"; failure: FilesFailure };
 
-/** Why a file's text could not be loaded: gone since the page was asked for, or anything else in words. */
-function loadFailureOf(error: unknown): FilesFailure {
-  if (error instanceof HttpError && error.status === 404) {
-    return {
-      message: "This file is no longer there. It may have been moved or deleted.",
-      details: error.failure.details,
-      isReportable: false,
-      isOutOfSpace: false,
-    };
-  }
-  return toldFailure(error, "This file couldn't be opened", "open");
+/** Why the text of the file at `path` could not be loaded: gone since the page was asked for, or anything else in
+ *  words. */
+function loadFailureOf(error: unknown, path: string): FilesFailure {
+  const told = toldFailure(error, {
+    whatFailed: "This file couldn't be opened",
+    operation: "open",
+    tried: `open the file ${path}`,
+    item: nameOf(path),
+  });
+  // The page shows this one file, so it needs no name.
+  return told.isGone ? { ...told, message: "This file is no longer there. It may have been moved or deleted." } : told;
 }
 
 export class FilePageModel {
@@ -96,7 +103,7 @@ export class FilePageModel {
       this.text = { status: "ready", saved: text };
       this.draft = text;
     } catch (error) {
-      this.text = { status: "error", failure: loadFailureOf(error) };
+      this.text = { status: "error", failure: loadFailureOf(error, this.options.path) };
     }
     m.redraw();
   }
@@ -111,12 +118,15 @@ export class FilePageModel {
       this.text = { status: "ready", saved: content };
       this.size = new Blob([content]).size;
     } catch (error) {
-      toastFailures(
-        this.toasts,
-        [toldFailure(error, `Couldn't save "${nameOf(this.options.path)}"`, "item")],
-        this.reporter,
-        () => m.redraw(),
-      );
+      const path = this.options.path;
+      const name = nameOf(path);
+      const failure = toldFailure(error, {
+        whatFailed: `Couldn't save "${name}"`,
+        operation: "item",
+        tried: `save ${path}`,
+        item: name,
+      });
+      toastFailures(this.toasts, [failure], this.reporter, () => m.redraw());
     }
     this.isSaving = false;
     m.redraw();
@@ -152,14 +162,18 @@ export class FilePageModel {
     try {
       await server.deletePath(path);
     } catch (error) {
-      toastFailures(
-        this.toasts,
-        [toldFailure(error, `Couldn't delete "${nameOf(path)}"`, "item")],
-        this.reporter,
-        () => m.redraw(),
-      );
-      m.redraw();
-      return;
+      const failure = toldFailure(error, {
+        whatFailed: `Couldn't delete "${nameOf(path)}"`,
+        operation: "item",
+        tried: `delete ${path}`,
+        item: nameOf(path),
+      });
+      // Already gone is what was asked for.
+      if (!failure.isGone) {
+        toastFailures(this.toasts, [failure], this.reporter, () => m.redraw());
+        m.redraw();
+        return;
+      }
     }
     // The window shows this one file, so with it gone there is nothing left to show here but the fact.
     this.isDeleted = true;
@@ -218,7 +232,7 @@ function body(page: FilePageModel): m.Children {
 }
 
 /** A file whose text could not be loaded, in place of the editor: the sentence, what the server said behind "See
- *  details", Try again, and, where the sentence asks for a bug report, "Ask an agent to fix this" and Report a bug. */
+ *  details", Try again, and, where the failure owes help, "Ask an agent to fix this". */
 function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: string): m.Children {
   return m("div.files-load-failure", { class: `${centred} flex-col gap-3 text-center` }, [
     m("div.files-load-failure-message", { class: "type-body text-danger" }, failure.message),
@@ -226,15 +240,18 @@ function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: st
     m(FailureActions, {
       host: page.reporter,
       failure,
-      path: page.options.path,
       leading: m(Button, { sm: true, "data-action": "retry-load", onclick: () => void page.loadText() }, "Try again"),
       isCentred: true,
     }),
   ]);
 }
 
+/** Download the file; a download that did not start says so in its own words, which cannot say whether the file is
+ *  gone, so the server is asked that. */
 function downloadFile(page: FilePageModel, path: string): void {
-  startDownload(document, server.downloadUrlOf(path, false), nameOf(path), (note) => page.toasts.show(note));
+  startDownload(document, server.downloadUrlOf(path, false), nameOf(path), (note) => {
+    void server.isGone(path).then((isGone) => page.toasts.show(isGone ? goneSentence(nameOf(path)) : note));
+  });
 }
 
 export function FilePage(): m.Component<{ page: FilePageModel }> {
@@ -352,7 +369,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: reportBugAction(page.reporter),
-          onAskAgent: askAgentFromToasts(page.reporter),
+          onAskAgent: askAgentAction(page.reporter),
           onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),

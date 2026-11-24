@@ -4,7 +4,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import type { ShellConnection, StartOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, ShellConnection, StartOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
 import { fileEntry } from "../testing/records";
@@ -109,19 +109,19 @@ describe("asking an agent to free up space", () => {
       ),
     );
     const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
-    const connection: ShellConnection = {
-      ...framedConnection(),
-      startWithText: vi.fn(async (_text: string, options?: StartOptions) => {
-        if (options?.onLateAnswer !== undefined) lateAnswers.push(options.onLateAnswer);
-        return { isOpened: false, failure: { message: "No answer came.", details: null, isReportable: false } };
-      }),
-    };
+    const askAgent = vi.fn(async (_text: string, options?: StartOptions, _delivery?: AskDelivery) => {
+      if (options?.onLateAnswer !== undefined) lateAnswers.push(options.onLateAnswer);
+      return { isOpened: false, failure: { message: "No answer came.", details: null, isHelpOwed: false } };
+    });
+    const connection: ShellConnection = { ...framedConnection(), askAgent };
     const app = new FilesController(HOME, { exists: true, entries: [] }, connection);
     await app.model.createFolder();
     const messages = (): string[] => app.model.toasts.current().map((toast) => toast.message);
 
     app.model.toasts.current()[0].actions[0].run();
     await vi.waitFor(() => expect(messages()).toContain("No answer came."));
+    // The controller hands the shell where the ask goes: the main chat, since a new one would need disk.
+    expect(askAgent.mock.calls[0][2]).toBe("main-chat");
 
     expect(lateAnswers).toHaveLength(1);
     lateAnswers[0]({ isOpened: true });
@@ -130,7 +130,7 @@ describe("asking an agent to free up space", () => {
 });
 
 describe("a folder that cannot be listed", () => {
-  const LISTING_FAILED = "Couldn't open this folder. Try again. If this persists, report a bug.";
+  const LISTING_FAILED = "Couldn't open this folder. Try again.";
 
   const LISTING_REASON = "GET /home/: [Errno 5] Input/output error";
 
@@ -152,8 +152,10 @@ describe("a folder that cannot be listed", () => {
     return mountView(() => m(FilesApp, { app }));
   }
 
-  async function failedListing(canReportBug: boolean): Promise<{ connection: ShellConnection; root: HTMLElement }> {
-    const connection = { ...framedConnection(), canReportBug: () => canReportBug };
+  const LISTING_DETAILS = `Tried to open the folder /home/\nHTTP 500\n${LISTING_REASON}`;
+
+  async function failedListing(): Promise<{ connection: ShellConnection; root: HTMLElement }> {
+    const connection = { ...framedConnection(), canReportBug: () => true };
     const root = await openedOn({ status: 500, body: { detail: LISTING_REASON } }, connection);
     await vi.waitFor(() => expect(root.querySelector(".files-empty")?.textContent).toContain(LISTING_FAILED));
     return { connection, root };
@@ -163,22 +165,12 @@ describe("a folder that cannot be listed", () => {
     return Array.from(root.querySelectorAll(`${selector} button`), (button) => button.textContent);
   }
 
-  it("offers Report a bug carrying the sentence and the server's reason where Imbue Studio can open one", async () => {
-    const { connection, root } = await failedListing(true);
-
-    root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
-
-    // The report names the folder, which the window shows rather than says in its sentence.
-    expect(connection.reportBug).toHaveBeenCalledWith({
-      message: LISTING_FAILED,
-      details: "/home/\nHTTP 500\nGET /home/: [Errno 5] Input/output error",
-    });
-  });
-
-  it("offers Try again and an agent, but no Report a bug, where Imbue Studio cannot open a bug report", async () => {
-    const { root } = await failedListing(false);
+  it("offers Try again and an agent, with no Report a bug beside it, and names the folder behind See details", async () => {
+    const { root } = await failedListing();
 
     expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]);
+    // The window shows the folder rather than says it in its sentence.
+    expect(root.querySelector(".files-empty .see-details pre")?.textContent).toBe(LISTING_DETAILS);
   });
 
   it("asks an agent to fix it through the shell, and one Report a bug files a refused ask with it", async () => {
@@ -188,9 +180,7 @@ describe("a folder that cannot be listed", () => {
     );
     const connection = { ...framedConnection(), canReportBug: () => true, askAgent };
     const root = await openedOn({ status: 500, body: { detail: LISTING_REASON } }, connection);
-    await vi.waitFor(() =>
-      expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]),
-    );
+    await vi.waitFor(() => expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]));
 
     const ask = root.querySelector(".files-empty .ask-agent-to-fix") as HTMLButtonElement;
     ask.click();
@@ -200,12 +190,12 @@ describe("a folder that cannot be listed", () => {
     expect(connection.startWithText).not.toHaveBeenCalled();
     const [task, options] = askAgent.mock.calls[0];
     expect(task).toMatch(/^Imbue Studio showed the user this failure: Couldn't open this folder\./);
-    expect(task).toContain(`/home/\nHTTP 500\n${LISTING_REASON}`);
+    expect(task).toContain(LISTING_DETAILS);
     expect(options?.showsOutcome).toBe(true);
 
     answer({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: false },
     });
     await vi.waitFor(() => expect(ask.disabled).toBe(false));
     m.redraw.sync();
@@ -217,7 +207,7 @@ describe("a folder that cannot be listed", () => {
     root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
     expect(connection.reportBug).toHaveBeenCalledWith({
       message: LISTING_FAILED,
-      details: `/home/\nHTTP 500\n${LISTING_REASON}\n\nAsking an agent to fix this failed too:\nChat couldn't open that.`,
+      details: `${LISTING_DETAILS}\n\nAsking an agent to fix this failed too:\nChat couldn't open that.`,
     });
   });
 
@@ -242,10 +232,10 @@ describe("a folder that cannot be listed", () => {
     expect(askAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("drops a refused ask once the folder fails another way, and files only the failure on show", async () => {
+  it("drops a refused ask, and the report that went with it, once the folder fails another way", async () => {
     const askAgent = vi.fn(async (_text: string, _options?: StartOptions): Promise<StartOutcome> => ({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: false },
     }));
     const connection = { ...framedConnection(), canReportBug: () => true, askAgent };
     const listing = { status: 500, body: { detail: LISTING_REASON } };
@@ -262,15 +252,13 @@ describe("a folder that cannot be listed", () => {
     window.dispatchEvent(new Event("focus"));
     await vi.waitFor(() => {
       m.redraw.sync();
-      expect(root.querySelector(".files-empty .see-details pre")?.textContent).toBe(`HTTP 500\n${otherReason}`);
+      expect(root.querySelector(".files-empty .see-details pre")?.textContent).toBe(
+        `Tried to open the folder /home/\nHTTP 500\n${otherReason}`,
+      );
     });
 
     expect(root.querySelector(".files-empty .ask-agent-failure")).toBeNull();
-    root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
-    expect(connection.reportBug).toHaveBeenCalledWith({
-      message: LISTING_FAILED,
-      details: `/home/\nHTTP 500\n${otherReason}`,
-    });
+    expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]);
   });
 
   it("offers an agent for a column whose folder cannot be listed", async () => {
@@ -281,14 +269,11 @@ describe("a folder that cannot be listed", () => {
 
     // Every column's folder fails to list here; each says so with its own buttons.
     await vi.waitFor(() =>
-      expect(buttonsIn(root, ".files-column:last-child .files-column-failure")).toEqual([
-        "Ask an agent to fix this",
-        "Report a bug",
-      ]),
+      expect(buttonsIn(root, ".files-column:last-child .files-column-failure")).toEqual(["Ask an agent to fix this"]),
     );
   });
 
-  it("offers no agent for a folder it has no permission to open", async () => {
+  it("offers an agent for a folder it has no permission to open", async () => {
     const connection = { ...framedConnection(), canReportBug: () => true, askAgent: vi.fn() };
     const root = await openedOn(
       {
@@ -305,12 +290,24 @@ describe("a folder that cannot be listed", () => {
     await vi.waitFor(() =>
       expect(root.querySelector(".files-empty")?.textContent).toContain("You don't have permission to open it."),
     );
+    expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]);
+  });
+
+  it("offers only Try again for a computer that isn't answering, which the server calls expected", async () => {
+    const said = "Your computer isn't answering. It may be asleep, or Imbue Studio may be closed.";
+    const connection = { ...framedConnection(), canReportBug: () => true, askAgent: vi.fn() };
+    const root = await openedOn(
+      { status: 502, body: { detail: said, user_facing_message: said, expected: true } },
+      connection,
+    );
+
+    await vi.waitFor(() => expect(root.querySelector(".files-empty")?.textContent).toContain(said));
     expect(buttonsIn(root, ".files-empty")).toEqual(["Try again"]);
   });
 });
 
 describe("what your computers share, when it cannot be read", () => {
-  it("offers an agent, then Report a bug, under a failure that asks for one", async () => {
+  it("offers an agent under a failure that owes help", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
@@ -326,23 +323,18 @@ describe("what your computers share, when it cannot be read", () => {
     const app = new FilesController(HOME, undefined, connection);
     app.model.start();
     const root = mountView(() => m(FilesApp, { app }));
-    const said = "Couldn't read what your computers share. Try again. If this persists, report a bug.";
+    const said = "Couldn't read what your computers share. Try again.";
 
     await vi.waitFor(() => {
       m.redraw.sync();
       expect(root.querySelector(".files-connected-empty")?.textContent).toContain(said);
     });
     const buttons = Array.from(root.querySelectorAll(".files-connected-empty button"), (button) => button.textContent);
-    expect(buttons).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    expect(buttons).toEqual(["Ask an agent to fix this"]);
 
     root.querySelector<HTMLButtonElement>(".files-connected-empty .ask-agent-to-fix")?.click();
     const [task] = askAgent.mock.calls[0];
     expect(task).toMatch(/^Imbue Studio showed the user this failure: Couldn't read what your computers share\./);
     expect(task).toContain("HTTP 500\ngateway: [Errno 5] Input/output error");
-    root.querySelector<HTMLButtonElement>(".files-connected-empty .report-bug")?.click();
-    expect(connection.reportBug).toHaveBeenCalledWith({
-      message: said,
-      details: "HTTP 500\ngateway: [Errno 5] Input/output error",
-    });
   });
 });

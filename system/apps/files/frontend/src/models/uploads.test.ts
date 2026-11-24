@@ -99,7 +99,7 @@ describe("a failed upload's row", () => {
     ]);
     expect(uploads.items[1].failure?.explanation).toBe(`"b.txt" couldn't be uploaded. ${readOnly}\nHTTP 403`);
     expect(uploads.items[4].failure?.explanation).toBe(
-      '"e.txt" couldn\'t be uploaded. Try again. If this persists, report a bug.\nHTTP 500\nPUT /home/e.txt: [Errno 5] Input/output error',
+      '"e.txt" couldn\'t be uploaded. Try again.\nHTTP 500\nPUT /home/e.txt: [Errno 5] Input/output error',
     );
   });
 
