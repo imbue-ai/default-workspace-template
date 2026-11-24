@@ -9,14 +9,12 @@ metadata:
 
 A net-new task that needs research or experimentation has landed. This skill is a
 thin **router**: it scans for an existing skill, then sends you to the right
-interactive flow. The actual flow lives in the specialization you route to (or,
-for the rare task that fits neither, in the shared principles).
+interactive flow. The actual flow lives in the skill you route to (or, for the
+rare task that fits neither, in the list under "Neither cleanly applies").
 
 The overriding goal of any net-new interactive task is the same: deliver a result
 the user cares about *fast*, confirm the basic shape cheaply, and defer the
-expensive thorough work to the background. That shape is documented once in
-`.agents/shared/references/interactive-delivery.md` -- **read it**; every route
-below is a specialization of it.
+expensive thorough work to the background.
 
 ## Step 0: Existing-skill scan
 
@@ -45,11 +43,21 @@ Pick the flow that fits the ask:
   with `fetch-process-show`.
 
 - **Neither cleanly applies** -- the task is genuinely net-new and not a data
-  fetch or a web view. Apply the interactive-delivery skeleton directly from
-  `.agents/shared/references/interactive-delivery.md`: clarify only what blocks,
-  a fast feasibility pass, a small plan, validate the risky dependency first, a
-  cheap throwaway creation looped to explicit confirmation, then hardening in the
-  background. Fill in the skeleton's phases with the specifics of the task at hand.
+  fetch or a web view. Run the same loop yourself, in this order:
+  1. Ask only the questions whose answers change what you do next, in the
+     user's terms; zero is fine. Default everything else and say so in a line.
+  2. A fast feasibility pass: a few minutes, enough to know the task is
+     possible.
+  3. Propose a small plan (the approach, and what they will see at the end)
+     and wait for a go-ahead.
+  4. Exercise first whatever could sink the task and is not under your control
+     (an external API, an auth flow).
+  5. Put the smallest real, throwaway version in front of the user and loop on
+     it, each round visibly applying their feedback, until they **explicitly
+     confirm** the shape. Build nothing production-grade before that.
+  6. Only then harden it (tests, review gates), in a background worker through
+     the `crystallize-creation` skill, never in this chat.
+  7. Each further capability is its own delivery with its own confirmation.
 
 Load the routed skill and proceed; do not re-implement its flow here.
 

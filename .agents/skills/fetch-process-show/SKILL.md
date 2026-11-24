@@ -7,31 +7,26 @@ metadata:
 
 # Fetch, process, and show data
 
-The data specialization of the interactive-delivery shape. The ask is "go get
-this data, do something to it, and show me." The goal is to put a real result in
-front of the user *fast*, confirm the processing is right against a sample, then
-crystallize the pipeline in the background while you build the surface the user
-interacts with.
+The ask is "go get this data, do something to it, and show me." The goal is to
+put a real result in front of the user *fast*, confirm the processing is right
+against a small sample, and only then spend the expensive effort: crystallize
+the pipeline in the background while you build the surface the user interacts
+with. Never build, test or automate a process the user has not confirmed: that
+work is usually thrown away on their first feedback.
 
-**Read `.agents/shared/references/interactive-delivery.md` first.** It carries
-the generic skeleton (the 8 phases) and the cross-cutting principles. This file
-only fills in that skeleton's phases for data work. Where a phase below says
-"(skeleton phase N)", the generic behavior lives in that reference; this file
-adds the data-specific filling.
-
-The non-negotiable data principle on top of the skeleton: **the confirmed sample
-is the single source of truth.** It gates crystallization, seeds the first
-surface, and defines the shape the pipeline must reproduce. Nothing downstream may
-invent a second, different way of producing the data.
+**The confirmed sample is the single source of truth.** It gates
+crystallization, seeds the first surface, and defines the shape the pipeline
+must reproduce. Nothing downstream may invent a second, different way of
+producing the data.
 
 ## Contents
 
 - Conventions
-- Clarify and scope (skeleton phases 1-3)
-- Validate auth/latchkey first (skeleton phase 4)
-- The sample loop (skeleton phase 5)
+- Clarify and scope
+- Validate auth/latchkey first
+- The sample loop
 - After confirmation: crystallize (background) and start surfaces (foreground)
-- Deliver surfaces -- one at a time, all from the single source of truth (skeleton phase 8)
+- Deliver surfaces -- one at a time, all from the single source of truth
 - Re-fetch while crystallize is running
 
 ## Conventions
@@ -43,10 +38,13 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 - Sample data path: `data/.tasks/fetch-process-show/$SLUG/sample.json`
 - Slug passed to `crystallize-creation` at the end (reused as its `$NAME`)
 
-## Clarify and scope (skeleton phases 1-3)
+## Clarify and scope
 
-Ask only what blocks (phase 1). Then a small research pass (phase 2) and a
-proposed plan (phase 3), with these data specifics:
+Ask only the questions whose answers change what you do next; zero is fine.
+For a choice the user has not constrained, pick the simplest conventional
+default, say it in one line and move on: build for the one person you are
+talking to and the data you have. Then a small research pass and a proposed
+plan, with these data specifics:
 
 For external services, load the `connect-external-service` skill first (it routes
 you to the user's connected accounts, a new connection, an MCP server, a key on
@@ -66,8 +64,8 @@ For a service latchkey does not cover, the skill's routing table names the next
 row to try; 1-2 web/docs searches are enough to tell which is workable. Stop as
 soon as you can propose a plausible plan.
 
-Show the plan as two sections (phrase the data choices in business terms per the
-skeleton's principles):
+Show the plan as two sections, with every choice in the user's terms ("should
+this still be here tomorrow?"), never technical ones ("should we persist it?"):
 
 ```
 Auth: <how authentication will work>
@@ -84,7 +82,7 @@ For browser auth, add: "Need to launch the latchkey setup flow -- sign in in the
 pop-up browser." For `latchkey auth set`, include the exact command for the user
 to run. Wait for approval before any further work.
 
-## Validate auth/latchkey first (skeleton phase 4)
+## Validate auth/latchkey first
 
 The risky dependency for data work is **the data source's auth**.
 
@@ -106,7 +104,7 @@ combined operation.
 Keep validation code simple -- inline bash, `uv run --no-sync python -c`, or short scripts
 under `data/.tasks/fetch-process-show/$SLUG/` if substantive.
 
-## The sample loop (skeleton phase 5)
+## The sample loop
 
 The throwaway creation for data work is a **small real sample** put in front of
 the user in their intended delivery channel. It is a *feedback instrument, not
@@ -141,8 +139,8 @@ inherit an untested path and nobody knows to look.
 **Iterate every feedback round.** Each time the user gives feedback, produce an
 *updated sample that visibly applies it* and put it back in front of them. Loop
 -- present, feedback, updated sample -- until the user **explicitly confirms** the
-sample looks right across all shapes. Only that confirmation unlocks the next
-phase. If the user rejects the sample outright, go back to the plan and
+sample looks right across all shapes. Only that confirmation unlocks what
+follows. If the user rejects the sample outright, go back to the plan and
 re-propose (re-run research only if the new ask needs it).
 
 Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the user
@@ -172,13 +170,14 @@ it for their approval rather than answering the gate yourself.
 
 ## After confirmation: crystallize (background) and start surfaces (foreground)
 
-**Hard gate (skeleton phase 6): do not begin this until the user has explicitly
-confirmed the sample across every data shape.** Crystallizing or building a
+**Hard gate: do not begin this until the user has explicitly confirmed the
+sample across every data shape.** Crystallizing or building a
 surface on an unconfirmed process bakes the wrong process into code *and* into a
 background worker that cannot see the corrections the user hasn't made yet.
 
-Once the user has confirmed, the harden/ratify pass (skeleton phase 7) runs as
-a **`crystallize-creation` worker** (the crystallize operation, creation = a
+Once the user has confirmed, the thorough pass (real tests, review gates,
+polish) runs in the background, never in this chat, as a
+**`crystallize-creation` worker** (the crystallize operation, creation = a
 script-centric **skill**):
 
 1. **Kick off `crystallize-creation`** with `type=skill` and
@@ -199,7 +198,7 @@ script-centric **skill**):
 The skill's *flow* responsibility ends here; lead-proxy ownership for the
 dispatched worker continues until that worker reports terminal status.
 
-## Deliver surfaces -- one at a time, all from the single source of truth (skeleton phase 8)
+## Deliver surfaces -- one at a time, all from the single source of truth
 
 **Single source of truth.** Every surface renders the *confirmed sample data*
 (`sample.json`), and once it lands, the crystallized pipeline's output -- never a

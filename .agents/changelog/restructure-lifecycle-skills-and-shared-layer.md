@@ -16,7 +16,9 @@ The lifecycle skills, the harden worker and the shared references they rest on f
 
 - **Checking whether a worker is alive** uses `mngr capture <worker> --full --no-start`, which reads the agent's pane on any harness and does not start a stopped one.
 
-- **`launch-task`** has a numbered step list, with its guidelines above it. **`fetch-process-show`** is under the 14,000-byte cap. **`interactive-delivery.md`** has a contents list and a shorter opening, and links nothing.
+- **`launch-task`** has a numbered step list, with its guidelines above it. **`fetch-process-show`** is under the 14,000-byte cap.
+
+- **`interactive-delivery.md` is deleted.** Nothing reads it any more. `fetch-process-show` states each of its phases in its own words (what to ask, the defaults, the plan, the sample loop, the hard gate, the background pass), where it used to fill in that file's numbered phases, and `do-something-new` lists the loop for a task that is neither a data fetch nor a web view. The stops are the ones each flow had. `update-app` carries no exemption now that every shared reference it links has a contents list.
 
 - **Two rules made exact.** `crystallize-creation` says what to do with the freshness check while the skill it is building is not on the lead's branch yet (every merge before the first that brings it): skip it, since `pass-scope` refuses a creation that does not exist and nothing could have moved under it. `lead-proxy.md` has a lead close its ticket where its skill says to, which for the three lifecycle skills is after go-live, as they always did; it used to say before.
 
