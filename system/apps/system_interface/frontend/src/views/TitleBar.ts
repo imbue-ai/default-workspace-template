@@ -54,10 +54,10 @@ const CENTERED_ICON_WIDTH = APP_GLYPH_SIZE + 6;
 const SHARE_CLEARANCE = 8;
 
 /** How far from the bar's edge the run of the window menu, Refresh, the balloon and Share reaches, with Share's
- *  glyph alone and with its word, counting the bar's inset. The desktop pair was measured in Chromium
- *  on the standard look (124 and 174.9), the labelled run less the 8 that Share's tighter padding and gap
- *  (``.window-share--labelled``) take off it; the touch pair is the same run with each square control as wide as the
- *  44 touch target its minimum width asks for. */
+ *  glyph alone and with its word, counting the bar's inset. The desktop pair was measured in Chromium on the
+ *  standard look (124 and 174.9), the labelled run less the 10 that Share's tighter padding and gap
+ *  (``.window-share--labelled``) take off it, plus the 2 its larger glyph adds; the touch pair is the same run with
+ *  each square control as wide as the 44 touch target its minimum width asks for. */
 interface ShareRunWidths {
   readonly glyph: number;
   readonly labelled: number;
