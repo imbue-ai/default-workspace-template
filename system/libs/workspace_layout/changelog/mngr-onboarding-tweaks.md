@@ -1,1 +1,0 @@
-`InventoryApp`, the app object of the shell's inventory answer, gains `system`: whether the app is part of the workspace itself rather than one built on it. An answer from an older shell reads as false.
