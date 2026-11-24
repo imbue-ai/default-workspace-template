@@ -130,12 +130,12 @@ lead's reply arrives.
 
 ## Step 4: Report back to the lead
 
-Report with the launcher's `report` subcommand -- write the body to a file and
-hand that file over -- exactly as
-`.agents/shared/references/worker-reporting.md` describes. The `eval` in Step 1
-already set the variables it needs, and the subcommand derives the report
-destination and the lead's address from `TASK_FILE` itself, so there is nothing
-to substitute.
+Before your first report, read
+`.agents/shared/references/worker-reporting.md`. Report exactly as it
+describes, with the launcher's `report` subcommand: write the body to a file
+and hand that file over. The `eval` in Step 1 already set the variables it
+needs, and the subcommand derives the report destination and the lead's
+address from `TASK_FILE` itself, so there is nothing to substitute.
 
 The valid `name:` values for gates and terminal statuses come from your
 operation reference -- it is the authority on which gates fire for your

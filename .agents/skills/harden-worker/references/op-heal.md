@@ -49,8 +49,8 @@ Fixed <app> on branch `<branch>`. Ready to preview.
 
 1. Read the task file: the `## Incident summary` and the `## Anchors` verbatim
    quotes are your primary guide.
-2. Locate the incident in the lead's transcript, per
-   `.agents/skills/harden-worker/references/transcript-exploration.md`.
+2. Read `.agents/skills/harden-worker/references/transcript-exploration.md`,
+   then locate the incident in the lead's transcript as it says.
 3. Read the creation's current state on disk per your creation reference.
 4. Reproduce the failure. If it depends on external state you cannot recreate,
    construct a minimal synthetic input that exercises the same code path (or,

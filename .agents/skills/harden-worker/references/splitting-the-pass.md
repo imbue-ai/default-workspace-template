@@ -8,13 +8,12 @@ Name each one with your own worker
 name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
 are unique across the host in every state, so a re-run of the same pass reaches
 the same names only after the old pass has been superseded and destroyed. You
-are its lead, so you follow the lead-proxy flow
-(`.agents/shared/references/lead-proxy.md`) for it, and the rules that are
-yours alone are in
-`.agents/shared/references/lead-proxy/intermediate-lead.md`: answer your
-worker's `question` yourself or re-raise it to your own lead, merge exactly one
-level with `--no-ff`, destroy a merged worker and stop a stuck one, and await
-it with `--timeout 60m`.
+are its lead: before you launch, read
+`.agents/shared/references/lead-proxy.md`, the lead-proxy flow you follow for
+it, and `.agents/shared/references/lead-proxy/intermediate-lead.md`, the rules
+that are yours alone: answer your worker's `question` yourself or re-raise it
+to your own lead, merge exactly one level with `--no-ff`, destroy a merged
+worker and stop a stuck one, and await it with `--timeout 60m`.
 
 - Each worker's task file carries the same `operation` as yours, the
   `creations` its boundary touches, its own `scope_file` beside its task file

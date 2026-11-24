@@ -83,11 +83,10 @@ work stands; extend it to the new base rather than starting over.
 ## A reverted milestone
 
 When the lead reverts a milestone it merged, its reply names the revert
-commit and says why. Bring the milestone back on your branch as "A milestone
-the lead reverted" in `.agents/shared/references/worker-reporting.md` says,
-resolve any
-conflict as step 2 of "Catching up to a moved base" says, then fix the
-milestone's work per the lead's reply.
+commit and says why. Read "A milestone the lead reverted" in
+`.agents/shared/references/worker-reporting.md` and bring the milestone back
+on your branch as it says, resolve any conflict as step 2 of "Catching up to a
+moved base" says, then fix the milestone's work per the lead's reply.
 
 The revert of the revert is yours, selected like any change, so your test
 gate covers the milestone's work again. A pass still under way goes on as

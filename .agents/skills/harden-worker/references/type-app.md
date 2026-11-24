@@ -43,8 +43,9 @@ paths.
 
 ## Running and testing
 
-The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.
-App specifics:
+Before you run or test the app, read
+`.agents/shared/references/web-frontend-testing.md` for the isolated-instance
+and rendered-page rules. App specifics:
 
 - A user-built app is a standalone uv project
   (`.agents/shared/references/running-python.md`, "User packages are standalone

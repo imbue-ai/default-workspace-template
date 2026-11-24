@@ -1,11 +1,12 @@
 # Creation: skill
 
 A reusable skill under `.agents/skills/<name>/` -- a SKILL.md process recipe plus
-the scripts its steps call. `.agents/shared/references/spec-summary.md` is the
-authority on how a skill is packaged here: directory layout, frontmatter, the
-`[script]` / `[ai-script]` / `[prose]` step kinds, `run.py` packaging,
-validation, and the scenario template. This reference adds only what that
-reference and the universal `harden-creation.md` contract don't already cover.
+the scripts its steps call. Before you build or change one, read
+`.agents/shared/references/spec-summary.md`, the authority on how a skill is
+packaged here: directory layout, frontmatter, the `[script]` / `[ai-script]` /
+`[prose]` step kinds, `run.py` packaging, validation, and the scenario
+template. This reference adds only what that reference and the universal
+`harden-creation.md` contract don't already cover.
 
 A new skill starts from the scaffold (`spec-summary.md`, "Directory layout"),
 which writes the layout, installs the package and validates it:

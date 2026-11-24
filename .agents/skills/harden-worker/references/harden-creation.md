@@ -145,11 +145,11 @@ merge and verify their work as their lead.
   only for purely visual things not worth a permanent test, and do not duplicate
   the same coverage in both.
 - **Run every suite that applies** plus the relevant ratchets.
-- **Harden concurrency, pipelines and stored data to `data-and-storage.md`**
-  whenever the creation performs multiple independent I/O-bound operations,
-  works through many items, captures data, or keeps anything on disk across
-  runs: when you first build it, and equally when an `update` makes one of
-  those true or enlarges a store the creation already had.
+- **Read `data-and-storage.md` and harden concurrency, pipelines and stored
+  data to it** whenever the creation performs multiple independent I/O-bound
+  operations, works through many items, captures data, or keeps anything on
+  disk across runs: when you first build it, and equally when an `update`
+  makes one of those true or enlarges a store the creation already had.
 
 ## Review gates
 
