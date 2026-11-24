@@ -83,12 +83,13 @@ labelled a `submit-upstream-changes` candidate, plus any other defect in
 built-in code you hit this pass: a failing built-in test, a built-in test the
 worker's Validation names as flaky, a step of this skill that broke and had
 to be worked around. Escalate them together as AGENTS.md's "Updates" section
-describes: one report through
-`data/.tasks/update-self/skill-at-target/.agents/shared/references/report-built-in-issues.md`,
-or `submit-upstream-changes` for a template fix. Otherwise name each in the
-results message with the submission offered.
+describes: read
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/report-built-in-issues.md`
+and send one report as it says, or use `submit-upstream-changes` for a
+template fix. Otherwise name each in the results message with the submission
+offered.
 
 A flaky test of a creation the workspace built is not built-in: file a
 regular ticket for it (`tk create`).
 
-Then compose the results message per `results-message.md`.
+Then read `results-message.md` and compose the results message.

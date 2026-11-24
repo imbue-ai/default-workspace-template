@@ -1,8 +1,9 @@
 # Resuming after `stuck`
 
-When the user overrides a `stuck` verdict, resume the same pass with the same
-worker as `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md` ("Resuming after the user
-overrides a failure") says. This pass's preconditions, re-taken before the
+When the user overrides a `stuck` verdict, read
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`
+("Resuming after the user overrides a failure") and resume the same pass with
+the same worker as it says. This pass's preconditions, re-taken before the
 `reply`, each `tk` call as its own command:
 
 1. The `updating workspace` lease, exactly as SKILL.md Step 1 takes it.
