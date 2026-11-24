@@ -110,7 +110,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   says whether its failure owes the person help (`isHelpOwed`), and
   `Toasts` draws "Ask an agent to fix this" on it while the page passes
   `onAskAgent` (`askAgentFromToasts(connection)` for a framed page, whose
-  refused ask the shell toasts; read "Asking an agent…" until it settles)
+  refused ask the shell toasts; read "Asking an agent…" until it settles;
+  the handler is given the toast's `agentRequest`, which is its message and
+  details unless the caller named more, such as an instruction)
   unless the toast says `isAgentWithheld`, and "Report a bug" in its place
   while the page passes only `onReportBug`, each decided at each draw, so a toast shown before
   the page learned it can ask an agent or open a bug report gains the button

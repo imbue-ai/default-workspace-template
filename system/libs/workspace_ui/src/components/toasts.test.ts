@@ -4,7 +4,7 @@ import "../testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import type { ReportedFailure } from "../app_contract";
+import type { AgentFixRequest, ReportedFailure } from "../app_contract";
 import { ToastQueue } from "../models/toasts";
 import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
@@ -18,6 +18,7 @@ const TOASTS = [
     isLasting: false,
     isHelpOwed: false,
     isAgentOffered: false,
+    agentRequest: { whatFailed: "Could not move it", details: null },
   },
   {
     id: 2,
@@ -27,6 +28,7 @@ const TOASTS = [
     isLasting: false,
     isHelpOwed: false,
     isAgentOffered: false,
+    agentRequest: { whatFailed: "Could not copy it", details: null },
   },
 ];
 
@@ -37,7 +39,7 @@ afterEach(() => {
 function mountQueue(
   queue: ToastQueue,
   onReportBug: () => ((failure: ReportedFailure) => void) | null = () => null,
-  onAskAgent: () => ((failure: ReportedFailure) => Promise<unknown>) | null = () => null,
+  onAskAgent: () => ((request: AgentFixRequest) => Promise<unknown>) | null = () => null,
 ): HTMLElement {
   return mountView(() =>
     m(Toasts, {
@@ -154,9 +156,9 @@ describe("Toasts", () => {
       actions: [{ label: "Try again", run: vi.fn() }],
     });
     queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
-    const asked: ReportedFailure[] = [];
+    const asked: AgentFixRequest[] = [];
     let settle: () => void = () => undefined;
-    let askAgent: ((failure: ReportedFailure) => Promise<unknown>) | null = null;
+    let askAgent: ((request: AgentFixRequest) => Promise<unknown>) | null = null;
     const root = mountQueue(
       queue,
       () => () => undefined,
@@ -182,7 +184,7 @@ describe("Toasts", () => {
     m.redraw.sync();
     expect(ask().textContent).toBe("Asking an agent…");
     expect(ask().disabled).toBe(true);
-    expect(asked).toEqual([{ message: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
+    expect(asked).toEqual([{ whatFailed: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
     expect(queue.current()).toHaveLength(2);
 
     settle();
@@ -191,6 +193,27 @@ describe("Toasts", () => {
     m.redraw.sync();
     expect(ask().textContent).toBe("Ask an agent to fix this");
     expect(ask().disabled).toBe(false);
+  });
+
+  it("asks the agent what the note says to ask, where that is more than its message and details", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    const agentRequest: AgentFixRequest = {
+      whatFailed: 'Couldn\'t create "notes". This folder is read-only.',
+      details: "Tried to create /data/reports/notes/\nHTTP 403",
+      instruction: "Do what the user was trying to do if you can.",
+    };
+    queue.show(agentRequest.whatFailed, { isLasting: true, details: "HTTP 403", isHelpOwed: true, agentRequest });
+    const asked: AgentFixRequest[] = [];
+    const root = mountQueue(
+      queue,
+      () => null,
+      () => (request) => {
+        asked.push(request);
+        return Promise.resolve();
+      },
+    );
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    expect(asked).toEqual([agentRequest]);
   });
 
   it("offers no agent on a note that withholds one, where the ask would go through what failed", () => {
