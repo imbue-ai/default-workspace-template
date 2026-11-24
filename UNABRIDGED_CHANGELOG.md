@@ -4,6 +4,62 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-23
+
+### .agents
+
+The `first-run-onboarding` skill:
+
+- Its reply to "Describe what you want to make" opens with "What’s annoying, overwhelming, or tedious in your digital life? Go ahead and complain--I’ll help you build something that makes it better." in place of the sentence about what current apps don't do, and gains an example of a problem described with context, in italics above the line about the mic.
+
+- Its "See what Studio can do" path opens Getting Started on the left half of the desktop, in front, with the chat on the right half. It used to open it on the right with the chat on the left, where the tour's step that moves the chat to the right covered it.
+
+### system
+
+The shared frontend library's connect-data pointer (`system/libs/workspace_ui/src/onboarding_pointers.ts`) ends in "You can always see your connections here as well."
+
+The shared icons (`system/libs/workspace_ui/src/components/icons.ts`) gain `arrow-up-right`.
+
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list `firstConversationStep(isPending)` among what `connectToShell` returns, and the comment on `shell:show-coach-card` in `workspace_ui`'s app contract says when the shell shows a card as the shell does it: while its tour shows nothing, in place of a coach card that is up, and in place of the tour's last card or exit badge.
+
+`uv.lock` lists the Onboarding checklist app among the chat app's dev dependencies.
+
+### system/apps/chat
+
+The first run's provider page:
+
+- The dialog a provider tile opens wears the page's cream and brown ink in place of the workspace's own look, and fades the page into its cream behind it. The provider chooser opened from anywhere else is unchanged.
+
+- Each account under "Connected" ends in Remove, which asks first (in the same cream) and then signs the account out. Removing the last one brings Skip back and holds Next. A removal that fails keeps the row and says "That didn't go through. Try again."
+
+Suggested replies:
+
+- The model that works out a chat's next-step suggestions may think for 20,000 tokens, up from 4,000, and has 120 seconds to answer, up from 60. Chat naming keeps its 60 seconds.
+
+- The pointer the "connect some data" suggestion shows reads "Just ask your agent to connect anything!" over "You can always see your connections here as well."
+
+The README says where the connect-data pointer's card sits: under the right end of the Imbue Studio title bar, by the Settings button it rings.
+
+The chat's dev dependencies name the Onboarding checklist app (`onboarding-checklist`), which its browser tests serve beside the shell and the chat.
+
+### system/apps/onboarding_checklist
+
+The card the "connect some data" entry shows by the Imbue Studio title bar's Settings button reads "Just ask your agent to connect anything!" over "You can always see your connections here as well."
+
+The page is headed "Click to learn more" in place of "Onboarding checklist", and each entry that can be clicked ends in an arrow pointing up and to the right. The window's title and the launcher's row still read "Onboarding checklist".
+
+The README says where the "Connect some data" entry's card sits: under the right end of the Imbue Studio title bar, by the Settings button it rings.
+
+### system/apps/system_interface
+
+A window of an app that is part of the workspace itself (Chat, Terminal, Files, Getting Started, Screen, Routines, System Monitor, the Style Guide, the onboarding checklist) no longer shows Share in its title bar. Its window menu still offers "Share <app>". A window of an app built on the workspace keeps Share in both places.
+
+A tour card or a page's coach card about a control of the Imbue Studio title bar now sits under the end of the bar the control is at. Settings (which holds a workspace's permissions and settings) and Share are at the bar's right end, so their cards sit there, as the card about reporting a bug already did; only the card about the workspace's name stays at the left.
+
+### system/libs/workspace_layout
+
+`InventoryApp`, the app object of the shell's inventory answer, gains `system`: whether the app is part of the workspace itself rather than one built on it. An answer from an older shell reads as false.
+
 ## 2026-11-22
 
 ### .agents

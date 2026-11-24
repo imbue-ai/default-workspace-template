@@ -1,9 +1,10 @@
 /**
- * The Onboarding checklist page: its title, and the items in order, one row each, with a check mark on the done
- * ones. A row whose pointer can be shown here is a button, and a click shows the pointer whether or not the item
- * is done; a row whose pointer cannot be shown is listed plain. The page is its own scroller, since the shared
- * base styles pin the body to the viewport.
- * Markers the tests use: ``data-checklist-title``, ``data-checklist-item`` (the item's id), ``data-done``.
+ * The Onboarding checklist page: its heading, and the items in order, one row each, with a check mark on the done
+ * ones. A row whose pointer can be shown here is a button that ends in an arrow, and a click shows the pointer
+ * whether or not the item is done; a row whose pointer cannot be shown is listed plain, with no arrow. The page is
+ * its own scroller, since the shared base styles pin the body to the viewport.
+ * Markers the tests use: ``data-checklist-title``, ``data-checklist-item`` (the item's id), ``data-done``,
+ * ``data-checklist-check``, ``data-checklist-arrow``.
  */
 
 import m from "mithril";
@@ -11,9 +12,13 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { ChecklistItem } from "../models/ChecklistItems";
 import { isPointerAvailable } from "../models/pointers";
 
+/** What the page reports to the shell as its window's title. */
 export const PAGE_TITLE = "Onboarding checklist";
+/** The heading over the items, which says what a row does. */
+const PAGE_HEADING = "Click to learn more";
 
 const CHECK_GLYPH_SIZE = 14;
+const ARROW_GLYPH_SIZE = 16;
 const ROW_CLASS = "flex w-full items-center gap-3 rounded-md px-2 py-2 text-left type-body text-primary";
 
 export interface ChecklistPageAttrs {
@@ -31,6 +36,7 @@ function checkMark(isDone: boolean): m.Vnode {
     "span",
     {
       "aria-hidden": "true",
+      "data-checklist-check": "",
       class:
         "flex size-5 shrink-0 items-center justify-center rounded-full border " +
         (isDone ? "border-accent bg-accent text-on-accent" : "border-strong"),
@@ -39,8 +45,17 @@ function checkMark(isDone: boolean): m.Vnode {
   );
 }
 
+/** The arrow at the end of a row that can be clicked: the row leads to where its item is. */
+function leadsOutArrow(): m.Vnode {
+  return m(
+    "span",
+    { "aria-hidden": "true", "data-checklist-arrow": "", class: "flex shrink-0 items-center text-secondary" },
+    m.trust(icon("arrow-up-right", { size: ARROW_GLYPH_SIZE })),
+  );
+}
+
 function itemRow(item: ChecklistItem, attrs: ChecklistPageAttrs): m.Vnode {
-  const content = [checkMark(item.isDone), m("span", { class: "min-w-0" }, item.label)];
+  const content = [checkMark(item.isDone), m("span", { class: "min-w-0 flex-1" }, item.label)];
   const marks = { "data-checklist-item": item.id, "data-done": item.isDone ? "true" : "false" };
   if (!isPointerAvailable(item.id, attrs.showsCoachMarks)) {
     return m("li", { key: item.id }, m("div", { ...marks, class: ROW_CLASS }, content));
@@ -56,7 +71,7 @@ function itemRow(item: ChecklistItem, attrs: ChecklistPageAttrs): m.Vnode {
         class: `${ROW_CLASS} cursor-pointer hover:bg-fill-hover`,
         onclick: () => attrs.onPick(item.id),
       },
-      content,
+      [...content, leadsOutArrow()],
     ),
   );
 }
@@ -65,7 +80,7 @@ export const ChecklistPage: m.Component<ChecklistPageAttrs> = {
   view(vnode) {
     const { items } = vnode.attrs;
     return m("div", { class: "onboarding-checklist-page h-screen w-full overflow-y-auto bg-page px-4 py-5" }, [
-      m("h1", { "data-checklist-title": "", class: "m-0 px-2 type-heading text-primary" }, PAGE_TITLE),
+      m("h1", { "data-checklist-title": "", class: "m-0 px-2 type-heading text-primary" }, PAGE_HEADING),
       items === null
         ? null
         : m(

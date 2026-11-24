@@ -444,7 +444,8 @@ def test_a_turns_end_stores_the_replies_a_mid_sized_model_suggests_and_tells_the
         '<turn speaker="assistant">\nBuilt. Want reminders?\n</turn>'
     ]
     assert harness.completion.model_tiers == [OneShotModelTier.MEDIUM]
-    assert harness.completion.thinking_token_allowances == [4000]
+    assert harness.completion.thinking_token_allowances == [20_000]
+    assert harness.completion.timeouts_seconds == [120.0]
 
 
 def test_a_set_replaces_the_one_an_earlier_reply_had(tmp_path: Path) -> None:

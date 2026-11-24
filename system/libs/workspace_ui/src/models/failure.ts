@@ -21,8 +21,9 @@ export type Failure = FailureFields &
         readonly userFacingMessage: string;
         /** The server's developer text beside its sentence, when it gave one. */
         readonly reason: string | null;
-        /** The server said its sentence asks for a bug report (``reportable: true``). */
-        readonly isReportable: boolean;
+        /** The server said its refusal is ordinary operation that its sentence fully explains (``expected: true``:
+         *  an app still starting, an account to sign in to first), so nothing is broken and no help is owed. */
+        readonly isExpected: boolean;
       }
     | {
         /** The server (or the code that threw) gave a reason of its own (``detail`` or ``error``), developer text
@@ -64,9 +65,9 @@ const READ_NOT_ANSWERED = "The workspace didn't answer. Try again in a moment.";
 /** What failed, for a surface that has not said in its own words yet. */
 export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
 
-const REPORT_A_BUG_ENDING = "Try again. If this persists, report a bug.";
+const TRY_AGAIN_ENDING = "Try again.";
 
-/** The button a sentence that asks for a bug report carries, where Imbue Studio can open one. */
+/** The button a failure that owes help carries, where Imbue Studio can open a bug report. */
 export const REPORT_A_BUG_LABEL = "Report a bug";
 
 // How much of a body that is not a reason (an error page, a proxy's plain text) "See details" quotes.
@@ -77,9 +78,9 @@ export function notAnsweredSentence(kind: RequestKind): string {
   return kind === "read" ? READ_NOT_ANSWERED : CHANGE_NOT_ANSWERED_SENTENCE;
 }
 
-/** The fallback for a failure with no explanation of its own: what failed, then the bug-report ending. */
+/** The fallback for a failure with no explanation of its own: what failed, then to try again. */
 export function fallbackSentence(whatFailed: string): string {
-  return `${whatFailed}. ${REPORT_A_BUG_ENDING}`;
+  return `${whatFailed}. ${TRY_AGAIN_ENDING}`;
 }
 
 /** The non-empty lines of a "See details" text, joined; null when every one is empty. */
@@ -138,7 +139,7 @@ export function readFailure(answer: FailedAnswer): Failure {
       cause: "user_facing",
       userFacingMessage: userFacing,
       reason,
-      isReportable: body?.reportable === true,
+      isExpected: body?.expected === true,
     };
   }
   if (reason !== null) return { ...fields, cause: "reason", reason };
@@ -149,23 +150,23 @@ export function readFailure(answer: FailedAnswer): Failure {
 /**
  * ``failure`` in words, ``whatFailed`` being a sentence stem naming what failed ("This window couldn't be closed").
  * The server's sentence for people stands as written; no answer says only that, whatever failed; a refusal (a 4xx)
- * with a reason names what failed and puts the reason behind "See details"; anything else is the fallback, which asks
- * for a bug report.
+ * with a reason names what failed and puts the reason behind "See details"; anything else is the fallback, which says
+ * to try again.
  */
 export function failureSentence(failure: Failure, whatFailed: string = DEFAULT_WHAT_FAILED): FailureMessage {
   const { details } = failure;
   switch (failure.cause) {
     case "user_facing":
-      return { message: failure.userFacingMessage, details, isReportable: failure.isReportable };
+      return { message: failure.userFacingMessage, details, isHelpOwed: !failure.isExpected };
     case "not_answered":
-      return { message: notAnsweredSentence(failure.requestKind), details, isReportable: false };
+      return { message: notAnsweredSentence(failure.requestKind), details, isHelpOwed: false };
     case "reason":
       if (failure.status !== null && failure.status >= 400 && failure.status < 500) {
-        return { message: `${whatFailed}.`, details, isReportable: false };
+        return { message: `${whatFailed}.`, details, isHelpOwed: false };
       }
-      return { message: fallbackSentence(whatFailed), details, isReportable: true };
+      return { message: fallbackSentence(whatFailed), details, isHelpOwed: true };
     case "no_reason":
-      return { message: fallbackSentence(whatFailed), details, isReportable: true };
+      return { message: fallbackSentence(whatFailed), details, isHelpOwed: true };
   }
 }
 

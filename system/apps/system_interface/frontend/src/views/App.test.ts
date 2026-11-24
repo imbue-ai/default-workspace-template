@@ -164,7 +164,7 @@ describe("a failure toast's Report a bug", () => {
     m.redraw.sync();
     const toast = (): HTMLElement => document.querySelector("[data-toast]") as HTMLElement;
     expect(toast().querySelector(".toast-message")?.textContent).toBe(
-      "Could not read the desktops and apps. Try again. If this persists, report a bug.",
+      "Could not read the desktops and apps. Try again.",
     );
     expect(toast().querySelector(".report-bug")).toBeNull();
 
@@ -174,7 +174,7 @@ describe("a failure toast's Report a bug", () => {
     expect(button?.textContent).toBe("Report a bug");
     button?.click();
     expect(reportBug).toHaveBeenCalledWith({
-      message: "Could not read the desktops and apps. Try again. If this persists, report a bug.",
+      message: "Could not read the desktops and apps. Try again.",
       details: "HTTP 500\ninventory unreadable",
     });
     expect(document.querySelector("[data-toast]")).not.toBeNull();
@@ -779,6 +779,20 @@ describe("sharing a window's app", () => {
     store.setEmbedderPresent(true);
     m.redraw.sync();
     expect(titleBarShare()).not.toBeNull();
+
+    const chrome = framedUnderChrome();
+    const row = windowMenuShare() as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+
+    expect(chrome.postMessage.mock.calls).toEqual([[{ type: "minds:open-share-settings", serviceName: "docs" }, "*"]]);
+  });
+
+  it("offers Share in the window menu alone for an app that is part of the workspace itself", () => {
+    offerApps(api, socket, [appRecord("docs", { system: true })]);
+    store.setEmbedderPresent(true);
+    m.redraw.sync();
+    expect(titleBarShare()).toBeNull();
 
     const chrome = framedUnderChrome();
     const row = windowMenuShare() as HTMLElement;
