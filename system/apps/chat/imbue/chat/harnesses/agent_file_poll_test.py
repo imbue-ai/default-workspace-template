@@ -115,7 +115,8 @@ def test_a_callback_that_raises_neither_stops_the_pass_nor_later_polls(
 
     poller.poll_once()
     assert changed == ["agent-failing", "agent-other"]
-    assert [record for record in loguru_records if record.startswith("ERROR ")] == [
+    # Only this poller's own errors: a thread another test left running logs into the same sink.
+    assert [record for record in loguru_records if record.startswith(f"ERROR {_THREAD_NAME}: ")] == [
         f"ERROR {_THREAD_NAME}: the change callback failed for agent agent-failing"
     ]
 
