@@ -120,7 +120,8 @@ Over the share, the stream reaches them through the relay or through TURN (secti
 
 ### 4.7 When the stack is gone
 
-If the user quits the app, the window shows "The Screen was stopped." with a "Start" button; if a member of the stack exits on its own, "The Screen stopped unexpectedly." with "Start", "Ask an agent to fix this" and "Report a bug"; and if the memory guard shed a member, the same sentence with a line saying the workspace ran low on memory and no "Report a bug".
+If the user quits the app, the window shows "The Screen was stopped." with a "Start" button; if a member of the stack exits on its own, "The Screen stopped unexpectedly." with "Start" and "Ask an agent to fix this"; and if the memory guard shed a member, the same sentence and buttons with a line saying the workspace ran low on memory.
+An ask that could not be sent says why under the buttons and offers "Draft it in a chat" and "Report a bug" in its place.
 The service's own reason sits behind "See details", and every program that ran on the stack is gone with the X server.
 The next open starts a fresh stack; Chromium comes back with its profile and tabs (section 16).
 

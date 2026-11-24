@@ -1,7 +1,8 @@
 """Browser: the Screen's built viewer, framed by a stand-in for the shell, says why the Screen stopped in our words and
-offers what can help through the shell: "Ask an agent to fix this" always under a shell, "Report a bug" only where
-the shell's handshake says Imbue Studio opens one, and a refused Start under the overlay's title. A state that got no
-answer names the Screen, offers Try again, and shows no control for a Screen it knows nothing about.
+offers what can help through the shell: "Ask an agent to fix this" under a shell; once that ask was refused, "Draft it
+in a chat" and, only where the shell's handshake says Imbue Studio opens one, "Report a bug"; and a refused Start
+under the overlay's title. A state that got no answer names the Screen, offers Try again, and shows no control for a
+Screen it knows nothing about.
 
 The service is stood in for by routes answering a crashed stack's state and a refused start; the viewer's event
 socket finds nothing and keeps retrying, which changes nothing here.
@@ -55,6 +56,11 @@ _CRASHED_STATE: Final[dict[str, Any]] = {
     },
     "screen_size": None,
     "chromium": {"state": "absent", "name": None, "pending_url": None},
+}
+
+_REFUSED_ASK: Final[dict[str, Any]] = {
+    "isOpened": False,
+    "failure": {"message": "Chat couldn't open that. Try again.", "details": "HTTP 500\nboom", "isHelpOwed": True},
 }
 
 
@@ -119,22 +125,41 @@ def _open(context: BrowserContext) -> tuple[Page, Frame]:
     return page, viewer
 
 
-def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_context: BrowserContext) -> None:
+def _ask_and_have_it_refused(page: Page, viewer: Frame) -> None:
+    viewer.locator("[data-screen-ask-agent]").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
+    answer_ask_agent(page, _REFUSED_ASK)
+    expect(viewer.locator("[data-screen-ask-failure] p")).to_have_text("Chat couldn't open that. Try again.")
+
+
+def test_a_crash_offers_an_agent_and_a_refused_ask_a_draft_and_a_bug_report_through_the_shell(
+    desktop_context: BrowserContext,
+) -> None:
     _serve(desktop_context, can_report_bug=True)
     page, viewer = _open(desktop_context)
     overlay = viewer.locator("[data-screen-overlay]")
     expect(overlay.locator("[data-screen-overlay-details] pre")).to_have_text(_CRASH_REASON)
     expect(overlay.locator("[data-screen-start]")).to_be_visible()
-    viewer.locator("[data-screen-ask-agent]").click()
+    expect(viewer.locator("[data-screen-ask-agent]")).to_be_visible()
+    expect(viewer.locator("[data-screen-draft-ask]")).to_be_hidden()
+    expect(viewer.locator("[data-screen-report-bug]")).to_be_hidden()
+
+    _ask_and_have_it_refused(page, viewer)
+    viewer.locator("[data-screen-draft-ask]").click()
     viewer.locator("[data-screen-report-bug]").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
-    started = shell_messages(page, "shell:ask-agent")
-    assert len(started) == 1
-    assert started[0]["showsOutcome"] is True
-    assert "The Screen stopped unexpectedly." in str(started[0]["text"])
-    assert _CRASH_REASON in str(started[0]["text"])
+
+    asked, drafted = shell_messages(page, "shell:ask-agent")
+    assert asked["showsOutcome"] is True
+    assert "delivery" not in asked
+    assert "The Screen stopped unexpectedly." in str(asked["text"])
+    assert _CRASH_REASON in str(asked["text"])
+    assert (drafted["text"], drafted["delivery"]) == (asked["text"], "draft")
     [reported] = shell_messages(page, "shell:report-bug")
-    assert (reported["message"], reported["details"]) == ("The Screen stopped unexpectedly.", _CRASH_REASON)
+    assert reported["message"] == "The Screen stopped unexpectedly."
+    assert reported["details"] == (
+        f"{_CRASH_REASON}\n\nAsking an agent to fix this failed too:\nChat couldn't open that. Try again.\nHTTP 500\nboom"
+    )
 
 
 def test_an_ask_stays_pending_while_the_same_shell_greets_again_and_settles_when_it_answers(
@@ -160,8 +185,9 @@ def test_no_bug_report_where_the_shell_cannot_open_one_and_a_refused_start_is_sa
     desktop_context: BrowserContext,
 ) -> None:
     _serve(desktop_context, can_report_bug=False)
-    _page, viewer = _open(desktop_context)
-    expect(viewer.locator("[data-screen-ask-agent]")).to_be_visible()
+    page, viewer = _open(desktop_context)
+    _ask_and_have_it_refused(page, viewer)
+    expect(viewer.locator("[data-screen-draft-ask]")).to_be_visible()
     expect(viewer.locator("[data-screen-report-bug]")).to_be_hidden()
     viewer.locator("[data-screen-start]").click()
     expect(viewer.locator("[data-screen-overlay-body]")).to_have_text("The Screen couldn't start.")

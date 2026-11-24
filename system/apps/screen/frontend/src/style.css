@@ -172,6 +172,7 @@
 }
 
 .screen-overlay[hidden],
+.screen-overlay__actions[hidden],
 .screen-overlay__details[hidden],
 .screen-overlay__detail[hidden] {
   display: none;

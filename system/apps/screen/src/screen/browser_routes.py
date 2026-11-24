@@ -107,33 +107,31 @@ BROWSER_ROUTE_TABLE: Final[RouteTable] = {
 # What a person who opened Browser or clicked a link is told, the developer reason staying under ``detail`` (the
 # shell shows these sentences as written and keeps the reason behind "See details"; the fleet CLI reads ``detail``).
 BROWSER_INSTALLING_MESSAGE: Final[str] = "The browser is still being set up in this workspace. Try again in a minute."
-BROWSER_INSTALL_FAILED_MESSAGE: Final[str] = (
-    "The browser couldn't be set up in this workspace. Ask an agent to fix it."
-)
+BROWSER_INSTALL_FAILED_MESSAGE: Final[str] = "The browser couldn't be set up in this workspace."
 BAD_START_PAGE_MESSAGE: Final[str] = "That start page isn't a web address the browser can open."
 BAD_LINK_MESSAGE: Final[str] = "That link can't be opened in the Screen's browser."
 FLEET_FULL_MESSAGE: Final[str] = "Too many browsers are open. Close one, then try again."
 BROWSER_BUSY_MESSAGE: Final[str] = "The browser isn't ready yet. Try again in a moment."
 PAGE_NOT_OPENED_MESSAGE: Final[str] = "Couldn't open this page in the Screen's browser. Try again."
 WINDOW_NOT_SHOWN_MESSAGE: Final[str] = (
-    "The page is open in the Screen's browser, but its window couldn't be shown. "
-    "Try again. If this persists, report a bug."
+    "The page is open in the Screen's browser, but its window couldn't be shown. Try again."
 )
 
 
 def _refusal(
-    reason: str, status: int, user_facing_message: str | None = None, is_reportable: bool | None = None
+    reason: str, status: int, user_facing_message: str | None = None, is_expected: bool | None = None
 ) -> Response:
     """A refusal, as the shell and the fleet CLI read one: the reason under ``detail``, and the sentence for a person
-    (and whether it asks for a bug report) beside it when there is one."""
-    return error_response(reason, status, user_facing_message, is_reportable)
+    beside it when there is one. ``is_expected`` marks a sentence that fully explains an ordinary state (still being
+    set up, not ready yet, too many open), for which the shell offers no agent."""
+    return error_response(reason, status, user_facing_message, is_expected)
 
 
 def _install_refusal(missing: str, failure: str | None) -> Response:
     """Chromium is not installed: still being set up, or not to be in this boot because the install unit failed."""
     if failure is not None:
-        return _refusal(f"{missing}\n{failure}", HTTP_SERVICE_UNAVAILABLE, BROWSER_INSTALL_FAILED_MESSAGE, False)
-    return _refusal(missing, HTTP_SERVICE_UNAVAILABLE, BROWSER_INSTALLING_MESSAGE, False)
+        return _refusal(f"{missing}\n{failure}", HTTP_SERVICE_UNAVAILABLE, BROWSER_INSTALL_FAILED_MESSAGE)
+    return _refusal(missing, HTTP_SERVICE_UNAVAILABLE, BROWSER_INSTALLING_MESSAGE, True)
 
 
 def _agent_identity() -> tuple[AgentId | None, str | None]:
@@ -175,7 +173,7 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
             try:
                 start_url = str(AbsoluteHttpUrl(raw_url))
             except InvalidStartUrlError as e:
-                return _refusal(f"url: {e}", HTTP_BAD_REQUEST, BAD_START_PAGE_MESSAGE, False)
+                return _refusal(f"url: {e}", HTTP_BAD_REQUEST, BAD_START_PAGE_MESSAGE, True)
         try:
             if name is None:
                 return service.launch_browser(start_url) if is_launch_path else service.new_browser(start_url)
@@ -186,9 +184,9 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         except DuplicateBrowserNameError as e:
             return _refusal(str(e), HTTP_CONFLICT)
         except FleetFullError as e:
-            return _refusal(str(e), HTTP_CONFLICT, FLEET_FULL_MESSAGE, False)
+            return _refusal(str(e), HTTP_CONFLICT, FLEET_FULL_MESSAGE, True)
         except BrowserNotDrivableError as e:
-            return _refusal(str(e), HTTP_CONFLICT, BROWSER_BUSY_MESSAGE, False)
+            return _refusal(str(e), HTTP_CONFLICT, BROWSER_BUSY_MESSAGE, True)
 
     # the launch path and the message handler
 
@@ -210,7 +208,7 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         try:
             url = LocalHttpUrl(body.url)
         except InvalidStartUrlError as e:
-            return _refusal(f"url: {e}", HTTP_BAD_REQUEST, BAD_LINK_MESSAGE, False)
+            return _refusal(f"url: {e}", HTTP_BAD_REQUEST, BAD_LINK_MESSAGE)
         try:
             client_id = ClientId(body.client_id)
         except InvalidLayoutValueError as e:
@@ -221,9 +219,9 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         try:
             browser = service.open_url_for_human(str(url))
         except FleetFullError as e:
-            return _refusal(str(e), HTTP_CONFLICT, FLEET_FULL_MESSAGE, False)
+            return _refusal(str(e), HTTP_CONFLICT, FLEET_FULL_MESSAGE, True)
         except BrowserNotDrivableError as e:
-            return _refusal(f"The browser could not open the page: {e}", HTTP_CONFLICT, PAGE_NOT_OPENED_MESSAGE, False)
+            return _refusal(f"The browser could not open the page: {e}", HTTP_CONFLICT, PAGE_NOT_OPENED_MESSAGE)
         shell = ShellLayoutClient(
             shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS
         )
@@ -235,7 +233,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
                 f"The browser has the page, but the Screen's window could not be shown: {e}",
                 HTTP_BAD_GATEWAY,
                 WINDOW_NOT_SHOWN_MESSAGE,
-                True,
             )
         return model_response(
             OpenUrlAnswer(browser=str(browser.name), window_id=str(shown.window_id), shown=str(shown.shown))

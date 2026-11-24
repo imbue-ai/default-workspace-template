@@ -3,7 +3,8 @@
 The Onboarding checklist: one small page listing the four things worth trying
 in a new workspace, in order, with a check mark on the ones the workspace's
 owner has done. A click on an entry shows where that thing is (its pointer),
-whether or not it is done. It is an app like any other: it is in the launcher,
+whether or not it is done; the page is headed "Click to learn more", and each
+entry that can be clicked ends in an arrow. It is an app like any other: it is in the launcher,
 its window can be closed and opened again, and no desktop is given a shortcut
 of it (`seeds_shortcuts = false` in `app.toml`). The desktop's tour opens it as
 the tour ends, by sending the message `onboarding:show-checklist`, which the

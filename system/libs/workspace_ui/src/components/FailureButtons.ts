@@ -8,15 +8,18 @@ import { SeeDetails } from "./SeeDetails";
 import { TEXT_HELPER_SIZE } from "./typography";
 
 /**
- * The two buttons a failure in a framed app page offers beside its sentence, both of which go through the shell that
- * frames the page: "Ask an agent to fix this" sends the failure to an agent as its task, and "Report a bug" opens
- * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface
- * draws both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as
- * every page does). ``FailureRemedies`` draws the pair a failure that asks for a bug report gets by default.
+ * The buttons a failure in a framed app page offers beside its sentence, which go through the shell that frames the
+ * page: "Ask an agent to fix this" sends the failure to an agent as its task, and "Report a bug" opens Imbue Studio's
+ * bug report with the failure attached. Each renders nothing where it could not work; it reads the connection at
+ * render time, so the page redraws when a handshake arrives (as every page does). ``FailureRemedies`` draws what a
+ * failure that owes help gets by default: the agent, and the bug report only where no agent can be asked or the ask
+ * was refused.
  */
 
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 export const ASKING_AN_AGENT_LABEL = "Asking an agent…";
+/** What a refused ask offers: the same request left unsent in a chat's message box, for the person to send. */
+export const DRAFT_ASK_LABEL = "Draft it in a chat";
 
 interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
   readonly variant?: ButtonVariant;
@@ -34,8 +37,9 @@ export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
 
 /** Nothing without a shell (a page opened on its own, a share visitor holding only this app): nothing can carry the
  *  ask. Pressed, it reads "Asking an agent…" and stays disabled until the shell says the chat's window opened or the
- *  ask failed; a failure is shown under it, with Report a bug when it asks for one (unless the page reports bugs
- *  itself), and the button is back for another try. An answer that comes after the press was settled as not answered replaces what is shown. */
+ *  ask failed; a failure is shown under it, and the button is back for another try. A failure that owes help offers
+ *  to draft the request in a chat instead, and Report a bug (unless the page reports bugs itself). An answer that
+ *  comes after the press was settled as not answered replaces what is shown. */
 export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> = () => {
   let isAsking = false;
   let failure: ShownFailure | null = null;
@@ -96,13 +100,27 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
           : m("div", { class: `ask-agent-failure ${TEXT_HELPER_SIZE} basis-full`, role: "alert" }, [
               m("p", { class: "ask-agent-failure-message" }, failure.message),
               m(SeeDetails, { details: failure.details }),
-              failure.isReportable && pageReportBug === undefined
-                ? m(ReportBugButton, {
-                    connection,
-                    failure: { message: failure.message, details: failure.details },
-                    sm: true,
-                    extra: "mt-1",
-                  })
+              failure.isHelpOwed
+                ? m("div", { class: "mt-1 flex flex-wrap justify-center gap-1" }, [
+                    m(
+                      Button,
+                      {
+                        sm: true,
+                        extra: "draft-ask",
+                        // The shell tells a draft that could not be made itself.
+                        onclick: () =>
+                          void askAgentToFix(connection, vnode.attrs.failure, { showsOutcome: true }, "draft"),
+                      },
+                      DRAFT_ASK_LABEL,
+                    ),
+                    pageReportBug === undefined
+                      ? m(ReportBugButton, {
+                          connection,
+                          failure: { message: failure.message, details: failure.details },
+                          sm: true,
+                        })
+                      : null,
+                  ])
                 : null,
             ]),
       ];
@@ -139,19 +157,21 @@ export interface FailureRemediesAttrs extends FailureButtonOptions {
   readonly isAgentWithheld?: boolean;
 }
 
-/** What a failure that asks for a bug report offers by default: "Ask an agent to fix this", then "Report a bug", whose
- *  report also carries a refused ask; nothing for a failure that asks for none, whose surface offers its own remedy. */
+/** What a failure that owes help offers by default: "Ask an agent to fix this", and "Report a bug" only where no
+ *  agent can be asked (the surface withholds it, or no shell frames the page) or once the ask was refused, when its
+ *  report carries the refused ask too. Nothing for a failure that owes none, whose surface offers its own remedy. */
 export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
   let askFailure: ShownFailure | null = null;
   return {
     view(vnode) {
       const { connection, failure, isAgentWithheld, variant, sm, extra } = vnode.attrs;
-      if (!failure.isReportable) return null;
+      if (!failure.isHelpOwed) return null;
       const options = { variant, sm, extra };
+      const isAgentOffered = isAgentWithheld !== true && connection !== null && connection.hasShell();
+      if (!isAgentOffered) askFailure = null;
       return [
-        isAgentWithheld === true
-          ? null
-          : m(AskAgentToFixButton, {
+        isAgentOffered
+          ? m(AskAgentToFixButton, {
               ...options,
               connection,
               failure: { whatFailed: failure.message, details: failure.details },
@@ -160,12 +180,15 @@ export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
                   askFailure = next;
                 },
               },
+            })
+          : null,
+        isAgentOffered && askFailure === null
+          ? null
+          : m(ReportBugButton, {
+              ...options,
+              connection,
+              failure: withAskFailure({ message: failure.message, details: failure.details }, askFailure),
             }),
-        m(ReportBugButton, {
-          ...options,
-          connection,
-          failure: withAskFailure({ message: failure.message, details: failure.details }, askFailure),
-        }),
       ];
     },
   };

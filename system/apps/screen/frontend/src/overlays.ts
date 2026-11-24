@@ -3,10 +3,10 @@
  *  control opens it, Cancel drops it, offered to the sessions the service lets drop it.
  *
  *  A failure says what happened in a sentence of ours, keeps the service's own text behind "See details", and offers
- *  what can help: Start, "Ask an agent to fix this" where a shell frames the page (it sends the ask to the chat about
- *  the Screen), and "Report a bug" where the shell's handshake says Imbue Studio opens one (the workspace's failure
- *  wording, workspace_ui's models/failure.ts and app contract). Every failure that asks for a bug report offers the
- *  agent too, as workspace_ui's FailureRemedies does. */
+ *  what can help: Start, and "Ask an agent to fix this" where a shell frames the page (it sends the ask to the chat
+ *  about the Screen). "Report a bug" is the fallback, as in workspace_ui's FailureRemedies: offered where the shell's
+ *  handshake says Imbue Studio opens one, once an ask was refused (beside "Draft it in a chat", which leaves the same
+ *  request unsent in a chat's message box) or for a failure that owes help where no agent can be asked. */
 
 import { askAgentToFix, withAskFailure } from "@imbue/workspace-ui/src/app_contract";
 import type {
@@ -16,14 +16,16 @@ import type {
   ShownFailure,
   StartOutcome,
 } from "@imbue/workspace-ui/src/app_contract";
+import {
+  ASKING_AN_AGENT_LABEL,
+  ASK_AGENT_TO_FIX_LABEL,
+  DRAFT_ASK_LABEL,
+} from "@imbue/workspace-ui/src/components/FailureButtons";
 import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
-
-export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
-const ASKING_AN_AGENT_LABEL = "Asking an agent…";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
 export type FailureHost = Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug">;
@@ -39,7 +41,8 @@ export interface OverlayView {
   readonly isReloadOffered: boolean;
   /** What "Ask an agent to fix this" hands the agent, or null when it is not offered. */
   readonly agentFix: AgentFixRequest | null;
-  readonly isReportable: boolean;
+  /** Whether "Report a bug" stands in for the agent where none can be asked. */
+  readonly isHelpOwed: boolean;
 }
 
 const INSTALL_FAILED_STEM = "The Screen couldn't be set up in this workspace";
@@ -61,7 +64,7 @@ function view(title: string, fields: Partial<Omit<OverlayView, "title">> = {}): 
     startLabel: null,
     isReloadOffered: false,
     agentFix: null,
-    isReportable: false,
+    isHelpOwed: false,
     ...fields,
   };
 }
@@ -72,8 +75,8 @@ export function describeLoadFailure(failure: Failure): OverlayView {
   const fields = {
     details: told.details,
     isReloadOffered: true,
-    agentFix: told.isReportable ? { whatFailed: LOAD_FAILED_STEM, details: told.details } : null,
-    isReportable: told.isReportable,
+    agentFix: told.isHelpOwed ? { whatFailed: LOAD_FAILED_STEM, details: told.details } : null,
+    isHelpOwed: told.isHelpOwed,
   };
   // These sentences do not name the Screen, so they go under a title that does.
   if (failure.cause === "not_answered" || failure.cause === "user_facing") {
@@ -91,7 +94,7 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
         details,
         startLabel: "Try again",
         agentFix: { whatFailed: START_FAILED_STEM, details },
-        isReportable: true,
+        isHelpOwed: true,
       });
       break;
     case "crashed":
@@ -99,7 +102,7 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
         details,
         startLabel: "Start",
         agentFix: { whatFailed: STOPPED_UNEXPECTEDLY_STEM, details },
-        isReportable: true,
+        isHelpOwed: true,
       });
       break;
     case "out_of_memory":
@@ -124,8 +127,8 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
     body: startFailure.message === stopped.title ? stopped.body : startFailure.message,
     details: joined,
     agentFix:
-      stopped.agentFix ?? (startFailure.isReportable ? { whatFailed: START_FAILED_STEM, details: joined } : null),
-    isReportable: stopped.isReportable || startFailure.isReportable,
+      stopped.agentFix ?? (startFailure.isHelpOwed ? { whatFailed: START_FAILED_STEM, details: joined } : null),
+    isHelpOwed: stopped.isHelpOwed || startFailure.isHelpOwed,
   };
 }
 
@@ -182,11 +185,13 @@ export class Overlays {
   private readonly startButton = document.createElement("button");
   private readonly reloadButton = document.createElement("button");
   private readonly askAgentButton = document.createElement("button");
-  private readonly reportBugButton = document.createElement("button");
   private readonly askFailure = document.createElement("div");
   private readonly askFailureMessage = document.createElement("p");
   private readonly askFailureDetails = document.createElement("details");
   private readonly askFailureDetailsText = document.createElement("pre");
+  private readonly fallbackActions = document.createElement("div");
+  private readonly draftAskButton = document.createElement("button");
+  private readonly reportBugButton = document.createElement("button");
   private readonly dim = document.createElement("div");
   private readonly dimTitle = document.createElement("div");
   private readonly dimPending = document.createElement("div");
@@ -195,7 +200,7 @@ export class Overlays {
   private host: FailureHost | null = null;
   private agentFix: AgentFixRequest | null = null;
   private reported: ReportedFailure | null = null;
-  private isReportable = false;
+  private isHelpOwed = false;
   /** Which failure the overlay shows: changes when it hides or shows another, so an ask settling later knows. */
   private shownFailure = 0;
   /** The failure the pending ask was made about (``shownFailure`` at the press), or null when none is pending. */
@@ -228,6 +233,14 @@ export class Overlays {
     this.askAgentButton.textContent = ASK_AGENT_TO_FIX_LABEL;
     this.askAgentButton.dataset.screenAskAgent = "true";
     this.askAgentButton.addEventListener("click", () => void this.askAgent());
+    this.draftAskButton.className = "screen-button draft-ask";
+    this.draftAskButton.textContent = DRAFT_ASK_LABEL;
+    this.draftAskButton.dataset.screenDraftAsk = "true";
+    this.draftAskButton.addEventListener("click", () => {
+      if (this.host === null || this.agentFix === null) return;
+      // The shell tells a draft that could not be made itself.
+      void askAgentToFix(this.host, this.agentFix, { showsOutcome: true }, "draft");
+    });
     this.reportBugButton.className = "screen-button report-bug";
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
@@ -236,7 +249,9 @@ export class Overlays {
         this.host.reportBug(withAskFailure(this.reported, this.askFailureShown));
       }
     });
-    this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
+    this.actions.append(this.startButton, this.reloadButton, this.askAgentButton);
+    this.fallbackActions.className = "screen-overlay__actions";
+    this.fallbackActions.append(this.draftAskButton, this.reportBugButton);
     const askFailureSummary = document.createElement("summary");
     askFailureSummary.textContent = "See details";
     this.askFailureDetails.className = "screen-overlay__details see-details";
@@ -246,7 +261,7 @@ export class Overlays {
     this.askFailure.dataset.screenAskFailure = "true";
     this.askFailure.hidden = true;
     this.askFailure.append(this.askFailureMessage, this.askFailureDetails);
-    this.element.append(this.title, this.body, this.details, this.actions, this.askFailure);
+    this.element.append(this.title, this.body, this.details, this.actions, this.askFailure, this.fallbackActions);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
     this.showLoading();
     this.dim.className = "screen-overlay screen-overlay--dim";
@@ -298,13 +313,19 @@ export class Overlays {
     }
   }
 
-  /** Show "Ask an agent to fix this" and "Report a bug" as the host now says they can work, for what the overlay
-   *  shows; the shell's handshake can arrive after it was drawn. */
+  /** Show "Ask an agent to fix this" as the host now says it can work, for what the overlay shows, and what stands
+   *  in for it: "Draft it in a chat" and "Report a bug" under an ask that was refused in a way that owes help, and
+   *  "Report a bug" alone for a failure that owes help where no agent can be asked. The shell's handshake can arrive
+   *  after the overlay was drawn. */
   syncShellButtons(): void {
-    this.askAgentButton.hidden = this.agentFix === null || this.host === null || !this.host.hasShell();
-    // One Report a bug files the overlay's failure and a failed ask's together.
-    const isReportable = this.isReportable || this.askFailureShown?.isReportable === true;
-    this.reportBugButton.hidden = !isReportable || this.host === null || !this.host.canReportBug();
+    const isAgentOffered = this.agentFix !== null && this.host !== null && this.host.hasShell();
+    const isAskRefused = isAgentOffered && this.askFailureShown?.isHelpOwed === true;
+    this.askAgentButton.hidden = !isAgentOffered;
+    this.draftAskButton.hidden = !isAskRefused;
+    // One Report a bug files the overlay's failure and a refused ask's together.
+    const isReportOffered = isAskRefused || (this.isHelpOwed && !isAgentOffered);
+    this.reportBugButton.hidden = !isReportOffered || this.host === null || !this.host.canReportBug();
+    this.fallbackActions.hidden = this.draftAskButton.hidden && this.reportBugButton.hidden;
   }
 
   /** "Ask an agent to fix this": pending until the shell says the chat about the Screen opened, or why it could not. */
@@ -378,7 +399,7 @@ export class Overlays {
       message: shown.body === "" ? shown.title : `${shown.title} ${shown.body}`,
       details: shown.details,
     };
-    this.isReportable = shown.isReportable;
+    this.isHelpOwed = shown.isHelpOwed;
     this.syncShellButtons();
   }
 }

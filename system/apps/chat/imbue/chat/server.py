@@ -109,7 +109,6 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import APP_CHAT_LABEL
-from imbue.chat.chat_intakes import app_ask_message
 from imbue.chat.chat_intakes import app_chat_hint
 from imbue.chat.chat_intakes import app_chat_prefill
 from imbue.chat.chat_intakes import app_chat_title
@@ -2571,17 +2570,6 @@ def _app_ask_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Res
     return _ResolvedIntakeChat(chat_id=created.chat_id, is_sent_with_create=True, is_agent_chat_made_for_it=True)
 
 
-def _intake_naming_its_app(intake: IntakeRequest) -> IntakeRequest:
-    """An ``app_ask`` with its text led by the sentence that names the app (``app_ask_message``): the page's text does
-    not say which app it is about, and the chat that takes it may be the main chat, where nothing else does. An ask
-    with no text stays one, there being nothing to send, and every other intake is as it arrived."""
-    if intake.target is not IntakeTarget.APP_ASK or not intake.message:
-        return intake
-    return intake.model_copy_update(
-        to_update(intake.field_ref().message, app_ask_message(intake.app_display_name, intake.message))
-    )
-
-
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
@@ -2710,7 +2698,7 @@ def _intake_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     # Named before the chat is resolved: resolving an ask may create its chat with the text as the first message.
-    intake = _intake_naming_its_app(parse_request_body(IntakeRequest))
+    intake = parse_request_body(IntakeRequest)
     resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved

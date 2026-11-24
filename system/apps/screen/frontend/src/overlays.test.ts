@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
-import type { ReportedFailure, StartOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, ReportedFailure, StartOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -144,6 +144,8 @@ function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): 
   lateAnswers: ((outcome: StartOutcome) => void)[];
   /** Whether each ask told the shell the page shows its outcome (so the shell toasts nothing). */
   showsOutcome: boolean[];
+  /** Where each ask was to go; undefined is the chat about the Screen. */
+  deliveries: (AskDelivery | undefined)[];
   reports: ReportedFailure[];
 } {
   const host = {
@@ -151,12 +153,14 @@ function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): 
     answers: [] as ((outcome: StartOutcome) => void)[],
     lateAnswers: [] as ((outcome: StartOutcome) => void)[],
     showsOutcome: [] as boolean[],
+    deliveries: [] as (AskDelivery | undefined)[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    askAgent: (text: string, options?: StartOptions) => {
+    askAgent: (text: string, options?: StartOptions, delivery?: AskDelivery) => {
       host.started.push(text);
       host.showsOutcome.push(options?.showsOutcome === true);
+      host.deliveries.push(delivery);
       host.lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
       return new Promise<StartOutcome>((resolve) => host.answers.push(resolve));
     },
@@ -266,9 +270,8 @@ describe("Overlays for the stack's state", () => {
     expect(starts).toBe(1);
   });
 
-  it("says a crash was unexpected and offers Start, an agent and a bug report, the reason behind See details", () => {
-    const host = fakeHost();
-    const overlays = overlaysWith(host);
+  it("says a crash was unexpected and offers Start and an agent, the reason behind See details", () => {
+    const overlays = overlaysWith(fakeHost());
     overlays.update(
       state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
       "idle",
@@ -280,12 +283,41 @@ describe("Overlays for the stack's state", () => {
       title: "The Screen stopped unexpectedly.",
       body: null,
       details: "screen-neko exited unexpectedly",
-      buttons: ["Start", "Ask an agent to fix this", "Report a bug"],
+      buttons: ["Start", "Ask an agent to fix this"],
     });
-    overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
-    expect(host.reports).toEqual([
-      { message: "The Screen stopped unexpectedly.", details: "screen-neko exited unexpectedly" },
+  });
+
+  it("offers a draft of the request and Report a bug under an ask that was refused in a way that owes help", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace couldn't do that. Try again.", details: "boom", isHelpOwed: true },
+    });
+    await Promise.resolve();
+    expect(shown(overlays).buttons).toEqual([
+      "Start",
+      "Ask an agent to fix this",
+      "Draft it in a chat",
+      "Report a bug",
     ]);
+
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-draft-ask]")?.click();
+    expect(host.deliveries).toEqual([undefined, "draft"]);
+    expect(host.started[1]).toBe(host.started[0]);
+    expect(host.showsOutcome).toEqual([true, true]);
+
+    // Another ask takes the refused one's remedies away until it settles.
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    expect(shown(overlays).buttons).toEqual(["Start", "Asking an agent…"]);
   });
 
   it("reads Asking an agent… until the chat opens, and says why when it could not", async () => {
@@ -306,12 +338,13 @@ describe("Overlays for the stack's state", () => {
 
     host.answers[0]({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isHelpOwed: false },
     });
     await Promise.resolve();
     expect([ask?.textContent, ask?.disabled]).toEqual(["Ask an agent to fix this", false]);
     expect(askFailure()?.querySelector("p")?.textContent).toBe("Chat couldn't open that.");
     expect(askFailure()?.querySelector("pre")?.textContent).toBe("HTTP 400\nbad launch");
+    expect(shown(overlays).buttons).toEqual(["Start", "Ask an agent to fix this"]);
 
     ask?.click();
     expect(askFailure()).toBeNull();
@@ -348,7 +381,7 @@ describe("Overlays for the stack's state", () => {
     ask?.click();
     host.answers[0]({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: false },
     });
     await Promise.resolve();
     expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Asking an agent…", true, null]);
@@ -376,12 +409,12 @@ describe("Overlays for the stack's state", () => {
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     host.answers[0]({
       isOpened: false,
-      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+      failure: { message: "The workspace didn't answer.", details: null, isHelpOwed: false },
     });
     await Promise.resolve();
     expect(askFailure()?.querySelector("p")?.textContent).toBe("The workspace didn't answer.");
 
-    const late = { message: "The workspace couldn't do that.", details: "boom", isReportable: true };
+    const late = { message: "The workspace couldn't do that.", details: "boom", isHelpOwed: true };
     host.lateAnswers[0]({ isOpened: false, failure: late });
     expect(askFailure()?.querySelector("p")?.textContent).toBe(late.message);
     expect(reportButtons()).toHaveLength(1);
@@ -398,7 +431,7 @@ describe("Overlays for the stack's state", () => {
     expect(askFailure()).toBeNull();
   });
 
-  it("offers Report a bug for an ask that failed in a way to report, on a failure that asks for none itself", async () => {
+  it("offers Report a bug for a refused ask that owes help, on a failure that would offer none without an agent", async () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     overlays.update(
@@ -413,7 +446,7 @@ describe("Overlays for the stack's state", () => {
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     host.answers[0]({
       isOpened: false,
-      failure: { message: "The workspace couldn't do that.", details: "boom", isReportable: true },
+      failure: { message: "The workspace couldn't do that.", details: "boom", isHelpOwed: true },
     });
     await Promise.resolve();
     expect(report?.hidden).toBe(false);
@@ -425,7 +458,7 @@ describe("Overlays for the stack's state", () => {
     const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
     const notOpened: StartOutcome = {
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: false },
     };
     const askFailure = (): HTMLElement | null =>
       overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
@@ -448,7 +481,7 @@ describe("Overlays for the stack's state", () => {
     expect(askFailure()).toBeNull();
   });
 
-  it("names low memory for a member the memory guard shed, with no bug report for it", () => {
+  it("names low memory for a member the memory guard shed, and offers an agent", () => {
     const overlays = overlaysWith(fakeHost());
     overlays.update(
       state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "out_of_memory" }),
@@ -463,7 +496,7 @@ describe("Overlays for the stack's state", () => {
     expect(seen.buttons).toEqual(["Start", "Ask an agent to fix this"]);
   });
 
-  it("says a start that failed asks for a bug report, with Try again, an agent and Report a bug", () => {
+  it("says a start that failed with Try again and an agent", () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     overlays.update(
@@ -474,10 +507,10 @@ describe("Overlays for the stack's state", () => {
       null,
     );
     expect(shown(overlays)).toEqual({
-      title: "The Screen couldn't start. Try again. If this persists, report a bug.",
+      title: "The Screen couldn't start. Try again.",
       body: null,
       details: "the stack did not start: neko never answered",
-      buttons: ["Try again", "Ask an agent to fix this", "Report a bug"],
+      buttons: ["Try again", "Ask an agent to fix this"],
     });
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     expect(host.started[0]).toContain("The Screen couldn't start.");
@@ -492,23 +525,34 @@ describe("Overlays for the stack's state", () => {
       null,
       null,
       {
-        message: "The Screen couldn't start. Try again. If this persists, report a bug.",
+        message: "The Screen couldn't start. Try again.",
         details: "HTTP 500\nsupervisord refused the start",
-        isReportable: true,
+        isHelpOwed: true,
       },
     );
     expect(shown(overlays)).toMatchObject({
-      title: "The Screen couldn't start. Try again. If this persists, report a bug.",
+      title: "The Screen couldn't start. Try again.",
       body: null,
       details: "HTTP 500\nsupervisord refused the start\nneko never answered",
     });
   });
 
-  it("offers Report a bug only where the shell says one opens, and an agent only under a shell", () => {
+  it("offers Report a bug in the agent's place only where no agent can be asked and the failure owes help", () => {
     const crashed = state({ ...STOPPED, stop_reason: "screen-xorg exited unexpectedly", stop_cause: "crashed" });
-    const noBugReport = overlaysWith(fakeHost({ canReportBug: false }));
-    noBugReport.update(crashed, "idle", null, null, null);
-    expect(shown(noBugReport).buttons).toEqual(["Start", "Ask an agent to fix this"]);
+    const shed = state({ ...STOPPED, stop_reason: "screen-xorg exited unexpectedly", stop_cause: "out_of_memory" });
+    const host = fakeHost({ hasShell: false });
+    const noAgent = overlaysWith(host);
+    noAgent.update(crashed, "idle", null, null, null);
+    expect(shown(noAgent).buttons).toEqual(["Start", "Report a bug"]);
+    noAgent.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
+    expect(host.reports).toEqual([
+      { message: "The Screen stopped unexpectedly.", details: "screen-xorg exited unexpectedly" },
+    ]);
+    noAgent.update(shed, "idle", null, null, null);
+    expect(shown(noAgent).buttons).toEqual(["Start"]);
+    const neither = overlaysWith(fakeHost({ hasShell: false, canReportBug: false }));
+    neither.update(crashed, "idle", null, null, null);
+    expect(shown(neither).buttons).toEqual(["Start"]);
     const unframed = overlaysWith(null);
     unframed.update(crashed, "idle", null, null, null);
     expect(shown(unframed).buttons).toEqual(["Start"]);
@@ -522,20 +566,20 @@ describe("Overlays for the stack's state", () => {
       null,
       null,
       {
-        message: "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+        message: "The workspace didn't answer. This may not have gone through.",
         details: null,
-        isReportable: false,
+        isHelpOwed: false,
       },
     );
     expect(shown(overlays)).toEqual({
       title: "The Screen was stopped.",
-      body: "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+      body: "The workspace didn't answer. This may not have gone through.",
       details: "Quit from the window menu",
       buttons: ["Start"],
     });
   });
 
-  it("offers an agent and Report a bug for a refused Start whose sentence asks for one, over a stop that asks for none", () => {
+  it("offers an agent for a refused Start that owes help, over a stop that owes none, and files both once the ask is refused", async () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     overlays.update(
@@ -544,21 +588,28 @@ describe("Overlays for the stack's state", () => {
       null,
       null,
       {
-        message: "The Screen couldn't start. Try again. If this persists, report a bug.",
+        message: "The Screen couldn't start. Try again.",
         details: "HTTP 500\nsupervisord refused the start",
-        isReportable: true,
+        isHelpOwed: true,
       },
     );
-    expect(shown(overlays).buttons).toEqual(["Start", "Ask an agent to fix this", "Report a bug"]);
+    expect(shown(overlays).buttons).toEqual(["Start", "Ask an agent to fix this"]);
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     expect(host.started).toHaveLength(1);
     expect(host.started[0]).toMatch(/^Imbue Studio showed the user this failure: The Screen couldn't start\.\n\n/);
     expect(host.started[0]).toContain("HTTP 500\nsupervisord refused the start\nQuit from the window menu");
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that. Try again.", details: null, isHelpOwed: true },
+    });
+    await Promise.resolve();
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
     expect(host.reports).toEqual([
       {
-        message: "The Screen was stopped. The Screen couldn't start. Try again. If this persists, report a bug.",
-        details: "HTTP 500\nsupervisord refused the start\nQuit from the window menu",
+        message: "The Screen was stopped. The Screen couldn't start. Try again.",
+        details:
+          "HTTP 500\nsupervisord refused the start\nQuit from the window menu\n\n" +
+          "Asking an agent to fix this failed too:\nChat couldn't open that. Try again.",
       },
     ]);
   });
@@ -599,17 +650,17 @@ describe("Overlays for the stack's state", () => {
     expect(reloads).toBe(1);
   });
 
-  it("asks for a bug report, and offers an agent, when the service failed to answer its state for no reason it gave", () => {
+  it("offers Try again and an agent when the service failed to answer its state for no reason it gave", () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     overlays.showLoadFailure(
       readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
     );
     expect(shown(overlays)).toEqual({
-      title: "The Screen couldn't load. Try again. If this persists, report a bug.",
+      title: "The Screen couldn't load. Try again.",
       body: null,
       details: "HTTP 500\nInternal Server Error",
-      buttons: ["Try again", "Ask an agent to fix this", "Report a bug"],
+      buttons: ["Try again", "Ask an agent to fix this"],
     });
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     expect(host.started[0]).toMatch(/^Imbue Studio showed the user this failure: The Screen couldn't load\.\n\n/);
@@ -617,19 +668,31 @@ describe("Overlays for the stack's state", () => {
     expect(host.showsOutcome).toEqual([true]);
   });
 
-  it("offers Report a bug on a load failure once a handshake that came after it says one opens", () => {
+  it("offers Report a bug under a refused ask once a handshake that came after it says one opens", async () => {
     const canReportBug = { value: false };
-    const host = { ...fakeHost(), canReportBug: () => canReportBug.value };
+    const asked = fakeHost();
+    const host = { ...asked, canReportBug: () => canReportBug.value };
     const overlays = overlaysWith(host);
     overlays.showLoadFailure(
       readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
     );
-    expect(shown(overlays).buttons).toEqual(["Try again", "Ask an agent to fix this"]);
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    asked.answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace couldn't do that. Try again.", details: null, isHelpOwed: true },
+    });
+    await Promise.resolve();
+    expect(shown(overlays).buttons).toEqual(["Try again", "Ask an agent to fix this", "Draft it in a chat"]);
 
     canReportBug.value = true;
     overlays.syncShellButtons();
 
-    expect(shown(overlays).buttons).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
+    expect(shown(overlays).buttons).toEqual([
+      "Try again",
+      "Ask an agent to fix this",
+      "Draft it in a chat",
+      "Report a bug",
+    ]);
   });
 
   it("shows no agent dim before any state says an agent drives", () => {

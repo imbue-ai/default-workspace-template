@@ -64,7 +64,7 @@ import {
   coachCardPlaceOf,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
-import type { ShellCoachCardPlace, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, ShellCoachCardPlace, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
@@ -1178,13 +1178,15 @@ export class LivePagesLayer implements PageDriver {
     );
   }
 
-  /** ``shell:ask-agent {text, requestId}`` from a page ("Ask an agent to fix this"): the text is sent to the chat
-   *  about the app of the page's window, shown beside that window, and the page is answered with
-   *  ``shell:ask-agent-result``. */
+  /** ``shell:ask-agent {text, requestId, delivery?}`` from a page ("Ask an agent to fix this"): the text is sent to
+   *  the chat about the app of the page's window, shown beside that window (or where ``delivery`` says), and the page
+   *  is answered with ``shell:ask-agent-result``. */
   private takeAskAgent(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const windowId = this.pageOfFrame(frame)?.windowId ?? null;
+    const delivery: AskDelivery =
+      payload.delivery === "main-chat" || payload.delivery === "draft" ? payload.delivery : "app-chat";
     this.startAndAnswer(frame, payload, SHELL_ASK_AGENT, SHELL_ASK_AGENT_RESULT, (text) =>
-      this.store.askAgent(text, windowId),
+      this.store.askAgent(text, windowId, delivery),
     );
   }
 
@@ -1213,7 +1215,7 @@ export class LivePagesLayer implements PageDriver {
           failure: {
             message: fallbackSentence(DEFAULT_WHAT_FAILED),
             details: error instanceof Error ? error.message : String(error),
-            isReportable: true,
+            isHelpOwed: true,
           },
         };
       })

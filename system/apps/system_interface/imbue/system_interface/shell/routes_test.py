@@ -3308,7 +3308,7 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
             LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
             LaunchPostOutcome(
                 status_code=503,
-                body={"detail": "agent list not read", "user_facing_message": starting, "reportable": False},
+                body={"detail": "agent list not read", "user_facing_message": starting, "expected": True},
             ),
             LaunchPostOutcome(status_code=409, body={"detail": "chat is gone", "user_facing_message": deleted}),
             LaunchPostOutcome(status_code=200, body={"nope": True}),
@@ -3333,13 +3333,13 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     failed = _launch(client, body)
     assert failed.status_code == 502
     assert failed.get_json() == {"detail": "buddy answered the launch with 500: boom"}
-    # A sentence the app wrote for people, and its word on whether it asks for a bug report, are passed on as written.
+    # A sentence the app wrote for people, and its word that the refusal is expected, are passed on as written.
     waiting = _launch(client, body)
     assert waiting.status_code == 502
     assert waiting.get_json() == {
         "detail": "buddy answered the launch with 503: agent list not read",
         "user_facing_message": starting,
-        "reportable": False,
+        "expected": True,
     }
     gone = _launch(client, body)
     assert gone.status_code == 400
