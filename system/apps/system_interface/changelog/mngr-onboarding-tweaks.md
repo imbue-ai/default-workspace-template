@@ -1,0 +1,1 @@
+A window of an app that is part of the workspace itself (Chat, Terminal, Files, Getting Started, Screen, Routines, System Monitor, the Style Guide, the onboarding checklist) no longer shows Share in its title bar. Its window menu still offers "Share <app>". A window of an app built on the workspace keeps Share in both places.

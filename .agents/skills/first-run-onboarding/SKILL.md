@@ -45,7 +45,7 @@ Reply with exactly this message:
 ```
 ## Describe the problem you want to solve. Provide lots of context!
 
-Describe something your current apps don't quite do, a task that takes too long, or any other problem you're facing right now.
+What’s annoying, overwhelming, or tedious in your digital life? Go ahead and complain--I’ll help you build something that makes it better.
 
 *Example: I feel scattered. My todos are in a million different places, and I can never find things when I need them. I want a command center that pulls everything into one place and tells me what to do next.*
 
@@ -161,10 +161,12 @@ Only a message that is plainly something else, such as a question for you or a r
 
 ## Path C: "See what Studio can do"
 
-Open the Getting Started app beside the chat:
+Open the Getting Started app on the left half of the desktop, in front, with the chat on the right half, which is where the tour puts the chat. Run these three commands in this order:
 
 ```bash
-uv run --no-sync workspace-layout open getting-started --beside
+uv run --no-sync workspace-layout place self --state snapped-right
+uv run --no-sync workspace-layout open getting-started
+uv run --no-sync workspace-layout place getting-started --state snapped-left
 ```
 
 Then reply with exactly this message:
@@ -185,6 +187,6 @@ Feel free to ask me for more details about any of them!
 I've also opened the **Getting Started** app next to our chat. It has some simple ways to get started, as well as templates and apps other people built that you can get started with immediately or use as a starting point for your own apps and ideas.
 ```
 
-If the command failed, leave out the last paragraph, since nothing was opened, and do not retry it.
+If the `open` command failed, leave out the last paragraph, since nothing was opened, and do not retry it. A `place` command that failed only leaves a window where it was: say nothing about it and do not retry it.
 
 Then stop following this skill: what the user says next is an ordinary request.

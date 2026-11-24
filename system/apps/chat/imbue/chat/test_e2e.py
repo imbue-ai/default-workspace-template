@@ -4358,7 +4358,7 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
     tmp_path: Path, page: Page
 ) -> None:
     """The checklist is an app in the launcher with no shortcut on the desktop. Its page lists the four onboarding
-    items in order under its title, none checked in a workspace where none is done; the two whose pointers need the
+    items in order under its heading, none checked in a workspace where none is done; the two whose pointers need the
     Imbue Studio chrome are plain rows here, where no chrome frames the workspace. An item that becomes done is
     checked the next time the page reads."""
     with _running_onboarding_workspace(tmp_path) as server:
@@ -4369,7 +4369,7 @@ def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is
         checklist_id = _checklist_window_id(server)
         checklist = _page_of_window(page, checklist_id)
 
-        expect(checklist.locator("[data-checklist-title]")).to_have_text("Onboarding checklist", timeout=15000)
+        expect(checklist.locator("[data-checklist-title]")).to_have_text("Click to learn more", timeout=15000)
         # The page reports its title once the shell has greeted it.
         wait_until_true(
             lambda: _app_windows(server, _CHECKLIST_APP_NAME)[0]["title"] == "Onboarding checklist",
