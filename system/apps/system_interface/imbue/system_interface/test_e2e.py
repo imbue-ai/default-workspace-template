@@ -2523,12 +2523,12 @@ def test_the_title_bars_balloon_opens_the_chat_about_the_app_beside_its_window(t
         controls = window.locator("[data-window-control]")
         expect(controls).to_have_count(6)
         assert [control.get_attribute("data-window-control") for control in controls.all()] == [
+            "close",
+            "minimize",
+            "maximize",
             "menu",
             "refresh",
             "app-chat",
-            "minimize",
-            "maximize",
-            "close",
         ]
 
         window.locator('[data-window-control="app-chat"]').click()
