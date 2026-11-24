@@ -22,11 +22,18 @@ _SCRATCH_ROOT = Path(tempfile.mkdtemp(prefix="disk-space-tests-"))
 os.environ["DISK_SPACE_DATA_DIR"] = str(_SCRATCH_ROOT / "data")
 
 from disk_space import (  # noqa: E402  (the data directory above must be set first)
+    cleanup,
     runner,
     store,
 )
 
 FORTRESS_CHROMIUM = Path("/opt/fortress/tilion-fortress/tilion")
+
+
+@pytest.fixture(autouse=True)
+def disk_figures_settle_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The faked disk figures never lag, so a deletion reads them once instead of waiting for them to move."""
+    monkeypatch.setattr(cleanup, "FREED_SETTLE_SECONDS", 0.0)
 
 
 @pytest.fixture(autouse=True)

@@ -479,3 +479,24 @@ def test_a_measurement_that_is_already_running_is_not_started_twice(
         assert scan.scan_locked() is None
     assert scan.scan_locked() == {"id": "measured"}
     assert store.read_watch().get("scan_started_at") is None
+
+
+def test_starting_a_measurement_answers_once_it_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[list[str]] = []
+    lock_reads: list[bool] = []
+
+    def fake_popen(argv: list[str], **_kwargs: object) -> None:
+        started.append(argv)
+
+    def fake_is_locked(_name: str) -> bool:
+        # Free before the start; the new process takes the lock a moment later.
+        lock_reads.append(True)
+        return len(lock_reads) >= 4
+
+    monkeypatch.setattr(scan.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(scan.store, "is_locked", fake_is_locked)
+    assert scan.scan_in_background() is True
+    assert len(started) == 1 and started[0][-2:] == ["disk_space.cli", "scan"]
+    assert len(lock_reads) == 4

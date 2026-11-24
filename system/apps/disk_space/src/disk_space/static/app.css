@@ -72,6 +72,10 @@ button.link:hover { text-decoration: underline; background: none; }
 .alert { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--c-danger) 9%, var(--c-surface)); border: 1px solid color-mix(in srgb, var(--c-danger) 25%, var(--c-surface)); display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--font-size-row); }
 .alert strong { display: block; color: var(--c-danger-hover); }
 .alert[hidden] { display: none; }
+.note.stale { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius-lg); background: var(--c-surface-secondary); border: 1px solid var(--c-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--font-size-row); color: var(--c-text-secondary); }
+.note.stale[hidden] { display: none; }
+.quick-clear { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-lg); background: var(--safe-bg); display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--font-size-row); }
+.quick-clear[hidden] { display: none; }
 
 /* The treemap. */
 .crumbs { margin: 10px 0 8px; font-size: var(--font-size-row); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -145,7 +149,7 @@ details.group[open] summary h3::after { content: "Hide"; }
 
 @media (max-width: 520px) {
   main { padding-left: 14px; padding-right: 14px; }
-  .alert { flex-direction: column; align-items: stretch; }
+  .alert, .note.stale, .quick-clear { flex-direction: column; align-items: stretch; }
   .treemap { height: 280px; }
   .items li .where { display: none; }
 }

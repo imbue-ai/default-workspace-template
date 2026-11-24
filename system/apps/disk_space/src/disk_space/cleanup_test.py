@@ -365,6 +365,7 @@ def test_a_package_cache_uv_could_not_run_in_time_is_reported(
         raise subprocess.TimeoutExpired(argv, cleanup.UV_CLEAN_TIMEOUT_SECONDS)
 
     monkeypatch.setattr(cleanup.subprocess, "run", fake_run)
+    monkeypatch.setattr(cleanup, "_cache_in_use", lambda _cache: False)
     result = cleanup.delete([str(cache)], user_approved=False, by="page")
     assert result["refused"] == [
         {
@@ -432,3 +433,114 @@ def test_one_refusal_does_not_stop_the_rest(
     assert [item["path"] for item in result["refused"]] == [kept]
     assert not good_folder.exists()
     assert kept_folder.exists()
+
+
+def test_the_freed_space_is_read_again_while_the_disk_figures_catch_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path, folder = a_saved_item(tmp_path)
+    _measurement(_safe_item("n1", path))
+    monkeypatch.setattr(cleanup, "FREED_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(cleanup, "FREED_SETTLE_SECONDS", 5.0)
+    # Before; right after (not moved yet); then caught up.
+    install_disk(
+        monkeypatch,
+        a_disk(free=7 * GIB, percent=93),
+        a_disk(free=7 * GIB, percent=93),
+        a_disk(free=7 * GIB, percent=93),
+        a_disk(free=8 * GIB, percent=92),
+    )
+    result = cleanup.delete([path], user_approved=False, by="page")
+    assert not folder.exists()
+    assert result["freed_bytes"] == 1 * GIB
+
+
+def _uv_cache_measurement(tmp_path: Path) -> Path:
+    cache = tmp_path / "uv-cache"
+    cache.mkdir()
+    _measurement(
+        a_node(
+            "n1",
+            "root",
+            "Python package downloads",
+            size=GIB,
+            path=str(cache),
+            verdict=scan.SAFE,
+            item=True,
+            method="uv-cache",
+        )
+    )
+    return cache
+
+
+def test_a_package_cache_marked_in_use_but_used_by_nothing_is_cleared_by_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cache = _uv_cache_measurement(tmp_path)
+    install_disk(monkeypatch, a_disk())
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if "--force" not in argv:
+            raise subprocess.TimeoutExpired(argv, cleanup.UV_POLITE_WAIT_SECONDS)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(cleanup.subprocess, "run", fake_run)
+    monkeypatch.setattr(cleanup, "_cache_in_use", lambda _cache: False)
+    result = cleanup.delete([str(cache)], user_approved=False, by="page")
+    assert calls == [
+        ["uv", "cache", "clean", "--cache-dir", str(cache)],
+        ["uv", "cache", "clean", "--cache-dir", str(cache), "--force"],
+    ]
+    assert result["deleted"][0]["path"] == str(cache)
+
+
+def test_a_package_cache_a_running_program_uses_is_never_forced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cache = _uv_cache_measurement(tmp_path)
+    install_disk(monkeypatch, a_disk())
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        raise subprocess.TimeoutExpired(argv, cleanup.UV_POLITE_WAIT_SECONDS)
+
+    monkeypatch.setattr(cleanup.subprocess, "run", fake_run)
+    monkeypatch.setattr(cleanup, "_cache_in_use", lambda _cache: True)
+    result = cleanup.delete([str(cache)], user_approved=False, by="page")
+    assert all("--force" not in argv for argv in calls)
+    assert result["deleted"] == []
+    assert result["refused"][0]["reason"].startswith(
+        "A running program is using the Python package cache"
+    )
+
+
+def test_a_program_running_from_inside_a_folder_counts_as_using_it(
+    tmp_path: Path,
+) -> None:
+    holder = tmp_path / "cache" / "env"
+    holder.mkdir(parents=True)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    process = subprocess.Popen(["sleep", "30"], cwd=holder)
+    try:
+        assert cleanup._cache_in_use(tmp_path / "cache") is True
+        assert cleanup._cache_in_use(other) is False
+    finally:
+        process.kill()
+        process.wait()
+
+
+def test_holding_only_the_caches_lock_file_is_not_using_it(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".lock").write_text("")
+    with (cache / ".lock").open() as lock:
+        process = subprocess.Popen(["sleep", "30"], stdin=lock, cwd=tmp_path)
+    try:
+        assert cleanup._cache_in_use(cache) is False
+    finally:
+        process.kill()
+        process.wait()

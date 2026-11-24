@@ -6,6 +6,7 @@ these tests run through the page deletes nothing else.
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from playwright.sync_api import (
     expect,
 )
 
-from disk_space import scan, store
+from disk_space import cleanup, scan, store
 from disk_space.testing import (
     GIB,
     a_disk,
@@ -233,7 +234,9 @@ def test_deleting_a_safe_item_through_the_page_asks_first_and_then_deletes_it(
         page.locator("#delete-selected").click()
         page.locator("#sheet-confirm").click()
         expect(page.locator("#toast")).to_be_visible()
-        expect(page.locator("#toast")).to_contain_text("Freed")
+        expect(page.locator("#toast")).to_contain_text(
+            "the free space shown catches up in a moment"
+        )
         assert not planted.item_folder.exists()
 
         # The page catches up on its own, and the deletion is on record with a way back to the raw entry.
@@ -314,7 +317,9 @@ def test_a_phone_shows_the_page_without_scrolling_sideways_and_can_delete_by_tap
         assert box["x"] >= 0 and box["x"] + box["width"] <= PHONE_WIDTH
         assert box["y"] >= 0 and box["y"] + box["height"] <= PHONE_HEIGHT
         page.locator("#sheet-confirm").tap()
-        expect(page.locator("#toast")).to_contain_text("Freed")
+        expect(page.locator("#toast")).to_contain_text(
+            "the free space shown catches up in a moment"
+        )
         assert not planted.item_folder.exists()
         expect(page.locator("#safe-list")).not_to_contain_text("Leftover build")
         _no_sideways_scroll(page, PHONE_WIDTH)
@@ -413,5 +418,94 @@ def test_the_raw_records_the_page_links_open_as_json(
         raw = page.request.get(f"{served_origin}/raw/snapshot/{snapshot_id}")
         assert raw.ok
         assert json.loads(raw.body())["id"] == snapshot_id
+    finally:
+        context.close()
+
+
+def test_an_old_breakdown_offers_to_measure_again_and_a_fresh_one_does_not(
+    module_browser: Browser,
+    served_origin: str,
+    planted: Planted,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[bool] = []
+
+    def fake_scan_in_background() -> bool:
+        started.append(True)
+        return True
+
+    monkeypatch.setattr(scan, "scan_in_background", fake_scan_in_background)
+    # The planted breakdown was just taken: no prompt.
+    context, page = _open(
+        module_browser, served_origin, width=DESKTOP_WIDTH, height=DESKTOP_HEIGHT
+    )
+    try:
+        expect(page.locator("#used-text")).to_contain_text("93% full")
+        expect(page.locator("#stale-note")).to_be_hidden()
+    finally:
+        context.close()
+
+    save_measurement(
+        latest_measurement()["nodes"], taken_at=time.time() - 3 * 86400 - 600
+    )
+    context, page = _open(
+        module_browser, served_origin, width=DESKTOP_WIDTH, height=DESKTOP_HEIGHT
+    )
+    try:
+        expect(page.locator("#stale-note")).to_be_visible()
+        expect(page.locator("#stale-text")).to_have_text(
+            "This breakdown is 3 days old, so it may not match the disk now."
+        )
+        with page.expect_response(
+            lambda response: response.url.endswith("/api/scan")
+        ) as answered:
+            page.locator("#stale-measure").click()
+        assert answered.value.status == 200
+        assert started == [True]
+    finally:
+        context.close()
+
+
+def test_one_button_clears_every_safe_item_after_the_same_confirmation(
+    module_browser: Browser,
+    served_origin: str,
+    planted: Planted,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The planted measurement also lists a real cache folder as safe: record its delete instead of doing it.
+    removed: list[str] = []
+    real_remove = cleanup._remove
+
+    def remove_only_the_planted_folder(path: Path, method: str) -> str | None:
+        removed.append(str(path))
+        return real_remove(path, method) if str(path) == planted.item_path else None
+
+    monkeypatch.setattr(cleanup, "_remove", remove_only_the_planted_folder)
+    context, page = _open(
+        module_browser, served_origin, width=DESKTOP_WIDTH, height=DESKTOP_HEIGHT
+    )
+    try:
+        expect(page.locator("#quick-clear")).to_be_visible()
+        expect(page.locator("#clear-safe")).to_have_text("Clear safe items (12.0 GB)")
+        page.locator("#clear-safe").click()
+        expect(page.locator("#sheet")).to_be_visible()
+        expect(page.locator("#sheet-list li")).to_have_count(2)
+        expect(page.locator("#sheet-list")).to_contain_text("Leftover build")
+        expect(page.locator("#sheet-list")).to_contain_text("AI model downloads")
+        page.locator("#sheet-cancel").click()
+        assert removed == []
+        assert planted.item_folder.exists()
+
+        page.locator("#clear-safe").click()
+        page.locator("#sheet-confirm").click()
+        expect(page.locator("#toast")).to_contain_text(
+            "the free space shown catches up in a moment"
+        )
+        assert sorted(removed) == sorted(
+            [planted.item_path, "/var/cache/user/huggingface"]
+        )
+        assert not planted.item_folder.exists()
+        # Nothing safe is left, so the button goes away.
+        expect(page.locator("#quick-clear")).to_be_hidden()
     finally:
         context.close()

@@ -31,6 +31,8 @@ SAFE, ASK, KEEP = "safe", "ask", "keep"
 # A rule with this verdict only names a folder; its children are judged on their own.
 CONTAINER = ""
 DU_TIMEOUT_SECONDS: Final[float] = 600.0
+# How long a started measurement may take to show up as running before the request that started it answers.
+SCAN_START_WAIT_SECONDS: Final[float] = 5.0
 KIB: Final[int] = 1024
 MB: Final[int] = 1024 * 1024
 # A folder smaller than this, or than this share of its parent, joins its parent's "Smaller items".
@@ -609,6 +611,8 @@ def scan_in_background() -> bool:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    # Answer once the measurement holds its lock, so the page that asked shows it measuring straight away.
+    store.poll_until(lambda: store.is_locked("scan"), SCAN_START_WAIT_SECONDS, 0.1)
     return True
 
 

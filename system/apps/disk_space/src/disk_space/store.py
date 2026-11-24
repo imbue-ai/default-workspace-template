@@ -16,9 +16,10 @@ import fcntl
 import json
 import os
 import shutil
+import threading
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Final
@@ -214,3 +215,16 @@ def held_lock(name: str, wait: bool) -> Generator[bool]:
 def is_locked(name: str) -> bool:
     with held_lock(name, wait=False) as acquired:
         return not acquired
+
+
+def poll_until(
+    condition: Callable[[], bool], timeout_seconds: float, interval_seconds: float
+) -> bool:
+    """Checks ``condition`` until it holds or ``timeout_seconds`` pass; whether it held."""
+    deadline = time.monotonic() + timeout_seconds
+    pause = threading.Event()
+    while not condition():
+        if time.monotonic() >= deadline:
+            return False
+        pause.wait(interval_seconds)
+    return True

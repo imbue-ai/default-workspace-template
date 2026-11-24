@@ -20,6 +20,10 @@
     <div class="big num" id="used-text"></div>
     <div class="bar guard-bar" id="gauge"><span id="gauge-fill"></span><i class="mark" id="gauge-mark" title="Alert line"></i></div>
     <div class="row"><span id="free-text"></span><span id="alert-line-text"></span></div>
+    <div class="quick-clear" id="quick-clear" hidden>
+      <span id="quick-clear-text"></span>
+      <button class="primary" id="clear-safe" type="button">Clear safe items</button>
+    </div>
     <div class="alert" id="alert" hidden>
       <div>
         <strong>The disk is almost full.</strong>
@@ -33,6 +37,10 @@
     <div class="section-head">
       <h2>What's using the disk</h2>
       <button class="link" id="rescan" type="button">Measure again</button>
+    </div>
+    <div class="note stale" id="stale-note" hidden>
+      <span id="stale-text"></span>
+      <button class="primary" id="stale-measure" type="button">Measure now</button>
     </div>
     <nav class="crumbs" id="crumbs"></nav>
     <div class="treemap" id="treemap"></div>

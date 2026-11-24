@@ -7,6 +7,8 @@ const GB = 1024 ** 3;
 const MB = 1024 ** 2;
 const POLL_MS = 15000;
 const SCAN_POLL_MS = 3000;
+// A breakdown older than this may no longer match the disk, so the page offers to measure again.
+const STALE_SECONDS = 24 * 3600;
 
 let state = null;
 let byId = new Map();
@@ -64,7 +66,23 @@ function renderGauge() {
   $("last-check").textContent = `${checked} The disk is checked every 10 minutes; past the line, the cleanup helper opens and you get a notification.`;
 }
 
+function howLong(seconds) {
+  const days = Math.floor(seconds / 86400);
+  if (days >= 1) return `${days} day${days === 1 ? "" : "s"}`;
+  const hours = Math.max(1, Math.floor(seconds / 3600));
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+function renderStaleNote() {
+  const snap = state.snapshot;
+  const age = snap ? Date.now() / 1000 - snap.taken_at : 0;
+  const stale = Boolean(snap) && !state.scanning && age >= STALE_SECONDS;
+  $("stale-note").hidden = !stale;
+  if (stale) $("stale-text").textContent = `This breakdown is ${howLong(age)} old, so it may not match the disk now.`;
+}
+
 function renderSnapshotAge() {
+  renderStaleNote();
   const el = $("snapshot-age");
   el.innerHTML = "";
   if (state.scanning) {
@@ -229,6 +247,20 @@ function selectedItems() {
   return state.snapshot ? state.snapshot.nodes.filter((n) => n.item && selected.has(n.path)) : [];
 }
 
+function safeDeletableItems() {
+  return state.snapshot ? state.snapshot.nodes.filter((n) => n.item && n.deletable && n.verdict === "safe" && n.bytes > 0) : [];
+}
+
+// The one-click way to free what is safe: every safe item the page can delete, behind the same confirmation sheet.
+function renderQuickClear() {
+  const items = state.scanning ? [] : safeDeletableItems();
+  const total = items.reduce((s, l) => s + l.bytes, 0);
+  $("quick-clear").hidden = !items.length;
+  $("quick-clear-text").textContent = `${fmt(total)} can be cleared without losing anything: caches that download again and unused leftovers.`;
+  $("clear-safe").textContent = `Clear safe items (${fmt(total)})`;
+  $("clear-safe").disabled = !state.is_owner;
+}
+
 function updateDeleteButton() {
   const sel = selectedItems();
   const b = $("delete-selected");
@@ -264,6 +296,7 @@ function renderAll() {
   renderTreemap();
   renderLists();
   renderHistory();
+  renderQuickClear();
   renderOwnerControls();
 }
 
@@ -309,7 +342,7 @@ $("select-all").addEventListener("click", () => {
   for (const n of state.snapshot ? state.snapshot.nodes : []) if (n.item && n.deletable && n.verdict === "safe") selected.add(n.path);
   renderLists();
 });
-$("delete-selected").addEventListener("click", () => {
+function openDeleteSheet() {
   const sel = selectedItems();
   $("sheet-list").innerHTML = "";
   for (const l of sel) {
@@ -320,6 +353,13 @@ $("delete-selected").addEventListener("click", () => {
   }
   $("sheet-note").textContent = `About ${fmt(sel.reduce((s, l) => s + l.bytes, 0))}. These download again or rebuild themselves when needed, or are leftovers nothing uses.`;
   $("sheet").hidden = false;
+}
+$("delete-selected").addEventListener("click", openDeleteSheet);
+$("clear-safe").addEventListener("click", () => {
+  selected.clear();
+  for (const n of safeDeletableItems()) selected.add(n.path);
+  renderLists();
+  openDeleteSheet();
 });
 $("sheet-cancel").addEventListener("click", () => { $("sheet").hidden = true; });
 $("sheet-confirm").addEventListener("click", async () => {
@@ -330,7 +370,11 @@ $("sheet-confirm").addEventListener("click", async () => {
     const result = await api("POST", "/api/delete", { paths });
     selected.clear();
     const refused = result.refused.length ? ` ${result.refused.length} left alone: ${result.refused[0].reason}` : "";
-    toast(`Freed ${fmt(result.freed_bytes)}.${refused}`);
+    const listed = result.deleted.reduce((sum, item) => sum + item.bytes, 0);
+    const done = result.freed_bytes || !result.deleted.length
+      ? `Freed ${fmt(result.freed_bytes)}.`
+      : `Deleted ${fmt(listed)}; the free space shown catches up in a moment.`;
+    toast(`${done}${refused}`);
   } catch (error) {
     toast(`Nothing was deleted: ${error.message}`);
   }
@@ -341,7 +385,7 @@ $("sheet-confirm").addEventListener("click", async () => {
 });
 $("alert-helper").addEventListener("click", () => startHelper(null));
 $("helper-inline").addEventListener("click", () => startHelper(null));
-$("rescan").addEventListener("click", async () => {
+async function measureAgain() {
   try {
     const result = await api("POST", "/api/scan");
     if (!result.started) toast("A measurement is already running.");
@@ -349,7 +393,9 @@ $("rescan").addEventListener("click", async () => {
     toast(`Could not start measuring: ${error.message}`);
   }
   refresh();
-});
+}
+$("rescan").addEventListener("click", measureAgain);
+$("stale-measure").addEventListener("click", measureAgain);
 $("threshold").addEventListener("change", async (e) => {
   try {
     const result = await api("POST", "/api/settings", { threshold: Number(e.target.value) || 90 });

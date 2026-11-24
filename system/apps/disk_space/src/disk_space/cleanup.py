@@ -16,6 +16,10 @@ from typing import Any, Final
 from disk_space import scan, store
 
 UV_CLEAN_TIMEOUT_SECONDS: Final[float] = 300.0
+# How long a polite clean may wait on the cache's in-use mark before the clean is forced.
+UV_POLITE_WAIT_SECONDS: Final[float] = 10.0
+FREED_SETTLE_SECONDS: Final[float] = 8.0
+FREED_POLL_SECONDS: Final[float] = 0.5
 
 
 def _is_backup_running() -> bool:
@@ -29,23 +33,79 @@ def _is_backup_running() -> bool:
     return False
 
 
+def _cache_in_use(cache: Path) -> bool:
+    """Whether a running program runs from, works in, or has a file open or loaded inside ``cache``."""
+    prefix = str(cache).rstrip("/") + "/"
+    # uv's in-use mark: every uv run holds the cache's lock file open for its whole run, so holding it is not use.
+    lock_file = prefix + ".lock"
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            places = [os.readlink(entry / "exe"), os.readlink(entry / "cwd")]
+            places += (
+                (entry / "cmdline").read_bytes().decode(errors="replace").split("\0")
+            )
+            places += [
+                line.rsplit(" ", 1)[-1]
+                for line in (entry / "maps").read_text().splitlines()
+            ]
+            fd_dir = entry / "fd"
+            places += [os.readlink(fd_dir / fd) for fd in os.listdir(fd_dir)]
+        except OSError:
+            continue
+        if any(
+            (place.startswith(prefix) and place != lock_file)
+            or place == prefix.rstrip("/")
+            for place in places
+        ):
+            return True
+    return False
+
+
+def _run_uv_clean(
+    cache: Path, force: bool, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    argv = [
+        "uv",
+        "cache",
+        "clean",
+        "--cache-dir",
+        str(cache),
+        *(["--force"] if force else []),
+    ]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+
+
+def _clear_uv_cache(cache: Path) -> str | None:
+    """Clears the Python package cache with uv; the reason it could not, or None.
+
+    Every ``uv run`` keeps the cache marked in use for as long as its program runs, and a workspace always has one
+    running, so a polite clean waits forever. After a short wait the clean is forced, but only when no running program
+    actually uses a file inside the cache (a script's environment, a download in progress).
+    """
+    try:
+        result = _run_uv_clean(cache, force=False, timeout=UV_POLITE_WAIT_SECONDS)
+    except subprocess.TimeoutExpired:
+        if _cache_in_use(cache):
+            return "A running program is using the Python package cache right now; try again once it finishes."
+        try:
+            result = _run_uv_clean(cache, force=True, timeout=UV_CLEAN_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            return "The Python package cache was busy; try again in a few minutes."
+    except OSError:
+        return "The Python package cache was busy; try again in a few minutes."
+    return (
+        None
+        if result.returncode == 0
+        else (result.stderr.strip().splitlines() or ["uv cache clean failed"])[-1]
+    )
+
+
 def _remove(path: Path, method: str) -> str | None:
     """Deletes ``path``; the reason it could not, or None."""
     if method == "uv-cache":
-        try:
-            result = subprocess.run(
-                ["uv", "cache", "clean", "--cache-dir", str(path)],
-                capture_output=True,
-                text=True,
-                timeout=UV_CLEAN_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return "The Python package cache was busy; try again in a few minutes."
-        return (
-            None
-            if result.returncode == 0
-            else (result.stderr.strip().splitlines() or ["uv cache clean failed"])[-1]
-        )
+        return _clear_uv_cache(path)
     if path.name == "restic" and _is_backup_running():
         return "A backup is running right now; try again once it finishes."
     try:
@@ -58,6 +118,19 @@ def _remove(path: Path, method: str) -> str | None:
     except OSError as error:
         return f"Could not delete it: {error.strerror or error}"
     return None
+
+
+def _freed_since(free_before: int) -> int:
+    """How much the free space grew after a deletion. The disk's figures (a cloud machine's quota above all) catch
+    up a few seconds late, so a figure that has not moved yet is read again for a few seconds before it is believed."""
+    readings: list[int] = []
+
+    def has_moved() -> bool:
+        readings.append(max(0, scan.disk_usage()["free"] - free_before))
+        return readings[-1] > 0
+
+    store.poll_until(has_moved, FREED_SETTLE_SECONDS, FREED_POLL_SECONDS)
+    return readings[-1]
 
 
 def delete(
@@ -134,7 +207,7 @@ def delete(
             }
         )
         _drop_from_snapshot(snapshot, node)
-    freed = max(0, scan.disk_usage()["free"] - free_before)
+    freed = _freed_since(free_before) if deleted else 0
     if deleted:
         snapshot["disk"] = scan.disk_usage()
         store.rewrite_latest_snapshot(snapshot)
