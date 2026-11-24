@@ -751,9 +751,10 @@ chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no gene
 A strip's suggestions are drawn as pills in a list on the user's side of the transcript's column
 (`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group
 ending at the column's right edge (where the composer's box ends) with each label set in 16px, as
-a bubble sets in its text, and a label too long for the column wrapping inside its pill. A pill has a dashed outline, small corners, the body text size, a light shadow and a solid
-fill, the chat's own background (`--c-bg-chat`), and the recommended one (at most one, and the
-first) is green. The pills rise into place over 150 ms.
+a bubble sets in its text, and a label too long for the column wrapping inside its pill. A pill
+has a dashed outline, small corners, the body text size, a light shadow and a solid fill, the
+chat's own background (`--c-bg-chat`), and the recommended one (at most one, and the first) is
+green. The pills rise into place over 150 ms.
 
 The pills of the strip above the composer float over the end of the transcript, directly above
 the footer, which holds the strip's line and nothing else of it: the footer's height and the
@@ -994,14 +995,14 @@ writer that knows fewer fields would reset the rest; `PUT /api/settings/suggesti
 either switch or both, changes only those (one left out or null stays as it is), and answers
 the settings as `GET /api/settings` does. The settings file and both routes drop a field the
 settings do not hold, so a file or a writer that carries one keeps every other value. Each
-placement's strip shows the workspace's owner its own link on its line ("Disable", named
-"Disable suggestions", on the next-step line while its pills are shown, "Disable new chat suggestions" on the
-new-chat strip's), which switches that placement off through that route: the strip goes, a
+placement's strip shows the workspace's owner its own link on its line ("Disable", named "Disable
+suggestions", on the next-step line while its pills are shown, "Disable new chat suggestions" on
+the new-chat strip's), which switches that placement off through that route: the strip goes, a
 notice with "Undo" takes its place for a few seconds, and where the Imbue Studio app says it
 opens workspace settings the link opens them on their Suggestions group, whose switches write
 through the same route. Every write through either settings route is pushed to every page as
-`settings_updated` on `/api/ws`, and each page reads the settings again, so a strip switched
-off on one page goes at once on all of them.
+`settings_updated` on `/api/ws`, and each page reads the settings again, so a strip switched off
+on one page goes at once on all of them.
 
 ## Telling the shell a reply is under way
 
