@@ -153,11 +153,11 @@ up"). Show a literal command only when the user must run it themselves.
 
 ## The `stuck` message
 
-Nothing is merged or applied. Surface the failure as
+Nothing is merged or applied. Read
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/worker-failure.md`
-says; if the user then overrides it, `resuming-after-stuck.md` resumes the
-pass. This is the one message where detail is preserved, because it gets
-pasted into bug reports.
+and surface the failure as it says; if the user then overrides it,
+`resuming-after-stuck.md` resumes the pass. This is the one message where
+detail is preserved, because it gets pasted into bug reports.
 
 Two parts: a plain-language lead for the user (what happened, what it means --
 "I couldn't complete this update cleanly; your workspace is untouched and

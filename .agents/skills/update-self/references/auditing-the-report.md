@@ -40,8 +40,9 @@ its first catch-up merge, not to its tip (`worker/review-gates.md`).
 ## A report with a gap
 
 A report missing any of this, including one that openly discloses skipping a
-gate outside the rule, goes back to the worker: reply saying what is missing
-and re-arm the poll, as `question-gates.md` ("Answering and re-arming") does.
+gate outside the rule, goes back to the worker: read `question-gates.md`
+("Answering and re-arming"), then reply saying what is missing and re-arm the
+poll as it does.
 Do not run the apply over the gap. A deviation stands only when the worker is
 gone and the gap cannot be closed from here, and then the results message
 states it plainly as a caveat.

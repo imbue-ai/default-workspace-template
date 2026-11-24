@@ -46,10 +46,11 @@ stderr and the `apply phase timings:` line, then:
 
 - **A local resource cause** (a step shed for memory, a full disk, a step that
   outlived its budget on a loaded workspace; a pre-flight boot the memory guard
-  stopped says so in the failure line itself): lessen the load first, under
-  the licence in `freeing-memory-for-an-update.md` (pause more chats with
-  `run-status stop-chats --agent <name>`, stop the browser and windowless
-  apps, prune caches, worktrees and old snapshots), then retry.
+  stopped says so in the failure line itself): read
+  `freeing-memory-for-an-update.md`, lessen the load first under its licence
+  (pause more chats with `run-status stop-chats --agent <name>`, stop the
+  browser and windowless apps, prune caches, worktrees and old snapshots),
+  then retry.
 - **A network cause** (a download, `npm ci` or `uv sync` that could not reach
   its registry): retry once.
 - **Anything else**, or a retry that fails again: no retry. That includes a
@@ -73,11 +74,11 @@ WORKER_ID=$(sed -n 's/^worker_agent_id: *//p' data/.tasks/update-self/task.md)
 python3 system/scripts/message_chat.py "$WORKER_ID" -m "$MESSAGE"
 ```
 
-Only a worker that is gone takes a fresh pass (SKILL.md Step 3b, with the same
-`$REF`, the lease and the run record carried over). Nothing retries beyond
-these rules, and nothing retries unwatched: a pass that fails after your best
-effort records `run-status verdict REFUSED --detail "<what failed, one plain
-line>"` at once, so the app shows the failure immediately.
+Only a worker that is gone takes a fresh pass (`launching-the-worker.md`, with
+the same `$REF`, the lease and the run record carried over). Nothing retries
+beyond these rules, and nothing retries unwatched: a pass that fails after
+your best effort records `run-status verdict REFUSED --detail "<what failed,
+one plain line>"` at once, so the app shows the failure immediately.
 
 The message you compose carries three things, in order: **the workspace is
 safe** ("the update hit a problem while being applied, so I automatically
@@ -114,12 +115,13 @@ With the other chats paused, a dirty tree or a refused fast-forward means
 something wrote after the pause (the user, or a chat they woke). Neither makes
 the worker's validation worthless. The chats stay paused while you release
 the `editing critical app` leases you took for the apply (Step 5b takes them
-again right before the next one), save the new changes as Step 5b saves the
-paused chats' work, then run Step 5b's fast-forward check again. If `HEAD`
-moved, catch the worker up to it as Step 5b does and apply its new `done`; if
-not, apply the branch as it is. Never destroy the worker to re-dispatch, and
-never build the catch-up merge yourself: the worker's merge is the one its
-validation covers.
+again right before the next one), then go back into
+`applying-the-update.md`: save the new changes as its section 3 saves the
+paused chats' work, then run its section 1's fast-forward check again. If
+`HEAD` moved, catch the worker up to it as that section does and apply its
+new `done`; if not, apply the branch as it is. Never destroy the worker to
+re-dispatch, and never build the catch-up merge yourself: the worker's merge
+is the one its validation covers.
 
 Anything else makes you wait far longer than an apply takes, so bring the
 chats back first (`run-status resume-chats`, without `--landed`, and with

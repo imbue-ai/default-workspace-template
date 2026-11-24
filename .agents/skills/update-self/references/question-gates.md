@@ -50,12 +50,12 @@ Escalate to the user only if it contains a real question of their intent.
 
 ## 3. A gate command shed for memory
 
-The worker is asking for room to rerun. Free it yourself per
+The worker is asking for room to rerun. Before you free it, read
 `freeing-memory-for-an-update.md`, which says what this pass may stop and how
-much further a scheduled pass may go. Then reply with what you stopped and
-the free memory the candidates command reports *after* it. Memory pressure is
-never a reason to narrow the gate, so never answer by telling the worker to
-skip or trim one.
+much further a scheduled pass may go. Free it yourself, then reply with what
+you stopped and the free memory the candidates command reports *after* it.
+Memory pressure is never a reason to narrow the gate, so never answer by
+telling the worker to skip or trim one.
 
 It reaches the user only when the licence is spent and the room is still not
 there. Then ask them, naming what is left to stop and what stopping it costs
@@ -104,9 +104,9 @@ long they take. In this order, each command on its own:
    `updating workspace` lease: `tk close "$UPDATE_LEASE_ID" "Waiting on the
    user's decision."`. Leave the tracking ticket open; the re-land closes it.
 
-4. Compose the decision message from their point of view per
-   `results-message.md` ("The decision message"), show this chat as teardown
-   ends ("Show the user this chat"), and end your turn.
+4. Read `results-message.md` ("The decision message") and compose the
+   decision message from their point of view as it says, show this chat as
+   teardown ends ("Show the user this chat"), and end your turn.
 
 Their answer, whenever it comes, arrives in this chat: follow
 `resuming-after-a-decision.md`.

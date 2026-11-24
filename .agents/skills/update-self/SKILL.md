@@ -99,8 +99,9 @@ A match is decided by rule, never by asking. `tk show <id>` names its holder
 - **A holder `mngr list --format "{name}	{state}"` shows `RUNNING` or
   `WAITING`**: another pass is live. Tell the user an update is already under
   way and end, recording nothing.
-- **Any other holder** is gone: take its pass over, or supersede it once its
-  worker is gone too, per `.agents/shared/references/harden-contention.md`.
+- **Any other holder** is gone: read
+  `.agents/shared/references/harden-contention.md`, then take its pass over,
+  or supersede it once its worker is gone too.
 
 Then take it, and `tk start "$UPDATE_LEASE_ID"`:
 
@@ -160,15 +161,16 @@ cat /tmp/update-self-target.json
 REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.json"))["ref"])')
 ```
 
-Tell the user which version you are updating to.
-`references/version-ceiling.md` handles the other two outcomes:
+Tell the user which version you are updating to. The other two outcomes:
 
-- **A non-zero exit: stop.** "When no target resolves" names the verdict for
-  its `error:` line: `ALREADY_CURRENT`, a fault (`STUCK`), or `REFUSED`.
-- **`"exceeds_ceiling": true`**: unless the starting message already carries
-  the user's confirmation, get their go-ahead ("Overrides past the ceiling").
-  Record the wait while you ask, and clear it when they answer with the same
-  script's `run-status resume`:
+- **A non-zero exit: stop.** Read `references/version-ceiling.md` ("When no
+  target resolves"), which names the verdict for its `error:` line:
+  `ALREADY_CURRENT`, a fault (`STUCK`), or `REFUSED`.
+- **`"exceeds_ceiling": true`**: read `references/version-ceiling.md`
+  ("Overrides past the ceiling"), then, unless the starting message already
+  carries the user's confirmation, get their go-ahead. Record the wait while
+  you ask, and clear it when they answer with the same script's `run-status
+  resume`:
 
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py run-status hold \
@@ -215,9 +217,10 @@ cat /tmp/update-self-recheck.json
 ```
 
 Set `PINNED_CEILING` as Step 2 does. **A non-zero exit: stop** and follow
-what it printed (an `error:` line is a Step 2 error; exit 75 prints its own
-procedure, and `references/older-workspaces.md`, "A system Python older than
-3.12", has the rest). If `exceeds_ceiling` is `true`, follow
+what it printed (for an `error:` line, read `references/version-ceiling.md`,
+"When no target resolves"; exit 75 prints its own procedure, and
+`references/older-workspaces.md`, "A system Python older than 3.12", has the
+rest). If `exceeds_ceiling` is `true`, follow
 `references/version-ceiling.md` ("When Step 3a finds the target above the
 ceiling") before going on.
 
@@ -266,23 +269,24 @@ worker in general is
 
 ## 5. Terminal status
 
-- **The worker died without reporting**: recover it per
+- **The worker died without reporting**: read
   `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/dead-worker-recovery.md`,
-  then re-arm the poll. It is stuck only once that has not brought it back.
+  recover it as it says, then re-arm the poll. It is stuck only once that
+  has not brought it back.
 - **A `stuck` showing the merge cannot land without breaking the running
-  workspace**: `references/apply-outcomes.md` ("Migration-required
+  workspace**: read `references/apply-outcomes.md` ("Migration-required
   updates"); the pass ends `NEEDS_RECREATION`.
 - **Any other `stuck`**, or a dead worker that did not come back: nothing is
-  merged or applied. Surface it per `references/results-message.md` ("The
-  `stuck` message"), record `run-status verdict STUCK --detail "<one plain
-  line on what failed>"`, and go to Step 6.
+  merged or applied. Read `references/results-message.md` ("The `stuck`
+  message") and surface it as it says, record `run-status verdict STUCK
+  --detail "<one plain line on what failed>"`, and go to Step 6.
 - **`done`**: 5a to 5d, in order.
 
 ### 5a. Audit the report
 
-Check the report against `references/auditing-the-report.md`. The audit, not
-the user, authorizes the apply, and a report that lacks evidence goes back to
-the worker.
+Read `references/auditing-the-report.md` and check the report against it.
+The audit, not the user, authorizes the apply, and a report that lacks
+evidence goes back to the worker.
 
 ### 5b. Apply the update (one atomic motion)
 
@@ -294,16 +298,16 @@ read `references/apply-outcomes.md` before doing anything else.
 
 ### 5c. Carry out the report-driven remainder
 
-After a landed apply, anything of the user's that is broken gets fixed, not
-reported: `references/after-the-apply.md`, which also says what each finding
+After a landed apply, read `references/after-the-apply.md`: anything of the
+user's that is broken gets fixed, not reported, and it says what each finding
 of the report asks of you. The worker classed provisioning findings by
 `references/worker/provisioning-changes.md`; read it when a class is unclear.
 
 ### 5d. Escalate the built-in defects this pass found
 
-Escalate them together, per `references/after-the-apply.md` ("Escalating
-built-in defects"). Then compose the results message per
-`references/results-message.md`.
+Read `references/after-the-apply.md` ("Escalating built-in defects") and
+escalate them together. Then read `references/results-message.md` and compose
+the results message.
 
 ## 6. Teardown
 

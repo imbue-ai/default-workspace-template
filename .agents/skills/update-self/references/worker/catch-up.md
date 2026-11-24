@@ -25,7 +25,8 @@ prefix, and your `update-self:` merge must stay on the branch's first-parent
 line, which merging the lead's commit into your branch (not the other way
 round) keeps.
 
-Resolve conflicts by `worker/conflict-triage.md`, with two differences:
+To resolve a conflict, read `worker/conflict-triage.md` and triage by it,
+with two differences:
 
 - The commits coming in are the workspace's own latest work, so where they
   and the update meet, keep both.
@@ -39,11 +40,12 @@ it even without a conflict. Conclude a conflicted merge with `git commit
 
 ## Validate the delta
 
-Scoped by the same rules as the worker guide's Step 4b, but over
-`$PRE..HEAD` only, where `$PRE` is your branch's tip before the catch-up
-merge (that merge's first parent). Do not re-run 4b's recipe: its merged set
-re-selects the whole pass, and its `git diff` lines from `$MERGE` would read
-the workspace's commits as your edits.
+Before you run an item below, read its section of `worker/validation.md`:
+that is how 4b runs it. The items are scoped by the same rules as the worker
+guide's Step 4b, but over `$PRE..HEAD` only, where `$PRE` is your branch's
+tip before the catch-up merge (that merge's first parent). Do not re-run 4b's
+recipe: its merged set re-selects the whole pass, and its `git diff` lines
+from `$MERGE` would read the workspace's commits as your edits.
 
 - **Impact**: when the commits coming in add or change user-created code,
   check it against what the update changed. Search it for the names the
@@ -90,7 +92,8 @@ the workspace's commits as your edits.
 - **Customization survival** for a creation the update touches (the scope
   files) whose files the incoming commits also change.
 - **Review gates**: a conflict you resolved here is merge work, in 4c's
-  scope. The catch-up merge itself is not an edit of yours.
+  scope: read `worker/review-gates.md` before deciding whether the gates run.
+  The catch-up merge itself is not an edit of yours.
 
 ## Report `done` again
 
