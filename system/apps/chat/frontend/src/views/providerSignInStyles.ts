@@ -180,3 +180,7 @@ export const ACCOUNT_PICK =
 export const ACCOUNT_ACTION = "relative";
 export const ACCOUNT_NEUTRAL_NOTE = "shrink-0 type-helper text-secondary";
 export const ACCOUNT_FAILING_NOTE = "shrink-0 type-helper text-danger";
+
+/** On the root of a dialog the first run's provider page opens: the page's cream and brown ink for everything under
+ *  it, in place of the workspace's look (`.first-run-dialog` in style.css). */
+export const FIRST_RUN_DIALOG = "first-run-dialog";
