@@ -46,7 +46,6 @@ _MODEL_FAMILY_BY_TIER: Final[Mapping[OneShotModelTier, str]] = {
 _EFFORT_LADDER: Final[tuple[str, ...]] = ("none", "minimal", "low", "medium", "high", "xhigh")
 # The effort a call that is allowed to think runs at: codex takes an effort, not a count of tokens.
 _THINKING_EFFORT: Final = "medium"
-_TIMEOUT_SECONDS: Final = 60.0
 _SLOW_WARNING_SECONDS: Final = 15.0
 _ANSWER_FILENAME: Final = "answer.txt"
 
@@ -150,6 +149,7 @@ class CodexOneShotCompletion(OneShotCompletion):
         *,
         model_tier: OneShotModelTier,
         thinking_token_allowance: int | None,
+        timeout_seconds: float,
     ) -> str:
         """The answer on the account's model of the tier; on the default model when that one is refused."""
         choice = choose_codex_one_shot_model(_account_models(account_dir), model_tier, thinking_token_allowance)
@@ -159,11 +159,11 @@ class CodexOneShotCompletion(OneShotCompletion):
         choices = (choice,) if choice.model is None else (choice, CodexOneShotChoice())
         return answer_on_first_model(
             choices,
-            lambda each: self._complete_on(each, account_dir, full_prompt),
+            lambda each: self._complete_on(each, account_dir, full_prompt, timeout_seconds),
             lambda each: describe_model_name(each.model),
         )
 
-    def _complete_on(self, choice: CodexOneShotChoice, account_dir: Path, prompt: str) -> str:
+    def _complete_on(self, choice: CodexOneShotChoice, account_dir: Path, prompt: str, timeout_seconds: float) -> str:
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             answer_path = Path(isolated_dir) / _ANSWER_FILENAME
@@ -171,7 +171,7 @@ class CodexOneShotCompletion(OneShotCompletion):
                 finished = run_local_command_modern_version(
                     command=codex_one_shot_argv(choice, answer_path),
                     is_checked=False,
-                    timeout=_TIMEOUT_SECONDS,
+                    timeout=timeout_seconds,
                     cwd=Path(isolated_dir),
                     env=codex_account_environment(account_dir),
                     name="codex one-shot completion",
@@ -180,7 +180,7 @@ class CodexOneShotCompletion(OneShotCompletion):
             except ProcessError as e:
                 raise OneShotCompletionError(f"codex exec could not run: {e}") from e
             if finished.is_timed_out:
-                raise OneShotCompletionTimeoutError(f"codex exec did not answer within {_TIMEOUT_SECONDS:.0f}s")
+                raise OneShotCompletionTimeoutError(f"codex exec did not answer within {timeout_seconds:.0f}s")
             if finished.returncode != 0:
                 raise OneShotCompletionError(
                     f"codex exec exited {finished.returncode}: {finished.stderr.strip()[-300:]}"

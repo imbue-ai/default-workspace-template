@@ -1,1 +1,0 @@
-A tour card or a page's coach card about a control of the Imbue Studio title bar now sits under the end of the bar the control is at. Settings (which holds a workspace's permissions and settings) and Share are at the bar's right end, so their cards sit there, as the card about reporting a bug already did; only the card about the workspace's name stays at the left.
