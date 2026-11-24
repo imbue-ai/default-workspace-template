@@ -83,5 +83,8 @@ class OneShotCompletion(ABC):
         model_tier: OneShotModelTier,
         # How many tokens the model may think for before it answers; None for an answer with no thinking.
         thinking_token_allowance: int | None,
+        # How long the harness's CLI may take over one model before the call gives up on it.
+        timeout_seconds: float,
     ) -> str:
-        """The model's answer text. Raises ``OneShotCompletionError`` when the call fails."""
+        """The model's answer text. Raises ``OneShotCompletionError`` when the call fails, and its
+        ``OneShotCompletionTimeoutError`` when the CLI did not answer within ``timeout_seconds``."""
