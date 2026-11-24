@@ -193,9 +193,10 @@ describe("a folder that cannot be listed", () => {
     expect(task).toContain(LISTING_DETAILS);
     expect(options?.showsOutcome).toBe(true);
 
+    expect(root.querySelector(".files-empty .report-bug")).toBeNull();
     answer({
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: false },
+      failure: { message: "Chat couldn't open that.", details: null, isHelpOwed: true },
     });
     await vi.waitFor(() => expect(ask.disabled).toBe(false));
     m.redraw.sync();
