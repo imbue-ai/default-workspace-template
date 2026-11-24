@@ -73,6 +73,13 @@
   cursor: grabbing;
 }
 
+/* Share with its word, in a title bar: tighter than a small button's 12px sides and 6px gap, as Imbue Studio's own
+   Share is. Outside the utilities layer, so it wins over the button's own padding and gap. */
+.window-share--labelled {
+  padding-inline: 8px;
+  gap: 4px;
+}
+
 /* A window travels to its new rectangle rather than appearing at it, so a move the user did not
    make with the pointer -- a snap from the size menu, a restore, an agent laying one window beside
    another -- reads as the window going somewhere rather than as the desktop cutting to a new

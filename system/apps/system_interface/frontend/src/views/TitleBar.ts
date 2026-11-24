@@ -31,6 +31,8 @@ const CONTROL_GLYPH_SIZE = 14;
 /** The two actions that follow the title: a smaller glyph than the window's own controls wear,
  *  in a box the same size as theirs. */
 const TITLE_ACTION_GLYPH_SIZE = 12;
+/** Share's glyph, a little larger than the other title actions': it matches Imbue Studio's own Share. */
+const SHARE_GLYPH_SIZE = 14;
 /** The app's own tile, taller than any glyph in the bar: it is a picture rather than a mark, and
  *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
 const APP_GLYPH_SIZE = 20;
@@ -53,14 +55,15 @@ const SHARE_CLEARANCE = 8;
 
 /** How far from the bar's edge the run of the window menu, Refresh, the balloon and Share reaches, with Share's
  *  glyph alone and with its word, counting the bar's inset. The desktop pair was measured in Chromium
- *  on the standard look (124 and 174.9); the touch pair is the same run with each square control as wide as the
+ *  on the standard look (124 and 174.9), the labelled run less the 8 that Share's tighter padding and gap
+ *  (``.window-share--labelled``) take off it; the touch pair is the same run with each square control as wide as the
  *  44 touch target its minimum width asks for. */
 interface ShareRunWidths {
   readonly glyph: number;
   readonly labelled: number;
 }
-const SHARE_RUN_WIDTHS: ShareRunWidths = { glyph: 124, labelled: 175 };
-const SHARE_TOUCH_RUN_WIDTHS: ShareRunWidths = { glyph: 188, labelled: 223 };
+const SHARE_RUN_WIDTHS: ShareRunWidths = { glyph: 124, labelled: 167 };
+const SHARE_TOUCH_RUN_WIDTHS: ShareRunWidths = { glyph: 188, labelled: 215 };
 
 /** How Share is drawn: with its word, as its glyph alone, or not at all. */
 export type ShareLook = "labelled" | "glyph" | "hidden";
@@ -274,10 +277,12 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
                 : control(
                     "share",
                     app === undefined ? SHARE_LABEL : `${SHARE_LABEL} ${app.display_name}`,
-                    shareIcon(TITLE_ACTION_GLYPH_SIZE),
+                    shareIcon(SHARE_GLYPH_SIZE),
                     false,
                     onControl,
-                    { extra: "ml-0.5", text: shareLook === "labelled" ? SHARE_LABEL : undefined },
+                    shareLook === "labelled"
+                      ? { extra: "ml-0.5 window-share--labelled", text: SHARE_LABEL }
+                      : { extra: "ml-0.5" },
                   ),
             ];
           }
