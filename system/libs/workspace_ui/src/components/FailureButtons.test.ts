@@ -107,7 +107,7 @@ describe("Ask an agent to fix this", () => {
 
     await answerLastAsk(parent, {
       isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isHelpOwed: false },
     });
     const failed = render(view());
     expect(failed?.textContent).toBe("Ask an agent to fix this");
@@ -124,14 +124,14 @@ describe("Ask an agent to fix this", () => {
     expect(root.querySelector(".ask-agent-failure")).toBeNull();
   });
 
-  it("offers Report a bug for a reportable failure it shows, where the shell can open one, carrying that failure", async () => {
+  it("offers Report a bug for a failure it shows that owes help, where the shell can open one, carrying that failure", async () => {
     const { parent, live } = greetedPage({ canReportBug: true });
     const view = (): m.Children => m(AskAgentToFixButton, { connection: live, failure: FAILURE });
     render(view())?.click();
     const failure = {
-      message: "Chat couldn't open that. Try again. If this persists, report a bug.",
+      message: "Chat couldn't open that. Try again.",
       details: "HTTP 502\nchat answered 500",
-      isReportable: true,
+      isHelpOwed: true,
     };
     await answerLastAsk(parent, { isOpened: false, failure });
     m.render(root, view());
@@ -152,7 +152,7 @@ describe("Ask an agent to fix this", () => {
   it("leaves Report a bug to a page that offers its own, which reports its failure and the refused ask's together", async () => {
     const { parent, live } = greetedPage({ canReportBug: true });
     const pageFailure = {
-      message: "The Screen couldn't load. Try again. If this persists, report a bug.",
+      message: "The Screen couldn't load. Try again.",
       details: "HTTP 500",
     };
     let askFailure: ShownFailure | null = null;
@@ -177,9 +177,9 @@ describe("Ask an agent to fix this", () => {
     m.render(root, view());
     root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")?.click();
     const refused = {
-      message: "Chat couldn't open that. Try again. If this persists, report a bug.",
+      message: "Chat couldn't open that. Try again.",
       details: "HTTP 502\nchat answered 500",
-      isReportable: true,
+      isHelpOwed: true,
     };
     await answerLastAsk(parent, { isOpened: false, failure: refused });
     m.render(root, view());
@@ -195,7 +195,7 @@ describe("Ask an agent to fix this", () => {
       details:
         "HTTP 500\n\n" +
         "Asking an agent to fix this failed too:\n" +
-        "Chat couldn't open that. Try again. If this persists, report a bug.\n" +
+        "Chat couldn't open that. Try again.\n" +
         "HTTP 502\nchat answered 500",
     });
 
@@ -211,7 +211,7 @@ describe("Ask an agent to fix this", () => {
       failure: FAILURE,
       pageReportBug: { onFailureChange: (failure: ShownFailure | null) => changes.push(failure) },
     };
-    const refused = { message: "Chat couldn't open that.", details: "HTTP 502", isReportable: true };
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 502", isHelpOwed: true };
 
     render(m(AskAgentToFixButton, attrs))?.click();
     await answerLastAsk(parent, { isOpened: false, failure: refused });
@@ -253,7 +253,7 @@ describe("Report a bug", () => {
     const live = connectToShell({});
     connection = live;
     const failure = {
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      message: "Docs couldn't open that. Try again.",
       details: "HTTP 502",
     };
     const view = (): m.Children => m(ReportBugButton, { connection: live, failure });
@@ -274,50 +274,56 @@ describe("Report a bug", () => {
 });
 
 describe("FailureRemedies", () => {
-  const REPORTABLE: ShownFailure = {
-    message: "Docs couldn't save. Try again. If this persists, report a bug.",
+  const OWES_HELP: ShownFailure = {
+    message: "Docs couldn't save. Try again.",
     details: "HTTP 500",
-    isReportable: true,
+    isHelpOwed: true,
   };
 
   function labels(): (string | null)[] {
     return Array.from(root.querySelectorAll("button")).map((button) => button.textContent);
   }
 
-  it("offers an agent, then Report a bug, for a failure that asks for a bug report", () => {
+  it("offers an agent, and no Report a bug beside it, for a failure that owes help", () => {
     const { parent, live } = greetedPage({ canReportBug: true });
-    m.render(root, m(FailureRemedies, { connection: live, failure: REPORTABLE }));
-    expect(labels()).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    m.render(root, m(FailureRemedies, { connection: live, failure: OWES_HELP }));
+    expect(labels()).toEqual(["Ask an agent to fix this"]);
 
     root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
     const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
     expect(asked.type).toBe(SHELL_ASK_AGENT);
-    expect(asked.text).toContain(REPORTABLE.message);
+    expect(asked.text).toContain(OWES_HELP.message);
     expect(asked.text).toContain("HTTP 500");
   });
 
-  it("offers nothing for a failure that asks for no bug report, and no agent where one is withheld", () => {
+  it("offers nothing for a failure that owes no help, and Report a bug in the agent's place where one is withheld", () => {
     const { live } = greetedPage({ canReportBug: true });
-    m.render(root, m(FailureRemedies, { connection: live, failure: { ...REPORTABLE, isReportable: false } }));
+    m.render(root, m(FailureRemedies, { connection: live, failure: { ...OWES_HELP, isHelpOwed: false } }));
     expect(labels()).toEqual([]);
 
-    m.render(root, m(FailureRemedies, { connection: live, failure: REPORTABLE, isAgentWithheld: true }));
+    m.render(root, m(FailureRemedies, { connection: live, failure: OWES_HELP, isAgentWithheld: true }));
     expect(labels()).toEqual(["Report a bug"]);
   });
 
-  it("files a refused ask with the page's failure in its one Report a bug", async () => {
+  it("offers a refused ask as a draft, and files it with the page's failure in the one Report a bug", async () => {
     const { parent, live } = greetedPage({ canReportBug: true });
-    const view = (): m.Children => m(FailureRemedies, { connection: live, failure: REPORTABLE });
+    const view = (): m.Children => m(FailureRemedies, { connection: live, failure: OWES_HELP });
     m.render(root, view());
+    expect(root.querySelector(".report-bug")).toBeNull();
     root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
-    const refused = { message: "Chat couldn't open that.", details: "HTTP 500", isReportable: true };
+    const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 500", isHelpOwed: true };
     await answerLastAsk(parent, { isOpened: false, failure: refused });
     m.render(root, view());
+
+    root.querySelector<HTMLButtonElement>(".draft-ask")!.click();
+    const [drafted] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect([drafted.type, drafted.text, drafted.delivery]).toEqual([SHELL_ASK_AGENT, asked.text, "draft"]);
 
     expect(root.querySelectorAll(".report-bug")).toHaveLength(1);
     root.querySelector<HTMLButtonElement>(".report-bug")!.click();
     expect(parent.postMessage).toHaveBeenLastCalledWith(
-      { type: SHELL_REPORT_BUG, ...withAskFailure(REPORTABLE, refused) },
+      { type: SHELL_REPORT_BUG, ...withAskFailure(OWES_HELP, refused) },
       "*",
     );
   });

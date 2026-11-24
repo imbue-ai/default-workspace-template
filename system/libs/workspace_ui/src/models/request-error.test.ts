@@ -10,7 +10,7 @@ import {
   sendFailureKindOf,
 } from "./request-error";
 
-const FALLBACK = "The workspace couldn't do that. Try again. If this persists, report a bug.";
+const FALLBACK = "The workspace couldn't do that. Try again.";
 
 /** A rejection the way mithril builds one: its message the raw body text, the status as ``code``, the parsed body
  *  (null when it could not be read) as ``response``. */
@@ -28,7 +28,7 @@ describe("describeRequestFailure", () => {
     expect(describeRequestFailure(userFacing)).toMatchObject({
       cause: "user_facing",
       userFacingMessage: "Chat is still starting.",
-      isReportable: false,
+      isExpected: false,
       details: "HTTP 502\nchat answered the launch with 503",
     });
     const reason = rejection(404, { detail: "Agent 'x' not found", kind: "chat_gone" }, "{}");

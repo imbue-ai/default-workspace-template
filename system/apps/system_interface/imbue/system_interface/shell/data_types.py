@@ -117,6 +117,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: fr
         label=row.label,
         url=row.url,
         internal=row.internal,
+        system=row.system,
         program=row.program or "",
         critical=row.critical,
         stop_when_no_windows=row.stop_when_no_windows,

@@ -8044,9 +8044,12 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
     assert applied.get_json()["first_message"] is None
 
 
-_ASK = "The preview couldn't load. Find out why this failed and fix it."
-# The ask as a chat receives it from a page of the Docs app: the page's task does not say which app failed.
-_ASK_NAMING_DOCS = f"/assist This is about the Docs app.\n\n{_ASK}"
+# An ask as the shell sends it: the assist command first, then where it was pressed, then the task.
+_ASK = (
+    "/assist This is about the Docs app (`docs`, window `win-1`).\n\n"
+    "Imbue Studio showed the user this failure: The preview couldn't load.\n\n"
+    "Find out why it failed and fix it, then tell the user what was wrong and what you changed."
+)
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
@@ -8082,7 +8085,7 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
-    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK)]
     assert len(manager.get_chat_snapshots()) == chat_count
     assert manager.get_provisional_chats() == []
 
@@ -8145,11 +8148,11 @@ def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _DOCS_CHAT_ID
     held = client.get(f"/api/chats/intakes/{_token_of(path)}").get_json()
-    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK_NAMING_DOCS, False)
+    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK, False)
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
     assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (
         _DOCS_CHAT_ID,
-        _ASK_NAMING_DOCS,
+        _ASK,
         None,
     )
     assert messenger.sent == []
@@ -8183,7 +8186,7 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     assert (created.name, created.labels, created.message, created.account_id, created.phase) == (
         "Docs Chat",
         {"app_chat": "docs"},
-        _ASK_NAMING_DOCS,
+        _ASK,
         signed_in_account,
         ProvisionalChatPhase.CREATING,
     )
@@ -8193,15 +8196,14 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     visitors_chat_id = _chat_id_of(visitors.get_json()["path"])
     visitors_chat = manager.get_provisional_chat(visitors_chat_id)
     assert visitors_chat is not None
-    ask_naming_notes = f"/assist This is about the Notes app.\n\n{_ASK}"
     # An ask runs the assist command, which a chat never prefixes with its sender, so who pressed it is in the
     # annotation alone.
-    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", ask_naming_notes)
+    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", _ASK)
     (annotation,) = state.authors.annotations(ChatId(visitors_chat_id))
-    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(ask_naming_notes))
+    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(_ASK))
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the visitor's first message's bubble to reach the shell")
     assert [(str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text) for bubble in shell.bubbles] == [
-        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", ask_naming_notes)
+        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", _ASK)
     ]
 
 
@@ -8242,7 +8244,7 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == provisional_before
     assert len(manager.get_chat_snapshots()) == chat_count
 
@@ -8257,7 +8259,7 @@ def test_an_app_ask_with_nothing_signed_in_goes_to_the_main_chat_and_makes_no_ch
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == []
 
 
@@ -8273,7 +8275,7 @@ def test_an_app_ask_whose_chat_cannot_be_created_goes_to_the_main_chat(tmp_path:
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
     assert manager.get_provisional_chats() == []
 
 
@@ -8293,7 +8295,7 @@ def test_an_app_ask_to_be_drafted_with_no_chat_about_the_app_is_held_for_the_mai
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _MAIN_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
-    assert applied.get_json()["composer_text"] == _ASK_NAMING_DOCS
+    assert applied.get_json()["composer_text"] == _ASK
     assert messenger.sent == []
     assert manager.get_provisional_chats() == []
 
@@ -8313,7 +8315,7 @@ def test_an_app_ask_with_no_chat_at_all_and_nothing_signed_in_is_the_first_messa
     assert awaiting is not None
     assert (awaiting.phase, awaiting.labels) == (ProvisionalChatPhase.AWAITING_FIRST_SEND, {})
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
-    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK_NAMING_DOCS)
+    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK)
 
 
 def test_an_app_ask_that_names_no_app_or_no_display_name_is_refused(tmp_path: Path) -> None:
