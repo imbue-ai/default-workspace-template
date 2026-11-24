@@ -486,7 +486,7 @@ def _offer_fixed_suggestions(server: RunningWorkspace, labels: Sequence[str]) ->
 
 
 def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) -> None:
-    """One pill to a row, all as wide as the widest, their right edge 16px in from the column's."""
+    """One pill to a row, all as wide as the widest, their right edge on the column's."""
     boxes = [_box(pills.nth(index)) for index in range(pills.count())]
     assert len(boxes) > 1
     column_box = _box(column)
@@ -494,7 +494,7 @@ def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) 
         assert lower["top"] >= upper["bottom"], "each pill has a row of its own"
     assert max(box["right"] - box["left"] for box in boxes) - min(box["right"] - box["left"] for box in boxes) < 1
     for box in boxes:
-        assert abs(column_box["right"] - 16 - box["right"]) < 1, "the pills are set in 16px from the column's edge"
+        assert abs(column_box["right"] - box["right"]) < 1, "the pills end at the column's edge"
         assert box["left"] > column_box["left"] + (column_box["right"] - column_box["left"]) / 3, (
             "the pills sit on the user's side of the column"
         )
@@ -553,9 +553,9 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
     assert _box(composer) == composer_box, "the composer does not move"
-    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
-    # The link sits immediately left of the button that hides the suggestions, 16px away, on the same line.
-    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 16) < 1
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, "the line's words end 16px in from the box's edge"
+    # The link sits immediately left of the button that hides the suggestions, 12px away, on the same line.
+    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 12) < 1
     assert abs(_box(toggle)["top"] - _box(disable)["top"]) < 1
     page.screenshot(path=str(tmp_path / "1-fixed-set-shown.png"))
 
@@ -585,7 +585,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     expect(pills).to_have_count(0)
     expect(column.locator(".suggestion-strip-disable")).to_have_count(0)
     assert _box(composer) == composer_box_before_the_set, "the set's arrival moves nothing"
-    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, "the line's words end 16px in from the box's edge"
     page.screenshot(path=str(tmp_path / "2-generated-set-line.png"))
 
     toggle.click()
@@ -650,7 +650,7 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         expect(column.get_by_role("button")).to_have_count(1)
         _assert_pills_are_a_list_on_the_users_side(pills, column)
         assert _box(disable)["top"] >= _box(pills.last)["bottom"]
-        assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
+        assert abs(_box(composer)["right"] - 16 - _box(disable)["right"]) < 1, "the line's words end 16px in from the box's edge"
         assert _box(line)["bottom"] <= _box(composer)["top"]
         page.screenshot(path=str(tmp_path / "new-chat-strip.png"))
 
@@ -915,7 +915,7 @@ def test_a_tall_list_of_suggestion_pills_keeps_to_its_share_of_the_transcript_an
 def test_suggestion_pills_float_over_the_transcript_in_the_phone_layout_in_line_with_its_messages(
     tmp_path: Path, page: Page
 ) -> None:
-    """At a phone's width the pills float over the transcript the same way: set in 16px from the edge of the
+    """At a phone's width the pills float over the transcript the same way: ending at the edge of the
     transcript's own column, above a footer that keeps its box, the last reply ending just above them."""
     with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
         _set_fixture_agent(server, "WAITING", ActivityState.IDLE)
