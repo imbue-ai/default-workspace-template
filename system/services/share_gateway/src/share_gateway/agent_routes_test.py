@@ -570,7 +570,7 @@ def test_a_run_nobody_reads_to_its_end_stops_the_command_and_everything_it_start
     try:
         response = harness.client.post(
             "/_agent/run",
-            json={"command": ["sh", "-c", f"exec 3>{lifeline.path}; echo started; sleep 600 & wait"]},
+            json={"command": lifeline.holding_command()},
             headers=bearer(join_as(harness, "workspace")),
             buffered=False,
         )
@@ -587,7 +587,7 @@ def test_a_caller_that_hangs_up_on_a_run_that_prints_nothing_stops_the_command(t
     harness = make_harness(tmp_path)
     lifeline = ProcessLifeline(tmp_path)
     headers = bearer(join_as(harness, "workspace"))
-    body = {"command": ["sh", "-c", f"exec 3>{lifeline.path}; echo started; sleep 600 & wait"]}
+    body = {"command": lifeline.holding_command()}
     try:
         with serve_wsgi(harness.app, is_threaded=True) as origin:
             with httpx.stream("POST", f"{origin}/_agent/run", json=body, headers=headers, timeout=10.0) as response:

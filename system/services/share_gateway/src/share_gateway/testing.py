@@ -3,6 +3,7 @@
 import json
 import os
 import select
+import socket
 import subprocess
 import threading
 from collections.abc import Generator
@@ -20,6 +21,9 @@ from werkzeug.serving import make_server
 from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
+from share_gateway.agent_exec import RunRequest
+from share_gateway.agent_exec import RunningCommands
+from share_gateway.agent_exec import stream_command
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
 from share_gateway.caddyfile import RegisteredApp
@@ -184,7 +188,30 @@ class ProcessLifeline:
     def close(self) -> None:
         os.close(self._reader)
 
+    def holding_command(self) -> list[str]:
+        """A shell that opens the FIFO, says ``started``, starts a child that holds the FIFO too, and waits on it."""
+        return ["sh", "-c", f"exec 3>{self.path}; echo started; sleep 600 & wait"]
+
     def is_released_within(self, timeout_seconds: float) -> bool:
         """Whether every process holding the FIFO open exits within ``timeout_seconds``."""
         readable, _writable, _exceptional = select.select([self._reader], [], [], timeout_seconds)
         return bool(readable) and os.read(self._reader, 1) == b""
+
+
+def run_to_completion(command: list[str], cwd: Path, timeout_seconds: float = 5.0) -> list[dict[str, object]]:
+    """Every event of ``command``, run in ``cwd`` to its end."""
+    return list(stream_command(RunRequest(command, cwd, timeout_seconds), RunningCommands()))
+
+
+def start_holding(
+    lifeline: ProcessLifeline,
+    cwd: Path,
+    timeout_seconds: float,
+    running: RunningCommands,
+    caller: socket.socket | None = None,
+) -> Generator[dict[str, object], None, None]:
+    """Start ``lifeline``'s holding command, and answer its events from after its first line, which it prints once
+    the FIFO is open."""
+    events = stream_command(RunRequest(lifeline.holding_command(), cwd, timeout_seconds), running, caller)
+    assert next(events) == {"type": "stdout", "data": "started\n"}
+    return events

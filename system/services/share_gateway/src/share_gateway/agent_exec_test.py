@@ -3,7 +3,6 @@ import signal
 import socket
 import stat
 import sys
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -28,27 +27,11 @@ from share_gateway.agent_exec import resolve_workspace_path
 from share_gateway.agent_exec import stream_command
 from share_gateway.agent_exec import write_workspace_file
 from share_gateway.testing import ProcessLifeline
+from share_gateway.testing import run_to_completion
+from share_gateway.testing import start_holding
 
 _ROOT = Path("/home/user/workspace")
 _LIFELINE_WAIT_SECONDS = 5.0
-
-
-def run_to_completion(command: list[str], cwd: Path, timeout_seconds: float = 5.0) -> list[dict[str, object]]:
-    return list(stream_command(RunRequest(command, cwd, timeout_seconds), RunningCommands()))
-
-
-def start_holding(
-    lifeline: ProcessLifeline,
-    tmp_path: Path,
-    timeout_seconds: float,
-    running: RunningCommands,
-    caller: socket.socket | None = None,
-) -> Generator[dict[str, object], None, None]:
-    """Start a shell that holds ``lifeline`` open, starts a child that holds it too, and waits; read past its first line."""
-    script = f"exec 3>{lifeline.path}; echo started; sleep 600 & wait"
-    events = stream_command(RunRequest(["sh", "-c", script], tmp_path, timeout_seconds), running, caller)
-    assert next(events) == {"type": "stdout", "data": "started\n"}
-    return events
 
 
 def test_a_path_is_taken_as_written_when_absolute_and_under_the_repository_root_otherwise() -> None:
