@@ -30,11 +30,9 @@ test adds Playwright to the app's own dev group and launches Fortress itself.
 The chat app's and the shell's suites are their own pytest roots too, and
 their own conftests point `page` / `context` / `browser` at Fortress, so use
 those there. Where a conftest provides the browser, do not write your own
-launch fixture. Fortress glides the cursor on every pointer move, which changes
-how a test should click and hover:
-`.agents/shared/references/playwright-fortress.md`. Never `playwright install`
-a managed browser, and never skip browser tests on browser presence -- a
-browser that cannot launch must fail the run. Give every browser test a `pytest.mark.timeout(120, func_only=False)`
+launch fixture. Never `playwright install` a managed browser, and never skip
+browser tests on browser presence -- a browser that cannot launch must fail
+the run. Give every browser test a `pytest.mark.timeout(120, func_only=False)`
 marker: under the repo-root conftest it is the only per-suite setup a browser test
 needs, since the repo-wide 10-second default does not cover a browser launch, and
 a user-built app's suite honours it through the `pytest-timeout` in its own dev
