@@ -310,13 +310,12 @@ _NOTHING_HELD: Final[Holding] = Holding((), (), None)
 
 
 class ProcessTable(NamedTuple):
-    """One reading of every process: who each belongs to, and what each owner holds.
+    """One reading of every process and what each owner holds.
 
     ``unowned`` is what no agent, program or browser started, by the item
     ``oom_priority.processes.unowned_item`` counts it under."""
 
     processes: Mapping[int, Process]
-    owners: Mapping[int, Owner | None]
     holdings: Mapping[Owner, Holding]
     unowned: Mapping[str, Holding]
 
@@ -569,7 +568,6 @@ def read_process_table(
             unowned.setdefault(unowned_item(procs[pid]), []).append(pid)
     return ProcessTable(
         processes=procs,
-        owners=owners,
         holdings={
             owner: _holding(root_pids.get(owner, ()), pids, procs)
             for owner, pids in owned.items()
