@@ -1,0 +1,1 @@
+The lead-proxy reference no longer carries the `mngr rsync` rationale section. The launcher (`create_worker.py`) makes that copy itself and documents the argument order, path spelling, trailing slashes and `--uncommitted-changes=clobber` in its own docstrings, so the section repeated them for readers who never run the command.
