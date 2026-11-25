@@ -46,8 +46,7 @@ upgrade (a message to a stopped chat, the main chat's wake) is restarted by
 and such a chat's reads `upgraded <chat> (restarted: ...)`. A line that reports
 a failure or a restart, or a `warning:` about the pass itself (it timed out or
 could not run), changes nothing about the landing and needs nothing from you:
-the update stays applied, and the workspace's next boot brings every agent
-current.
+the update stays applied, and the workspace's next boot tries again.
 
 ## Exit 2 -- automatically rolled back
 
