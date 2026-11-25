@@ -15,7 +15,10 @@ from use_ai_integration_skill.data_types import (
     AIProvider,
 )
 from use_ai_integration_skill.errors import (
+    API_KEY_LANE,
     GOOGLE_LANE,
+    PROVIDERS_CODE_CAN_CALL,
+    SIGN_IN_ADVICE,
     NoUsableAccountError,
     UnsupportedProviderError,
     unsupported_provider_message,
@@ -97,12 +100,20 @@ def _read_index(root: Path) -> _AccountIndex | None:
         ) from e
 
 
-def _account_label(row: _IndexRow) -> str:
-    return row.name or row.display or row.lane
-
-
-def _provider_label(row: _IndexRow) -> str:
+def _provider_name(row: _IndexRow) -> str:
     return row.display or row.lane
+
+
+def _numbered_labels(rows: Sequence[_IndexRow]) -> dict[str, str]:
+    """Each account's label, numbered among the accounts on its lane that read the same: "Anthropic", "Anthropic 2"."""
+    counts: dict[tuple[str, str], int] = {}
+    labels: dict[str, str] = {}
+    for row in rows:
+        name = row.name or _provider_name(row)
+        number = counts.get((name, row.lane), 0) + 1
+        counts[(name, row.lane)] = number
+        labels[row.id] = name if number == 1 else f"{name} {number}"
+    return labels
 
 
 def _choose_default_row(index: _AccountIndex) -> _IndexRow | None:
@@ -118,16 +129,28 @@ def _choose_default_row(index: _AccountIndex) -> _IndexRow | None:
     return next((row for row in supported if row.id == index.mru), supported[0])
 
 
-def _only_unsupported_accounts_message(rows: Sequence[_IndexRow]) -> str:
-    labels = list(dict.fromkeys(_provider_label(row) for row in rows))
-    message = (
-        f"None of this workspace's AI accounts can call a model from code ({', '.join(labels)}); "
-        "sign in to Anthropic or OpenAI to call a model from code."
+def _unsupported_account_description(row: _IndexRow) -> str:
+    name = _provider_name(row)
+    return f"{name} through the API key option" if row.lane == API_KEY_LANE else name
+
+
+def _has_specific_advice(row: _IndexRow) -> bool:
+    return row.lane == GOOGLE_LANE or (
+        row.lane == API_KEY_LANE and _provider_name(row) in PROVIDERS_CODE_CAN_CALL
     )
-    google_row = next((row for row in rows if row.lane == GOOGLE_LANE), None)
-    if google_row is None:
-        return message
-    return f"{message} {unsupported_provider_message(GOOGLE_LANE, _provider_label(google_row))}"
+
+
+def _only_unsupported_accounts_message(rows: Sequence[_IndexRow]) -> str:
+    descriptions = list(
+        dict.fromkeys(_unsupported_account_description(row) for row in rows)
+    )
+    notes = dict.fromkeys(
+        unsupported_provider_message(row.lane, _provider_name(row))
+        for row in rows
+        if _has_specific_advice(row)
+    )
+    message = f"None of this workspace's AI accounts can call a model from code ({', '.join(descriptions)}); {SIGN_IN_ADVICE}"
+    return " ".join([message, *notes])
 
 
 def _named_row(index: _AccountIndex, account_id: str) -> _IndexRow:
@@ -135,8 +158,23 @@ def _named_row(index: _AccountIndex, account_id: str) -> _IndexRow:
     if row is None:
         raise NoUsableAccountError(f"No signed-in account has the id {account_id!r}.")
     if row.lane not in SUPPORTED_PROVIDER_BY_LANE:
-        raise UnsupportedProviderError(row.lane, _provider_label(row))
+        raise UnsupportedProviderError(row.lane, _provider_name(row))
     return row
+
+
+def _account_from_row(root: Path, row: _IndexRow, label: str) -> AIAccount:
+    """The account a supported row names; raises when its folder is gone."""
+    account_dir = root / row.id
+    if not account_dir.is_dir():
+        raise NoUsableAccountError(
+            f"The account {label} has no folder on disk; sign in to it again."
+        )
+    return AIAccount(
+        account_id=row.id,
+        provider=SUPPORTED_PROVIDER_BY_LANE[row.lane],
+        account_dir=account_dir,
+        label=label,
+    )
 
 
 def resolve_ai_account(account_id: str | None, root: Path) -> AIAccount:
@@ -153,31 +191,44 @@ def resolve_ai_account(account_id: str | None, root: Path) -> AIAccount:
                 _only_unsupported_accounts_message(index.accounts)
             )
         row = default_row
-    account_dir = root / row.id
-    if not account_dir.is_dir():
-        raise NoUsableAccountError(
-            f"The account {_account_label(row)} has no folder on disk; sign in to it again."
-        )
-    return AIAccount(
-        account_id=row.id,
-        provider=SUPPORTED_PROVIDER_BY_LANE[row.lane],
-        account_dir=account_dir,
-        label=_account_label(row),
-    )
+    return _account_from_row(root, row, _numbered_labels(index.accounts)[row.id])
 
 
-def list_ai_accounts(root: Path) -> list[AIAccountListing]:
+def _listed_billing(
+    root: Path, row: _IndexRow, label: str, *, anthropic_snapshot_path: str
+) -> AIBilling | None:
+    if row.lane not in SUPPORTED_PROVIDER_BY_LANE:
+        return None
+    try:
+        account = _account_from_row(root, row, label)
+        return read_ai_credential(
+            account, anthropic_snapshot_path=anthropic_snapshot_path
+        ).billing
+    except NoUsableAccountError:
+        return None
+
+
+def list_ai_accounts(
+    root: Path, *, anthropic_snapshot_path: str
+) -> list[AIAccountListing]:
     index = _read_index(root)
     if index is None:
         return []
     default_row = _choose_default_row(index)
+    labels = _numbered_labels(index.accounts)
     return [
         AIAccountListing(
             account_id=row.id,
             lane=row.lane,
-            label=_account_label(row),
+            label=labels[row.id],
             is_supported=row.lane in SUPPORTED_PROVIDER_BY_LANE,
             is_default=default_row is not None and row.id == default_row.id,
+            billing=_listed_billing(
+                root,
+                row,
+                labels[row.id],
+                anthropic_snapshot_path=anthropic_snapshot_path,
+            ),
         )
         for row in index.accounts
     ]
@@ -238,10 +289,11 @@ def _read_openai_credential(account: AIAccount) -> AICredential:
         ) from e
     try:
         auth = _CodexAuthFile.model_validate_json(text)
-    except ValidationError as e:
+    except ValidationError:
+        # The validation error quotes the file, key included.
         raise NoUsableAccountError(
-            f"The OpenAI account {account.label}'s sign-in is not readable: {e}"
-        ) from e
+            f"The OpenAI account {account.label}'s sign-in file is not valid; sign in to it again."
+        ) from None
     api_key = (
         auth.openai_api_key
         if auth.openai_api_key is not None and len(auth.openai_api_key) > 0
@@ -250,12 +302,17 @@ def _read_openai_credential(account: AIAccount) -> AICredential:
     auth_mode = auth.auth_mode or (
         _CODEX_API_KEY_AUTH_MODE if api_key is not None else _CODEX_SIGN_IN_AUTH_MODE
     )
-    if auth_mode != _CODEX_API_KEY_AUTH_MODE:
+    if auth_mode == _CODEX_SIGN_IN_AUTH_MODE:
         return AICredential(
             kind=AICredentialKind.OPENAI_SIGN_IN,
             billing=AIBilling.SUBSCRIPTION,
             api_key=None,
             api_base=None,
+        )
+    if auth_mode != _CODEX_API_KEY_AUTH_MODE:
+        raise NoUsableAccountError(
+            f"The OpenAI account {account.label} signs in with codex's {auth_mode!r} mode, "
+            "which code cannot call yet; sign in to it with ChatGPT or an API key."
         )
     if api_key is None:
         raise NoUsableAccountError(

@@ -7,7 +7,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from use_ai_integration_skill.claude_p import Usage
+from use_ai_integration_skill.claude_p import Usage, run_in_own_process_group
 from use_ai_integration_skill.data_types import CodexExecOutcome, CodexSandboxMode
 from use_ai_integration_skill.errors import ProviderCallError, ProviderTimeoutError
 
@@ -181,21 +181,18 @@ def run_codex_exec(
 ) -> CodexExecOutcome:
     """Run ``codex exec --json`` on the account with the prompt on stdin, then closed, and parse its events."""
     try:
-        finished = subprocess.run(
+        finished = run_in_own_process_group(
             codex_exec_argv(model=model, sandbox_mode=sandbox_mode),
-            input=prompt_text,
-            capture_output=True,
-            text=True,
+            input_text=prompt_text,
             env=codex_exec_environment(account_dir, os.environ),
-            cwd=working_dir,
-            timeout=timeout_seconds,
-            check=False,
+            cwd=str(working_dir),
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired as e:
         raise ProviderTimeoutError(
             f"codex exec did not finish within {e.timeout:g}s"
         ) from e
-    except FileNotFoundError as e:
+    except OSError as e:
         raise ProviderCallError(f"could not start codex: {e}") from e
     if finished.returncode != 0:
         raise ProviderCallError(

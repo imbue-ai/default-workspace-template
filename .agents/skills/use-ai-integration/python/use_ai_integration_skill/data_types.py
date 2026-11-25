@@ -49,7 +49,7 @@ class AIAccount(BaseModel):
     provider: AIProvider = Field(description="The provider the account signs in to")
     account_dir: Path = Field(description="The account's folder")
     label: str = Field(
-        description="The user's name for the account, else its provider's name"
+        description="The user's name for the account, else its provider's, numbered like the chat's picker, e.g. Anthropic 2"
     )
 
 
@@ -63,13 +63,16 @@ class AIAccountListing(BaseModel):
         description="The chat app's lane id, e.g. anthropic, openai, google"
     )
     label: str = Field(
-        description="The user's name for the account, else its provider's name"
+        description="The user's name for the account, else its provider's, numbered like the chat's picker, e.g. Anthropic 2"
     )
     is_supported: bool = Field(
-        description="Whether code can call a model on this account"
+        description="Whether code can call a model on this account's provider"
     )
     is_default: bool = Field(
         description="Whether a call that names no account runs on this one"
+    )
+    billing: AIBilling | None = Field(
+        description="How a call on this account is billed; None when code cannot call it"
     )
 
 

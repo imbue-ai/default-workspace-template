@@ -1,4 +1,8 @@
 import json
+import os
+import select
+import signal
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -9,6 +13,7 @@ from use_ai_integration_skill.ai import (
     DEFAULT_OPENAI_API_MODEL,
     complete,
     complete_on_account,
+    pin_anthropic_key_of_account,
     run_task,
     run_task_on_account,
 )
@@ -23,17 +28,36 @@ from use_ai_integration_skill.data_types import (
     LiteLLMReply,
     LiteLLMRequest,
 )
-from use_ai_integration_skill.errors import ProviderCallError, ProviderTimeoutError
+from use_ai_integration_skill.errors import (
+    NoUsableAccountError,
+    ProviderCallError,
+    ProviderTimeoutError,
+)
 from use_ai_integration_skill.testing import write_ai_accounts, write_stub_executable
 
 # Stands in for claude: reports what it was run with as the result text of a success payload.
 _STUB_CLAUDE = """
 import json, os, sys
+argv = sys.argv[1:]
+def flag_file(flag):
+    if flag not in argv:
+        return None
+    with open(argv[argv.index(flag) + 1], encoding="utf-8") as f:
+        return f.read()
+stdin_text = sys.stdin.read()
 observed = {
-    "argv": sys.argv[1:],
+    "argv": argv,
     "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
-    "api_key": os.environ.get("ANTHROPIC_API_KEY"),
-    "base_url": os.environ.get("ANTHROPIC_BASE_URL"),
+    "ambient_credentials": sorted(
+        name
+        for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN")
+        if name in os.environ
+    ),
+    "settings": json.loads(flag_file("--settings") or "null"),
+    "system_prompt": flag_file("--system-prompt-file"),
+    "append_system_prompt": flag_file("--append-system-prompt-file"),
+    "stdin_length": len(stdin_text),
+    "stdin_head": stdin_text[:100],
     "cwd": os.getcwd(),
 }
 print(json.dumps({
@@ -77,6 +101,29 @@ _HANGING_STUB = """
 import signal
 signal.pause()
 """
+
+# Starts a grandchild that holds the fifo STUB_GRANDCHILD_FIFO names open, writes its pid there, then hangs.
+_STUB_LEAVING_A_GRANDCHILD = """
+import os, signal, subprocess
+fd = os.open(os.environ["STUB_GRANDCHILD_FIFO"], os.O_WRONLY)
+grandchild = subprocess.Popen(["sleep", "36284"], stdin=subprocess.DEVNULL, stdout=fd, stderr=subprocess.DEVNULL)
+os.write(fd, f"{grandchild.pid}\\n".encode())
+os.close(fd)
+signal.pause()
+"""
+
+_STUB_PRINTING_NON_UTF8 = """
+import sys
+sys.stderr.buffer.write(b"\\xff\\xfe bad bytes")
+sys.exit(1)
+"""
+
+_AMBIENT_CREDENTIALS = {
+    "ANTHROPIC_API_KEY": "sk-ant-ambient",
+    "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
+    "ANTHROPIC_BASE_URL": "https://ambient/",
+    "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-ambient",
+}
 
 _CHATGPT_AUTH = {
     "auth_mode": "chatgpt",
@@ -239,12 +286,18 @@ def test_complete_on_an_anthropic_sign_in_runs_claude_on_that_account(
     credential = read_ai_credential(
         account, anthropic_snapshot_path=anthropic_snapshot_path
     )
+    for name, value in _AMBIENT_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
 
     result = _complete_on(account, credential)
 
     observed = json.loads(result.text)
     assert observed["config_dir"] == str(account.account_dir)
+    assert observed["ambient_credentials"] == []
+    assert observed["system_prompt"] == "You are a classifier."
+    assert observed["stdin_head"] == "Classify: invoice overdue"
     argv = observed["argv"]
+    assert "--" not in argv and "Classify: invoice overdue" not in argv
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
     assert argv[argv.index("--tools") + 1] == ""
     assert result.billing is AIBilling.SUBSCRIPTION
@@ -303,14 +356,85 @@ def test_run_task_on_an_anthropic_key_gives_claude_the_key_in_the_given_director
     )
 
     observed = json.loads(result.text)
-    assert observed["api_key"] == "sk-ant-key"
-    assert observed["base_url"] == "https://proxy"
+    assert observed["settings"] == {
+        "env": {
+            "ANTHROPIC_API_KEY": "sk-ant-key",
+            "ANTHROPIC_BASE_URL": "https://proxy",
+        }
+    }
+    assert observed["ambient_credentials"] == []
     assert Path(observed["cwd"]).resolve() == work_dir.resolve()
+    assert observed["append_system_prompt"] == "Only touch notes/."
+    assert observed["stdin_head"] == "Tidy the notes."
     argv = observed["argv"]
-    assert argv[argv.index("--append-system-prompt") + 1] == "Only touch notes/."
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert result.billing is AIBilling.API_KEY
     assert result.cost_usd == 0.42
+
+
+def test_run_task_on_a_pinned_key_overrides_the_accounts_own_proxy(
+    tmp_path: Path, anthropic_snapshot_path: str, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "claude", _STUB_CLAUDE)
+    account = _anthropic_account(tmp_path)
+    (account.account_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "env": {
+                    "ANTHROPIC_API_KEY": "sk-ant-rekeyed",
+                    "ANTHROPIC_BASE_URL": "https://new-proxy/",
+                }
+            }
+        )
+    )
+    snapshot = Path(anthropic_snapshot_path)
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("ANTHROPIC_API_KEY=sk-ant-pinned\n")
+    credential = read_ai_credential(
+        account, anthropic_snapshot_path=anthropic_snapshot_path
+    )
+
+    result = run_task_on_account(
+        "Tidy the notes.",
+        instructions=None,
+        model=None,
+        account=account,
+        credential=credential,
+        working_dir=tmp_path,
+        timeout_seconds=8.0,
+    )
+
+    assert json.loads(result.text)["settings"] == {
+        "env": {
+            "ANTHROPIC_API_KEY": "sk-ant-pinned",
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+        }
+    }
+
+
+def test_a_prompt_longer_than_any_argv_allows_reaches_claude_on_stdin(
+    tmp_path: Path, anthropic_snapshot_path: str, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "claude", _STUB_CLAUDE)
+    account = _anthropic_account(tmp_path)
+    credential = read_ai_credential(
+        account, anthropic_snapshot_path=anthropic_snapshot_path
+    )
+    long_text = "x" * 2_000_000
+
+    result = complete_on_account(
+        long_text,
+        system=long_text,
+        model=None,
+        account=account,
+        credential=credential,
+        timeout_seconds=8.0,
+        litellm_caller=_unexpected_litellm_call,
+    )
+
+    observed = json.loads(result.text)
+    assert observed["stdin_length"] == len(long_text)
+    assert observed["system_prompt"] == long_text
 
 
 def test_claude_that_outlives_its_timeout_raises_provider_timeout(
@@ -410,6 +534,147 @@ def test_a_missing_cli_raises_provider_call_error(
 
     with pytest.raises(ProviderCallError, match="could not start codex"):
         complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+
+def _complete_through(
+    cli: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_snapshot_path: str,
+    *,
+    timeout_seconds: float,
+) -> AIResult:
+    """One completion on a sign-in whose provider runs ``cli``."""
+    if cli == "codex":
+        _openai_sign_in_root(tmp_path, monkeypatch)
+        return complete(
+            "hello", system="Answer briefly.", timeout_seconds=timeout_seconds
+        )
+    else:
+        account = _anthropic_account(tmp_path)
+        credential = read_ai_credential(
+            account, anthropic_snapshot_path=anthropic_snapshot_path
+        )
+        return _complete_on(account, credential, timeout_seconds=timeout_seconds)
+
+
+def _read_until_closed(fd: int, *, timeout_seconds: float) -> tuple[bytes, bool]:
+    """What a fifo's writers wrote to it, and whether all of them closed it within the timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    received = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            return received, False
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return received, True
+        received += chunk
+
+
+@pytest.mark.parametrize("cli", ["claude", "codex"])
+def test_a_call_that_times_out_ends_every_process_its_cli_started(
+    cli: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_snapshot_path: str,
+    stub_bin_dir: Path,
+) -> None:
+    write_stub_executable(stub_bin_dir, cli, _STUB_LEAVING_A_GRANDCHILD)
+    fifo = tmp_path / "grandchild.fifo"
+    os.mkfifo(fifo)
+    monkeypatch.setenv("STUB_GRANDCHILD_FIFO", str(fifo))
+    fifo_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with pytest.raises(ProviderTimeoutError, match="did not finish within 3s"):
+            _complete_through(
+                cli, tmp_path, monkeypatch, anthropic_snapshot_path, timeout_seconds=3.0
+            )
+        received, is_closed = _read_until_closed(fifo_fd, timeout_seconds=5.0)
+    finally:
+        os.close(fifo_fd)
+
+    grandchild_pid = int(received)
+    if not is_closed:
+        os.kill(grandchild_pid, signal.SIGKILL)
+    assert is_closed
+
+
+@pytest.mark.parametrize("cli", ["claude", "codex"])
+def test_a_cli_printing_bytes_that_are_not_utf8_raises_provider_call_error(
+    cli: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_snapshot_path: str,
+    stub_bin_dir: Path,
+) -> None:
+    write_stub_executable(stub_bin_dir, cli, _STUB_PRINTING_NON_UTF8)
+
+    with pytest.raises(ProviderCallError, match="exited 1: .*bad bytes"):
+        _complete_through(
+            cli, tmp_path, monkeypatch, anthropic_snapshot_path, timeout_seconds=8.0
+        )
+
+
+@pytest.mark.parametrize("cli", ["claude", "codex"])
+def test_a_cli_that_cannot_be_run_raises_provider_call_error(
+    cli: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_snapshot_path: str,
+    stub_bin_dir: Path,
+) -> None:
+    (stub_bin_dir / cli).write_text("not a program")
+    monkeypatch.setenv("PATH", str(stub_bin_dir))
+
+    with pytest.raises(ProviderCallError, match=f"could not start {cli}"):
+        _complete_through(
+            cli, tmp_path, monkeypatch, anthropic_snapshot_path, timeout_seconds=8.0
+        )
+
+
+def test_pin_anthropic_key_snapshots_the_accounts_key_and_proxy(
+    tmp_path: Path, anthropic_snapshot_path: str
+) -> None:
+    account = _anthropic_account(tmp_path)
+    (account.account_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "env": {
+                    "ANTHROPIC_API_KEY": "sk-ant-key",
+                    "ANTHROPIC_BASE_URL": "https://proxy/",
+                }
+            }
+        )
+    )
+
+    written = pin_anthropic_key_of_account(
+        account, anthropic_snapshot_path=anthropic_snapshot_path
+    )
+
+    assert written == anthropic_snapshot_path
+    assert (
+        Path(written).read_text()
+        == "ANTHROPIC_API_KEY=sk-ant-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("lane", "display"), [("anthropic", "Anthropic"), ("openai", "OpenAI")]
+)
+def test_pin_anthropic_key_refuses_an_account_without_an_anthropic_key(
+    lane: str, display: str, tmp_path: Path, anthropic_snapshot_path: str
+) -> None:
+    root = write_ai_accounts(tmp_path / "accounts", [("acct", lane, display)])
+    (root / "acct" / "auth.json").write_text(json.dumps(_CHATGPT_AUTH))
+    account = resolve_ai_account("acct", root)
+
+    with pytest.raises(NoUsableAccountError, match="no key to pin"):
+        pin_anthropic_key_of_account(
+            account, anthropic_snapshot_path=anthropic_snapshot_path
+        )
+
+    assert not Path(anthropic_snapshot_path).exists()
 
 
 def test_ai_result_rejects_a_cost_on_subscription_billing() -> None:

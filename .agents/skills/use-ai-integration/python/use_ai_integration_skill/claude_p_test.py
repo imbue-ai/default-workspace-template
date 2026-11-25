@@ -423,6 +423,24 @@ def test_credentials_prefer_snapshot_over_settings(
     assert creds.base_url == "https://pinned/"
 
 
+def test_a_snapshotted_key_never_takes_the_settings_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key pinned without a base URL stays on the direct API after the account moves to a proxy."""
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new-proxy/"}}'
+    )
+    snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\n")
+
+    creds = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
+
+    assert creds.api_key == "sk-pinned-key"
+    assert creds.base_url is None
+
+
 def test_credentials_fall_back_to_settings_without_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -538,27 +556,76 @@ def test_child_env_runs_on_the_named_account_over_claude_config_dir(
     assert env["CLAUDE_CONFIG_DIR"] == "/accounts/named"
 
 
-def test_child_env_gives_claude_the_given_key_and_drops_a_stale_base_url(
+_AMBIENT_CREDENTIALS = {
+    "ANTHROPIC_API_KEY": "sk-ant-ambient",
+    "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
+    "ANTHROPIC_BASE_URL": "https://ambient/",
+    "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-ambient",
+}
+
+
+def _set_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in _AMBIENT_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_child_env_for_a_named_account_drops_the_process_envs_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://stale/")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _set_ambient_credentials(monkeypatch)
 
-    without_base = claude_p._child_env(
-        api_credentials=claude_p.WorkspaceAICredentials(
-            api_key="sk-given", base_url=None, oauth_token=None
-        )
+    env = claude_p._child_env(account_dir="/accounts/named")
+
+    assert not set(_AMBIENT_CREDENTIALS) & set(env)
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-ambient"
+
+
+def test_child_env_without_a_named_account_keeps_the_process_envs_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _set_ambient_credentials(monkeypatch)
+
+    env = claude_p._child_env()
+
+    assert {name: env[name] for name in _AMBIENT_CREDENTIALS} == _AMBIENT_CREDENTIALS
+
+
+def test_credentials_of_a_named_account_ignore_the_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_credential_sources(tmp_path, monkeypatch)
+    _set_ambient_credentials(monkeypatch)
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+
+    named = claude_p.read_workspace_ai_credentials(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
     )
-    with_base = claude_p._child_env(
-        api_credentials=claude_p.WorkspaceAICredentials(
-            api_key="sk-given", base_url="https://proxy", oauth_token=None
-        )
+    unnamed = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
+
+    assert named == claude_p.WorkspaceAICredentials(
+        api_key=None, base_url=None, oauth_token=None
+    )
+    assert unnamed.api_key == "sk-ant-ambient"
+
+
+def test_write_snapshot_of_a_named_account_captures_its_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    chat_settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-chat-key"}}')
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+    (named_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-named-key"}}'
     )
 
-    assert without_base["ANTHROPIC_API_KEY"] == "sk-given"
-    assert "ANTHROPIC_BASE_URL" not in without_base
-    assert with_base["ANTHROPIC_API_KEY"] == "sk-given"
-    assert with_base["ANTHROPIC_BASE_URL"] == "https://proxy"
+    written = claude_p.write_anthropic_env_snapshot(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
+    )
+
+    assert Path(written).read_text() == "ANTHROPIC_API_KEY=sk-named-key\n"
 
 
 def test_credentials_read_the_named_account_not_claude_config_dir(

@@ -27,6 +27,7 @@ _OPENAI_ROW = ("o1", "openai", "OpenAI")
 _GOOGLE_ROW = ("g1", "google", "Google")
 _OPENROUTER_ROW = ("r1", "openrouter", "OpenRouter")
 _OPENCODE_GO_ROW = ("c1", "opencode-go", "Opencode Go")
+_ANTHROPIC_KEY_OPTION_ROW = ("k1", "api-key", "Anthropic")
 
 
 def _account(tmp_path: Path, provider: AIProvider) -> AIAccount:
@@ -132,6 +133,31 @@ def test_named_google_account_raises_unsupported_provider_with_googles_terms(
         assert phrase in message
 
 
+def test_named_anthropic_key_from_the_api_key_option_says_where_to_add_it(
+    tmp_path: Path,
+) -> None:
+    root = write_ai_accounts(tmp_path, [_ANTHROPIC_ROW, _ANTHROPIC_KEY_OPTION_ROW])
+
+    with pytest.raises(
+        UnsupportedProviderError,
+        match="Anthropic key added through the API key option.*under Anthropic's own sign-in option",
+    ):
+        resolve_ai_account("k1", root)
+
+
+def test_only_an_anthropic_key_from_the_api_key_option_says_where_to_add_it(
+    tmp_path: Path,
+) -> None:
+    root = write_ai_accounts(tmp_path, [_ANTHROPIC_KEY_OPTION_ROW])
+
+    with pytest.raises(NoUsableAccountError) as raised:
+        resolve_ai_account(None, root)
+
+    message = str(raised.value)
+    assert "(Anthropic through the API key option)" in message
+    assert "under Anthropic's own sign-in option" in message
+
+
 def test_named_openrouter_account_raises_unsupported_provider_naming_it(
     tmp_path: Path,
 ) -> None:
@@ -181,25 +207,57 @@ def test_account_without_a_folder_raises_no_usable_account(tmp_path: Path) -> No
         resolve_ai_account(None, root)
 
 
-def test_list_ai_accounts_marks_support_and_the_default(tmp_path: Path) -> None:
+def test_list_ai_accounts_marks_support_billing_and_the_default(
+    tmp_path: Path, anthropic_snapshot_path: str
+) -> None:
     root = write_ai_accounts(
-        tmp_path, [_GOOGLE_ROW, _ANTHROPIC_ROW, _OPENAI_ROW], mru="o1"
+        tmp_path / "accounts", [_GOOGLE_ROW, _ANTHROPIC_ROW, _OPENAI_ROW], mru="o1"
+    )
+    (root / "a1" / "settings.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_API_KEY": "sk-ant-settings"}})
     )
 
-    listing = list_ai_accounts(root)
+    listing = list_ai_accounts(root, anthropic_snapshot_path=anthropic_snapshot_path)
 
-    assert [(row.account_id, row.is_supported) for row in listing] == [
-        ("g1", False),
-        ("a1", True),
-        ("o1", True),
+    assert [(row.account_id, row.is_supported, row.billing) for row in listing] == [
+        ("g1", False, None),
+        ("a1", True, AIBilling.API_KEY),
+        ("o1", True, None),
     ]
     assert [row.account_id for row in listing if row.is_default] == [
         resolve_ai_account(None, root).account_id
     ]
 
 
+def test_list_ai_accounts_numbers_accounts_that_read_the_same(
+    tmp_path: Path, anthropic_snapshot_path: str
+) -> None:
+    root = write_ai_accounts(
+        tmp_path / "accounts",
+        [
+            _ANTHROPIC_ROW,
+            _OPENAI_ROW,
+            ("a2", "anthropic", "Anthropic"),
+            _ANTHROPIC_KEY_OPTION_ROW,
+        ],
+    )
+
+    listing = list_ai_accounts(root, anthropic_snapshot_path=anthropic_snapshot_path)
+
+    assert [(row.account_id, row.label) for row in listing] == [
+        ("a1", "Anthropic"),
+        ("o1", "OpenAI"),
+        ("a2", "Anthropic 2"),
+        ("k1", "Anthropic"),
+    ]
+    assert resolve_ai_account("a2", root).label == "Anthropic 2"
+
+
 def test_list_ai_accounts_without_an_index_is_empty(tmp_path: Path) -> None:
-    assert list_ai_accounts(tmp_path) == []
+    assert (
+        list_ai_accounts(tmp_path, anthropic_snapshot_path=str(tmp_path / "none.env"))
+        == []
+    )
 
 
 def test_anthropic_key_in_the_account_settings_is_an_api_key_credential(
@@ -321,6 +379,22 @@ def test_anthropic_credential_ignores_claude_config_dir(
     assert credential.kind is AICredentialKind.ANTHROPIC_SIGN_IN
 
 
+def test_anthropic_credential_ignores_credentials_in_the_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anthropic_snapshot_path: str
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-the-chats-own")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://the-chats-proxy/")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-the-chats-own")
+    account = _account(tmp_path, AIProvider.ANTHROPIC)
+
+    credential = read_ai_credential(
+        account, anthropic_snapshot_path=anthropic_snapshot_path
+    )
+
+    assert credential.kind is AICredentialKind.ANTHROPIC_SIGN_IN
+    assert credential.api_key is None
+
+
 def test_openai_pasted_key_is_an_api_key_credential(tmp_path: Path) -> None:
     account = _account(tmp_path, AIProvider.OPENAI)
     (account.account_dir / "auth.json").write_text(
@@ -385,6 +459,39 @@ def test_openai_api_key_mode_without_a_key_raises_no_usable_account(
         read_ai_credential(
             account, anthropic_snapshot_path=str(tmp_path / "unused.env")
         )
+
+
+def test_openai_sign_in_of_another_codex_mode_raises_no_usable_account(
+    tmp_path: Path,
+) -> None:
+    account = _account(tmp_path, AIProvider.OPENAI)
+    (account.account_dir / "auth.json").write_text(
+        json.dumps({"auth_mode": "bedrockApiKey", "OPENAI_API_KEY": None})
+    )
+
+    with pytest.raises(NoUsableAccountError, match="'bedrockApiKey' mode"):
+        read_ai_credential(
+            account, anthropic_snapshot_path=str(tmp_path / "unused.env")
+        )
+
+
+def test_an_unreadable_openai_key_file_raises_without_any_of_the_key(
+    tmp_path: Path,
+) -> None:
+    secret_tail = "SECRETTAIL1234567890abcdef"
+    account = _account(tmp_path, AIProvider.OPENAI)
+    (account.account_dir / "auth.json").write_text(
+        f'{{\n  "auth_mode": "apikey",\n  "OPENAI_API_KEY": "sk-proj-{secret_tail}'
+    )
+
+    with pytest.raises(NoUsableAccountError) as raised:
+        read_ai_credential(
+            account, anthropic_snapshot_path=str(tmp_path / "unused.env")
+        )
+
+    assert "not valid" in str(raised.value)
+    assert "SECRET" not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
 
 
 def test_openai_account_without_auth_json_raises_no_usable_account(

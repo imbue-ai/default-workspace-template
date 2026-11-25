@@ -6,6 +6,7 @@ from typing import Final, assert_never
 
 from use_ai_integration_skill.ai_accounts import (
     accounts_root,
+    list_ai_accounts,
     read_ai_credential,
     resolve_ai_account,
 )
@@ -17,10 +18,12 @@ from use_ai_integration_skill.claude_p import (
     WorkspaceAICredentials,
     claude_p_completion,
     claude_p_task,
+    write_anthropic_env_snapshot,
 )
 from use_ai_integration_skill.codex_exec import CODEX_TASK_SANDBOX, run_codex_exec
 from use_ai_integration_skill.data_types import (
     AIAccount,
+    AIAccountListing,
     AIBilling,
     AICredential,
     AICredentialKind,
@@ -30,7 +33,11 @@ from use_ai_integration_skill.data_types import (
     CodexSandboxMode,
     LiteLLMRequest,
 )
-from use_ai_integration_skill.errors import ProviderCallError, ProviderTimeoutError
+from use_ai_integration_skill.errors import (
+    NoUsableAccountError,
+    ProviderCallError,
+    ProviderTimeoutError,
+)
 from use_ai_integration_skill.litellm_call import (
     LiteLLMCaller,
     call_litellm,
@@ -92,6 +99,36 @@ def run_task(
     )
 
 
+def list_accounts() -> list[AIAccountListing]:
+    """The workspace's accounts, with the default marked and how a call on each is billed."""
+    return list_ai_accounts(
+        accounts_root(), anthropic_snapshot_path=ANTHROPIC_ENV_SNAPSHOT_PATH
+    )
+
+
+def pin_anthropic_key(account: str | None = None) -> str:
+    """Snapshot the named or default Anthropic account's API key for every Anthropic call from code; returns the snapshot's path."""
+    return pin_anthropic_key_of_account(
+        resolve_ai_account(account, accounts_root()),
+        anthropic_snapshot_path=ANTHROPIC_ENV_SNAPSHOT_PATH,
+    )
+
+
+def pin_anthropic_key_of_account(
+    account: AIAccount, *, anthropic_snapshot_path: str
+) -> str:
+    credential = read_ai_credential(
+        account, anthropic_snapshot_path=anthropic_snapshot_path
+    )
+    if credential.kind is not AICredentialKind.ANTHROPIC_API_KEY:
+        raise NoUsableAccountError(
+            f"The account {account.label} is not an Anthropic account with an API key; there is no key to pin."
+        )
+    return write_anthropic_env_snapshot(
+        anthropic_snapshot_path, account_dir=str(account.account_dir)
+    )
+
+
 def _default_api_model(provider: AIProvider) -> str:
     match provider:
         case AIProvider.ANTHROPIC:
@@ -149,6 +186,7 @@ def complete_on_account(
                     strip_mngr_agent_vars=True,
                     account_dir=str(account.account_dir),
                     timeout_seconds=timeout_seconds,
+                    is_prompt_text_outside_argv=True,
                 )
             return ai_result_from_claude(
                 result, account=account, model=chosen_model, billing=credential.billing
@@ -204,6 +242,7 @@ def run_task_on_account(
                     api_credentials=api_credentials,
                     cwd=str(working_dir),
                     timeout_seconds=timeout_seconds,
+                    is_prompt_text_outside_argv=True,
                 )
             return ai_result_from_claude(
                 result, account=account, model=chosen_model, billing=credential.billing
@@ -268,5 +307,5 @@ def _claude_failures_as_ai_errors() -> Generator[None, None, None]:
         raise ProviderTimeoutError(str(e)) from e
     except ClaudeCLIError as e:
         raise ProviderCallError(str(e)) from e
-    except FileNotFoundError as e:
+    except OSError as e:
         raise ProviderCallError(f"could not start claude: {e}") from e
