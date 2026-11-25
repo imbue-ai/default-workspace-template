@@ -74,11 +74,11 @@ moving a library:
   is not directly inside it (a test's) is a store somewhere else, and its
   parent is never touched;
 - a store a datalib process still holds (a `flock` on `system/lock` or
-  `system/runner-lock`, say a `datalib-dag` an agent ran that straddles the
+  `system/runner-lock`, say a `datalib-pipeline` an agent ran that straddles the
   restart) is left where it is, and the launcher exits so supervisord retries
   it; the move happens on the start that finds the store released;
 - a top-level `data_root` in the moved `config.toml` that names the old folder
-  is dropped, since `datalib-dag` writes where that key says; any other value
+  is dropped, since `datalib-pipeline` writes where that key says; any other value
   is kept;
 - a folder that holds a store of its own *and* a non-empty `Default` is left
   alone and the launcher refuses to start, naming both and what it found at

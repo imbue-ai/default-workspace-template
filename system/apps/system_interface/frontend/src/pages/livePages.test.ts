@@ -68,7 +68,8 @@ import type { LivePagesOptions } from "./livePages";
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
-const docs = appRecord("docs", { url: "http://127.0.0.1:7001" });
+// Docs is built in; Notes is a user's own app, whose pages never offer Report a bug.
+const docs = appRecord("docs", { url: "http://127.0.0.1:7001", system: true });
 const notes = appRecord("notes", { url: "http://127.0.0.1:7002" });
 
 let api: FakeDesktopApi;
@@ -970,6 +971,19 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_REPORT_BUG, ...failure });
     messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: null });
     expect(bugReportsOpened).toEqual([failure, { message: "Docs couldn't save.", details: null }]);
+  });
+
+  it("tells a user's own app's page it cannot report a bug, and drops a shell:report-bug it sends anyway", () => {
+    store.setCanReportBug(true);
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    const spy = spyOnFrame("win-2");
+    load("win-2");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, app: "notes", canReportBug: false });
+    messageFromPage("win-2", { type: SHELL_REPORT_BUG, message: "Notes couldn't save.", details: "HTTP 500" });
+    expect(bugReportsOpened).toEqual([]);
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: "HTTP 500" });
+    expect(bugReportsOpened).toEqual([{ message: "Docs couldn't save.", details: "HTTP 500" }]);
   });
 
   it("opens the bug report with nothing attached for a shell:report-bug whose payload holds no failure", () => {

@@ -1015,6 +1015,11 @@ describe("failure toasts", () => {
     return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
   }
 
+  beforeEach(() => {
+    // Docs is built in, so its failures are Imbue's to hear about; Notes is a user's own app.
+    api.apps = [appRecord("docs", { system: true }), appRecord("notes")];
+  });
+
   async function storeReportingBugs(
     reportBug: (failure: ReportedFailure | null) => void,
     isOpeningHelp: boolean,
@@ -1054,6 +1059,7 @@ describe("failure toasts", () => {
       actions: [],
       isLasting: true,
       isHelpOwed: true,
+      isBugReportOffered: true,
     });
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
     expect(reportBug).toHaveBeenCalledWith({
@@ -1084,20 +1090,45 @@ describe("failure toasts", () => {
   it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, false);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
     expect(reportBug).not.toHaveBeenCalled();
     store.setCanReportBug(true);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
-    store.reportBugFromPage(null);
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", null);
     expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
-  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal expected", async () => {
+  it("opens no bug report for a user's own app, from its page or from a toast about its launch", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, true);
+    expect([store.canReportBugFor("docs"), store.canReportBugFor("notes")]).toEqual([true, false]);
+    store.reportBugFromPage("notes", { message: "Notes couldn't save.", details: "HTTP 500" });
+    expect(reportBug).not.toHaveBeenCalled();
+
+    api.refusal = refusedWith(502, { detail: "notes answered the launch with 500: boom" });
+    await store.runLaunch("notes", "new", "new");
+    // Help is still owed (the toast stays up), but not by Imbue.
+    expect(store.toasts.current()[0]).toMatchObject({
+      message: "Notes couldn't open that. Try again.",
+      isLasting: true,
+      isHelpOwed: true,
+      isBugReportOffered: false,
+    });
+  });
+
+  it("offers Report a bug for a user's own app's window when the shell failed to open it", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
+    api.refusal = refusedWith(500, { detail: "the layout could not be written" });
+    await store.openWindowAt("notes", "/c", "new");
+    expect(store.toasts.current()[0]).toMatchObject({ isHelpOwed: true, isBugReportOffered: true });
+  });
+
+  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal routine", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
-      expected: true,
+      routine: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
@@ -1139,10 +1170,10 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("leaves a plain note for a refusal the server calls expected, in the server's own sentence", async () => {
+  it("leaves a plain note for a refusal the server calls routine, in the server's own sentence", async () => {
     const store = await startedStore();
     const sentence = "This is a preview of a proposed change; it cannot change the live workspace.";
-    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, expected: true });
+    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, routine: true });
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
     expect(store.toasts.current()).toMatchObject([{ message: sentence, details: "HTTP 403", isLasting: false }]);
     vi.advanceTimersByTime(TOAST_DURATION_MS);

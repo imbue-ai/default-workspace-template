@@ -741,7 +741,11 @@ than a browser alert. A toast whose failure owes the person help offers
 "Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
 the toast draws, and the report it opens carries the toast's sentence and
 details (`minds:open-help {errorDetails}`); a page's `shell:report-bug` does
-the same with the failure the page sent.
+the same with the failure the page sent. Only built-in apps (`system = true`
+in `app.toml`) get it: a user's own app's page is told `canReportBug: false`
+and its `shell:report-bug` is dropped, and a toast about a launch such an app
+refused or could not answer offers no "Report a bug"
+(`DesktopStore.isBuiltInApp`, `canReportBugFor`).
 
 ### The phone layout
 

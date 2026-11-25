@@ -8,8 +8,9 @@
  * and close button; opening the details holds it up (``onHold``). A lasting toast (one that stays until dismissed)
  * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose failure
  * owes help gets "Ask an agent to fix this" while the page gives ``onAskAgent`` (unless the toast withholds it), and
- * "Report a bug" in its place while the page gives only ``onReportBug``, each decided as it draws: whether a shell
- * frames the page and whether the embedder opens a bug report can be learned after the toast went up.
+ * "Report a bug" in its place while the page gives only ``onReportBug`` (unless its caller withheld it), each
+ * decided as it draws: whether a shell frames the page and whether the embedder opens a bug report can be learned
+ * after the toast went up.
  */
 
 import m from "mithril";
@@ -113,7 +114,7 @@ function lastingToastBody(
   // The agent's assist flow reports a fault in built-in code itself, so the bug report is only for where none can
   // be asked.
   const reportBug: ToastAction | null =
-    toast.isHelpOwed && askAgent === null && onReportBug !== null
+    toast.isBugReportOffered && askAgent === null && onReportBug !== null
       ? { label: REPORT_A_BUG_LABEL, run: () => onReportBug(failure), keepsToast: true }
       : null;
   const remedies = [askAgent, reportBug].filter((action): action is ToastAction => action !== null);
