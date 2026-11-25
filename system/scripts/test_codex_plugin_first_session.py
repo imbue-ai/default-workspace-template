@@ -163,7 +163,7 @@ def test_first_session_and_reprovision_load_only_native_reviews(tmp_path: Path) 
                 guardian_skills = [
                     skill
                     for skill in skills["skills"]
-                    if "imbue-code-guardian" in skill["path"]
+                    if skill.get("pluginId") == _PLUGIN
                 ]
                 assert {
                     f"imbue-code-guardian:{name}"
