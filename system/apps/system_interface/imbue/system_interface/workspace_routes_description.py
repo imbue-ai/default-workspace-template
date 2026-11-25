@@ -8,7 +8,8 @@ entry names the operation it serves (``x-workspace-operation``), the name a clie
 answer.
 
 For as long as a client that calls a route is supported, the route keeps its path and its operation's name, no
-field of an answer is removed, and no field of a request becomes required. Each release freezes a copy of the description
+field of an answer is removed, no field of a request becomes required, and no field of a request stops being taken
+(a request model refuses a field it does not know). Each release freezes a copy of the description
 (``workspace_routes_api_frozen/``), and ``description_compatibility_breaks`` holds the current description to every
 copy still there.
 """
@@ -126,10 +127,44 @@ def _removed_fields(
     return breaks
 
 
+def _request_breaks(
+    frozen: Mapping[str, Any],
+    frozen_document: Mapping[str, Any],
+    current: Mapping[str, Any],
+    current_document: Mapping[str, Any],
+    where: str,
+    field_prefix: str,
+) -> list[str]:
+    """What ``current`` refuses of a request ``frozen`` took, through nested objects: a field it now requires, and a
+    field it no longer takes where it refuses a field it does not know."""
+    newly_required = sorted(set(current.get("required", ())) - set(frozen.get("required", ())))
+    breaks = [f"{where} now requires the request field {field_prefix + name!r}" for name in newly_required]
+    frozen_properties = frozen.get("properties")
+    current_properties = current.get("properties")
+    if not isinstance(frozen_properties, Mapping):
+        return breaks
+    for name, frozen_property in frozen_properties.items():
+        if not isinstance(current_properties, Mapping) or name not in current_properties:
+            if current.get("additionalProperties") is False:
+                breaks.append(f"{where} no longer takes the request field {field_prefix + name!r}")
+            continue
+        breaks.extend(
+            _request_breaks(
+                _resolved(frozen_property, frozen_document),
+                frozen_document,
+                _resolved(current_properties[name], current_document),
+                current_document,
+                where,
+                f"{field_prefix}{name}.",
+            )
+        )
+    return breaks
+
+
 def description_compatibility_breaks(current: Mapping[str, Any], frozen: Mapping[str, Any]) -> list[str]:
     """What ``current`` breaks for a client written against ``frozen``: a route or a method gone or serving an
-    operation of another name, a field of an answer removed, or a field of a request become required. Empty when a
-    client of ``frozen`` still works."""
+    operation of another name, a field of an answer removed, or a field of a request become required or no longer
+    taken. Empty when a client of ``frozen`` still works."""
     breaks: list[str] = []
     for path, frozen_item in frozen.get("paths", {}).items():
         current_item = current.get("paths", {}).get(path)
@@ -149,8 +184,7 @@ def description_compatibility_breaks(current: Mapping[str, Any], frozen: Mapping
                 breaks.append(f"{where} no longer serves the operation {frozen_name!r}")
             frozen_request = _json_schema(frozen_operation.get("requestBody"), frozen)
             current_request = _json_schema(current_operation.get("requestBody"), current)
-            newly_required = sorted(set(current_request.get("required", ())) - set(frozen_request.get("required", ())))
-            breaks.extend(f"{where} now requires the request field {name!r}" for name in newly_required)
+            breaks.extend(_request_breaks(frozen_request, frozen, current_request, current, where, ""))
             for status, frozen_response in frozen_operation.get("responses", {}).items():
                 if status == "default":
                     continue
