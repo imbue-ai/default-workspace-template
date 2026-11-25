@@ -300,7 +300,7 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     assert still_starting.value.kind is RefusalKind.APP_STILL_STARTING
     assert still_starting.value.user_facing_message == "Docs is still starting. Try again in a moment."
     # Ordinary operation the sentence fully explains, so it owes no help.
-    assert still_starting.value.expected is True
+    assert still_starting.value.is_routine is True
     assert started == ["docs", "docs"] and len(posts) == 1
 
     # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
@@ -465,7 +465,7 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
 ) -> None:
     """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
     to try again (which would ask the app a second time) but as launched and not opened, naming the launch (a
-    message sent, else the launch path by its label) and saying a full disk is one. Neither is an expected refusal:
+    message sent, else the launch path by its label) and saying a full disk is one. Neither is a routine refusal:
     each owes the person help. Nothing opens."""
     registry_path = write_registry(
         tmp_path / "apps.toml",
@@ -513,7 +513,7 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
 
     assert not_opened.value.kind is expected_kind
     assert not_opened.value.user_facing_message == expected_message
-    assert not_opened.value.expected is None
+    assert not_opened.value.is_routine is None
     assert len(posts) == 1
     (still,) = shell.list_desktops()
     assert still.windows == home.windows

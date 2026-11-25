@@ -23,7 +23,7 @@ import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Pres
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import { FakeTourApi } from "../testing/fakeTour";
 import {
-  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
@@ -1673,7 +1673,7 @@ describe("a stopped app's window", () => {
   it("asks an agent to start the app in the chat about it, beside the window it was pressed in, on the desktop and the phone", async () => {
     offerApps(api, socket, [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
       }),
       appRecord("docs", { is_running: false, program: "" }),
     ]);
@@ -1686,7 +1686,7 @@ describe("a stopped app's window", () => {
       await settle();
       m.redraw.sync();
     };
-    const ask = `launch:home:chat:app-ask:${JSON.stringify({
+    const ask = `launch:home:chat:app-chat:${JSON.stringify({
       app: "docs",
       app_display_name: "Docs",
       message:

@@ -42,6 +42,9 @@ export type ToastOptions =
       /** What the toast's agent is asked, where that is more than the toast's own message and details: what the
        *  person was trying to do, an instruction other than to find and fix a fault. */
       readonly agentRequest?: AgentFixRequest;
+      /** No bug report is offered for this failure, even where the page can open one: a user's own app caused it,
+       *  and its faults are not Imbue's bugs. */
+      readonly isBugReportWithheld?: boolean;
     };
 
 export interface Toast {
@@ -56,6 +59,8 @@ export interface Toast {
   readonly isAgentOffered: boolean;
   /** What its agent is asked: the caller's ``agentRequest``, else its message and details. */
   readonly agentRequest: AgentFixRequest;
+  /** A toast owing help that offers "Report a bug" where the page can open one (``isBugReportWithheld`` unset). */
+  readonly isBugReportOffered: boolean;
 }
 
 /** How long a plain toast stays up. */
@@ -81,6 +86,7 @@ export class ToastQueue {
     const actions = options.isLasting ? (options.actions ?? []) : [];
     const isHelpOwed = options.isLasting && options.isHelpOwed === true;
     const isAgentOffered = isHelpOwed && options.isAgentWithheld !== true;
+    const isBugReportOffered = isHelpOwed && options.isBugReportWithheld !== true;
     const toast: Toast = {
       id: this.nextId,
       message,
@@ -90,6 +96,7 @@ export class ToastQueue {
       isHelpOwed,
       isAgentOffered,
       agentRequest: (options.isLasting ? options.agentRequest : undefined) ?? { whatFailed: message, details },
+      isBugReportOffered,
     };
     this.nextId += 1;
     let kept = this.toasts.filter((other) => other.message !== message || other.details !== details);

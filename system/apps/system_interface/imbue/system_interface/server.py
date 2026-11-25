@@ -264,7 +264,7 @@ def _recovery_launch() -> ResponseReturnValue:
     since either would act on the live workspace."""
     if get_state().is_preview:
         return detail_response(
-            PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL, expected=True
+            PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL, is_routine=True
         )
     launch_request = parse_request_body(RecoveryLaunchRequest)
     shell = _shell()
@@ -279,7 +279,7 @@ def _recovery_launch() -> ResponseReturnValue:
                     "the desktops and apps load now, so there is nothing to ask an agent about",
                     HTTP_CONFLICT,
                     user_facing_message=_DESKTOPS_LOAD_NOW_SENTENCE,
-                    expected=True,
+                    is_routine=True,
                 )
             found = repair_agent_launch(entries, message)
         case _ as unreachable:

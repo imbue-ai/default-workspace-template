@@ -92,7 +92,7 @@ export const FREE_SPACE_INSTRUCTION =
  *  ``_launch_lead`` says the same of a launch whose window it could not open. */
 export function tookLaunchLead(displayName: string, launchPath: LaunchPath | null, isAsk = false): string {
   if (launchPath === null) return `${displayName} took that`;
-  if (launchPath.text_param !== null || (launchPath.app_params !== null && launchPath.app_params.text !== null)) {
+  if (launchPath.text_param !== null) {
     // An ask's message is the shell's, not something the person wrote.
     return isAsk ? `The request was sent to ${displayName}` : `Your message was sent to ${displayName}`;
   }

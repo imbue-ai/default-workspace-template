@@ -14,7 +14,7 @@ import type { UpdateNoticeWire } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
@@ -274,7 +274,7 @@ describe("UpdateNoticeBanner", () => {
         launch_paths: [
           launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
           launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
-          appAskLaunchPathRecord(),
+          appChatLaunchPathRecord(),
         ],
       }),
     ]);

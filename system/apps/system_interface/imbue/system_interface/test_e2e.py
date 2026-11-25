@@ -127,7 +127,6 @@ _PINNED_NEW_LAUNCH_ID = "new"
 _PINNED_SEND_LAUNCH_ID = "send"
 _PINNED_DRAFT_LAUNCH_ID = "draft"
 _PINNED_APP_CHAT_LAUNCH_ID = "app-chat"
-_PINNED_APP_ASK_LAUNCH_ID = "app-ask"
 _PINNED_APP_PARAM = "app"
 _PINNED_APP_DISPLAY_NAME_PARAM = "app_display_name"
 _PINNED_TEXT_PARAM = "message"
@@ -248,23 +247,21 @@ def _running_e2e_server(
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
                     pin=(_PINNED_HOME_PATH, *pin),
-                    # The pin's home path is a plain page, as the chat's root is; the other five are POST launch
-                    # paths as the chat's, two taking typed text, one a draft, one about an app, and one an ask
-                    # about an app.
+                    # The pin's home path is a plain page, as the chat's root is; the other four are POST launch
+                    # paths as the chat's, two taking typed text, one a draft, and one about an app, which takes an
+                    # ask's text too.
                     launch_paths=(
                         ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
                         (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
                         (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
                         (_PINNED_DRAFT_LAUNCH_ID, f"Draft into {_PINNED_APP_DISPLAY_NAME.lower()}", "/draft"),
                         (_PINNED_APP_CHAT_LAUNCH_ID, "Chat about this app", f"/{_PINNED_APP_CHAT_LAUNCH_ID}"),
-                        (_PINNED_APP_ASK_LAUNCH_ID, "Ask about this app", f"/{_PINNED_APP_ASK_LAUNCH_ID}"),
                     ),
                     launch_params={
                         _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_DRAFT_LAUNCH_ID: [_PINNED_TEXT_PARAM],
-                        _PINNED_APP_CHAT_LAUNCH_ID: [_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM],
-                        _PINNED_APP_ASK_LAUNCH_ID: [
+                        _PINNED_APP_CHAT_LAUNCH_ID: [
                             _PINNED_APP_PARAM,
                             _PINNED_APP_DISPLAY_NAME_PARAM,
                             _PINNED_TEXT_PARAM,
@@ -273,19 +270,17 @@ def _running_e2e_server(
                     launch_text_params={
                         _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
                         _PINNED_SEND_LAUNCH_ID: _PINNED_TEXT_PARAM,
+                        _PINNED_APP_CHAT_LAUNCH_ID: _PINNED_TEXT_PARAM,
                     },
                     launch_draft_params={_PINNED_DRAFT_LAUNCH_ID: _PINNED_TEXT_PARAM},
                     launch_app_params={
-                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM),
-                        _PINNED_APP_ASK_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM),
+                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM)
                     },
-                    launch_app_text_params={_PINNED_APP_ASK_LAUNCH_ID: _PINNED_TEXT_PARAM},
                     launch_methods={
                         _PINNED_NEW_LAUNCH_ID: "POST",
                         _PINNED_SEND_LAUNCH_ID: "POST",
                         _PINNED_DRAFT_LAUNCH_ID: "POST",
                         _PINNED_APP_CHAT_LAUNCH_ID: "POST",
-                        _PINNED_APP_ASK_LAUNCH_ID: "POST",
                     },
                 )
             )
@@ -1211,7 +1206,7 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
 ) -> None:
     """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
     stopped window tells it (not as a failed open to report), and the agent it offers is asked through the launch
-    path that takes an ask about an app, naming the stopped app, the note staying up."""
+    path about an app, naming the stopped app, the note staying up."""
     ghost_row = registry_row_toml(
         "ghost",
         f"http://127.0.0.1:{find_free_port()}",
@@ -1239,7 +1234,7 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
             error_message="the request to start Ghost never reached the agent's app",
         )
         (asked,) = _posted_launches(server.pinned_url)
-        assert asked["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
+        assert asked["path"] == f"/{_PINNED_APP_CHAT_LAUNCH_ID}"
         assert asked["body"] == {
             _PINNED_APP_PARAM: "ghost",
             _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
@@ -2678,12 +2673,12 @@ def test_the_title_bars_balloon_opens_the_chat_about_the_app_beside_its_window(t
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_a_pages_ask_reaches_the_ask_launch_path_about_its_app_and_opens_the_answer_beside_its_window(
+def test_a_pages_ask_reaches_the_launch_path_about_its_app_and_opens_the_answer_beside_its_window(
     tmp_path: Path, page: Page
 ) -> None:
     """A page's ``shell:ask-agent`` (a failure's "Ask an agent to fix this"): the shell runs the pinned app's launch
-    path that takes an ask's text, with the asking window's app and the message it wrote from the text (the assist
-    command, the app and the window, then the text), never the one the balloon runs; the page is told the ask went
+    path about an app, the one the balloon runs, with the asking window's app and, in its text param, the message it
+    wrote from the text (the assist command, the app and the window, then the text); the page is told the ask went
     through, this client's pinned window is pointed at the page the launch answers, and the two windows are snapped
     side by side, the pinned one on the right and on top."""
     with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
@@ -2705,10 +2700,10 @@ def test_a_pages_ask_reaches_the_ask_launch_path_about_its_app_and_opens_the_ans
             ),
         }
         (posted,) = _posted_launches(server.pinned_url)
-        assert posted["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
+        assert posted["path"] == f"/{_PINNED_APP_CHAT_LAUNCH_ID}"
         assert posted["body"] == {**asked, "client_id": client_id, "desktop_id": _HOME_DESKTOP_ID}
         _wait_for_own_window_path(
-            server.base_url, client_id, pinned["id"], _launched_page_path(_PINNED_APP_ASK_LAUNCH_ID, asked)
+            server.base_url, client_id, pinned["id"], _launched_page_path(_PINNED_APP_CHAT_LAUNCH_ID, asked)
         )
         chat = _window(page, pinned["id"])
         expect(chat).to_be_visible(timeout=15000)

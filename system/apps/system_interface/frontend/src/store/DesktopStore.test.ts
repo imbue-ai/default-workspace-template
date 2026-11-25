@@ -14,7 +14,6 @@ import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } fr
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
   appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
@@ -68,11 +67,11 @@ const PAGE_ID = expect.stringMatching(/^page-[0-9a-f]{16}$/);
 const APP_GONE_SENTENCE = "This app couldn't be found in this workspace, so nothing was changed.";
 
 /** A refusal as the shell answers one written for people: its sentence, the developer's reason behind See details,
- *  the kind the desktop words it by, and whether the shell calls it expected (ordinary operation, which owes no
+ *  the kind the desktop words it by, and whether the shell calls it routine (ordinary operation, which owes no
  *  help). */
-function shellRefusal(status: number, detail: string, sentence: string, kind: string, isExpected = false): HttpError {
-  const expected = isExpected ? { expected: true } : {};
-  return refusedWith(status, { detail, user_facing_message: sentence, kind, ...expected });
+function shellRefusal(status: number, detail: string, sentence: string, kind: string, isRoutine = false): HttpError {
+  const routine = isRoutine ? { routine: true } : {};
+  return refusedWith(status, { detail, user_facing_message: sentence, kind, ...routine });
 }
 
 /** A chat-like app, so the workspace has one an agent is asked through. */
@@ -814,11 +813,12 @@ describe("opening", () => {
     );
   });
 
-  /** A chat-like app that declares both launch paths about an app, a Docs app, and a hidden monitor, with the
-   *  chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs window placed. */
+  /** A chat-like app that declares the launch path about an app, taking an ask's text, a Docs app, and a hidden
+   *  monitor, with the chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs
+   *  window placed. */
   function offerAppsWithAnAskPath(): void {
     const chat = chatLikeAppRecord("chat", {
-      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
     });
     offerApps(api, socket, [
       chat,
@@ -849,7 +849,7 @@ describe("opening", () => {
 
     // The shell writes the message: the assist command, then the app and the window the ask was pressed in.
     expect(launchCalls()).toEqual([
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message: "/assist This is about the Docs app (`docs`, window `win-docs`).\n\nFix this.",
@@ -887,10 +887,13 @@ describe("opening", () => {
     expect(await store.askAgent("Fix this.", "win-docs", "main-chat")).toEqual({ isOpened: true });
     expect(launchCalls()).toEqual([primary, primary, aboutMonitor, aboutDocs]);
 
-    // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
+    // A machine whose launch path about an app takes no text has nowhere to send an ask about an app.
     offerApps(api, socket, [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
+        launch_paths: [
+          ...chatLikeAppRecord("chat").launch_paths,
+          appChatLaunchPathRecord({ params: ["app", "app_display_name"], text_param: null }),
+        ],
       }),
       appRecord("docs", { display_name: "Docs" }),
     ]);
@@ -1025,6 +1028,7 @@ describe("opening", () => {
     offerApps(api, socket, [
       appRecord("buddy", {
         display_name: "Buddy",
+        system: true,
         pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
       }),
@@ -1130,7 +1134,7 @@ describe("opening", () => {
         launch_paths: [
           launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
           launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
-          appAskLaunchPathRecord(),
+          appChatLaunchPathRecord(),
         ],
       }),
     ]);
@@ -1467,7 +1471,8 @@ describe("windows", () => {
 /** A chat-like app that also declares the launch path an ask about an app runs. */
 function chatWithAskPathRecord(name: string): AppRecord {
   return chatLikeAppRecord(name, {
-    launch_paths: [...chatLikeAppRecord(name).launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+    system: true,
+    launch_paths: [...chatLikeAppRecord(name).launch_paths, appChatLaunchPathRecord()],
   });
 }
 
@@ -1510,7 +1515,7 @@ describe("a stopped app's window", () => {
     stopped.actions[0].run();
     await settle();
     expect(launchCalls()).toEqual([
-      `launch:home:chat:app-ask:${startTerminalAsk("win-terminal")}:show:beside:win-terminal`,
+      `launch:home:chat:app-chat:${startTerminalAsk("win-terminal")}:show:beside:win-terminal`,
     ]);
     // The agent is the remedy, so the window draws no Report a bug beside it.
     expect(stopped.isBugReportOffered).toBe(false);
@@ -1562,7 +1567,7 @@ describe("a stopped app's window", () => {
         ],
       });
     const primary = textApp("alpha", 1);
-    const asked = textApp("beta", 2, [appAskLaunchPathRecord()]);
+    const asked = textApp("beta", 2, [appChatLaunchPathRecord()]);
     api.apps = [primary, asked];
     const store = await startedStore();
 
@@ -1577,7 +1582,7 @@ describe("a stopped app's window", () => {
     stopped.actions[0].run();
     await settle();
     expect(launchCalls()).toEqual([
-      `launch:home:beta:app-ask:${JSON.stringify({
+      `launch:home:beta:app-chat:${JSON.stringify({
         app: "alpha",
         app_display_name: "ALPHA",
         message:
@@ -1646,7 +1651,7 @@ describe("a launch into an app that is not running", () => {
     await settle();
     // The toast stands for no window, so the chat about the app goes wherever the show rule puts it.
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:chat:app-ask:${startTerminalAsk(null)}:show`,
+      `launch:home:chat:app-chat:${startTerminalAsk(null)}:show`,
     );
   });
 
@@ -1716,7 +1721,7 @@ describe("a launch into an app that is not running", () => {
     store.toasts.current()[0].actions[1].run();
     await settle();
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message:
@@ -1859,7 +1864,7 @@ describe("an agent by default", () => {
       expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Ask an agent to fix this"]);
       toast.actions[1].run();
       await settle();
-      expect(lastAsk().launch).toBe("chat:app-ask:show");
+      expect(lastAsk().launch).toBe("chat:app-chat:show");
       // The shell says which app the ask is about, ahead of what the toast said.
       expect(lastAsk().message).toContain(
         `${askLead("docs", "Docs", null)}Imbue Studio showed the user this failure: ${toast.message}`,
@@ -2006,6 +2011,11 @@ describe("an agent by default", () => {
 });
 
 describe("failure toasts", () => {
+  beforeEach(() => {
+    // Docs is built in, so its failures are Imbue's to hear about; Notes is a user's own app.
+    api.apps = [appRecord("docs", { system: true }), appRecord("notes")];
+  });
+
   async function storeReportingBugs(
     reportBug: (failure: ReportedFailure | null) => void,
     isOpeningHelp: boolean,
@@ -2044,6 +2054,7 @@ describe("failure toasts", () => {
       details: "HTTP 502\ndocs answered the launch with 500: boom",
       isLasting: true,
       isHelpOwed: true,
+      isBugReportOffered: true,
     });
     expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
@@ -2075,20 +2086,44 @@ describe("failure toasts", () => {
   it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, false);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
     expect(reportBug).not.toHaveBeenCalled();
     store.setCanReportBug(true);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
-    store.reportBugFromPage(null);
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", null);
     expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
-  it("shows an app's own sentence as written, which owes help unless the app calls the refusal expected", async () => {
+  it("opens no bug report for a user's own app, from its page or from a toast about its launch", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, true);
+    expect([store.canReportBugFor("docs"), store.canReportBugFor("notes")]).toEqual([true, false]);
+    store.reportBugFromPage("notes", { message: "Notes couldn't save.", details: "HTTP 500" });
+    expect(reportBug).not.toHaveBeenCalled();
+
+    api.refusal = refusedWith(502, { detail: "notes answered the launch with 500: boom" });
+    await store.runLaunch("notes", "new", "new");
+    // No agent can be asked here, and the fault is not Imbue's: the toast stays up, with no bug report.
+    expect(store.toasts.current()[0]).toMatchObject({
+      message: "Notes couldn't open that. Try again.",
+      isLasting: true,
+      isBugReportOffered: false,
+    });
+  });
+
+  it("offers Report a bug for a user's own app's window when the shell failed to open it", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
+    api.refusal = refusedWith(500, { detail: "the layout could not be written" });
+    await store.openWindowAt("notes", "/c", "new");
+    expect(store.toasts.current()[0]).toMatchObject({ isHelpOwed: true, isBugReportOffered: true });
+  });
+
+  it("shows an app's own sentence as written, which owes help unless the app calls the refusal routine", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
-      expected: true,
+      routine: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
@@ -2130,10 +2165,10 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("leaves a plain note for a refusal the server calls expected, in the server's own sentence", async () => {
+  it("leaves a plain note for a refusal the server calls routine, in the server's own sentence", async () => {
     const store = await startedStore();
     const sentence = "This is a preview of a proposed change; it cannot change the live workspace.";
-    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, expected: true });
+    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, routine: true });
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
     expect(store.toasts.current()).toMatchObject([{ message: sentence, details: "HTTP 403", isLasting: false }]);
     vi.advanceTimersByTime(TOAST_DURATION_MS);
@@ -5647,7 +5682,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
     api.apps = [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
       }),
       appRecord("docs"),
     ];

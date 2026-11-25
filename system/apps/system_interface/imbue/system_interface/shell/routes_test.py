@@ -375,7 +375,7 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
         ]
     assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
-    assert all(refusal.get_json()["expected"] is True for refusal in refusals)
+    assert all(refusal.get_json()["routine"] is True for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
     assert received == []
     _register_client(application, "c1", "home")
@@ -3358,7 +3358,7 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
             LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
             LaunchPostOutcome(
                 status_code=503,
-                body={"detail": "agent list not read", "user_facing_message": starting, "expected": True},
+                body={"detail": "agent list not read", "user_facing_message": starting, "routine": True},
             ),
             LaunchPostOutcome(status_code=409, body={"detail": "chat is gone", "user_facing_message": deleted}),
             LaunchPostOutcome(status_code=200, body={"nope": True}),
@@ -3383,13 +3383,13 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     failed = _launch(client, body)
     assert failed.status_code == 502
     assert failed.get_json() == {"detail": "buddy answered the launch with 500: boom"}
-    # A sentence the app wrote for people, and its word that the refusal is expected, are passed on as written.
+    # A sentence the app wrote for people, and its word that the refusal is routine, are passed on as written.
     waiting = _launch(client, body)
     assert waiting.status_code == 502
     assert waiting.get_json() == {
         "detail": "buddy answered the launch with 503: agent list not read",
         "user_facing_message": starting,
-        "expected": True,
+        "routine": True,
     }
     gone = _launch(client, body)
     assert gone.status_code == 400
@@ -3505,8 +3505,8 @@ def test_a_refusal_for_something_this_window_held_says_it_is_gone_and_that_nothi
         )
         assert into_gone.get_json()["user_facing_message"] == WINDOW_GONE_SENTENCE
         assert into_gone.get_json()["kind"] == "window_gone"
-        # A stale view the window recovers from by reading again: an expected refusal, which owes no help.
-        assert into_gone.get_json()["expected"] is True
+        # A stale view the window recovers from by reading again: a routine refusal, which owes no help.
+        assert into_gone.get_json()["routine"] is True
 
     terminal_shortcut = {**shortcut, "target": {"kind": "launch", "app": "terminal", "launch": "new"}}
     deleted = client.post("/api/desktops/research/shortcuts", json=terminal_shortcut)
@@ -3514,13 +3514,13 @@ def test_a_refusal_for_something_this_window_held_says_it_is_gone_and_that_nothi
     assert deleted.get_json() == {
         "detail": "Desktop 'research' not found",
         "user_facing_message": DESKTOP_GONE_SENTENCE,
-        "expected": True,
+        "routine": True,
         "kind": "desktop_gone",
     }
 
     only = client.post("/api/desktops/home/delete")
     assert only.status_code == 409 and only.get_json()["user_facing_message"] == LAST_DESKTOP_SENTENCE
-    assert only.get_json()["expected"] is True
+    assert only.get_json()["routine"] is True
     # Nothing was opened, launched, or posted for any of them.
     assert [window["id"] for window in _desktop_windows(client)] == [pinned["id"], terminal["id"]]
 

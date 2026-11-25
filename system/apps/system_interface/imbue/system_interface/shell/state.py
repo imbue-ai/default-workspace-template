@@ -628,14 +628,14 @@ class ShellState(MutableModel):
                 str(request.target.window_id),
                 user_facing_message=WINDOW_GONE_SENTENCE,
                 kind=RefusalKind.WINDOW_GONE,
-                expected=True,
+                is_routine=True,
             )
         if window.app != request.app:
             raise DesktopValueError(
                 f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}",
                 user_facing_message=WINDOW_GONE_SENTENCE,
                 kind=RefusalKind.WINDOW_GONE,
-                expected=True,
+                is_routine=True,
             )
         return effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
 
@@ -1253,9 +1253,7 @@ def _launch_lead(entry: AppInventoryEntry, launch_path: RegistryLaunchPath) -> s
     """How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
     into the app, or else the launch path by its label. The desktop's ``tookLaunchLead`` says the same."""
     name = entry.display_name
-    if launch_path.text_param is not None or (
-        launch_path.app_params is not None and launch_path.app_params.text is not None
-    ):
+    if launch_path.text_param is not None:
         return f"Your message was sent to {name}"
     if launch_path.draft_param is not None:
         return f"Your text was put into {name}"
@@ -1303,7 +1301,7 @@ def _raise_unless_up(entry: AppInventoryEntry, outcome: WakeOutcome) -> None:
             raise LaunchUnavailableError(
                 f"{entry.row.name} was started for the launch but did not answer in time",
                 f"{name} is still starting. Try again in a moment.",
-                expected=True,
+                is_routine=True,
                 kind=RefusalKind.APP_STILL_STARTING,
             )
         case _ as unreachable:

@@ -618,9 +618,8 @@ viewer's. The phone layout offers no overview.
 `store/DesktopStore.ts` `openAppChat`). Every window of an app that is not
 internal carries "Chat about this app" (a speech balloon) in its focused title
 bar, the chat app's windows included. It runs the first launch path of the
-machine whose `app_params` names no `text` param (the chat app's `app-chat`,
-which names the window's app and its display name in the params the path
-declares) through the
+machine that declares `app_params` (the chat app's `app-chat`, which names the
+window's app and its display name in the params the path declares) through the
 launch route's `show` target: the shell shows the answered page as the `show` op
 would (a window already at the path raised, else the pinned window pointed at
 it, else a window opened) and lays the two windows out for this client, the chat
@@ -640,8 +639,9 @@ shell writes the message the agent reads, the one place that does
 (`assistRequest`): `/assist `, so the agent runs the workspace's assist flow,
 then the app and the window the ask was pressed in, then the ask's text. For a
 page in a window of an app that is not internal, the shell runs the first
-launch path of the machine whose `app_params` names a `text` param (the chat
-app's `app-ask`) with the app's name, its display name, and the message,
+launch path of the machine that declares `app_params` and a `text_param` (the
+chat app's `app-chat` again) with the app's name, its display name, and the
+ask's text in that `text_param`,
 through the same `show` target beside the page's window, and the chat app sends
 it to the chat about the app as a message (making that chat with it when there
 is none, and sending it to the main chat when that chat cannot take it). With
@@ -755,7 +755,7 @@ open, placed there once by that app for the first client that connects.
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
 than a browser alert. A failure that owes the person help (one the server did
-not explain, or wrote a sentence about without calling it expected), and a
+not explain, or wrote a sentence about without calling it routine), and a
 refusal that leaves the person unable to do what they meant to (an app that
 couldn't be found, a launch path an app no longer offers), offers an agent,
 decided in one place (the store's notice builder): "Ask an agent to fix this",
@@ -773,7 +773,11 @@ offered whenever the Imbue Studio chrome says it opens one, decided as the
 toast draws, and the report it opens carries the toast's sentence and details
 (`minds:open-help {errorDetails}`); a failure told in place (a dialog's line,
 the launcher, the backdrop, a stopped window) does the same, and so does a
-page's `shell:report-bug` with the failure the page sent. A send from the
+page's `shell:report-bug` with the failure the page sent. Only built-in apps
+(`system = true` in `app.toml`) get it: a user's own app's page is told
+`canReportBug: false` and its `shell:report-bug` is dropped, and a note about a
+launch such an app refused or could not answer offers no "Report a bug"
+(`DesktopStore.isBuiltInApp`, `canReportBugFor`). A send from the
 launcher that Chat itself refused, whose line keeps the typed text in the
 field, also offers "Open Chat", where the person can send it themselves. "Ask
 an agent to ..." and "Report a bug" leave their toast up; Try again takes it

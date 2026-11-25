@@ -46,7 +46,7 @@ import { activeFocusedWindowId, activePlacements } from "../reducers/desktopStat
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   desktopRecord,
   launchPathRecord,
@@ -68,7 +68,8 @@ import type { LivePagesOptions } from "./livePages";
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
-const docs = appRecord("docs", { url: "http://127.0.0.1:7001" });
+// Docs is built in; Notes is a user's own app, whose pages never offer Report a bug.
+const docs = appRecord("docs", { url: "http://127.0.0.1:7001", system: true });
 const notes = appRecord("notes", { url: "http://127.0.0.1:7002" });
 
 let api: FakeDesktopApi;
@@ -973,6 +974,19 @@ describe("the contract", () => {
     expect(bugReportsOpened).toEqual([failure, { message: "Docs couldn't save.", details: null }]);
   });
 
+  it("tells a user's own app's page it cannot report a bug, and drops a shell:report-bug it sends anyway", () => {
+    store.setCanReportBug(true);
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    const spy = spyOnFrame("win-2");
+    load("win-2");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, app: "notes", canReportBug: false });
+    messageFromPage("win-2", { type: SHELL_REPORT_BUG, message: "Notes couldn't save.", details: "HTTP 500" });
+    expect(bugReportsOpened).toEqual([]);
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: "HTTP 500" });
+    expect(bugReportsOpened).toEqual([{ message: "Docs couldn't save.", details: "HTTP 500" }]);
+  });
+
   it("opens the bug report with nothing attached for a shell:report-bug whose payload holds no failure", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     store.setCanReportBug(true);
@@ -1436,7 +1450,7 @@ describe("the contract", () => {
         url: "http://127.0.0.1:7003",
         launch_paths: [
           launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
-          appAskLaunchPathRecord(),
+          appChatLaunchPathRecord(),
         ],
       }),
       notes,
@@ -1450,7 +1464,7 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-1" });
     await settle();
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message: "/assist This is about the Docs app (`docs`, window `win-1`).\n\nFix this.",
@@ -1467,7 +1481,7 @@ describe("the contract", () => {
     expect(launches()[1]).toMatch(/^launch:home:chat:main:/);
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-3", delivery: "elsewhere" });
     await settle();
-    expect(launches()[2]).toMatch(/^launch:home:chat:app-ask:/);
+    expect(launches()[2]).toMatch(/^launch:home:chat:app-chat:/);
   });
 
   it("answers a refused ask with the failure, and toasts it only for a page that does not show the outcome", async () => {

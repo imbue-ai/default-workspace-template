@@ -598,7 +598,7 @@ def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_
     assert refused.status_code == 403
     assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]
     # A rule the sentence fully explains, so it owes no help.
-    assert refused.get_json()["expected"] is True
+    assert refused.get_json()["routine"] is True
     assert posts == [] and preview_posts == []
 
 
@@ -676,7 +676,7 @@ def test_the_desktops_recovery_page_goes_back_to_the_desktop_once_they_load_and_
     refused = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"})
     assert refused.status_code == 409
     assert refused.get_json()["user_facing_message"] == "This workspace's desktops load now."
-    assert refused.get_json()["expected"] is True
+    assert refused.get_json()["routine"] is True
     assert posts == []
 
 

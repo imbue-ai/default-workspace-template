@@ -45,7 +45,7 @@ NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again."
 class ShellError(Exception):
     """Base error for everything in the shell subpackage. The message is the developer's reason, which the log,
     agents, and "See details" read; ``user_facing_message``, when set, is the sentence a person is shown in its place,
-    ``expected`` whether the refusal is ordinary operation that sentence fully explains (nothing is broken, so no
+    ``is_routine`` whether the refusal is ordinary operation that sentence fully explains (nothing is broken, so no
     help is owed), and ``kind`` names the refusal for a frontend that words it itself."""
 
     def __init__(
@@ -53,11 +53,11 @@ class ShellError(Exception):
         message: str = "",
         user_facing_message: str | None = None,
         kind: RefusalKind | None = None,
-        expected: bool | None = None,
+        is_routine: bool | None = None,
     ) -> None:
         self.user_facing_message = user_facing_message
         self.kind = kind
-        self.expected = expected
+        self.is_routine = is_routine
         super().__init__(message)
 
 
@@ -110,7 +110,7 @@ class DesktopNotFoundError(ShellError, LookupError):
             f"Desktop '{desktop}' not found",
             user_facing_message=DESKTOP_GONE_SENTENCE,
             kind=RefusalKind.DESKTOP_GONE,
-            expected=True,
+            is_routine=True,
         )
 
 
@@ -122,7 +122,7 @@ class LastDesktopError(ShellError, ValueError):
     """The last remaining desktop cannot be deleted (answered 409)."""
 
     def __init__(self, message: str) -> None:
-        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE, expected=True)
+        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE, is_routine=True)
 
 
 class DesktopValueError(ShellError, ValueError):
@@ -131,7 +131,7 @@ class DesktopValueError(ShellError, ValueError):
 
 class LaunchFailureError(ShellError):
     """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
-    sentence the app itself wrote for people about it, passed on as written, and ``expected`` the app's own word that
+    sentence the app itself wrote for people about it, passed on as written, and ``is_routine`` the app's own word that
     the refusal is ordinary operation its sentence fully explains; both are None when the app gave none (the frontends
     word it then). ``kind`` is set only where the shell knows why the app could not take the launch (it is not
     running)."""
@@ -140,10 +140,10 @@ class LaunchFailureError(ShellError):
         self,
         message: str,
         user_facing_message: str | None = None,
-        expected: bool | None = None,
+        is_routine: bool | None = None,
         kind: RefusalKind | None = None,
     ) -> None:
-        super().__init__(message, user_facing_message=user_facing_message, kind=kind, expected=expected)
+        super().__init__(message, user_facing_message=user_facing_message, kind=kind, is_routine=is_routine)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -172,11 +172,11 @@ class WindowNotFoundError(ShellError, LookupError):
         window: str,
         user_facing_message: str | None = None,
         kind: RefusalKind | None = None,
-        expected: bool | None = None,
+        is_routine: bool | None = None,
     ) -> None:
         self.window = window
         super().__init__(
-            f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind, expected=expected
+            f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind, is_routine=is_routine
         )
 
 

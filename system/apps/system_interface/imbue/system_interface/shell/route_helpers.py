@@ -41,14 +41,14 @@ def detail_response(
     message: str,
     status_code: int,
     user_facing_message: str | None = None,
-    expected: bool | None = None,
+    is_routine: bool | None = None,
     kind: RefusalKind | None = None,
 ) -> ResponseReturnValue:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with: ``detail`` is the developer's
     reason, which every caller reads; ``user_facing_message``, when there is one, is the sentence the workspace's
-    frontends show a person in its place, ``expected`` whether the refusal is ordinary operation that sentence fully
+    frontends show a person in its place, ``is_routine`` whether the refusal is ordinary operation that sentence fully
     explains, and ``kind`` names the refusal for a frontend that words it itself."""
-    return error_response(message, status_code, user_facing_message, expected, None if kind is None else kind.value)
+    return error_response(message, status_code, user_facing_message, is_routine, None if kind is None else kind.value)
 
 
 def request_identity() -> RequestIdentity:

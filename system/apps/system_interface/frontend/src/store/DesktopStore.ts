@@ -1281,10 +1281,23 @@ export class DesktopStore {
     return this.canReportBug ? (failure) => this.reportBug(failure) : null;
   }
 
-  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
-   *  it with nothing attached. */
-  reportBugFromPage(failure: ReportedFailure | null): void {
-    if (this.canReportBug) this.reportBug(failure);
+  /** Whether a failure ``app`` caused is Imbue's to hear about: the app is built in (``system = true`` in its
+   *  app.toml). A user's own app's faults are not Imbue's bugs, so neither its pages nor the shell's toasts about its
+   *  failures offer "Report a bug". */
+  isBuiltInApp(app: string): boolean {
+    return appByName(this.state, app)?.system === true;
+  }
+
+  /** Whether a page of ``app`` may offer "Report a bug", which its handshake says: the embedder opens a bug report
+   *  and the app is built in. */
+  canReportBugFor(app: string): boolean {
+    return this.canReportBug && this.isBuiltInApp(app);
+  }
+
+  /** A page of ``app`` sent ``shell:report-bug``: the bug report about ``failure`` opens where that page may offer
+   *  one (``canReportBugFor``); null opens it with nothing attached. */
+  reportBugFromPage(app: string, failure: ReportedFailure | null): void {
+    if (this.canReportBugFor(app)) this.reportBug(failure);
   }
 
   /** Whether the embedder opens its workspace settings when a page asks, which each page is told in its handshake. */
@@ -3660,10 +3673,11 @@ export class DesktopStore {
 
   /** The one place an ask becomes the message an agent reads: the assist command and the app and window it came
    *  from (``about``, and ``besideWindowId`` when it was pressed in a window) go in front of ``text``
-   *  (``assistRequest``). It is sent to the chat about ``about``, through the first launch path of the machine that
-   *  takes an ask's text, whose page is put on screen by the show rule and laid out beside the window, as "Chat about
-   *  this app" lays it out. With no app, an internal one, no such launch path, or the ``main-chat`` delivery, the
-   *  primary text action runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. */
+   *  (``assistRequest``). It is sent to the chat about ``about``, through the first launch path of the machine about
+   *  an app that takes text (``appAskLaunchOf``), whose page is put on screen by the show rule and laid out beside the
+   *  window, as "Chat about this app" lays it out. With no app, an internal one, no such launch path, or the
+   *  ``main-chat`` delivery, the primary text action runs with it instead; the ``draft`` delivery leaves it unsent in
+   *  a chat's message box. */
   private async askAgentAbout(
     text: string,
     about: AppRecord | null,
@@ -3691,7 +3705,7 @@ export class DesktopStore {
     });
   }
 
-  /** The launch an ask about ``about`` runs: the machine's first launch path that takes an ask's text, for an app
+  /** The launch an ask about ``about`` runs: the machine's first launch path about an app that takes text, for an app
    *  that is not internal; null where the ask runs the primary text action instead. */
   private askLaunchAbout(about: AppRecord | null): AppLaunch | null {
     return about === null || about.internal ? null : appAskLaunchOf(openableApps(this.state));
@@ -3834,7 +3848,10 @@ export class DesktopStore {
       };
       // Lasting for every launch, a shortcut's included: a text row or a page's draft has already let go of the text
       // it carried, which only the toast's Try again still holds, and an app's own reason waits behind "See details".
-      const tell = copy.report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: true }));
+      const shown = copy.report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: true }));
+      // A user's own app's faults are not Imbue's bugs, so a failure of its launch offers no bug report.
+      const tell = (notice: FailureNotice): void =>
+        shown(this.isBuiltInApp(app) ? notice : { ...notice, isBugReportOffered: false });
       await this.tellFailure(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked, tell);
       return null;
     }
