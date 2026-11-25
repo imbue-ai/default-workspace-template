@@ -6,6 +6,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
+from workspace_update_control.protocol import UPDATE_STATE_DIR
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import StagedUpdateWorkspace
 from workspace_update_control.testing import full_state_line
@@ -226,6 +227,36 @@ def test_a_request_whose_values_are_out_of_range_is_refused_and_arms_nothing(
     assert refused.status_code == 400
     assert refused.get_json()["code"] == "INVALID_REQUEST"
     assert staged_update_workspace.read_state("schedule.json") is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "body"),
+    [
+        ("POST", UPDATE_START_ROUTE, _START_REQUEST),
+        ("PUT", UPDATE_SCHEDULE_ROUTE, _SCHEDULE_REQUEST),
+        ("DELETE", UPDATE_SCHEDULE_ROUTE, None),
+        ("POST", UPDATE_SKIP_ROUTE, {"target_ref": "minds-v0.11.0", "skipped_at": 200.0}),
+        ("POST", UPDATE_DISMISSALS_ROUTE, {"note_run_started_at": 200.0}),
+    ],
+)
+def test_update_state_that_cannot_be_written_is_answered_with_the_routes_own_error_object(
+    update_workspace_app: Flask,
+    staged_update_workspace: StagedUpdateWorkspace,
+    method: str,
+    route: str,
+    body: dict[str, object] | None,
+) -> None:
+    # A file where the directory of the update's state belongs, so nothing under it can be written.
+    state_directory = staged_update_workspace.root / UPDATE_STATE_DIR
+    state_directory.parent.mkdir(parents=True, exist_ok=True)
+    state_directory.write_text("")
+
+    failed = _client(update_workspace_app).open(route, method=method, json=body)
+
+    assert failed.status_code == 500
+    assert failed.get_json()["code"] == "WRITE_FAILED"
+    assert "update state could not be changed" in failed.get_json()["detail"]
+    assert staged_update_workspace.chat_creates() == []
 
 
 def test_a_shell_that_does_not_run_from_the_workspaces_root_refuses_to_act_on_its_updates(
