@@ -7443,6 +7443,61 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
         manager.stop()
 
 
+def _stop_lines(argv_log: Path) -> list[str]:
+    return [line for line in argv_log.read_text().splitlines() if line.startswith("stop ")] if argv_log.exists() else []
+
+
+def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_not(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The handoff's stop of the retiring agent never landed (its tracked state read stopped while a restarted
+    process ran): when the observe stream reports that member running, the manager stops it."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    try:
+        manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
+        stopped = _agent_details(archived_name, agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED)
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert _stop_lines(argv_log) == []
+
+        running = stopped.model_copy_update(to_update(stopped.field_ref().state, AgentLifecycleState.RUNNING))
+        manager._handle_observe_event(make_agent_state_event(running))
+        wait_for(
+            lambda: _stop_lines(argv_log) == [f"stop {archived_name}"],
+            timeout=10.0,
+            poll_interval=0.05,
+            error_message=f"the retired member was never stopped: {_stop_lines(argv_log)}",
+        )
+    finally:
+        manager.stop()
+
+
+def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_first_snapshot(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    try:
+        manager._handle_observe_event(
+            make_full_agent_state_event(
+                [
+                    _agent_details("Chat-1", agent_id=MngrAgentId(second)),
+                    _agent_details(archived_name, agent_id=MngrAgentId(first), state=AgentLifecycleState.WAITING),
+                ]
+            )
+        )
+        wait_for(
+            lambda: _stop_lines(argv_log) == [f"stop {archived_name}"],
+            timeout=10.0,
+            poll_interval=0.05,
+            error_message=f"the retired member was never stopped: {_stop_lines(argv_log)}",
+        )
+    finally:
+        manager.stop()
+
+
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
     broadcaster: WebSocketBroadcaster,
 ) -> None:

@@ -1669,6 +1669,8 @@ class AgentManager:
     _letting_go_counts_by_agent: dict[str, int]
     # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
     _stops_begun_by_agent: dict[str, int]
+    # Retired chat members found running whose stop is under way, so a burst of observe events starts one stop each.
+    _retired_stops_in_flight: set[str]
     _resent_sends_by_chat: dict[ChatId, tuple[ResentSendSnapshot, ...]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
@@ -1861,6 +1863,7 @@ class AgentManager:
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
         manager._stops_begun_by_agent = {}
+        manager._retired_stops_in_flight = set()
         manager._resent_sends_by_chat = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
@@ -2339,6 +2342,14 @@ class AgentManager:
 
     def _is_recorded_member_locked(self, agent_id: str) -> bool:
         return self._record_naming_locked(agent_id) is not None
+
+    def _is_retired_member_locked(self, agent_id: str) -> bool:
+        """Whether an agent is a member its chat has moved on from: its record's entry for it has ended. Unlike
+        ``_is_archived_member_locked``, never the successor a handoff is still making, nor a retiring agent whose
+        handoff has yet to stop it."""
+        record = self._record_naming_locked(agent_id)
+        entry = record.entry_for(agent_id) if record is not None else None
+        return entry is not None and entry.ended_at is not None
 
     def _is_archived_member_locked(self, agent_id: str) -> bool:
         """Whether an agent is a record's other than the one its chat is read from: an archived member,
@@ -6133,6 +6144,27 @@ class AgentManager:
             ]
         for agent_id in dead_archived_member_ids:
             self._evict_watcher(agent_id)
+
+        # A retired member found running (a handoff's stop that never landed, or one revived since) holds memory for
+        # a chat that has moved on. Checked on every agent a full snapshot lists, so a leak from before a restart is
+        # found, and otherwise on the agents this event changed.
+        checked_ids = after_ids if is_full_snapshot else state_changed_ids | added_agent_ids
+        with self._lock:
+            running_retired_ids = [
+                agent_id
+                for agent_id in sorted(checked_ids)
+                if not is_lifecycle_dead(details_by_id[agent_id].state.value)
+                and self._is_retired_member_locked(agent_id)
+                and agent_id not in self._retired_stops_in_flight
+            ]
+            self._retired_stops_in_flight.update(running_retired_ids)
+        for agent_id in running_retired_ids:
+            self._creation_cg.start_new_thread(
+                target=self._stop_running_retired_member,
+                args=(agent_id,),
+                name=f"stop-retired-{agent_id[:14]}",
+                is_checked=False,
+            )
         if self._unviewed_transcript_release is not None:
             self._unviewed_transcript_release()
 
@@ -6150,6 +6182,23 @@ class AgentManager:
                 if agent.state in RUNNING_LIFECYCLE_STATES and agent_id in chat_id_by_agent_id
             )
         self._report_mid_turn_chats()
+
+    def _stop_running_retired_member(self, agent_id: str) -> None:
+        """Stop a retired chat member the observe stream reports running; a failure is logged, and the next report
+        of it running tries again."""
+        try:
+            agent_info = self.get_agent_info_by_id(agent_id)
+            if agent_info is None:
+                return
+            _loguru_logger.info(
+                "Stopping agent {}: its chat has moved on from it, but it is still running", agent_info.name
+            )
+            self.stop_agent_process(agent_info)
+        except AgentStopError as e:
+            _loguru_logger.warning("Could not stop retired agent {}: {}", agent_id, e)
+        finally:
+            with self._lock:
+                self._retired_stops_in_flight.discard(agent_id)
 
     def _report_mid_turn_chats(self) -> None:
         """Tell the OOM prioritizer which chats are mid-turn: those running a turn, and those waiting on one of the

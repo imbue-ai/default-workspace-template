@@ -695,17 +695,18 @@ class HandoffRunner:
             self._current(chat_id, handoff_id)
             agent_state = self._deps.get_agent_state(retiring_id)
             activity = agent_state.activity_state if agent_state is not None else None
-            is_dead = agent_state is None or is_lifecycle_dead(agent_state.state)
             now = self._deps.monotonic()
             is_busy = activity is not None and is_working_activity_state(activity)
             # Only a turn proves the summary request was taken up. A compaction queued ahead of it
             # blocks the wait without counting, and the idle grace starts over once it ends, so
-            # the compaction's end is not mistaken for the summary turn's.
+            # the compaction's end is not mistaken for the summary turn's. A dead lifecycle reading
+            # waits out the grace like an idle one: the request was just delivered, and the reading
+            # can be the drain's restart reported late.
             is_busy_seen = is_busy_seen or activity in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
             if activity == ActivityState.COMPACTING:
                 idle_grace_started_at = now
             is_turn_over = not is_busy and (
-                is_dead or is_busy_seen or now - idle_grace_started_at >= self._deps.summary_idle_grace_seconds
+                is_busy_seen or now - idle_grace_started_at >= self._deps.summary_idle_grace_seconds
             )
             if is_summary_written(_non_empty_mtime(path), stale_mtime):
                 outcome = SummaryOutcome.WRITTEN
@@ -829,9 +830,14 @@ class HandoffRunner:
         return successor_state
 
     def _stop_retiring(self, chat_id: ChatId, retiring: ChatAgentEntry) -> None:
-        agent_state = self._deps.get_agent_state(retiring.agent_id)
+        """Stop the retiring agent whatever its tracked lifecycle says.
+
+        The tracked state can read dead while a process runs: the drain restarts a claude agent, and the observe
+        stream can report that restart's stop after the new process is up. ``mngr stop`` of an agent that is
+        already stopped does nothing, so the stop never asks.
+        """
         agent_info = self._deps.get_agent_info(retiring.agent_id)
-        if agent_state is None or agent_info is None or is_lifecycle_dead(agent_state.state):
+        if agent_info is None:
             return
         logger.info("Handoff of chat {}: stopping agent {}", chat_id, retiring.agent_id)
         self._deps.stop_agent(agent_info)
