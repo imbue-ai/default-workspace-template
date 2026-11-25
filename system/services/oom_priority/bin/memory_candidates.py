@@ -89,10 +89,16 @@ from oom_priority.supervisor_rpc import supervised_pids
 # still reading its reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
-# The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
-MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset(
-    {IDLE_AGENT_STATE, "RUNNING"}
+# No turn is open, but a background task the agent started is still running.
+RUNNING_BACKGROUND_AGENT_STATE: Final[str] = "RUNNING_BACKGROUND"
+MID_TURN_AGENT_STATES: Final[frozenset[str]] = frozenset(
+    {"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"}
 )
+# The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
+MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = MID_TURN_AGENT_STATES | {
+    IDLE_AGENT_STATE,
+    RUNNING_BACKGROUND_AGENT_STATE,
+}
 # The label naming the chat an agent belongs to, which the chat app stamps on a chat's agents once it has handed
 # off; an agent without it is its own chat.
 CHAT_ID_LABEL: Final[str] = "chat_id"
@@ -627,9 +633,9 @@ def _why_agent_is_held(
     """Why a chat or worker holding memory is not a candidate, or None when it is one."""
     if main_chat_id is not None and agent.chat_id == main_chat_id:
         return "the main chat: the chat app starts it again as soon as it stops"
-    if agent.state != IDLE_AGENT_STATE:
+    if agent.state in MID_TURN_AGENT_STATES:
         return "mid-turn"
-    if is_chat_busy(agent.chat_id):
+    if agent.state == RUNNING_BACKGROUND_AGENT_STATE or is_chat_busy(agent.chat_id):
         return "waiting on a background task, which will start its next turn"
     if idle_seconds is None:
         return "no activity time to judge it by"

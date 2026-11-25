@@ -395,6 +395,12 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             "start_time": None,
             "agent_activity_time": None,
         },
+        _agent_record(
+            "background-chat", "RUNNING_BACKGROUND", {"user_created": "true"}, old, 16
+        ),
+        _agent_record(
+            "unknown-type", "RUNNING_UNKNOWN_AGENT_TYPE", {"agent_created": "true"}, old, 17
+        ),
     ]
 
     report = memory_candidates.collect_report(
@@ -412,6 +418,11 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
         ("busy-chat", "mid-turn"),
         ("just-answered", "in use: active 5m ago"),
         ("no-times", "no activity time to judge it by"),
+        (
+            "background-chat",
+            "waiting on a background task, which will start its next turn",
+        ),
+        ("unknown-type", "mid-turn"),
     ]
     table = memory_candidates.render_table(report)
     assert (
