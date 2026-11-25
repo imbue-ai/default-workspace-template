@@ -38,6 +38,7 @@ _UPDATE_SELF_SUBJECT_PATTERN: Final[re.Pattern[str]] = re.compile(
 _RELEASE_TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
 _GIT_TIMEOUT_SECONDS: Final[float] = 10.0
 _GIT_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 2.0
+_LOGGED_STDERR_MAX_CHARACTERS: Final[int] = 300
 
 _ReleaseSortKey = tuple[int, int, int, int, tuple[tuple[int, int, str], ...]]
 
@@ -73,8 +74,12 @@ def resolve_template_ref(marker_subject: str, described_tag: str) -> str:
     return marker_ref
 
 
-def _git_output(command: tuple[str, ...], repo_root: Path) -> str:
-    """A read-only git command's output; '' when it could not run or found nothing (a checkout with no tag)."""
+def _git_output(command: tuple[str, ...], repo_root: Path, is_failure_ordinary: bool) -> str:
+    """A read-only git command's output; '' when it could not run or exited with an error.
+
+    ``is_failure_ordinary`` says an error exit is an ordinary state of a checkout, which is logged quietly; any
+    other is a fault that would otherwise read as a checkout that names no version.
+    """
     try:
         result = run_local_command_modern_version(
             command=list(command),
@@ -86,11 +91,25 @@ def _git_output(command: tuple[str, ...], repo_root: Path) -> str:
     except (ProcessError, OSError) as e:
         logger.warning("Could not run `{}` in {} for the workspace's version: {}", " ".join(command), repo_root, e)
         return ""
-    return result.stdout if result.returncode == 0 else ""
+    if result.returncode != 0:
+        logger.log(
+            "DEBUG" if is_failure_ordinary else "WARNING",
+            "`{}` exited {} in {} for the workspace's version: {}",
+            " ".join(command),
+            result.returncode,
+            repo_root,
+            result.stderr.strip()[-_LOGGED_STDERR_MAX_CHARACTERS:],
+        )
+        return ""
+    return result.stdout
 
 
 def read_template_ref(repo_root: Path) -> str:
     """The version of the checkout at ``repo_root``; '' when it names none."""
     return resolve_template_ref(
-        _git_output(_UPDATE_SELF_MARKER_COMMAND, repo_root), _git_output(_DESCRIBE_COMMAND, repo_root)
+        # ``git log`` exits clean when no commit matches, so an error exit is never a checkout with no marker.
+        _git_output(_UPDATE_SELF_MARKER_COMMAND, repo_root, is_failure_ordinary=False),
+        # ``git describe`` exits with an error for a checkout with no tag to describe, which a workspace created
+        # from a published template is.
+        _git_output(_DESCRIBE_COMMAND, repo_root, is_failure_ordinary=True),
     )
