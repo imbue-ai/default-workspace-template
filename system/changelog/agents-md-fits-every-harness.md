@@ -6,4 +6,4 @@ Every agent harness now reads the whole of `AGENTS.md`. Antigravity truncates an
 
 - `system/test_agents_md_size.py` (new) fails when `AGENTS.md` exceeds the smallest limit across the harnesses: Antigravity's fixed 24,000 bytes, or Codex's configured budget if lower.
 
-- `docs/system/app-icons.md` lists `update-app`, not `AGENTS.md`, among the places that restate the icon rules.
+- `docs/system/app-icons.md` no longer lists `AGENTS.md` among the places that restate the icon rules.
