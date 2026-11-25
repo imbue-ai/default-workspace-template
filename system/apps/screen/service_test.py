@@ -11,6 +11,7 @@ from pathlib import Path
 from flask.testing import FlaskClient
 from websockets.sync.client import connect as connect_websocket
 
+from app_manifest.testing import assert_serves_the_not_built_page
 from mock_broker_test import FakeBroker
 from mock_display_modes_test import FakeDisplayModes
 from mock_neko_test import FakeNeko
@@ -23,8 +24,10 @@ from screen.data_types import MediaCandidate
 from screen.data_types import NekoSessionRecord
 from screen.data_types import TransportProtocol
 from screen.data_types import XWindow
+from screen.primitives import APP_DISPLAY_NAME
 from screen.primitives import NekoSessionId
 from screen.primitives import XWindowId
+from screen.routes import HEALTH_PATH
 from screen.service import ScreenService
 from screen.service import is_session_reapable
 from screen.serving import serve_in_background
@@ -57,9 +60,7 @@ def test_state_document_before_any_start_is_stopped_and_free(client: FlaskClient
 def test_a_page_load_starts_the_stack(
     client: FlaskClient, service: ScreenService, fake_supervisor: FakeSupervisor
 ) -> None:
-    answer = client.get("/")
-    assert answer.status_code == 200
-    assert b"has not been built" in answer.data
+    assert_serves_the_not_built_page(client, "/", APP_DISPLAY_NAME, HEALTH_PATH)
     assert wait_until(lambda: service.stack.lifecycle == Lifecycle.RUNNING)
     assert ("start", "screen-neko") in fake_supervisor.calls
 

@@ -28,6 +28,10 @@ from werkzeug.serving import run_simple
 
 from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.failure_pages import WORKSPACE_FRONTEND_BUILD
+from app_manifest.failure_pages import not_built_page_response
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
@@ -64,12 +68,6 @@ PAGE_KIT_FILES: Final[dict[str, str]] = {
 
 HTTP_NOT_FOUND: Final[int] = 404
 
-_NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Style Guide</title></head>'
-    "<body><p>The Style Guide has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
-    "</body></html>"
-)
-
 ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the style guide page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
@@ -78,6 +76,7 @@ ROUTE_TABLE: RouteTable = {
         reason="a plain-HTML page wearing the page kit, which the catalog frames"
     ),
     ("GET", "/_static/{filename}"): SchemalessRoute(reason="one file of the page kit the shell builds"),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
     **THEME_STATIC_ROUTE_TABLE,
 }
 
@@ -98,7 +97,7 @@ def create_app(static_directory: Path, shell_static_directory: Path = SHELL_STAT
         """The style guide page."""
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
-            return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
+            return not_built_page_response(APP_DISPLAY_NAME, WORKSPACE_FRONTEND_BUILD, HEALTH_PATH)
         return Response(
             document.read_text(encoding="utf-8"), mimetype="text/html", headers={"Cache-Control": "no-store"}
         )
@@ -127,6 +126,14 @@ def create_app(static_directory: Path, shell_static_directory: Path = SHELL_STAT
         response = send_file(path.absolute(), mimetype=mimetype)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+    @app.get(APP_CONTRACT_ROUTE)
+    def app_contract() -> ResponseReturnValue:
+        """The app contract module, which the page served while the style guide is not built asks an agent with."""
+        path = shell_static_directory / SHELL_APP_CONTRACT_PATH.name
+        if not path.is_file():
+            abort(HTTP_NOT_FOUND)
+        return send_file(path.absolute(), mimetype="text/javascript")
 
     @app.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:

@@ -5,7 +5,7 @@
  * (a status, the server's own text) behind "See details" rather than on the visible line.
  */
 
-import { CHANGE_NOT_ANSWERED_SENTENCE } from "../app_contract";
+import { CHANGE_NOT_ANSWERED_SENTENCE, REPORT_A_BUG_LABEL } from "../app_contract";
 import type { ShownFailure } from "../app_contract";
 
 /** Whether a failed request only read something (nothing it did can have changed) or asked for a change, which an
@@ -67,8 +67,7 @@ export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
 
 const TRY_AGAIN_ENDING = "Try again.";
 
-/** The button a failure that owes help carries, where Imbue Studio can open a bug report. */
-export const REPORT_A_BUG_LABEL = "Report a bug";
+export { REPORT_A_BUG_LABEL };
 
 // How much of a body that is not a reason (an error page, a proxy's plain text) "See details" quotes.
 const RAW_BODY_LIMIT = 2000;

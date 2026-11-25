@@ -1,0 +1,1 @@
+Getting Started's not-built page is every app's shared one: it says "Getting Started isn't available right now." and its "Report a bug", offered under a refused ask, files what the page says with why the ask failed.

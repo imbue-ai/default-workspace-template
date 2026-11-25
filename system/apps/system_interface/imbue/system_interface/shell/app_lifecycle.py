@@ -28,6 +28,7 @@ from enum import auto
 from typing import Final
 from typing import assert_never
 
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -98,6 +99,16 @@ def stop_supervisor_program_by_name(program: str) -> None:
 
 def read_supervisor_stderr_tail(program: str) -> str | None:
     return tail_supervisor_program_stderr(program, STDERR_TAIL_BYTES, supervisor_socket_path())
+
+
+def read_shell_app_contract_module() -> str | None:
+    """The shell's built app contract module, which a could-not-start page carries to ask an agent with; None while
+    it cannot be read (the shell's frontend is not built)."""
+    try:
+        return SHELL_APP_CONTRACT_PATH.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.debug("A could-not-start page will offer no agent: {}", e)
+        return None
 
 
 @pure
@@ -173,6 +184,11 @@ class AppLifecycleManager(MutableModel):
         default=read_supervisor_stderr_tail,
         frozen=True,
         description="The end of a program's stderr log, which the could-not-start page shows; None when unreadable",
+    )
+    read_app_contract_module: Callable[[], str | None] = Field(
+        default=read_shell_app_contract_module,
+        frozen=True,
+        description="The built app contract module, which the could-not-start page asks with; None when unreadable",
     )
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="A monotonic clock")
 
@@ -560,6 +576,7 @@ class AppLifecycleManager(MutableModel):
                 display_name,
                 program,
                 None if kind is ParkedPageKind.STARTING else self.read_stderr_tail(program),
+                None if kind is ParkedPageKind.STARTING else self.read_app_contract_module(),
             ),
         )
         # The parker is recorded under the lock its first connection's wake pops it with, so a connection that

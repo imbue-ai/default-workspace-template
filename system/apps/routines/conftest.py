@@ -86,20 +86,34 @@ def static_directory(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def contract_path(tmp_path: Path) -> Path:
+    """A stand-in for the shell's built app contract module, which the app serves from its own origin."""
+    path = tmp_path / "app_contract.js"
+    path.write_text("export function connectToShell() {}\n")
+    return path
+
+
+@pytest.fixture
 def fix_chat_starter() -> RecordingFixChatStarter:
     return RecordingFixChatStarter()
 
 
 @pytest.fixture
-def client(service: RoutinesService, static_directory: Path, fix_chat_starter: RecordingFixChatStarter) -> FlaskClient:
-    return create_app(service, static_directory, is_preview=False, fix_chat_starter=fix_chat_starter).test_client()
+def client(
+    service: RoutinesService, static_directory: Path, fix_chat_starter: RecordingFixChatStarter, contract_path: Path
+) -> FlaskClient:
+    return create_app(
+        service, static_directory, is_preview=False, fix_chat_starter=fix_chat_starter, contract_path=contract_path
+    ).test_client()
 
 
 @pytest.fixture
 def preview_client(
-    service: RoutinesService, static_directory: Path, fix_chat_starter: RecordingFixChatStarter
+    service: RoutinesService, static_directory: Path, fix_chat_starter: RecordingFixChatStarter, contract_path: Path
 ) -> FlaskClient:
-    return create_app(service, static_directory, is_preview=True, fix_chat_starter=fix_chat_starter).test_client()
+    return create_app(
+        service, static_directory, is_preview=True, fix_chat_starter=fix_chat_starter, contract_path=contract_path
+    ).test_client()
 
 
 @pytest.fixture

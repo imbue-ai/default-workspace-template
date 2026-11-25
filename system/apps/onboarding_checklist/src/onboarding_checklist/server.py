@@ -29,6 +29,8 @@ from werkzeug.serving import run_simple
 
 from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.failure_pages import WORKSPACE_FRONTEND_BUILD
+from app_manifest.failure_pages import not_built_page_response
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry_location import registry_path
@@ -63,12 +65,6 @@ ITEMS_PATH: Final[str] = "/api/items"
 
 HTTP_NOT_FOUND: Final[int] = 404
 
-_NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Onboarding checklist</title></head>'
-    "<body><p>The Onboarding checklist has not been built yet (run <code>npm run build</code> in "
-    "<code>system/</code>).</p></body></html>"
-)
-
 ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the checklist page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
@@ -101,7 +97,7 @@ def create_app(
         """The checklist page."""
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
-            return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
+            return not_built_page_response(APP_DISPLAY_NAME, WORKSPACE_FRONTEND_BUILD, HEALTH_PATH)
         # Read rather than streamed, so the document policy can admit the page's inline theme boot by its hash.
         return Response(
             document.read_text(encoding="utf-8"), mimetype="text/html", headers={"Cache-Control": "no-store"}

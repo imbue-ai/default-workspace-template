@@ -12,7 +12,6 @@ gateway's own loading page.
 
 import errno
 import html
-import json
 import socket
 import threading
 from collections.abc import Callable
@@ -23,6 +22,11 @@ from urllib.parse import urlsplit
 
 from app_manifest.content_security_policy import inline_script_hashes
 from app_manifest.content_security_policy import inline_source
+from app_manifest.failure_pages import AgentFixRequest
+from app_manifest.failure_pages import FAILURE_REMEDIES_ROOT_ID
+from app_manifest.failure_pages import FAILURE_REMEDIES_STYLE
+from app_manifest.failure_pages import FailureRemedies
+from app_manifest.failure_pages import failure_remedies_script
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -31,7 +35,6 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.agent_asks import agent_fix_task
 from imbue.system_interface.shell.errors import PortInUseError
 from imbue.system_interface.shell.errors import PortParkingError
 from imbue.system_interface.shell.errors import ShellError
@@ -84,6 +87,8 @@ _PAGE_STYLE: Final[str] = (
     "color:inherit;\ncursor:pointer}button:hover{background:#f1f5f9}details{margin-top:1.5rem;font-size:0.85em;"
     "color:#64748b}\nsummary{cursor:pointer}pre{text-align:left;white-space:pre-wrap;word-break:break-word;"
     "max-height:16rem;overflow:auto;\nbackground:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.5rem}"
+    + FAILURE_REMEDIES_STYLE
+    + ".actions,.ask-agent-failure-actions{justify-content:center}"
 )
 
 _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
@@ -93,128 +98,7 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 <body><div><h1>{heading}</h1>{body}</div></body></html>
 """
 
-# The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
-# contract module: the parker answers every path with this page, so it cannot serve the module beside it.
-SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
-SHELL_ASK_AGENT_TYPE: Final[str] = "shell:ask-agent"
-SHELL_ASK_AGENT_RESULT_TYPE: Final[str] = "shell:ask-agent-result"
-SHELL_REPORT_BUG_TYPE: Final[str] = "shell:report-bug"
-ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
-DRAFT_ASK_LABEL: Final[str] = "Draft it in a chat"
-DRAFT_DELIVERY: Final[str] = "draft"
-CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = "The workspace didn't answer. This may not have gone through."
-
-# What a page that could not start offers: a Try again that asks once more (left out when the wake budget is spent:
-# the budget refuses the next wake too, so a press could not help), the end of the program's error log behind "See
-# details" (which the page leaves out while it has nothing to show), and an agent asked to look at it (shown once
-# a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
-# ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
-# details"). A handshake from a shell with another ``shellId`` means the
-# shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
-# reasons); the old shell's answer, if it still comes, replaces that. A failed ask that owes help offers "Draft it in
-# a chat", which leaves the same request unsent in a chat's message box (the shell tells a draft that could not be
-# made), and "Report a bug" while the shell's latest handshake says it can open one.
-_TRY_AGAIN_BUTTON: Final[str] = '<button type="button" id="try-again">Try again</button> '
-_TRY_AGAIN_BINDING: Final[str] = (
-    'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
-)
-_FAILED_BODY_TEMPLATE: Final[str] = (
-    "{sentence}<p>{try_again_button}"
-    '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
-    '<p id="ask-agent-failure" hidden></p>'
-    '<p><button type="button" id="ask-agent-draft" hidden>{draft_label}</button> '
-    '<button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
-    '<details id="page-details"{details_hidden}><summary>See details</summary>'
-    '<pre id="ask-agent-failure-details" hidden></pre>'
-    "{stderr_tail}</details>"
-    "<script>(function () {"
-    "{try_again_binding}"
-    'var ask = document.getElementById("ask-agent");'
-    'var failure = document.getElementById("ask-agent-failure");'
-    'var failureDetails = document.getElementById("ask-agent-failure-details");'
-    'var draft = document.getElementById("ask-agent-draft");'
-    'var report = document.getElementById("ask-agent-report");'
-    "var shown = null;"
-    "var canReportBug = false;"
-    "var askLabel = ask.textContent;"
-    "var pendingId = null;"
-    "var unansweredId = null;"
-    "var shellId = null;"
-    "if (window.parent === window) return;"
-    "function newRequestId() {"
-    "return Math.random().toString(16).slice(2) + Date.now().toString(16);"
-    "}"
-    "function showRemedies() {"
-    "var isHelpOwed = shown !== null && shown.isHelpOwed === true;"
-    "draft.hidden = !isHelpOwed;"
-    "report.hidden = !(canReportBug && isHelpOwed);"
-    "}"
-    "function show(told) {"
-    "shown = told;"
-    "showRemedies();"
-    "failure.hidden = told === null;"
-    "failureDetails.hidden = told === null || !told.details;"
-    'document.getElementById("page-details").hidden = failureDetails.hidden && {has_log} === false;'
-    "if (told === null) return;"
-    "failure.textContent = told.message;"
-    'failureDetails.textContent = told.details || "";'
-    "}"
-    "function settle(told) {"
-    "pendingId = null;"
-    "ask.disabled = false;"
-    "ask.textContent = askLabel;"
-    "show(told);"
-    "}"
-    'window.addEventListener("message", function (event) {'
-    "if (event.source !== window.parent || !event.data) return;"
-    "var data = event.data;"
-    "if (data.type === {handshake}) {"
-    "ask.hidden = false;"
-    "canReportBug = data.canReportBug === true;"
-    "showRemedies();"
-    'var greeter = typeof data.shellId === "string" ? data.shellId : "";'
-    "if (shellId !== null && greeter !== shellId && pendingId !== null) {"
-    "unansweredId = pendingId;"
-    "settle({ message: {not_answered}, details: null });"
-    "}"
-    "shellId = greeter;"
-    "} else if (data.type === {result} && data.requestId === pendingId) {"
-    "settle(data.isOpened ? null : data.failure);"
-    "} else if (data.type === {result} && data.requestId === unansweredId) {"
-    "unansweredId = null;"
-    "show(data.isOpened ? null : data.failure);"
-    "}"
-    "});"
-    'report.addEventListener("click", function () {'
-    "if (shown !== null) {"
-    'window.parent.postMessage({ type: {report_bug}, message: shown.message, details: shown.details || null }, "*");'
-    "}"
-    "});"
-    'draft.addEventListener("click", function () {'
-    "window.parent.postMessage("
-    "{ type: {ask_agent}, text: {request}, requestId: newRequestId(), showsOutcome: true, delivery: {draft} },"
-    ' "*");'
-    "});"
-    'ask.addEventListener("click", function () {'
-    "if (pendingId !== null) return;"
-    "unansweredId = null;"
-    "pendingId = newRequestId();"
-    "ask.disabled = true;"
-    "ask.textContent = {asking};"
-    "show(null);"
-    "window.parent.postMessage("
-    '{ type: {ask_agent}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
-    "});"
-    "})();</script>"
-)
-
-
-@pure
-def _script_literal(value: str) -> str:
-    """``value`` as a JavaScript string literal that cannot close the script element it sits in."""
-    return json.dumps(value).replace("<", "\\u003c")
-
-
+ASK_TO_LOOK_LABEL: Final[str] = "Ask an agent to look at it"
 COULD_NOT_START_INSTRUCTION: Final[str] = (
     "Find out why and get it running again, then tell the user what was wrong and what you changed."
 )
@@ -226,12 +110,15 @@ def could_not_start_log_hint(program: str) -> str:
 
 
 @pure
-def could_not_start_request(display_name: str, program: str) -> str:
+def could_not_start_request(display_name: str, program: str) -> AgentFixRequest:
     """What an agent asked to look at an app that could not start is told: what the page says, where the app's log
     is, and what to do (the desktop's ``couldNotStartRequest`` asks the same). The shell that carries the ask says
     which app and window it is about."""
-    instruction = f"{could_not_start_log_hint(program)} {COULD_NOT_START_INSTRUCTION}"
-    return agent_fix_task(could_not_start_sentence(display_name), None, instruction)
+    return AgentFixRequest(
+        what_failed=could_not_start_sentence(display_name),
+        details=None,
+        instruction=f"{could_not_start_log_hint(program)} {COULD_NOT_START_INSTRUCTION}",
+    )
 
 
 @pure
@@ -257,6 +144,45 @@ def start_budget_spent_sentence(display_name: str) -> str:
 
 
 @pure
+def _could_not_start_body(
+    display_name: str,
+    program: str,
+    stderr_tail: str | None,
+    is_try_again_offered: bool,
+    sentence: str,
+    contract_module_source: str | None,
+) -> str:
+    """What a page that could not start shows under its heading: ``sentence`` (when there is one), a Try again that
+    asks once more (left out when the wake budget is spent, since the budget refuses the next wake too), the remedies
+    for the failure once a shell that frames the page has greeted it (an agent to look at it, and what a refused ask
+    offers), mounted from the copy of the contract module the page carries (the parker answers every path with this
+    page, so its origin serves nothing beside it; with no built module there is no ask), and the end of the program's
+    error log behind "See details" when it could be read."""
+    log = _stderr_tail_html(stderr_tail)
+    has_log = log != ""
+    try_again = '<button type="button" id="try-again">Try again</button>' if is_try_again_offered else ""
+    script = (
+        'document.getElementById("try-again").addEventListener("click", () => location.reload());'
+        if is_try_again_offered
+        else ""
+    )
+    if contract_module_source is not None:
+        remedies = FailureRemedies(
+            message=could_not_start_sentence(display_name),
+            details=stderr_tail if has_log else None,
+            request=could_not_start_request(display_name, program),
+            ask_label=ASK_TO_LOOK_LABEL,
+        )
+        script += failure_remedies_script(remedies, contract_module_source)
+    return (
+        (f"<p>{html.escape(sentence, quote=False)}</p>" if sentence != "" else "")
+        + f'<div class="actions">{try_again}<div id="{FAILURE_REMEDIES_ROOT_ID}" class="failure-remedies"></div></div>'
+        + (f"<details><summary>See details</summary>{log}</details>" if has_log else "")
+        + (f'<script type="module">{script}</script>' if script != "" else "")
+    )
+
+
+@pure
 def parked_refresh_seconds(kind: ParkedPageKind) -> int:
     """How long a client that retries on its own should wait before asking again: the answer's Retry-After, and the
     starting page's own reload."""
@@ -270,25 +196,18 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 
 
 @pure
-def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stderr_tail: str | None) -> str:
+def parked_page_html(
+    kind: ParkedPageKind,
+    display_name: str,
+    program: str,
+    stderr_tail: str | None,
+    contract_module_source: str | None,
+) -> str:
     """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
     start (with a Try again unless the wake budget is spent, an agent to look at it, and behind "See details" the end
-    of the program's error log, ``stderr_tail``, when it could be read)."""
+    of the program's error log, ``stderr_tail``, when it could be read). ``contract_module_source`` is the shell's
+    built app contract module, which the could-not-start page asks an agent with; None when it is not built."""
     name = html.escape(display_name)
-    has_log = _stderr_tail_html(stderr_tail) != ""
-    failed_body = (
-        _FAILED_BODY_TEMPLATE.replace("{details_hidden}", "" if has_log else " hidden")
-        .replace("{has_log}", "true" if has_log else "false")
-        .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
-        .replace("{ask_agent}", _script_literal(SHELL_ASK_AGENT_TYPE))
-        .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))
-        .replace("{report_bug}", _script_literal(SHELL_REPORT_BUG_TYPE))
-        .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
-        .replace("{draft_label}", html.escape(DRAFT_ASK_LABEL))
-        .replace("{draft}", _script_literal(DRAFT_DELIVERY))
-        .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))
-        .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
-    )
     match kind:
         case ParkedPageKind.STARTING:
             return _PAGE_TEMPLATE.format(
@@ -304,11 +223,14 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stde
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
-                body=failed_body.replace("{try_again_button}", _TRY_AGAIN_BUTTON)
-                .replace("{try_again_binding}", _TRY_AGAIN_BINDING)
-                .replace("{sentence}", "")
-                # The log last, so nothing in it is read as a placeholder.
-                .replace("{stderr_tail}", _stderr_tail_html(stderr_tail)),
+                body=_could_not_start_body(
+                    display_name=display_name,
+                    program=program,
+                    stderr_tail=stderr_tail,
+                    is_try_again_offered=True,
+                    sentence="",
+                    contract_module_source=contract_module_source,
+                ),
             )
         case ParkedPageKind.BUDGET_SPENT:
             return _PAGE_TEMPLATE.format(
@@ -316,10 +238,14 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stde
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
-                body=failed_body.replace("{try_again_button}", "")
-                .replace("{try_again_binding}", "")
-                .replace("{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>")
-                .replace("{stderr_tail}", _stderr_tail_html(stderr_tail)),
+                body=_could_not_start_body(
+                    display_name=display_name,
+                    program=program,
+                    stderr_tail=stderr_tail,
+                    is_try_again_offered=False,
+                    sentence=start_budget_spent_sentence(display_name),
+                    contract_module_source=contract_module_source,
+                ),
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -328,9 +254,10 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stde
 @pure
 def _page_content_security_policy(page: str) -> str:
     """The policy a parked page goes out under: its own stylesheet and its own inline script (the could-not-start
-    page's buttons), each admitted by hash, and nothing else."""
+    page's buttons), each admitted by hash, and the copy of the contract module that script imports from a ``blob:``
+    URL (which only a script already running on the page can make), and nothing else."""
     script_sources = inline_script_hashes(page)
-    script_directive = f"; script-src {' '.join(script_sources)}" if script_sources else ""
+    script_directive = f"; script-src {' '.join(script_sources)} blob:" if script_sources else ""
     return (
         f"default-src 'none'; style-src {inline_source(_PAGE_STYLE)}{script_directive}; base-uri 'none'; "
         "form-action 'none'"

@@ -31,7 +31,11 @@ from werkzeug.serving import run_simple
 
 from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.failure_pages import WORKSPACE_FRONTEND_BUILD
+from app_manifest.failure_pages import not_built_page_response
 from app_manifest.primitives import AppName
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import read_origin_label
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import RouteModels
@@ -98,12 +102,6 @@ HTTP_INTERNAL_SERVER_ERROR: Final[int] = 500
 
 PREVIEW_REFUSAL: Final[str] = "This is a preview of the Routines app; changes are made from the live one."
 
-_NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Routines</title></head>'
-    "<body><p>The Routines app has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
-    "</body></html>"
-)
-
 ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the Routines list page"),
     ("GET", "/{routine_id}"): SchemalessRoute(reason="a routine's page"),
@@ -111,6 +109,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/{routine_id}/runs/{run_id}/log"): SchemalessRoute(reason="a run's whole-log page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the pages' built bundle"),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
     ("GET", "/api/routines"): RouteModels(response_model=RoutineListing),
     ("GET", "/api/routines/{routine_id}"): RouteModels(response_model=RoutineDetail),
     ("GET", "/api/routines/{routine_id}/runs/{run_id}"): RouteModels(response_model=RunDetail),
@@ -142,7 +141,11 @@ def _run_id(raw: str) -> RunId | None:
 
 
 def create_app(
-    service: RoutinesService, static_directory: Path, is_preview: bool, fix_chat_starter: FixChatStarterInterface
+    service: RoutinesService,
+    static_directory: Path,
+    is_preview: bool,
+    fix_chat_starter: FixChatStarterInterface,
+    contract_path: Path,
 ) -> Flask:
     app = Flask("routines_app", static_folder=None)
     install_request_guard(app, exempt_rules=frozenset())
@@ -156,7 +159,7 @@ def create_app(
         """The one document, carrying the chat app's origin label (read per load: the registry is one small file)."""
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
-            return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
+            return not_built_page_response(APP_DISPLAY_NAME, WORKSPACE_FRONTEND_BUILD, HEALTH_PATH)
         chat_label = read_origin_label(service.registry_path, AppName(CHAT_APP_NAME))
         html_content = inject_chat_label_meta_tag(document.read_text(encoding="utf-8"), chat_label)
         return Response(html_content, mimetype="text/html", headers={"Cache-Control": "no-store"})
@@ -195,6 +198,16 @@ def create_app(
         return model_response(
             HealthResponse(status="ok", is_frontend_built=(static_directory / PAGE_DOCUMENT_FILENAME).is_file())
         )
+
+    @app.get(APP_CONTRACT_ROUTE)
+    def app_contract() -> ResponseReturnValue:
+        """The app contract module, which the page served while the pages are not built asks an agent with."""
+        if not contract_path.is_file():
+            return error_response(
+                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
+            )
+        # Flask resolves a relative path against the app's own directory, not the cwd the path names.
+        return send_file(contract_path.absolute(), mimetype="text/javascript")
 
     @app.get("/api/routines")
     def listing() -> ResponseReturnValue:
@@ -353,7 +366,11 @@ def main() -> None:
     paths: RoutinesPaths = paths_from_environment()
     service = build_service(paths, dict(os.environ))
     app = create_app(
-        service, STATIC_DIR, IS_PREVIEW, ChatAppFixChatStarter(repo_root=paths.repo_root, environ=dict(os.environ))
+        service,
+        STATIC_DIR,
+        IS_PREVIEW,
+        ChatAppFixChatStarter(repo_root=paths.repo_root, environ=dict(os.environ)),
+        contract_path=SHELL_APP_CONTRACT_PATH,
     )
     logger.info("Serving the Routines app at http://{}:{}/", HOST, PORT)
     run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)

@@ -40,7 +40,9 @@ port 8070:
   items in order. An item whose state cannot be read (an unreadable marker, an
   unreadable registry) is answered `is_done: false` and logged at warning. The
   route is not limited to the workspace's owner.
-- `GET /api/health`: `{"status", "is_frontend_built"}`.
+- `GET /api/health`: `{"status", "is_frontend_built"}`, which the page served
+  while the frontend is not built (every app's not-built page,
+  `app_manifest.failure_pages`) checks to come back on its own.
 - `GET /api/schema`: the OpenAPI document of these routes
   (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module,

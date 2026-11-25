@@ -12,22 +12,13 @@ import pytest
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import PortInUseError
-from imbue.system_interface.shell.port_parking import ASKING_AN_AGENT_LABEL
-from imbue.system_interface.shell.port_parking import CHANGE_NOT_ANSWERED_SENTENCE
 from imbue.system_interface.shell.port_parking import COULD_NOT_START_INSTRUCTION
-from imbue.system_interface.shell.port_parking import DRAFT_ASK_LABEL
-from imbue.system_interface.shell.port_parking import DRAFT_DELIVERY
 from imbue.system_interface.shell.port_parking import FAILED_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
-from imbue.system_interface.shell.port_parking import SHELL_ASK_AGENT_RESULT_TYPE
-from imbue.system_interface.shell.port_parking import SHELL_ASK_AGENT_TYPE
-from imbue.system_interface.shell.port_parking import SHELL_HANDSHAKE_TYPE
-from imbue.system_interface.shell.port_parking import SHELL_REPORT_BUG_TYPE
 from imbue.system_interface.shell.port_parking import STARTING_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import could_not_start_log_hint
-from imbue.system_interface.shell.port_parking import could_not_start_request
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parked_response_bytes
 from imbue.system_interface.shell.port_parking import parking_target_of
@@ -49,7 +40,7 @@ def _parked_port(port: int, on_first_connection: Callable[[], ParkedPageKind]) -
         app="docs",
         target=ParkingTarget(host="127.0.0.1", port=port),
         on_first_connection=on_first_connection,
-        page_for=lambda kind: parked_page_html(kind, "Docs", "docs", None),
+        page_for=lambda kind: parked_page_html(kind, "Docs", "docs", None, None),
     )
 
 
@@ -96,7 +87,7 @@ def test_a_wake_that_fails_is_told_so_and_waits_for_the_persons_try_again(closed
     head, _, body = answer.partition(b"\r\n\r\n")
     assert b"<h1>Docs couldn't start.</h1>" in body
     assert b'id="try-again">Try again</button>' in body
-    assert b'getElementById("try-again").addEventListener("click", function () { location.reload(); })' in body
+    assert b'getElementById("try-again").addEventListener("click", () => location.reload())' in body
     # A reload is a wake, which spends the budget, so the page never reloads itself; a fetch is told to wait.
     assert b"http-equiv" not in body
     assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in head
@@ -171,50 +162,45 @@ def test_a_could_not_start_page_shows_the_end_of_the_error_log_escaped_behind_se
     kind: ParkedPageKind,
 ) -> None:
     tail = 'Traceback (most recent call last):\n  File "<app>", line 3\nModuleNotFoundError: {request} & <b>x</b>\n'
-    page = parked_page_html(kind, "Docs", "docs", tail)
-    opening, shown = page.split('<details id="page-details"', 1)[1].split("</details>", 1)[0].split(">", 1)
-    assert "hidden" not in opening
+    page = parked_page_html(kind, "Docs", "docs", tail, None)
+    shown = page.split("<details><summary>See details</summary>", 1)[1].split("</details>", 1)[0]
     assert '<pre class="stderr-tail">Traceback' in shown
     assert "ModuleNotFoundError: {request} &amp; &lt;b&gt;x&lt;/b&gt;" in shown
-    # Nothing in the log is markup or a placeholder of the page's.
+    # Nothing in the log is markup.
     assert "<b>x</b>" not in page
 
-    # With no log to show, "See details" waits hidden for a failed ask's details.
+    # With no log to show, there is no "See details".
     for unreadable in (None, "", "  \n"):
-        bare = parked_page_html(kind, "Docs", "docs", unreadable)
+        bare = parked_page_html(kind, "Docs", "docs", unreadable, None)
         assert "stderr-tail" not in bare
-        assert '<details id="page-details" hidden>' in bare
+        assert "See details" not in bare
+
+
+@pytest.mark.parametrize("kind", [ParkedPageKind.FAILED, ParkedPageKind.BUDGET_SPENT])
+def test_a_could_not_start_page_asks_from_the_contract_module_it_carries_and_without_one_offers_no_agent(
+    kind: ParkedPageKind,
+) -> None:
+    module = 'export function connectToShell() { return "</script><b>x</b>"; }'
+    tail = "boom </script><script>alert(1)</script>"
+    page = parked_page_html(kind, "Docs", "docs", tail, module)
+    scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", page, re.DOTALL)
+    # One script, which nothing in the module or the log can close early.
+    assert len(scripts) == 1
+    assert "URL.createObjectURL(new Blob([" in scripts[0] and "mountFailureRemedies" in scripts[0]
+    assert '"askLabel": "Ask an agent to look at it"' in scripts[0]
+
+    without = parked_page_html(kind, "Docs", "docs", tail, None)
+    assert "mountFailureRemedies" not in without and "import(" not in without
+    assert 'id="failure-remedies"' in without
 
 
 def test_the_response_bytes_carry_the_page_length() -> None:
-    page = parked_page_html(ParkedPageKind.STARTING, "A <b>Name</b>", "prog", None)
+    page = parked_page_html(ParkedPageKind.STARTING, "A <b>Name</b>", "prog", None, None)
     response = parked_response_bytes(ParkedPageKind.STARTING, page)
     head, _, body = response.partition(b"\r\n\r\n")
     assert f"Content-Length: {len(page.encode())}".encode() in head
     assert body == page.encode()
     assert "&lt;b&gt;" in page
-
-
-@pytest.mark.frontend
-def test_the_could_not_start_pages_wire_is_the_app_contracts() -> None:
-    """The page speaks the app contract without its module, so it carries the types and the words it uses; this pins
-    them to ``workspace_ui``, where a renamed type would otherwise leave the page's button silently doing nothing."""
-    workspace_ui = Path(__file__).parents[5] / "libs" / "workspace_ui" / "src"
-    app_contract_ts = (workspace_ui / "app_contract.ts").read_text()
-    failure_buttons_ts = (workspace_ui / "components" / "FailureButtons.ts").read_text()
-    for source, name, value in (
-        (app_contract_ts, "SHELL_HANDSHAKE", SHELL_HANDSHAKE_TYPE),
-        (app_contract_ts, "SHELL_ASK_AGENT", SHELL_ASK_AGENT_TYPE),
-        (app_contract_ts, "SHELL_ASK_AGENT_RESULT", SHELL_ASK_AGENT_RESULT_TYPE),
-        (app_contract_ts, "SHELL_REPORT_BUG", SHELL_REPORT_BUG_TYPE),
-        (app_contract_ts, "CHANGE_NOT_ANSWERED_SENTENCE", CHANGE_NOT_ANSWERED_SENTENCE),
-        (failure_buttons_ts, "ASKING_AN_AGENT_LABEL", ASKING_AN_AGENT_LABEL),
-        (failure_buttons_ts, "DRAFT_ASK_LABEL", DRAFT_ASK_LABEL),
-    ):
-        declared = re.search(rf'export const {name} =\s*"([^"]+)";', source)
-        assert declared is not None and declared.group(1) == value, name
-    deliveries = re.search(r"export type AskDelivery = ([^;]+);", app_contract_ts)
-    assert deliveries is not None and f'"{DRAFT_DELIVERY}"' in deliveries.group(1)
 
 
 @pytest.mark.frontend
@@ -226,11 +212,6 @@ def test_the_could_not_start_pages_agent_is_asked_what_the_desktops_is() -> None
     assert declared is not None and declared.group(1) == COULD_NOT_START_INSTRUCTION
     assert f"`{could_not_start_log_hint('${app.program}')}`" in failures_ts
     assert "whatFailed: `${app.display_name} couldn't start.`" in failures_ts
-    assert could_not_start_request("Docs", "docs") == (
-        "Imbue Studio showed the user this failure: Docs couldn't start.\n\n"
-        "Its program's log may say why (supervisorctl tail docs stderr). Find out why and get it running again, then "
-        "tell the user what was wrong and what you changed."
-    )
 
 
 def _sha256_source(text: str) -> str:
@@ -238,19 +219,20 @@ def _sha256_source(text: str) -> str:
 
 
 def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet_and_script() -> None:
-    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs", None)
+    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs", None, "export const x = 1;")
     head, _, _ = parked_response_bytes(ParkedPageKind.FAILED, page).partition(b"\r\n\r\n")
     style = page.split("<style>", 1)[1].split("</style>", 1)[0]
-    script = page.split("<script>", 1)[1].split("</script>", 1)[0]
+    script = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    # The script imports the contract module from a blob URL it makes itself.
     policy = (
-        f"default-src 'none'; style-src {_sha256_source(style)}; script-src {_sha256_source(script)}; "
+        f"default-src 'none'; style-src {_sha256_source(style)}; script-src {_sha256_source(script)} blob:; "
         "base-uri 'none'; form-action 'none'"
     )
     assert f"Content-Security-Policy: {policy}".encode() in head
     # The page's own buttons run from that script alone: no inline handler, which no hash admits.
     assert "onclick=" not in page
 
-    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs", None)
+    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs", None, None)
     starting_head, _, _ = parked_response_bytes(ParkedPageKind.STARTING, starting).partition(b"\r\n\r\n")
     starting_policy = f"default-src 'none'; style-src {_sha256_source(style)}; base-uri 'none'; form-action 'none'"
     assert f"Content-Security-Policy: {starting_policy}".encode() in starting_head

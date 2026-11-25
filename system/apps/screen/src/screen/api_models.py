@@ -23,10 +23,13 @@ class RequestModel(FrozenModel):
 
 
 class HealthAnswer(FrozenModel):
-    """``GET /health``: the service is up, and where the stack is."""
+    """``GET /health``: the service is up, where the stack is, and whether the viewer has been built."""
 
     status: str = Field(description="``ok`` while the service answers")
     lifecycle: str = Field(description="The stack's lifecycle, lower-case")
+    is_frontend_built: bool = Field(
+        description="Whether the viewer's bundle has been built, so the page can be served"
+    )
 
 
 class ControlDocument(FrozenModel):

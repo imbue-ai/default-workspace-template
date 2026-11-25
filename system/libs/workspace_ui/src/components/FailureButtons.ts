@@ -1,7 +1,13 @@
 import m from "mithril";
-import { askAgentToFix, withAskFailure } from "../app_contract";
+import {
+  ASK_AGENT_TO_FIX_LABEL,
+  ASKING_AN_AGENT_LABEL,
+  DRAFT_ASK_LABEL,
+  REPORT_A_BUG_LABEL,
+  askAgentToFix,
+  withAskFailure,
+} from "../app_contract";
 import type { AgentFixRequest, ReportedFailure, ShellConnection, ShownFailure, StartOutcome } from "../app_contract";
-import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
 import type { ButtonOptions, ButtonVariant } from "./Button";
 import { SeeDetails } from "./SeeDetails";
@@ -13,13 +19,10 @@ import { TEXT_HELPER_SIZE } from "./typography";
  * bug report with the failure attached. Each renders nothing where it could not work; it reads the connection at
  * render time, so the page redraws when a handshake arrives (as every page does). ``FailureRemedies`` draws what a
  * failure that owes help gets by default: the agent, and the bug report only where no agent can be asked or the ask
- * was refused.
+ * was refused. A page without Mithril gets the same from the contract module's ``mountFailureRemedies``.
  */
 
-export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
-export const ASKING_AN_AGENT_LABEL = "Asking an agent…";
-/** What a refused ask offers: the same request left unsent in a chat's message box, for the person to send. */
-export const DRAFT_ASK_LABEL = "Draft it in a chat";
+export { ASK_AGENT_TO_FIX_LABEL, ASKING_AN_AGENT_LABEL, DRAFT_ASK_LABEL };
 
 interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
   readonly variant?: ButtonVariant;

@@ -288,7 +288,7 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `POST /api/session` | a neko session token for this identity (section 6.3) |
 | `GET /api/connect-info` | section 5.2 |
 | `POST /api/screen-size` | section 7.2 |
-| `GET /health` | `{"status", "lifecycle"}`, the service's liveness |
+| `GET /health` | `{"status", "lifecycle", "is_frontend_built"}`, the service's liveness and whether the viewer is built |
 | `GET /api/state` | lifecycle, lease, profile, frontmost window title, Chromium state |
 | `POST /api/start` | start the stack (the stopped overlay's Start button) |
 | `POST /api/input-seen` | the controller's viewer reporting input activity, the profile chooser's clock (section 8.1) |

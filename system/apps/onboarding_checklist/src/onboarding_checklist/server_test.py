@@ -3,11 +3,15 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from app_manifest.testing import assert_document_policy_admits_page
+from app_manifest.testing import assert_serves_the_not_built_page
 from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from onboarding_activity.markers import Marker
 from onboarding_activity.markers import mark
 from onboarding_checklist.items import read_checklist_items
+from onboarding_checklist.server import APP_DISPLAY_NAME
+from onboarding_checklist.server import HEALTH_PATH
 from onboarding_checklist.server import create_app
 from workspace_themes.testing import write_standard_theme
 
@@ -62,12 +66,10 @@ def test_a_content_named_asset_is_cached_for_good_and_a_missing_one_is_a_404(cli
     assert client.get("/assets/missing.js").status_code == 404
 
 
-def test_an_unbuilt_page_says_how_to_build_it_and_health_reports_it(tmp_path: Path, marker_directory: Path) -> None:
+def test_an_unbuilt_page_is_the_shared_not_built_page(tmp_path: Path, marker_directory: Path) -> None:
     client = _client(tmp_path / "never-built", marker_directory)
-    page = client.get("/")
-    assert page.status_code == 200
-    assert "npm run build" in page.get_data(as_text=True)
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
+    assert_serves_the_not_built_page(client, "/", APP_DISPLAY_NAME, HEALTH_PATH)
+    assert_document_policy_admits_page(client.get("/"))
 
 
 def test_health_reports_a_built_page(client: FlaskClient) -> None:

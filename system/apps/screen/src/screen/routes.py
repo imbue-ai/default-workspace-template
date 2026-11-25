@@ -17,6 +17,8 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from app_manifest.failure_pages import WORKSPACE_FRONTEND_BUILD
+from app_manifest.failure_pages import not_built_page_response
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -90,6 +92,7 @@ from screen.xclipboard import MAX_CLIPBOARD_BYTES
 from workspace_layout.identity import is_loopback_address
 
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
+HEALTH_PATH: Final[str] = "/health"
 
 HTTP_NO_CONTENT: Final[int] = 204
 HTTP_BAD_REQUEST: Final[int] = 400
@@ -105,12 +108,6 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 _RUN_START_WAIT_SECONDS: Final[float] = 45.0
 _VIEWER_QUEUE_POLL_SECONDS: Final[float] = 1.0
 _VIEWER_INBOUND_POLL_SECONDS: Final[float] = 0.05
-
-_NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Screen</title></head>'
-    "<body><p>The Screen's viewer has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
-    "</body></html>"
-)
 
 # A share admits a visitor to the whole origin, so the routes that act on the Screen outside the lease refuse one:
 # they are the owner's and the agents' (who reach the service over loopback with no identity header), while the
@@ -145,7 +142,7 @@ ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="a file of the viewer's built bundle"),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the shell's app contract module, a script"),
     ("GET", CONTEXT_MENU_ROUTE): SchemalessRoute(reason="the shell's context menu module, a script"),
-    ("GET", "/health"): RouteModels(response_model=HealthAnswer),
+    ("GET", HEALTH_PATH): RouteModels(response_model=HealthAnswer),
     ("GET", "/api/state"): RouteModels(response_model=StateDocument),
     ("POST", "/api/start"): RouteModels(response_model=StartAnswer),
     ("GET", "/api/connect-info"): RouteModels(response_model=ConnectInfoAnswer),
@@ -236,7 +233,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         service.ensure_started()
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
-            return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
+            return not_built_page_response(APP_DISPLAY_NAME, WORKSPACE_FRONTEND_BUILD, HEALTH_PATH)
         response = send_file(document.absolute(), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -264,10 +261,16 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         """The element context menu module: the right-click menu that hands an element on a page to a chat."""
         return _shell_module(SHELL_CONTEXT_MENU_PATH)
 
-    @app.get("/health")
+    @app.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
-        """Whether the service is up, with the stack's lifecycle."""
-        return model_response(HealthAnswer(status="ok", lifecycle=service.stack.lifecycle.value.lower()))
+        """Whether the service is up, with the stack's lifecycle and whether the viewer has been built."""
+        return model_response(
+            HealthAnswer(
+                status="ok",
+                lifecycle=service.stack.lifecycle.value.lower(),
+                is_frontend_built=(static_directory / PAGE_DOCUMENT_FILENAME).is_file(),
+            )
+        )
 
     # state and the service's events
 

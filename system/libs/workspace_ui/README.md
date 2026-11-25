@@ -137,11 +137,29 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   its own origin, and which follows the link clicks and script popups of a
   page a shell frames (its handshake has arrived) by one rule
   (desktop-interface contracts.md section 7, "Link rule"),
-  so no app carries link code of its own. A page without Mithril (the
-  terminal's and the browser's server-rendered pages) builds its failure
-  buttons from the same module, in a `<script type="module">` (a dynamic
-  `import()` works too: the shell greets a page again when it connects, even
-  after its frame's `load`):
+  so no app carries link code of its own. A page without Mithril gets
+  `FailureRemedies` from the same module, in a `<script type="module">` (a
+  dynamic `import()` works too: the shell greets a page again when it
+  connects, even after its frame's `load`): `mountFailureRemedies(root,
+  connection, { failure, request, askLabel })` draws the ask into `root`, and
+  what a refused ask offers, by the component's rules, and the page calls the
+  `redraw()` it answers on each handshake. Every app's not-built page and the
+  shell's could-not-start page use it (`app_manifest.failure_pages`):
+
+  ```js
+  import { connectToShell, mountFailureRemedies } from "/_static/app_contract.js";
+
+  let remedies = null;
+  const connection = connectToShell({ onHandshake: () => remedies?.redraw() });
+  remedies = mountFailureRemedies(document.getElementById("failure-remedies"), connection, {
+    failure: { message: sentence, details: output, isHelpOwed: true },
+    request: { whatFailed: sentence, details: output },
+  });
+  ```
+
+  A page whose failure buttons sit among controls of its own (the terminal's
+  and the browser's server-rendered pages) builds them from the module's
+  pieces instead:
 
   ```js
   import { connectToShell, askAgentToFix, withAskFailure } from "/_static/app_contract.js";
