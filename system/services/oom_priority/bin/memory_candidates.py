@@ -33,8 +33,8 @@ It joins four sources, each read independently so one failing leaves the others 
   window shows the Screen it runs on, per the same inventory document. Its memory is the summed
   anonymous memory of every Chromium process on its profile.
 
-A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
-"nothing to stop".
+A source that cannot be read is reported as unknown (``null`` candidates and ``others`` plus a
+note), never as "nothing to stop" or "nothing else holds memory".
 
 ``--free-memory`` prints only the free memory and reads nothing but the meminfo files and the
 memory guard's program file, so it is cheap enough to poll while memory is short.
