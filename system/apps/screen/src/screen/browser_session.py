@@ -59,7 +59,8 @@ def driven_browser(
 
     Raises ``BrowserUnavailableError`` (with the service's ``status``: ``busy_human``, ``busy_agent``, ``starting``,
     ``stopped`` or ``crashed``, or the HTTP status, ``404`` for a browser that does not exist) when the browser cannot
-    be reserved; nothing is attached then. A Screen service that does not answer raises
+    be reserved; nothing is attached then, but a ``busy_*`` refusal queues the run's agent, as ``acquire`` does, so it
+    is handed the Screen and messaged once it frees. A Screen service that does not answer raises
     ``ScreenServiceUnreachableError``. ``is_reclaim`` takes the Screen back from the human, only for a run the user
     started themselves. A detach that fails after the body succeeded raises ``BrowserSessionError``; after a body that
     raised, it is logged and the body's error goes on.

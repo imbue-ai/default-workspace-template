@@ -170,8 +170,10 @@ It reserves the browser, attaches a session under a name only this run uses, and
 (the body finishing or raising, a command's own timeout included) detaches that session and gives
 the browser back. The browser keeps running. A browser it cannot reserve raises
 `BrowserUnavailableError`, whose `status` says why (`busy_human`, `busy_agent`, `starting`,
-`stopped` or `crashed`, or `404` when there is no browser yet: start one with `new`); a Screen
-service that does not answer raises `ScreenServiceUnreachableError`. Both come from `screen.errors`.
+`stopped` or `crashed`, or `404` when there is no browser yet: start one with `new`). A `busy_*`
+refusal also queues the run's agent, as `acquire` does: it is handed the browser and messaged once
+it frees. A Screen service that does not answer raises `ScreenServiceUnreachableError`. Both come
+from `screen.errors`.
 
 Every `attach` starts a `playwright-cli` daemon that outlives the command, a few hundred MB each,
 and only `detach` ends it. A script killed before it detaches (by hand, or by a routine's time
