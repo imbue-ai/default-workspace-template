@@ -171,7 +171,12 @@ _UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS = 180.0
 
 def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
     """Bring the stopped agents' mngr-generated files to the workspace venv's mngr, relaying what it says on
-    stderr. Never raises: the tree it runs on is already live."""
+    stderr; nothing when the venv has no such command (a tree from before it). Never raises: the tree it runs on
+    is already live."""
+    if not (
+        repo_root / venv_links.VENV_NAME / "bin" / _UPGRADE_STOPPED_AGENTS_ARGV[-1]
+    ).exists():
+        return
     try:
         result = runner.run_process_group(
             list(_UPGRADE_STOPPED_AGENTS_ARGV),
@@ -2163,13 +2168,7 @@ def _run_rollback(
         _settle_rollback_record(record, repo_root, reason)
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
-    # A tree from before the command restores a venv without it.
-    if (
-        resyncs_venv
-        and (
-            repo_root / venv_links.VENV_NAME / "bin" / _UPGRADE_STOPPED_AGENTS_ARGV[-1]
-        ).exists()
-    ):
+    if resyncs_venv:
         _upgrade_stopped_agents(repo_root, runner)
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)

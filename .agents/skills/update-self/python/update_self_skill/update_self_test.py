@@ -7432,6 +7432,27 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
 _UPGRADE_STOPPED_AGENTS = ["uv", "run", "--no-sync", "upgrade-stopped-agents"]
 
 
+def _syncs_the_upgrade_command(runner: _RecordingRunner, repo_root: Path) -> None:
+    """Have each venv sync ``runner`` sees install the stopped-agent upgrade's command, as a tree whose bootstrap
+    package declares it does."""
+    observe = runner.on_command
+
+    def on_command(argv: list[str]) -> None:
+        if argv[:2] == ["uv", "sync"]:
+            environment = runner.envs[-1] or {}
+            venv = Path(
+                environment.get(
+                    "UV_PROJECT_ENVIRONMENT", repo_root / venv_links.VENV_NAME
+                )
+            )
+            (venv / "bin").mkdir(parents=True, exist_ok=True)
+            (venv / "bin" / _UPGRADE_STOPPED_AGENTS[-1]).touch()
+        if observe is not None:
+            observe(argv)
+
+    runner.on_command = on_command
+
+
 def test_update_self_runs_the_command_the_bootstrap_package_declares() -> None:
     pyproject = tomllib.loads(
         (_WORKSPACE_ROOT / "system/libs/bootstrap/pyproject.toml").read_text()
@@ -7459,6 +7480,7 @@ def test_a_landed_apply_upgrades_the_stopped_agents_once_on_the_landed_venv(
         if argv == _UPGRADE_STOPPED_AGENTS
         else None
     )
+    _syncs_the_upgrade_command(runner, apply_repo)
 
     code = _apply(
         runner,
@@ -7495,10 +7517,32 @@ def test_only_an_apply_that_re_synced_the_venv_upgrades_the_stopped_agents(
     apply_repo: Path, name_status: str, is_upgraded: bool
 ) -> None:
     runner = _apply_runner(name_status, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     assert runner.ran(*_UPGRADE_STOPPED_AGENTS) is is_upgraded
+
+
+def test_an_apply_landing_a_tree_from_before_the_upgrade_command_runs_no_upgrade(
+    apply_repo: Path, capsys
+) -> None:
+    # A forward revert to an older release lands a venv without the command.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    err = capsys.readouterr().err
+    assert "agent upgrade:" not in err
+    assert "stopped agents" not in err
 
 
 @pytest.mark.parametrize(
@@ -7515,6 +7559,7 @@ def test_a_stopped_agent_upgrade_that_fails_leaves_the_landed_apply_as_it_was(
 ) -> None:
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     runner.respond(tuple(_UPGRADE_STOPPED_AGENTS), outcome)
+    _syncs_the_upgrade_command(runner, apply_repo)
 
     code = _apply(
         runner,
@@ -10088,9 +10133,7 @@ def _venv_moving_rollback_point(
 ) -> _RecordingRunner:
     """A kept rollback point of an update that moved the venv, and the runner to roll it back; the venv it restores
     holds the stopped-agent upgrade's command when ``has_upgrade_command``."""
-    venv = _link_live_venv(repo_root)
-    if has_upgrade_command:
-        (venv / "bin" / _UPGRADE_STOPPED_AGENTS[-1]).touch()
+    _link_live_venv(repo_root)
     update_apply_contract.write_last_good(
         update_apply_contract.LastGoodRecord(
             merge_sha="fedcba9876543",
@@ -10112,6 +10155,8 @@ def _venv_moving_rollback_point(
     runner.respond(
         ("uv", "cache", "dir"), _Result(stdout=f"{_uv_cache_dir(repo_root)}\n")
     )
+    if has_upgrade_command:
+        _syncs_the_upgrade_command(runner, repo_root)
     return runner
 
 
