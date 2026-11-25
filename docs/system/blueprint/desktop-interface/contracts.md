@@ -321,7 +321,7 @@ The shell also sends `minds:highlight-chrome {anchor}` (contract version 9) whil
 The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app's backend, through mngr's forward), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
 `system/apps/system_interface/workspace_routes_api.json` is their full description (every request and answer, as an OpenAPI document, each route naming its operation under `x-workspace-operation`), and is what a client is checked against; this section says what holds across them.
 
-`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...]}`: the version of the checkout (the release tag `HEAD` is, else what `git describe --tags --always` says of it, else empty) and the name of every operation the shell has a route for.
+`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...]}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty) and the name of every operation the shell has a route for.
 A client asks before the first operation it sends a workspace and calls a route only for an operation named there, so a workspace whose shell names fewer is still served by the client's older path.
 A preview shell names none, and answers every route that changes the workspace `403` with the code `PREVIEW`: it serves a copy, and cannot change the live workspace.
 
