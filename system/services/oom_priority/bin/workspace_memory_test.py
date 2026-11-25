@@ -1603,6 +1603,15 @@ def test_show_asks_for_one_name_when_several_rows_match_and_says_when_none_does(
     exact, is_found = workspace_memory.render_show(report, "Chat", proc)
     assert is_found and exact.splitlines()[0] == "app chat (Chat)"
 
+    # An agent's id finds it whether or not it could be stopped: "budget" is mid-turn.
+    mngr = sources.run_command
+    assert isinstance(mngr, _FakeMngr)
+    rows = workspace_memory.report_rows(report)
+    for record in mngr.records:
+        assert [row.name for row in workspace_memory.find_rows(rows, record["id"])] == [
+            record["name"]
+        ]
+
     several, is_found = workspace_memory.render_show(report, "app", proc)
     assert not is_found
     assert {tuple(row[:2]) for row in _cells(several)[2:]} == {

@@ -399,6 +399,8 @@ class HeldEntry(NamedTuple):
     pids: tuple[int, ...]
     process_pids: tuple[int, ...]
     anonymous_kib: int | None
+    # Whatever else names it: an agent's id and chat id.
+    aliases: tuple[str, ...] = ()
 
 
 class AgentSection(NamedTuple):
@@ -721,6 +723,7 @@ def classify_agents(
                         pids=holding.root_pids,
                         process_pids=holding.process_pids,
                         anonymous_kib=holding.anonymous_kib,
+                        aliases=(agent.agent_id, agent.chat_id),
                     )
                 )
             continue
@@ -740,6 +743,7 @@ def classify_agents(
                     pids=holding.root_pids,
                     process_pids=holding.process_pids,
                     anonymous_kib=holding.anonymous_kib,
+                    aliases=(agent.agent_id, agent.chat_id),
                 )
             )
             continue
@@ -1564,7 +1568,7 @@ def report_rows(report: Report) -> list[Row]:
                     can_stop=CanStop.UNKNOWN if is_unknown else CanStop.NO,
                     detail=entry.why,
                     process_pids=entry.process_pids,
-                    aliases=(),
+                    aliases=entry.aliases,
                 )
             )
     return sorted(rows, key=lambda row: _memory_order(row.anonymous_kib))
