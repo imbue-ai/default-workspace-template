@@ -171,9 +171,8 @@ class ImageGenerationCalls(MutableModel):
     cell_ids: set[str] = Field(default_factory=set, description="Running cells of programs that generate images")
 
     def note_call(self, call_id: str, tool_name: str, raw_input: str) -> None:
-        if generates_images(tool_name, raw_input):
-            self.call_ids.add(call_id)
-        elif tool_name == WAIT_TOOL_NAME and _waited_cell_id(raw_input) in self.cell_ids:
+        is_waiting_on_a_generation = tool_name == WAIT_TOOL_NAME and _waited_cell_id(raw_input) in self.cell_ids
+        if generates_images(tool_name, raw_input) or is_waiting_on_a_generation:
             self.call_ids.add(call_id)
 
     def note_output(self, call_id: str, output_text: str) -> None:
@@ -186,7 +185,8 @@ def _waited_cell_id(raw_arguments: str) -> str | None:
     """The cell a ``wait`` call resumes, from its JSON arguments."""
     try:
         arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.warning("Could not decode a codex wait call's arguments: {}", exc)
         return None
     cell_id = arguments.get("cell_id") if isinstance(arguments, dict) else None
     if isinstance(cell_id, bool) or not isinstance(cell_id, (str, int)):
