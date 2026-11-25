@@ -748,6 +748,178 @@ def test_an_idle_workspace_still_carries_its_most_recent_chats(
     ]
 
 
+def _write_transcript_stream(
+    agents_dir: Path,
+    agent_name: str,
+    *,
+    mtime: float,
+    relative_source: str = "claude/common_transcript",
+) -> Path:
+    """An agent's conversation stream file at the layout mngr reads it from, last written at ``mtime``.
+
+    Its content is not what the collector reads -- that comes from ``mngr
+    transcript`` -- so only its place and its mtime matter here.
+    """
+    path = (
+        agents_dir
+        / _agent_id_for(agent_name)
+        / "events"
+        / relative_source
+        / "events.jsonl"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _fetched_transcripts(tmp_path: Path) -> set[str]:
+    """The agent names the stub was asked for a transcript of."""
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    return {
+        line.split()[1].split("@", 1)[0].removeprefix("agent-")
+        for line in invocations.splitlines()
+        if line.startswith("transcript ")
+    }
+
+
+def test_only_the_chats_a_report_can_keep_are_fetched(tmp_path: Path) -> None:
+    """Every fetch is a whole mngr CLI start, so a busy workspace's chats past the
+    window and the floor are never asked for: measured on an 81-agent workspace,
+    fetching all of them was the larger part of a collection that timed out."""
+    now = time.time()
+    agents_dir = tmp_path / "agents"
+    events_by_agent = {
+        "fresh": _transcript_events("fresh", timestamp=_stamp_seconds_ago(60))
+    }
+    _write_transcript_stream(agents_dir, "fresh", mtime=now - 60)
+    for index in range(6):
+        name = f"stale-{index}"
+        age = 10_000 + 100 * index
+        events_by_agent[name] = _transcript_events(
+            name, timestamp=_stamp_seconds_ago(age)
+        )
+        _write_transcript_stream(agents_dir, name, mtime=now - age)
+    # The converter's own output under events/logs/ is written as the harness
+    # runs, and says nothing about when the conversation was: it must not make
+    # the oldest chat look like the newest.
+    _write_transcript_stream(
+        agents_dir, "stale-5", mtime=now, relative_source="logs/common_transcript"
+    )
+    stub = _write_mngr_stub(
+        tmp_path, agents=tuple(events_by_agent), events_by_agent=events_by_agent
+    )
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "chats/fresh-claude.jsonl",
+        *(f"chats/stale-{index}-claude.jsonl" for index in range(4)),
+    ]
+    assert _fetched_transcripts(tmp_path) == {
+        "fresh",
+        "stale-0",
+        "stale-1",
+        "stale-2",
+        "stale-3",
+    }
+
+
+def test_a_chat_with_a_segment_whose_stream_cannot_be_found_is_still_fetched(
+    tmp_path: Path,
+) -> None:
+    """Recency read off the files is only a shortcut: a segment whose stream is not
+    where the collector looks (a harness that writes elsewhere) leaves its chat's
+    recency unknown, and an unknown chat is asked for rather than lost. Here the
+    chat's archived segment is the oldest stream in the workspace, so ranking the
+    chat by the segments that were found would drop the conversation the user is
+    holding right now."""
+    now = time.time()
+    agents_dir = tmp_path / "agents"
+    events_by_agent = {}
+    for index in range(5):
+        name = f"stale-{index}"
+        age = 10_000 + 100 * index
+        events_by_agent[name] = _transcript_events(
+            name, timestamp=_stamp_seconds_ago(age)
+        )
+        _write_transcript_stream(agents_dir, name, mtime=now - age)
+    events_by_agent["handed-off-archived"] = _transcript_events(
+        "before the handoff", timestamp=_stamp_seconds_ago(90_000)
+    )
+    _write_transcript_stream(agents_dir, "handed-off-archived", mtime=now - 90_000)
+    events_by_agent["handed-off-live"] = _transcript_events(
+        "after the handoff", timestamp=_stamp_seconds_ago(30), source="codex"
+    )
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(events_by_agent),
+        events_by_agent=events_by_agent,
+        chat_of_agent={
+            "handed-off-archived": ("chat-h", 1),
+            "handed-off-live": ("chat-h", 2),
+        },
+    )
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members][0] == "chats/handed-off-live-codex.jsonl"
+    assert "before the handoff" in members[0][1]
+    assert {"handed-off-archived", "handed-off-live"} <= _fetched_transcripts(tmp_path)
+
+
+def _png_data_url(payload_bytes: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(payload_bytes).decode("ascii")
+
+
+def test_an_image_inlined_into_a_chat_rides_as_a_stub_and_cannot_cost_the_chat(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A codex chat carries the images its tools returned as data URLs: most of its
+    bytes, and long random runs the scanners' short random-token rules match by
+    chance, which withheld every codex chat of a measured report. Stubbed before
+    staging, a match inside an image can no longer cost the chat, and the reader
+    still sees that an image was there, its type and its size."""
+    image = os.urandom(1000)
+    data_url = _png_data_url(image)
+    # The run the stub gate flags sits inside the image, as the measured
+    # false positives did.
+    flagged_run = data_url[200:240]
+    events = (
+        json.dumps(
+            {
+                "timestamp": _stamp_seconds_ago(60),
+                "type": "observation",
+                "emitter": "codex/common_transcript",
+                "results": [{"content": data_url}],
+            }
+        )
+        + "\n"
+        + _transcript_events("look at this screenshot", source="codex")
+    )
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=flagged_run)
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, {"viewer": events}),
+        scan_gate_dir=gate,
+        workspace_dir=tmp_path / "workspace",
+    )
+
+    collector.run(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert _notes_lines(archive) == []
+        shipped = archive.read("chats/viewer-codex.jsonl").decode("utf-8")
+    records = [json.loads(line) for line in shipped.splitlines()]
+    assert records[0]["results"][0]["content"] == (
+        "[image/png image, 1000 bytes, left out of the bug report]"
+    )
+    assert records[1]["message"] == "look at this screenshot"
+    assert base64.b64encode(image).decode("ascii")[:40] not in shipped
+
+
 def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
     tmp_path: Path,
 ) -> None:

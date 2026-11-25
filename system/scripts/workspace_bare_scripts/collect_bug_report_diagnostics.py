@@ -17,7 +17,8 @@ records ride under --logs as well, as ``update-apply/<file>``: its small state
 records and the tail of the dispatcher's log. Under --transcript it
 holds one ``chats/<agent-name>-<harness>.jsonl`` per selected chat, newest
 first -- one member per conversation the user held, which is one member per
-agent only until a chat is handed to another harness. With BOTH flags each
+agent only until a chat is handed to another harness; an image inlined into a
+chat rides as a short stub naming its type and size, not its bytes. With BOTH flags each
 running agent also contributes an ``agent-logs/<agent-name>/pane.txt``: a TUI
 harness renders the conversation into its pane, so its scrollback needs the
 chats consent as well as the logs one. The workspace logs, the update records,
@@ -99,6 +100,27 @@ TRANSCRIPT_RECENCY_WINDOW_SECONDS = 2 * 60 * 60
 # and a stale workspace is exactly where the conversation is hardest to
 # reconstruct from anything else. A workspace with fewer chats sends them all.
 MIN_TRANSCRIPT_COUNT = 5
+
+# Where an agent's conversation stream sits under its state dir, by the rule mngr
+# itself finds it with: any events source ending in ``common_transcript`` (so
+# ``events/claude/common_transcript/``, whatever the harness), outside
+# ``events/logs/``, as ``events.jsonl`` and its rotated ``events.jsonl.<stamp>``
+# segments. Read only for when the stream was last written, to decide which
+# chats are worth asking mngr for -- never for what was said.
+TRANSCRIPT_EVENTS_DIR = "events"
+TRANSCRIPT_STREAM_GLOB = os.path.join("**", "common_transcript", "events.jsonl*")
+CONVERTER_LOG_SOURCE = "logs"
+
+# An image a harness inlined into its transcript (codex puts the screenshots and
+# generated images its tools return there), as a ``data:`` URL. These are most of
+# a busy codex chat's bytes -- 62% of one measured 43MB transcript -- and long
+# random base64 runs, which the secret scanners' shorter random-token rules match
+# by chance. A reader of a report needs to know an image was there, not its
+# pixels, so each one is replaced by INLINE_IMAGE_STUB before anything is staged.
+# The base64 alphabet without ``\``: ``mngr transcript`` writes json.dumps
+# output, which never escapes ``/``.
+INLINE_IMAGE = re.compile(r"data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/]*={0,2})")
+INLINE_IMAGE_STUB = "[{media_type} image, {size} bytes, left out of the bug report]"
 
 # How far back a service log still describes the workspace the bug was filed
 # from: a log nothing has written to in over a day is history, not diagnostics,
@@ -603,8 +625,9 @@ def newest_event_time(events: str) -> float:
     """When this conversation was last written to, as an epoch; 0.0 when unknown.
 
     Read from the events themselves rather than mngr's ``user_activity_time``,
-    which is unpopulated on the agents this runs against, and rather than a file
-    mtime, which the collector no longer resolves paths for.
+    which is unpopulated on the agents this runs against. The stream's mtime only
+    decides which chats are fetched (``Collector.select_chats_to_read``); this is
+    what ranks the ones that were.
     """
     newest = 0.0
     for line in events.splitlines():
@@ -763,6 +786,17 @@ def release_scanned_members(
             "{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped_count))
         )
     return released, notes
+
+
+def stub_inline_images(text: str) -> str:
+    """``text`` with every inline ``data:image`` URL replaced by a stub naming its type and decoded size."""
+
+    def stub(match: re.Match[str]) -> str:
+        payload = match.group(2)
+        size = len(payload) * 3 // 4 - payload.count("=")
+        return INLINE_IMAGE_STUB.format(media_type=match.group(1), size=size)
+
+    return INLINE_IMAGE.sub(stub, text)
 
 
 def redact_url_credentials(text: str) -> str:
@@ -1186,11 +1220,78 @@ class Collector:
         itself, so the harness stays mngr's business rather than a list kept here
         (an agent of type ``chat`` writes its events under ``claude/``), and the
         converter's own stdout under ``logs/`` is already not what it reads.
+
+        Inline images are stubbed here, as soon as mngr answers, so a chat's image
+        bytes are never held beside the rest of the collection.
         """
         events = self.run_mngr(["transcript", target, "--format", "jsonl"], timeout)
         if events is None or not events.strip():
             return None
-        return events
+        return stub_inline_images(events)
+
+    def transcript_written_at(self, agent_id: str) -> float | None:
+        """When this agent's conversation stream was last written, or None when it cannot be found.
+
+        Read from the stream's own files (see TRANSCRIPT_STREAM_GLOB) because mngr
+        reports no recency an agent of every harness carries: its activity times
+        are unset on codex and antigravity agents, and its turn end on antigravity.
+        This is the one place the collector reads mngr's layout for chats, and only
+        to choose which chats to ask mngr for: what was said still comes from
+        ``mngr transcript``. A stream not found here reads as unknown, which costs
+        a fetch rather than the chat, so a layout this does not recognize degrades
+        to asking mngr about every agent instead of to an archive with no chats.
+        """
+        if not self.agents_dir:
+            return None
+        events_dir = os.path.join(self.agents_dir, agent_id, TRANSCRIPT_EVENTS_DIR)
+        newest: float | None = None
+        for path in glob.glob(
+            os.path.join(events_dir, TRANSCRIPT_STREAM_GLOB), recursive=True
+        ):
+            source_root = os.path.relpath(path, events_dir).split(os.sep, 1)[0]
+            if source_root == CONVERTER_LOG_SOURCE:
+                continue
+            try:
+                written_at = os.path.getmtime(path)
+            except OSError:
+                continue
+            newest = written_at if newest is None else max(newest, written_at)
+        return newest
+
+    def select_chats_to_read(
+        self, chats: Sequence[Sequence[ListedAgent]]
+    ) -> list[Sequence[ListedAgent]]:
+        """The chats worth fetching, in their listed order: those that could be selected.
+
+        Each fetch is a whole mngr CLI start, and a busy workspace holds far more
+        chats than a report keeps, so the selection ``collect_transcript_members``
+        makes is applied here first, by when each chat's streams were last written:
+        every chat inside the recency window, and the newest up to the floor. A
+        stream is written no earlier than the newest event in it, so every chat the
+        later selection would keep by its events is among these.
+
+        A chat any of whose segments has no stream this can find is always fetched:
+        its recency is unknown, and mngr is the authority on whether it has one.
+        """
+        known: list[tuple[float, int]] = []
+        unknown: set[int] = set()
+        for index, segments in enumerate(chats):
+            written = [
+                stamp
+                for stamp in (self.transcript_written_at(s.agent_id) for s in segments)
+                if stamp is not None
+            ]
+            if len(written) < len(segments):
+                unknown.add(index)
+            else:
+                known.append((max(written), index))
+        known.sort(reverse=True)
+        cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
+        recent_count = sum(1 for stamp, _ in known if stamp >= cutoff)
+        chosen = unknown | {
+            index for _, index in known[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
+        }
+        return [chat for index, chat in enumerate(chats) if index in chosen]
 
     def read_chat(
         self, segments: Sequence[ListedAgent], timeout: float
@@ -1233,11 +1334,12 @@ class Collector:
         chat written to inside the recency window rides along, newest first -- and
         never fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
         workspace holds fewer), so a report filed from a quiet workspace still
-        carries its recent history rather than nothing.
+        carries its recent history rather than nothing. Only the chats that could
+        make that cut are fetched at all (see ``select_chats_to_read``).
         """
         fetched = []
         used_names: set[str] = set()
-        chats = group_into_chats(self.list_agents(timeout))
+        chats = self.select_chats_to_read(group_into_chats(self.list_agents(timeout)))
         for segments, chat in zip(
             chats,
             map_concurrently(lambda segments: self.read_chat(segments, timeout), chats),
