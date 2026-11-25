@@ -1,10 +1,4 @@
-"""Bring the stopped local agents' mngr-generated files to the workspace venv's mngr.
-
-The boot runs it before anything starts an agent, and update-self runs it (``upgrade-stopped-agents``) once an
-update that moved the venv's mngr has landed or been rolled back. A running agent is never named: ``mngr upgrade``
-restarts an idle one, and restarts are the chat app's; one that something starts between the listing and its
-upgrade is still restarted. Both run from the repo root, which every path here is relative to.
-"""
+"""Bring the stopped local agents' mngr-generated files to the workspace venv's mngr."""
 
 import argparse
 import json
