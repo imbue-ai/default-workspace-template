@@ -44,21 +44,24 @@ folder per library. The library this workspace uses is `Default`, so the
 **data root** is `data/.skills/datalib/Default`, and the store's config file
 is `config.toml` inside it. `data/` is the workspace's own data tree on the
 persistent volume, so the store survives restarts. The binaries live in
-`~/.local/bin`, which is not on PATH for every shell, so establish all of
-this once at the top of your shell work:
+`/home/user/.local/bin`, which is not on PATH for every shell. The paths
+below are spelled out from the workspace's home, `/home/user`, not from
+`$HOME`: an agent's shell has `HOME=/root`, which is not the home the
+workspace and the Datalib app live under. Establish all of this once at the
+top of your shell work:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holding the store
+export PATH="/home/user/.local/bin:$PATH"
+DATA_ROOT="/home/user/workspace/data/.skills/datalib/Default"   # the data root holding the store
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
-# binaries (pinned to datalib v0.55.0), datalib's agent guide, and the Node
+# binaries (pinned to datalib v0.56.0), datalib's agent guide, and the Node
 # runtime a sync shells out to, about 160 MB together on the first run, then
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
 # running, so run it every time:
-bash "$HOME/workspace/.agents/skills/datalib/scripts/install_datalib.sh"
+bash /home/user/workspace/.agents/skills/datalib/scripts/install_datalib.sh
 mkdir -p "$DATA_ROOT"
 ```
 
@@ -89,7 +92,7 @@ mkdir -p "$DATA_ROOT"
    every source. With no chat to be woken in (`MINDS_CHAT_ID` and
    `MNGR_AGENT_ID` both unset), run the `wait` command directly instead.
 
-   `datalib-dag <config> --sync <step>` from the agent guide does the same
+   `datalib-pipeline sync <data_root> <step>` from the agent guide does the same
    sync and blocks until it ends, printing progress as it goes. Use it for a
    refresh you expect to take seconds, or when you need that progress output
    to diagnose a failure. It runs alongside the app's server on the same root
@@ -169,7 +172,7 @@ page. **Run this before doing any datalib work:**
 datalib-step help
 ```
 
-It prints the steps that set a source up from the shell (`datalib-dag init`,
+It prints the steps that set a source up from the shell (`datalib-pipeline init`,
 `datalib-step examples <type> --append`, a probe, a sync, a search), then an
 index of every other page. Those pages print from the installed binary, so
 they always match the tools you have:
@@ -187,7 +190,7 @@ they always match the tools you have:
 The install script also saved the agent guide as a file beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.55.0/docs/agent_user.md"
+cat /home/user/.local/share/datalib/v0.56.0/docs/agent_user.md
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -195,7 +198,7 @@ the tools you have. Two docs it links are saved with it, at the same relative
 paths: `user/getting_your_data.md` (each source's setup) and
 `user/config_examples/all_sources.toml` (a config naming every source). Its
 other relative links resolve against
-`https://github.com/imbue-ai/datalib/blob/v0.55.0/docs/`, and that is also
+`https://github.com/imbue-ai/datalib/blob/v0.56.0/docs/`, and that is also
 where to read the guide if the local copy is missing. Don't rely on remembered
 command lines or config shapes -- go read it.
 
