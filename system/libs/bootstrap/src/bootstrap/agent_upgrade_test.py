@@ -256,6 +256,37 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
     assert not any("WARNING" in line for line in lines)
 
 
+@pytest.mark.parametrize(
+    ("detail", "logged"),
+    [
+        ("it is mid-turn (--force interrupts it)", "it is mid-turn"),
+        (
+            "another program is running in its terminal (--force ends it and restarts the agent)",
+            "another program is running in its terminal",
+        ),
+        (
+            "its host is stopped (`mngr start a@box.docker` starts it)",
+            "its host is stopped",
+        ),
+    ],
+    ids=["busy", "replaced", "host-stopped"],
+)
+def test_a_skip_is_logged_without_the_command_mngr_suggests_for_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, detail: str, logged: str
+) -> None:
+    # Forcing an upgrade restarts a busy chat through mngr, so the outcome lines never offer it.
+    stub = _stub_in_workspace(monkeypatch, tmp_path, "agent-a|STOPPED\n")
+    stub.reply_on["upgrade"] = (9, _skipped("agent-a", "NOT_IDLE", detail))
+
+    with _captured_log_lines("INFO") as lines:
+        upgrade_stopped_agents()
+
+    assert any(
+        line.rstrip().endswith(f"mngr upgrade: skipped a: {logged}") for line in lines
+    ), lines
+    assert not any("--force" in line or "mngr start" in line for line in lines)
+
+
 @pytest.mark.parametrize("returncode", [1, 8])
 def test_an_upgrade_that_fails_is_a_warning(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, returncode: int

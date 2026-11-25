@@ -46,8 +46,11 @@ _MNGR_UPGRADE_EXIT_SKIPPED = 9
 # The kind of skip that leaves nothing to retry: the agent's harness has no upgrade for it.
 _UNSUPPORTED_SKIP_KIND = "UNSUPPORTED"
 _LEAVE_STOPPED_PLAN = "LEAVE_STOPPED"
-# What `mngr upgrade` appends to an agent it cannot upgrade, such as ``; re-create it with `mngr create a --reuse --update` ``.
-_RECREATE_HINT_PATTERN = re.compile(r"; re-create it with `[^`]*`")
+# A command `mngr upgrade` suggests in an outcome, such as ``; re-create it with `mngr create a --reuse --update` ``
+# or `` (--force interrupts it)``.
+_COMMAND_HINT_PATTERN = re.compile(
+    r"; re-create it with `[^`]*`| \((?:--force|`mngr )[^)]*\)"
+)
 # The entry point group mngr loads its plugins from.
 _MNGR_PLUGIN_GROUP = "mngr"
 _MNGR_COMMAND = "mngr"
@@ -167,8 +170,8 @@ def _list_agent_states(mngr_binary: Path) -> tuple[dict[str, str], bool]:
 
 
 def _log_upgrade_outcomes(stdout: str) -> set[str]:
-    """Log each outcome ``mngr upgrade --format jsonl`` printed, a failure as a warning, without the re-create
-    command it suggests; the ids of the agents it left current, counting one its harness has no upgrade for."""
+    """Log each outcome ``mngr upgrade --format jsonl`` printed, a failure as a warning, without the commands it
+    suggests; the ids of the agents it left current, counting one its harness has no upgrade for."""
     settled_ids: set[str] = set()
     for line in stdout.splitlines():
         if not line.strip():
@@ -195,7 +198,7 @@ def _log_upgrade_outcomes(stdout: str) -> set[str]:
                 logger.info("mngr upgrade: current {}", agent_name)
                 settled_ids.add(agent_id)
             case "agent_skipped":
-                detail = _RECREATE_HINT_PATTERN.sub("", str(event.get("detail")))
+                detail = _COMMAND_HINT_PATTERN.sub("", str(event.get("detail")))
                 logger.info("mngr upgrade: skipped {}: {}", agent_name, detail)
                 if event.get("kind") == _UNSUPPORTED_SKIP_KIND:
                     settled_ids.add(agent_id)
@@ -233,7 +236,7 @@ def _upgrade(mngr_binary: Path, agent_ids: Sequence[str]) -> bool:
     if returncode is None:
         return False
     if returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
-        stderr_tail = _RECREATE_HINT_PATTERN.sub("", stderr.strip()[-500:])
+        stderr_tail = _COMMAND_HINT_PATTERN.sub("", stderr.strip()[-500:])
         logger.warning(
             "mngr upgrade exited {}{}",
             returncode,
