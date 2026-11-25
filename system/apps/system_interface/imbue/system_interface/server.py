@@ -82,6 +82,7 @@ from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.workspace_routes import register_workspace_routes
 from imbue.system_interface.wsgi import build_sock
 
 # The terminal app's registered name: the not-built placeholder embeds it as the way out.
@@ -960,6 +961,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     register_shell_routes(application)
     register_keybindings_routes(application)
     register_avatar_routes(application)
+    register_workspace_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 
     # Registered unconditionally, even when the bundle is absent at startup: the directory can

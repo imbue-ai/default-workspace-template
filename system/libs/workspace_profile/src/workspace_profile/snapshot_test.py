@@ -1,11 +1,15 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from workspace_profile.errors import InvalidProfileSnapshotError
 from workspace_profile.snapshot import (
     SNAPSHOT_RELATIVE_PATH,
     SUPPORTED_SNAPSHOT_FORMAT,
     load_workspace_profile_snapshot,
     parse_workspace_profile_snapshot,
+    write_workspace_profile_snapshot,
 )
 
 
@@ -84,3 +88,33 @@ def test_parse_snapshot_rejects_a_header_field_of_the_wrong_type() -> None:
     assert (
         parse_workspace_profile_snapshot(json.dumps({"snapshot_format": "one"})) is None
     )
+
+
+def test_a_written_snapshot_is_read_back_with_every_key_it_carried(tmp_path: Path) -> None:
+    document: dict[str, object] = {
+        "snapshot_format": SUPPORTED_SNAPSHOT_FORMAT + 1,
+        "account_id": "account-123",
+        "owner_user_id": "user-123",
+        "written_at": "2026-11-24T00:00:00+00:00",
+        "written_by": "web",
+        "keybindings": {"shell": {"open": ["meta+k"]}},
+        "a_setting_this_build_does_not_know": {"kept": True},
+    }
+
+    write_workspace_profile_snapshot(tmp_path, document)
+
+    assert json.loads((tmp_path / SNAPSHOT_RELATIVE_PATH).read_text(encoding="utf-8")) == document
+    snapshot = load_workspace_profile_snapshot(tmp_path)
+    assert snapshot is not None
+    assert snapshot.account_id == "account-123"
+    assert snapshot.value_by_key["keybindings"] == {"shell": {"open": ["meta+k"]}}
+
+
+@pytest.mark.parametrize("snapshot_format", [None, "1", 1.5, True])
+def test_a_snapshot_without_a_whole_number_format_is_refused_and_not_written(
+    tmp_path: Path, snapshot_format: object
+) -> None:
+    with pytest.raises(InvalidProfileSnapshotError):
+        write_workspace_profile_snapshot(tmp_path, {"snapshot_format": snapshot_format, "account_id": "a"})
+
+    assert not (tmp_path / SNAPSHOT_RELATIVE_PATH).exists()

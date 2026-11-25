@@ -19,6 +19,9 @@ from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
+from workspace_backup_setup.testing import FAKE_RESTIC_CONTROL_DIR_ENV
+from workspace_backup_setup.testing import install_fake_restic
+from workspace_backup_setup.testing import path_with_fake_restic_first
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
@@ -243,6 +246,17 @@ def announcement_writer(tmp_path: Path) -> AppAnnouncementWriter:
 @pytest.fixture
 def broadcaster() -> WebSocketBroadcaster:
     return WebSocketBroadcaster()
+
+
+@pytest.fixture
+def fake_restic_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A stand-in ``restic`` first on PATH for the backup routes; the directory its mode, calls and release files
+    live in."""
+    control_directory = tmp_path / "restic-control"
+    install_fake_restic(tmp_path / "bin", control_directory)
+    monkeypatch.setenv("PATH", path_with_fake_restic_first(tmp_path / "bin"))
+    monkeypatch.setenv(FAKE_RESTIC_CONTROL_DIR_ENV, str(control_directory))
+    return control_directory
 
 
 @pytest.fixture
