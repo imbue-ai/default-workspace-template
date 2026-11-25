@@ -159,7 +159,8 @@ than ~1s later, and it keeps the command self-documenting.
 
    `reread` re-parses the config; `update` starts newly-added programs, stops
    removed ones, and restarts changed ones.
-3. Confirm it is running: `supervisorctl status <name>`.
+3. Confirm it is running: `supervisorctl status <name>`. Then scan its log with
+   the `check-app-errors` skill: a program that is up may still be logging errors.
 
 ## Removing a service
 
@@ -179,6 +180,7 @@ the `update-app` skill covers the full teardown.
    without editing its config, use `uv run --no-sync system/scripts/workspace_scripts/verify_app.py
    <name> --restart` for an app (no 30 s wait) or `supervisorctl restart <name>`
    for a daemon.
+3. Once it is back up, scan its log with the `check-app-errors` skill.
 
 ## Inspecting services
 

@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service, before touching its code. Applies to any change to its backend or frontend logic, or to how it runs. Covers apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window), the workspace's own critical apps (the shell, the chat, the terminal) included. For creating a brand-new app use build-app."
+description: "Use immediately whenever the user asks to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service, and before editing the code or supervisord config of one for any other reason. Applies to any change to its backend or frontend logic, or to how it runs. Covers apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window), the workspace's own critical apps (the shell, the chat, the terminal) and the UI, layout and theme libraries they share included. For creating a brand-new app use build-app."
 metadata:
   author: imbue
   exempt-checks: contents
