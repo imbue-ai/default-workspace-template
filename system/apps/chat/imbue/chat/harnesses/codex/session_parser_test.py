@@ -26,6 +26,7 @@ from imbue.chat.harnesses.codex.tool_labels import WAIT_TOOL_NAME
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.testing import ONE_PIXEL_PNG
+from imbue.chat.testing import ONE_PIXEL_PNG_DATA_URL
 
 
 def _user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
@@ -661,9 +662,6 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
 
 
-_PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode()
-
-
 def _exec_call_line(call_id: str, program: str) -> dict[str, Any]:
     return {
         "timestamp": "2026-11-25T22:00:10.589Z",
@@ -699,7 +697,7 @@ def _generated_image_output(
 ) -> list[dict[str, Any]]:
     return [
         {"type": "input_text", "text": status},
-        {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "original"},
+        {"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL, "detail": "original"},
         {"type": "input_text", "text": "Generated images are saved to /tmp/generated_images/x.png by default."},
     ]
 
@@ -735,7 +733,7 @@ def test_an_image_generation_result_counts_its_image_and_is_marked_generated() -
 def test_a_viewed_image_is_counted_but_not_marked_generated() -> None:
     output = [
         {"type": "input_text", "text": "Script completed\n"},
-        {"type": "input_image", "image_url": _PNG_DATA_URL},
+        {"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL},
     ]
     results = _tool_results(_parse_all([_exec_call_line("c1", _VIEW_IMAGE_PROGRAM), _result_line("c1", output)]))
     assert results["c1"]["image_count"] == 1
@@ -762,7 +760,7 @@ def test_a_generation_that_outlives_its_yield_window_is_marked_on_the_wait_that_
 
 def test_a_wait_on_a_cell_that_only_viewed_an_image_is_not_marked_generated() -> None:
     yielded = [{"type": "input_text", "text": "Script running with cell ID 8\n"}]
-    viewed = [{"type": "input_image", "image_url": _PNG_DATA_URL}]
+    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
     results = _tool_results(
         _parse_all(
             [
@@ -806,7 +804,7 @@ def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> 
 def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_its_number() -> None:
     """codex numbers cells afresh after a restart, so cell 3 can return for a program that only views an image."""
     yielded = [{"type": "input_text", "text": "Script running with cell ID 3\n"}]
-    viewed = [{"type": "input_image", "image_url": _PNG_DATA_URL}]
+    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
     results = _tool_results(
         _parse_all(
             [

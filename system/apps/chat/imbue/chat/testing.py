@@ -1329,6 +1329,7 @@ def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapp
 ONE_PIXEL_PNG: Final[bytes] = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 )
+ONE_PIXEL_PNG_DATA_URL: Final[str] = "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode()
 
 
 def codex_image_generation_rollout_lines() -> list[dict[str, Any]]:
@@ -1352,10 +1353,7 @@ def codex_image_generation_rollout_lines() -> list[dict[str, Any]]:
                 "call_id": "c1",
                 "output": [
                     {"type": "input_text", "text": "Script completed\n"},
-                    {
-                        "type": "input_image",
-                        "image_url": "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
-                    },
+                    {"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL},
                 ],
             },
         },
