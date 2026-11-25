@@ -115,14 +115,13 @@ def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
     mapping the process has touched, so it reads up to ten times higher for an agent's harness,
     which maps a large binary.
     """
-    try:
-        return _summed_anonymous_kib(
-            (proc / str(pid) / "smaps_rollup").read_text(errors="replace")
-        )
-    except OSError:
-        pass
-    memory = read_smaps_memory(pid, proc)
-    return None if memory is None else memory.anonymous_kib
+    for name in ("smaps_rollup", "smaps"):
+        try:
+            text = (proc / str(pid) / name).read_text(errors="replace")
+        except OSError:
+            continue
+        return _summed_anonymous_kib(text)
+    return None
 
 
 # A mapping's header line is "<start>-<end> <perms> <offset> <device> <inode> [<path>]"; a shared
