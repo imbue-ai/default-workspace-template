@@ -215,7 +215,7 @@ def _command_result_facts_text(output: Any) -> str:
     """
     item_texts = _output_item_texts(output)
     if not any('"chunk_id"' in text for text in item_texts):
-        return "".join(item_texts)
+        return "\n".join(item_texts)
     lines = [_unwrap_printed_line(line) for text in item_texts for line in text.splitlines()]
     return "\n".join(lines)
 

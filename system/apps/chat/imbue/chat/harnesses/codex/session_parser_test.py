@@ -396,6 +396,17 @@ def test_step_changes_batched_with_other_printed_values_reach_the_tk_stamp(case:
     assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
 
+@pytest.mark.parametrize("printed_before", ["{}", "Closing the step"])
+def test_plain_step_change_stdout_printed_after_another_value_reaches_the_tk_stamp(printed_before: str) -> None:
+    """``text(result.output)`` prints no envelope, so its stdout must still start its own line."""
+    stdout = "Updated wor-step-abc -> closed\ntk-step wor-step-abc title: Write the note\n"
+    items = ["Script completed\nWall time 0.4 seconds\nOutput:\n", printed_before, stdout]
+    line = _code_mode_result_line([{"type": "input_text", "text": text} for text in items])
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["tk_stamp"] == stdout.rstrip()
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == "".join(items)
+
+
 @pytest.mark.parametrize(
     "raw",
     [
