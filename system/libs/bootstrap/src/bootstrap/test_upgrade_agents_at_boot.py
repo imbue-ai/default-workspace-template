@@ -27,6 +27,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 _STAND_IN_API_KEY = "sk-ant-api03-stand-in-boot-upgrade"
 # A file mngr generates into every Claude agent; without it the agent reads as made by an older mngr.
 _GENERATED_FILE = Path("commands") / "mngr_background_task_lib.sh"
+# Keeps the pinned claude from updating itself, as the workspace's own config does.
+_PROJECT_SETTINGS = (
+    'is_allowed_in_pytest = true\n\n[agent_types.claude]\nupdate_policy = "NEVER"\n'
+)
 
 
 def _mngr(*args: str) -> subprocess.CompletedProcess[str]:
@@ -86,7 +90,10 @@ def test_the_boot_upgrades_a_stopped_agent_and_leaves_a_running_one_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "project-config"))
+    project_config_dir = tmp_path / "project-config"
+    project_config_dir.mkdir()
+    (project_config_dir / "settings.toml").write_text(_PROJECT_SETTINGS)
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(project_config_dir))
     project_dir = tmp_path / "project"
     log_path = tmp_path / "mngr.log"
     with (
