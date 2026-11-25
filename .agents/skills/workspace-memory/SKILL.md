@@ -25,10 +25,13 @@ several times too high here.
    the guard starts stopping processes (it acts at a share of the total, not at zero). Then it
    lists what could be stopped: idle chats and workers, the apps the workspace may stop, and the
    browser while no window shows the Screen. Last, under "Also holding memory, not candidates", it
-   lists everything else that holds memory with why it is not offered: a chat mid-turn or in use,
-   the main chat, a critical app, a workspace service, the browser while a window shows it. Every
-   row carries the same figure, the memory its processes made for themselves, which is roughly what
-   stopping it frees. A section it could not read says "unknown", which is not "nothing".
+   lists the other chats, workers, apps, workspace services and browsers holding memory, with why
+   each is not offered: a chat mid-turn or in use, the main chat, a critical app, a workspace
+   service, the browser while a window shows it. The workspace's own services agent, automations,
+   and processes no program started are in neither list; for where all of the memory goes, use the
+   System Monitor's breakdown below. Every row carries the same figure, the memory its processes
+   made for themselves, which is roughly what stopping it frees. A section it could not read says
+   "unknown", which is not "nothing".
    `--free-memory` prints only the first line and is cheap enough to repeat while memory is short.
    `system/services/oom_priority/README.md` ("Memory candidates") has the details.
 
