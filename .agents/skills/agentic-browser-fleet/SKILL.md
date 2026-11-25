@@ -169,7 +169,9 @@ with driven_browser(purpose="plaud-sync") as browser:
 It reserves the browser, attaches a session under a name only this run uses, and on the way out
 (the body finishing, raising, or timing out) detaches that session and gives the browser back. The
 browser keeps running. A browser it cannot reserve raises `BrowserUnavailableError`, whose `status`
-says why (`busy_human`, `busy_agent`, `starting`, `stopped` or `crashed`).
+says why (`busy_human`, `busy_agent`, `starting`, `stopped` or `crashed`, or `404` when there is
+no browser yet: start one with `new`); a Screen service that does not answer raises
+`ScreenServiceUnreachableError`. Both come from `screen.errors`.
 
 Every `attach` starts a `playwright-cli` daemon that outlives the command, a few hundred MB each,
 and only `detach` ends it. A script that attaches by hand and is killed before it detaches leaves
