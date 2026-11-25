@@ -159,7 +159,7 @@ def _printed_command_stdout(value: Any) -> str | None:
 
     ``text(result)`` prints the result envelope, a ``Promise.allSettled`` entry wraps it as
     ``{"status": "fulfilled", "value": <envelope>}``, and ``text(await Promise.all([...]))``
-    prints an array of them. Other array members keep their JSON text.
+    prints an array of them. Other array members are re-serialized as JSON.
     """
     if isinstance(value, dict):
         stdout = value.get("output")
