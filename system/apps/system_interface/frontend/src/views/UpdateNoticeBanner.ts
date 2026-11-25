@@ -20,7 +20,7 @@ import {
   rollbackUpdate,
 } from "../model/UpdateNotice";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { appByName } from "../reducers/desktopState";
+import { appDisplayName } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 
@@ -34,7 +34,7 @@ export const SYSTEM_SERVICES_RESTART_DETAILS =
 /** The shell's display name is "Workspace", which reads as the whole workspace in a sentence. */
 function displayName(state: DesktopState, appName: string): string {
   if (appName === SHELL_APP_NAME) return "the workspace interface";
-  return appByName(state, appName)?.display_name ?? appName;
+  return appDisplayName(state, appName);
 }
 
 function listed(names: readonly string[]): string {
