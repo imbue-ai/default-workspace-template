@@ -147,6 +147,31 @@ is why `acquire` is worth running before a long stretch of driving.
   back, so a site you logged into earlier is probably still logged in. Right after a restart the
   Screen may still be starting; `ls` works, driving may need a few seconds.
 
+## From a script
+
+A script that drives the browser (a sync that runs on a schedule, a batch job) uses the
+`driven_browser` block from the Screen package instead of running `attach` itself, and runs under
+`uv run --no-sync python` so the package is importable:
+
+```python
+from screen.browser_session import driven_browser
+
+with driven_browser(purpose="plaud-sync") as browser:
+    browser.run("goto", "https://example.com")
+    title = browser.run("eval", "() => document.title", "--raw")
+```
+
+It reserves the browser, attaches a session under a name only this run uses, and on the way out
+(the body finishing, raising, or timing out) detaches that session and gives the browser back. The
+browser keeps running. A browser it cannot reserve raises `BrowserUnavailableError`, whose `status`
+says why (`busy_human`, `busy_agent`, `starting`, `stopped` or `crashed`).
+
+Every `attach` starts a `playwright-cli` daemon that outlives the command, a few hundred MB each,
+and only `detach` ends it. A script that attaches by hand and is killed before it detaches leaves
+its daemon running. The Screen ends such a session within a minute of another attach replacing its
+token, or after 30 minutes unused while its agent does not hold the browser, but until then it holds
+that memory for nothing.
+
 ## Long lists: "not found" is not the same as "not there"
 
 The most expensive mistake on this tool. On a **virtualized** list only the visible rows exist in
@@ -289,9 +314,11 @@ uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on t
 
 ## Don'ts
 
-- **Don't run `playwright-cli close`, `attach` (twice), `detach`, `close-all`, `kill-all` or
-  `delete-data`.** The fleet owns lifecycle: the browser runs until the user quits it or the Screen
-  ends. `agentic-browser-fleet close <name>` deletes the profile (every login) with it, so use it
+- **Don't run `playwright-cli close`, `attach` (twice), `close-all`, `kill-all` or `delete-data`,
+  and don't `detach` a session another agent may be driving** (`browser-1`, the name the attach line
+  gives every agent). The fleet owns lifecycle: the browser runs until the user quits it or the Screen
+  ends. Detaching a session only you use, like the uniquely named one a script attached, is how that
+  session ends; `driven_browser` does it for you. `agentic-browser-fleet close <name>` deletes the profile (every login) with it, so use it
   only when the user asks for a fresh browser.
 - **Don't re-attach a slug whose session died** -- see "Crashes" above. It hangs rather than
   erroring, which is the one failure you cannot recover from; use a new slug.

@@ -1,0 +1,1 @@
+- The browser skill points scripts at the `driven_browser` block, which ends its own `playwright-cli` session, and now allows detaching a session only you use, while still ruling out detaching a session other agents drive.

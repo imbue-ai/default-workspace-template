@@ -7,17 +7,9 @@ from pathlib import Path
 import pytest
 
 from mock_chromium_test import FakeCdpClient
-from mock_chromium_test import FakeCdpConnector
-from mock_chromium_test import FakeChromiumLauncher
-from mock_messenger_test import RecordingMessenger
-from screen.browser_fleet import Browser
-from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import BrowserManifest
 from screen.browser_manifest import ManifestEntry
-from screen.browser_manifest import ManifestStore
 from screen.cdp_client import CdpTarget
-from screen.cdp_proxy import ProxyServer
-from screen.control import ScreenControl
 from screen.data_types import AcquireStatus
 from screen.data_types import BrowserLifecycle
 from screen.data_types import Controller
@@ -30,81 +22,15 @@ from screen.primitives import AgentId
 from screen.primitives import BROWSER_PROFILE_DIR_PREFIX
 from screen.primitives import BrowserName
 from screen.primitives import NekoSessionId
-from testing import ManualClock
+from testing import FleetHarness
 from testing import wait_until
 
 _AGENT = AgentId("chat-a")
 _HUMAN = NekoSessionId("human-1")
 
 
-class _Harness:
-    """A fleet over fakes, with the Screen's lease and every event it raised."""
-
-    def __init__(self, tmp_path: Path, max_browsers: int = 1) -> None:
-        self.clock = ManualClock()
-        self.messenger = RecordingMessenger()
-        self.control = ScreenControl(
-            messenger=self.messenger,
-            on_changed=lambda view: None,
-            on_handoff_request=lambda name, reason: None,
-            record_path=None,
-            clock=self.clock,
-        )
-        self.launcher = FakeChromiumLauncher()
-        self.connector = FakeCdpConnector()
-        self.proxy_server = ProxyServer(requested_port=0)
-        self.store = ManifestStore(path=tmp_path / "apps" / "browser" / "instances.json")
-        self.profile_root = tmp_path / "profiles"
-        self.changes = 0
-        self.kicks = 0
-        self.running: list[str] = []
-        self.touched: list[str] = []
-        self.install_reason: str | None = None
-
-        def changed() -> None:
-            self.changes += 1
-
-        def kicked() -> None:
-            self.kicks += 1
-
-        self.fleet = BrowserFleet(
-            launcher=self.launcher,
-            cdp_connector=self.connector,
-            proxy_server=self.proxy_server,
-            manifest_store=self.store,
-            profile_root=self.profile_root,
-            executable=tmp_path / "tilion",
-            install_check=lambda: self.install_reason,
-            environment=lambda: {"DISPLAY": ":4242"},
-            is_sandbox_disabled=True,
-            control=self.control,
-            on_changed=changed,
-            on_agent_activity=lambda agent_id: self.touched.append(str(agent_id)),
-            on_chromium_processes_expected=kicked,
-            on_browser_running=lambda name: self.running.append(str(name)),
-            max_browsers=max_browsers,
-        )
-
-    def stack_up(self) -> None:
-        self.fleet.on_stack_running()
-        assert wait_until(lambda: self.store.path.exists() or not self.fleet.browsers())
-
-    def running_browser(self, start_url: str | None = None) -> Browser:
-        browser = self.fleet.ensure_browser(start_url)
-        assert wait_until(lambda: browser.is_running), browser.lifecycle
-        return browser
-
-    def manifest(self) -> BrowserManifest:
-        loaded = self.store.read()
-        assert loaded is not None
-        return loaded
-
-    def cdp(self) -> FakeCdpClient:
-        return self.connector.clients[-1]
-
-
 def test_create_registers_the_browser_at_once_and_launches_it_on_the_start_page(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.fleet.create(None, "https://example.com")
     assert browser.name == "browser-1"
@@ -125,7 +51,7 @@ def test_create_registers_the_browser_at_once_and_launches_it_on_the_start_page(
 
 
 def test_the_one_browser_is_reused_and_a_start_page_opens_as_a_tab_in_front(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     again = harness.fleet.ensure_browser("https://two.example")
@@ -137,7 +63,7 @@ def test_the_one_browser_is_reused_and_a_start_page_opens_as_a_tab_in_front(tmp_
 
 
 def test_names_are_validated_and_the_cap_and_duplicates_are_refused(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     with pytest.raises(InvalidBrowserNameError):
         harness.fleet.create("Bad Name", None)
@@ -152,7 +78,7 @@ def test_names_are_validated_and_the_cap_and_duplicates_are_refused(tmp_path: Pa
 
 
 def test_a_browser_asked_for_while_the_stack_is_down_launches_when_the_stack_comes_up(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     browser = harness.fleet.ensure_browser("https://example.com")
     assert browser.lifecycle == BrowserLifecycle.INIT
     assert browser.is_launch_wanted is True
@@ -170,7 +96,7 @@ def test_a_browser_asked_for_while_the_stack_is_down_launches_when_the_stack_com
 
 
 def test_a_page_is_opened_at_once_on_a_running_browser_and_queued_on_one_still_launching(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     browser = harness.fleet.ensure_browser(None)
     assert browser.lifecycle == BrowserLifecycle.INIT
     assert browser.open_tab_or_queue_for_launch("https://queued.example") is False
@@ -189,7 +115,7 @@ def test_a_page_is_opened_at_once_on_a_running_browser_and_queued_on_one_still_l
 
 
 def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human_takes_control(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     assert (
@@ -213,7 +139,7 @@ def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human
 
 
 def test_the_humans_page_is_held_while_an_agent_drives_but_the_agents_own_opens_at_once(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     harness.control.acquire(
@@ -238,7 +164,7 @@ def test_the_humans_page_is_held_while_an_agent_drives_but_the_agents_own_opens_
 
 
 def test_a_cancelled_page_never_opens_and_leaves_the_agent_driving(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     harness.control.acquire(
@@ -253,7 +179,7 @@ def test_a_cancelled_page_never_opens_and_leaves_the_agent_driving(tmp_path: Pat
 
 
 def test_a_page_for_a_free_browser_opens_at_once(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.running_browser()
     harness.fleet.open_url_for_human("http://localhost:3000/app")
@@ -261,7 +187,7 @@ def test_a_page_for_a_free_browser_opens_at_once(tmp_path: Path) -> None:
 
 
 def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(
         FakeCdpClient(
@@ -296,7 +222,7 @@ def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(tmp_path:
 
 
 def test_a_relaunch_that_fails_leaves_the_browser_stopped_with_its_tabs(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(FakeCdpClient(targets=[CdpTarget(target_id="t1", url="https://a.example")]))
     browser = harness.running_browser("https://a.example")
@@ -309,7 +235,7 @@ def test_a_relaunch_that_fails_leaves_the_browser_stopped_with_its_tabs(tmp_path
 
 
 def test_a_first_launch_that_fails_removes_the_browser(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.launcher.failure = "no display"
     harness.fleet.create(None, None)
@@ -318,7 +244,7 @@ def test_a_first_launch_that_fails_removes_the_browser(tmp_path: Path) -> None:
 
 
 def test_chromium_not_installed_refuses_the_launch_and_says_so(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.install_reason = "Chromium is still installing"
     harness.stack_up()
     assert harness.fleet.install_reason() == "Chromium is still installing"
@@ -328,7 +254,7 @@ def test_chromium_not_installed_refuses_the_launch_and_says_so(tmp_path: Path) -
 
 
 def test_close_and_forget_ends_the_browser_drops_it_from_the_manifest_and_deletes_its_profile(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     profile = harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1"
@@ -344,7 +270,7 @@ def test_close_and_forget_ends_the_browser_drops_it_from_the_manifest_and_delete
 
 
 def test_the_manifest_is_checkpointed_with_the_live_tabs(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(
         FakeCdpClient(
@@ -365,7 +291,7 @@ def test_the_manifest_is_checkpointed_with_the_live_tabs(tmp_path: Path) -> None
 
 
 def test_a_tab_the_human_switched_to_inside_chromium_is_the_active_one_listed_and_saved(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(
         FakeCdpClient(
@@ -385,7 +311,7 @@ def test_a_tab_the_human_switched_to_inside_chromium_is_the_active_one_listed_an
 
 
 def test_restore_relaunches_the_browser_the_user_had_running_and_keeps_a_stopped_one_stopped(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path, max_browsers=2)
+    harness = FleetHarness(tmp_path, max_browsers=2)
     harness.store.write(
         BrowserManifest(
             browsers=(
@@ -409,7 +335,7 @@ def test_restore_relaunches_the_browser_the_user_had_running_and_keeps_a_stopped
 
 
 def test_restore_beyond_the_cap_keeps_the_extra_browser_stopped(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.store.write(
         BrowserManifest(
             browsers=(
@@ -426,7 +352,7 @@ def test_restore_beyond_the_cap_keeps_the_extra_browser_stopped(tmp_path: Path) 
 
 
 def test_a_saved_browser_is_started_not_clobbered_by_a_launch_while_the_stack_is_down(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.store.write(
         BrowserManifest(browsers=(ManifestEntry(id=BrowserName("browser-1"), tabs=("https://a.example",)),))
     )
@@ -442,7 +368,7 @@ def test_a_saved_browser_is_started_not_clobbered_by_a_launch_while_the_stack_is
 
 
 def test_load_saved_with_no_manifest_registers_the_profiles_on_disk_stopped(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").mkdir(parents=True)
     harness.fleet.load_saved()
     browser = harness.fleet.get(BrowserName("browser-1"))
@@ -452,7 +378,7 @@ def test_load_saved_with_no_manifest_registers_the_profiles_on_disk_stopped(tmp_
 
 
 def test_a_lost_manifest_brings_the_profiles_on_disk_back_stopped_and_sweeps_orphans(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").mkdir(parents=True)
     (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}0").mkdir()
     harness.fleet.on_stack_running()
@@ -465,7 +391,7 @@ def test_a_lost_manifest_brings_the_profiles_on_disk_back_stopped_and_sweeps_orp
 
 
 def test_the_stack_ending_stops_the_browser_for_its_life_and_the_next_start_brings_it_back(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(FakeCdpClient(targets=[CdpTarget(target_id="t1", url="https://a.example")]))
     browser = harness.running_browser("https://a.example")
@@ -481,7 +407,7 @@ def test_the_stack_ending_stops_the_browser_for_its_life_and_the_next_start_brin
 
 
 def test_a_launch_the_stack_ends_under_is_ended_and_the_browser_launches_with_the_next_stack(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.launcher.release.clear()
     browser = harness.fleet.create(None, "https://a.example")
@@ -508,7 +434,7 @@ def test_a_launch_the_stack_ends_under_is_ended_and_the_browser_launches_with_th
 def test_the_gate_lets_the_token_owner_drive_takes_a_free_screen_on_the_first_frame_and_refuses_a_human(
     tmp_path: Path,
 ) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     # No token issued yet: nothing drives.
@@ -534,7 +460,7 @@ def test_the_gate_lets_the_token_owner_drive_takes_a_free_screen_on_the_first_fr
 
 
 def test_another_agent_cannot_get_a_token_for_a_held_browser_and_taking_it_rotates_the_token(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     first = harness.fleet.attach_for(browser.name, _AGENT, "Alice")
@@ -549,7 +475,7 @@ def test_another_agent_cannot_get_a_token_for_a_held_browser_and_taking_it_rotat
 
 
 def test_attach_reports_a_starting_stopped_or_crashed_browser(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.launcher.release.clear()
     harness.stack_up()
     browser = harness.fleet.create(None, None)
@@ -562,7 +488,7 @@ def test_attach_reports_a_starting_stopped_or_crashed_browser(tmp_path: Path) ->
 
 
 def test_a_crash_is_detected_with_nobody_attached_within_two_polls(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     harness.launcher.handles[0].alive = False
@@ -581,7 +507,7 @@ def test_a_crash_is_detected_with_nobody_attached_within_two_polls(tmp_path: Pat
 
 
 def test_a_transient_cdp_drop_the_client_recovers_from_is_not_a_crash(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     harness.cdp().alive = False
@@ -592,7 +518,7 @@ def test_a_transient_cdp_drop_the_client_recovers_from_is_not_a_crash(tmp_path: 
 
 
 def test_close_active_tab_closes_the_tab_in_front_and_replaces_the_last_one(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(
         FakeCdpClient(
@@ -616,7 +542,7 @@ def test_close_active_tab_closes_the_tab_in_front_and_replaces_the_last_one(tmp_
 
 
 def test_describe_carries_the_lease_the_lifecycle_and_the_tabs(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+    harness = FleetHarness(tmp_path)
     harness.stack_up()
     harness.connector.clients.append(
         FakeCdpClient(targets=[CdpTarget(target_id="t1", url="https://one", title="One")])

@@ -20,6 +20,8 @@ from screen.cdp_client import WebSocketCdpConnector
 from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.chrome_launcher import should_disable_sandbox
+from screen.cli_sessions import CliSessionReaper
+from screen.cli_sessions import ProcCliSessions
 from screen.connect_info import ConnectInfoAggregator
 from screen.launch import DetachedProcessLauncher
 from screen.launch import screen_process_environment
@@ -103,7 +105,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_chromium_processes_expected=band_sweeper.kick,
         on_browser_running=service.on_browser_running,
     )
-    service.attach_fleet(fleet, band_sweeper)
+    service.attach_fleet(fleet, band_sweeper, CliSessionReaper(fleet=fleet, sessions=ProcCliSessions()))
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,

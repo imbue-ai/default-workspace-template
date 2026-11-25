@@ -21,6 +21,16 @@ from websockets.sync.server import ServerConnection
 from websockets.sync.server import serve
 
 from imbue.imbue_common.mutable_model import MutableModel
+from mock_chromium_test import FakeCdpClient
+from mock_chromium_test import FakeCdpConnector
+from mock_chromium_test import FakeChromiumLauncher
+from mock_messenger_test import RecordingMessenger
+from screen.browser_fleet import Browser
+from screen.browser_fleet import BrowserFleet
+from screen.browser_manifest import BrowserManifest
+from screen.browser_manifest import ManifestStore
+from screen.cdp_proxy import ProxyServer
+from screen.control import ScreenControl
 from screen.data_types import Lifecycle
 from screen.errors import SupervisorError
 from screen.interfaces import ProgramState
@@ -295,3 +305,70 @@ class SubprocessSupervisor(SupervisorInterface):
     def stop_everything(self) -> None:
         for program in reversed(STACK_PROGRAMS):
             self.stop_program(program)
+
+
+class FleetHarness:
+    """A fleet over fakes, with the Screen's lease and every event it raised."""
+
+    def __init__(self, tmp_path: Path, max_browsers: int = 1) -> None:
+        self.clock = ManualClock()
+        self.messenger = RecordingMessenger()
+        self.control = ScreenControl(
+            messenger=self.messenger,
+            on_changed=lambda view: None,
+            on_handoff_request=lambda name, reason: None,
+            record_path=None,
+            clock=self.clock,
+        )
+        self.launcher = FakeChromiumLauncher()
+        self.connector = FakeCdpConnector()
+        self.proxy_server = ProxyServer(requested_port=0)
+        self.store = ManifestStore(path=tmp_path / "apps" / "browser" / "instances.json")
+        self.profile_root = tmp_path / "profiles"
+        self.changes = 0
+        self.kicks = 0
+        self.running: list[str] = []
+        self.touched: list[str] = []
+        self.install_reason: str | None = None
+
+        def changed() -> None:
+            self.changes += 1
+
+        def kicked() -> None:
+            self.kicks += 1
+
+        self.fleet = BrowserFleet(
+            launcher=self.launcher,
+            cdp_connector=self.connector,
+            proxy_server=self.proxy_server,
+            manifest_store=self.store,
+            profile_root=self.profile_root,
+            executable=tmp_path / "tilion",
+            install_check=lambda: self.install_reason,
+            environment=lambda: {"DISPLAY": ":4242"},
+            is_sandbox_disabled=True,
+            control=self.control,
+            on_changed=changed,
+            on_agent_activity=lambda agent_id: self.touched.append(str(agent_id)),
+            on_chromium_processes_expected=kicked,
+            on_browser_running=lambda name: self.running.append(str(name)),
+            max_browsers=max_browsers,
+            clock=self.clock,
+        )
+
+    def stack_up(self) -> None:
+        self.fleet.on_stack_running()
+        assert wait_until(lambda: self.store.path.exists() or not self.fleet.browsers())
+
+    def running_browser(self, start_url: str | None = None) -> Browser:
+        browser = self.fleet.ensure_browser(start_url)
+        assert wait_until(lambda: browser.is_running), browser.lifecycle
+        return browser
+
+    def manifest(self) -> BrowserManifest:
+        loaded = self.store.read()
+        assert loaded is not None
+        return loaded
+
+    def cdp(self) -> FakeCdpClient:
+        return self.connector.clients[-1]

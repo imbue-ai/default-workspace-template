@@ -336,6 +336,14 @@ class ProxyServer(MutableModel):
     def attach_url(self, name: str, token: str) -> str:
         return f"http://{self.host}:{self.port}/{name}/{token}"
 
+    def parse_attach_url(self, url: str) -> tuple[str, str] | None:
+        """The browser name and token of an attach URL this proxy issued, or None for any other URL."""
+        prefix = f"http://{self.host}:{self.port}/"
+        if not url.startswith(prefix):
+            return None
+        name, token = split_proxy_path(url[len(prefix) - 1 :])
+        return (name, token) if name and token else None
+
     def register(self, proxy: BrowserProxy) -> None:
         with self._lock:
             self._browsers[proxy.name] = proxy

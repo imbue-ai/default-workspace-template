@@ -11,6 +11,7 @@ per-frame gate and the fleet verbs act on.
 import secrets as secrets_module
 import shutil
 import threading
+import time
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -119,6 +120,7 @@ class Browser(MutableModel):
     _token: str = PrivateAttr(default="")
     _token_owner: AgentId | None = PrivateAttr(default=None)
     _token_owner_name: str | None = PrivateAttr(default=None)
+    _token_used_at: float = PrivateAttr(default=0.0)
     _active_target_id: str = PrivateAttr(default="")
     _dead_polls: int = PrivateAttr(default=0)
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
@@ -142,6 +144,15 @@ class Browser(MutableModel):
     @property
     def token_owner_name(self) -> str | None:
         return self._token_owner_name
+
+    @property
+    def token_used_at(self) -> float:
+        """When the current token was minted or last sent a frame, on the fleet's monotonic clock."""
+        return self._token_used_at
+
+    def note_token_used(self, token: str, now: float) -> None:
+        if token and token == self._token:
+            self._token_used_at = now
 
     def remember_tabs(self, urls: Sequence[str], active_tab: int) -> None:
         """What a start restores: the tab list and the index in front among it (the first when out of range)."""
@@ -210,13 +221,14 @@ class Browser(MutableModel):
             self.pending_url = None
             return True
 
-    def mint_token(self, agent_id: AgentId | None, agent_name: str | None) -> str:
+    def mint_token(self, agent_id: AgentId | None, agent_name: str | None, minted_at: float) -> str:
         """A fresh capability token issued to one agent: minted on every launch (a CLI session reconnecting across
         a restart is refused rather than silently driving a different Chromium) and whenever the browser passes to
         a different agent, which makes revocation race-free."""
         self._token = secrets_module.token_urlsafe(_CAPABILITY_TOKEN_BYTES)
         self._token_owner = agent_id
         self._token_owner_name = agent_name
+        self._token_used_at = minted_at
         return self._token
 
     def attach(self, chromium: ChromiumHandleInterface, cdp: CdpClientInterface) -> None:
@@ -409,6 +421,7 @@ class BrowserFleet(MutableModel):
     bundled_extensions_dir: Path = Field(default=BUNDLED_EXTENSIONS_DIR, frozen=True)
     installed_extensions_dir: Path = Field(default=FORTRESS_EXTENSIONS_DIR, frozen=True)
     max_browsers: int = Field(default=MAX_BROWSERS, frozen=True, description="The cap on launched browsers")
+    clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="The monotonic clock")
 
     _browsers: dict[str, Browser] = PrivateAttr(default_factory=dict)
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
@@ -676,7 +689,7 @@ class BrowserFleet(MutableModel):
             chromium.kill()
             raise
         browser.attach(chromium, cdp)
-        browser.mint_token(None, None)
+        browser.mint_token(None, None, self.clock())
         self.proxy_server.register(
             BrowserProxy(
                 name=str(browser.name),
@@ -719,6 +732,7 @@ class BrowserFleet(MutableModel):
         owner = browser.token_owner
         if not token or token != browser.token or owner is None or not browser.is_running:
             return False
+        browser.note_token_used(token, self.clock())
         view = self.control.view()
         if view.controller == Controller.AGENT and view.agent_id == owner:
             self.on_agent_activity(owner)
@@ -764,7 +778,7 @@ class BrowserFleet(MutableModel):
             return {"ok": False, "status": "busy_human", **payload}
         if view.controller == Controller.AGENT and view.agent_id not in (None, agent_id):
             return {"ok": False, "status": "busy_agent", **payload}
-        token = browser.mint_token(agent_id, agent_name)
+        token = browser.mint_token(agent_id, agent_name, self.clock())
         return {"ok": True, "attach_url": self.proxy_server.attach_url(str(name), token), **payload}
 
     @staticmethod
