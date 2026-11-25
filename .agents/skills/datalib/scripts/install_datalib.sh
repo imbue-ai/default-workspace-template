@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs everything datalib needs to run, the first time the datalib skill
-# is used: the binaries (datalib-http for the Datalib app, datalib-dag and the
+# is used: the binaries (datalib-http for the Datalib app, datalib-pipeline and the
 # rest for the skill), one pinned release for both so the UI and the agent's
 # tools never disagree about the store format, datalib's guide for agents,
 # and the Node runtime a sync shells out to. Then it adds the Datalib app's
@@ -19,7 +19,7 @@ set -euo pipefail
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
-readonly PINNED_VERSION="v0.55.0"
+readonly PINNED_VERSION="v0.56.0"
 
 readonly INSTALL_ROOT="${DATALIB_INSTALL_ROOT:-$HOME/.local/share/datalib}"
 readonly BIN_DIR="${DATALIB_BIN_DIR:-$HOME/.local/bin}"
