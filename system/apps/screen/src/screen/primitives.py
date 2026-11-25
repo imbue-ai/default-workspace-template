@@ -124,6 +124,7 @@ DOWNLOAD_FOLDER_RELATIVE_PATH: Final[Path] = Path("data/Downloads")
 MAX_DROPPED_FILE_NAME_BYTES: Final[int] = 255
 # The file manager a drop opens the desktop folder in (XFCE's own), since the folder's icons are off.
 FILE_MANAGER_COMMAND: Final[str] = "thunar"
+PLAYWRIGHT_CLI_COMMAND: Final[str] = "playwright-cli"
 _PATH_SEPARATORS: Final[frozenset[str]] = frozenset({"/", "\\", "\x00"})
 
 

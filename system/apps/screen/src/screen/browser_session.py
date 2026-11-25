@@ -24,12 +24,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from screen.cli import ServiceAnswer
 from screen.cli import call_service
 from screen.cli import identity_headers
-from screen.cli_sessions import PLAYWRIGHT_CLI_COMMAND
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
 from screen.errors import ScreenServiceUnreachableError
 from screen.fleet_cli import refusal_reason
 from screen.identity import AGENT_ID_HEADER
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 
 DEFAULT_BROWSER_NAME: Final[str] = "browser-1"
 DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 300.0

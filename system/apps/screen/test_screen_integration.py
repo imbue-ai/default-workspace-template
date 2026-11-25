@@ -44,7 +44,6 @@ from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.cli_sessions import AbandonReason
 from screen.cli_sessions import CliSessionReaper
-from screen.cli_sessions import PLAYWRIGHT_CLI_COMMAND
 from screen.cli_sessions import ProcCliSessions
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
@@ -59,6 +58,7 @@ from screen.primitives import DISPLAY
 from screen.primitives import DISPLAY_SOCKET_PATH
 from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 from screen.primitives import STACK_PROGRAMS
 from screen.proxy import NekoProxy
 from screen.routes import build_app

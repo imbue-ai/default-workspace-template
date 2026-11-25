@@ -21,9 +21,9 @@ from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
 from screen.cdp_proxy import ProxyServer
 from screen.cli import ENV_SERVICE_URL
-from screen.cli_sessions import PLAYWRIGHT_CLI_COMMAND
 from screen.connect_info import ConnectInfoAggregator
 from screen.primitives import AgentId
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService

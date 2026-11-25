@@ -37,11 +37,11 @@ from screen.browser_fleet import BrowserFleet
 from screen.cdp_proxy import ProxyServer
 from screen.data_types import Controller
 from screen.primitives import AgentId
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 
 # Long enough that an agent driving by hand keeps its session between steps of a long turn.
 IDLE_LIMIT_SECONDS: Final[float] = 30 * 60
 
-PLAYWRIGHT_CLI_COMMAND: Final[str] = "playwright-cli"
 _CLI_DAEMON_SCRIPT: Final[str] = "cliDaemon.js"
 _CDP_FLAG: Final[str] = "--cdp="
 _PROC_DIR: Final[Path] = Path("/proc")
