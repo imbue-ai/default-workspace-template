@@ -143,6 +143,11 @@ is why `acquire` is worth running before a long stretch of driving.
   it and `ls` says `stopped`. `new` starts the Screen and the browser again, on the saved tabs.
 - **Same if the browser is closed or stopped while you are attached**: the connection dies, `ls`
   says so, start over with `new` and a fresh slug.
+- **The Screen ends a session nothing is using.** A session that has sent no command for 30
+  minutes while you do not hold the browser (the lease itself goes idle after ~60s), or one whose
+  token a later attach replaced (yours, or a script's run as you), is detached for you, and your
+  next command on it fails while `ls` shows nothing wrong. Run `acquire <name>` and attach again
+  under a new slug with the line it prints.
 - **The browser persists across a workspace restart** -- tabs, order, and cookies/logins all come
   back, so a site you logged into earlier is probably still logged in. Right after a restart the
   Screen may still be starting; `ls` works, driving may need a few seconds.
