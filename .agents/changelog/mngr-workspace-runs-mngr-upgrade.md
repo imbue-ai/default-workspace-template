@@ -1,0 +1,1 @@
+The `update-self` worker guide says the files mngr writes into an agent's state directory reach existing agents at the workspace's next boot, when bootstrap upgrades every stopped agent, and only new agents until then. An agent's launch command, arguments and environment still reach only agents created after the update.

@@ -524,9 +524,11 @@ A restart is **not needed** for:
   in `.mngr/settings.toml` other than `version`), and files mngr writes into
   an agent's state directory when it creates the agent (a move of the mngr pin
   can change these): mngr records both at create, and a restart replays them
-  unchanged. They reach only agents created after the update. When that
-  matters to the user, say so under **Agent restarts** so the results message
-  can offer a fresh chat.
+  unchanged. A launch command, arguments or environment reach only agents
+  created after the update. The mngr-written files reach existing agents at
+  the workspace's next boot, when bootstrap upgrades every stopped agent, and
+  until then only new agents have them. When that matters to the user, say so
+  under **Agent restarts** so the results message can offer a fresh chat.
 
 When the rule is unclear for a file (a new harness, a config file whose
 loading you cannot place), that is a `question` gate (Step 6), and the
