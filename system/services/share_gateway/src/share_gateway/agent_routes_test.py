@@ -160,9 +160,6 @@ def encoded(content: bytes) -> str:
     return base64.b64encode(content).decode("ascii")
 
 
-# --- join ---
-
-
 def test_join_answers_the_access_document_for_workspace_scope(tmp_path: Path) -> None:
     harness = make_harness(tmp_path)
     document = join_as(harness, "workspace")
@@ -278,9 +275,6 @@ def test_join_rate_limiter_forgets_addresses_whose_window_has_passed() -> None:
     assert not limiter.allow("198.51.100.1", 63.0)
 
 
-# --- me, primer, skills, changes ---
-
-
 def test_me_requires_a_live_token_and_repeats_the_coordinates(tmp_path: Path) -> None:
     harness = make_harness(tmp_path)
     document = join_as(harness, "workspace")
@@ -329,9 +323,6 @@ def test_helper_is_served_without_caching(tmp_path: Path) -> None:
     assert response.get_data(as_text=True).startswith("#!/usr/bin/env node")
 
 
-# --- invites ---
-
-
 def test_invites_need_workspace_level_access_human_or_agent(tmp_path: Path) -> None:
     harness = make_harness(tmp_path)
     headers: dict[str, str] = {}
@@ -365,9 +356,6 @@ def test_invites_need_workspace_level_access_human_or_agent(tmp_path: Path) -> N
     assert harness.client.post("/_agent/invites", json={}, headers=bearer(app_agent)).status_code == 403
 
 
-# --- grants ---
-
-
 def test_grant_list_and_revocation_follow_ownership(tmp_path: Path) -> None:
     harness = make_harness(tmp_path)
     headers: dict[str, str] = {}
@@ -392,8 +380,6 @@ def test_grant_list_and_revocation_follow_ownership(tmp_path: Path) -> None:
     agent_view = harness.client.get("/_agent/grants", headers=bearer(by_owner)).get_json()["agents"]
     assert agent_view == []
 
-
-# --- the Origin policy for a request that relies on a session ---
 
 _CHROME_ORIGIN = "https://studio.example.com"
 _FOREIGN_ORIGIN = {"Origin": "https://evil.example.com"}
@@ -439,9 +425,6 @@ def test_a_bearer_request_is_not_held_to_the_origin_policy(tmp_path: Path) -> No
     headers = {**bearer(join_as(harness, "workspace")), **_FOREIGN_ORIGIN}
     assert harness.client.post("/_agent/invites", json={}, headers=headers).status_code == 200
     assert harness.client.post("/_agent/run", json={"command": ["true"]}, headers=headers).status_code == 200
-
-
-# --- admission at /_auth/verify ---
 
 
 def test_verify_admits_a_workspace_scope_agent_everywhere_with_the_agent_identity(tmp_path: Path) -> None:
@@ -510,8 +493,6 @@ def test_verify_refuses_an_expired_grant_and_an_unconfigured_gateway(tmp_path: P
     assert verify(harness, f"chat-ch111111.{_DOMAIN}", headers).status_code == 403
     assert harness.client.get("/_agent/me", headers=bearer(document)).status_code == 403
 
-
-# --- commands and files ---
 
 # One request per route, each of which would leave a file in the repository if it were let through.
 _WORKSPACE_AUTHORITY_REQUESTS: list[tuple[str, dict[str, Any]]] = [

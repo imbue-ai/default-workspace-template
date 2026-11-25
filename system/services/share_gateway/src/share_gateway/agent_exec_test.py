@@ -51,9 +51,6 @@ def start_holding(
     return events
 
 
-# --- what a request asks for ---
-
-
 def test_a_path_is_taken_as_written_when_absolute_and_under_the_repository_root_otherwise() -> None:
     assert resolve_workspace_path(_ROOT, "data/notes.txt") == _ROOT / "data" / "notes.txt"
     assert resolve_workspace_path(_ROOT, "/etc/hostname") == Path("/etc/hostname")
@@ -137,9 +134,6 @@ def test_a_write_request_whose_content_is_absent_or_not_base64_is_refused() -> N
         parse_write_file_request({"path": "a", "content_b64": "AAE"}, _ROOT)
 
 
-# --- files ---
-
-
 def test_reading_answers_the_bytes_and_none_for_a_file_that_is_not_there(tmp_path: Path) -> None:
     (tmp_path / "note.bin").write_bytes(b"\x00binary\xff\n")
     assert read_workspace_file(tmp_path / "note.bin") == b"\x00binary\xff\n"
@@ -192,9 +186,6 @@ def test_writing_over_a_directory_fails_and_leaves_no_temp_file(tmp_path: Path) 
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["a-file", "taken"]
 
 
-# --- a command's output ---
-
-
 def test_a_line_is_one_event_whatever_reads_it_arrived_in() -> None:
     splitter = _LineSplitter("stdout")
     assert splitter.feed(b"one\ntwo") == [{"type": "stdout", "data": "one\n"}]
@@ -219,9 +210,6 @@ def test_a_line_that_never_ends_is_cut_into_bounded_events() -> None:
     events = splitter.feed(b"x" * (2 * 1024 * 1024 + 5))
     assert [len(str(event["data"])) for event in events] == [1024 * 1024, 1024 * 1024]
     assert splitter.feed(b"") == [{"type": "stdout", "data": "xxxxx"}]
-
-
-# --- running a command ---
 
 
 def test_a_command_streams_each_line_of_both_outputs_and_then_its_exit_code(tmp_path: Path) -> None:

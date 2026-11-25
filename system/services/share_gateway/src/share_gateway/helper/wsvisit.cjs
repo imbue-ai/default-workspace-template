@@ -48,6 +48,7 @@ const SKILLS_REFRESH_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RUN_TIMEOUT_SECONDS = 600;
 const MAX_RUN_TIMEOUT_SECONDS = 3600;
 const REQUEST_TIMEOUT_MS = 60 * 1000;
+const RUN_KEEPALIVE_DELAY_MS = 30 * 1000;
 // An idle app the shell stopped starts on its first request and answers 503
 // with Retry-After until it is up: a second or two, never minutes.
 const GET_MAX_RETRIES = 5;
@@ -247,6 +248,8 @@ function postForStream(url, headers, body, idleTimeoutMs) {
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, { method: "POST", headers }, resolve);
     request.setTimeout(idleTimeoutMs, () => request.destroy(new Error(`nothing arrived for ${Math.round(idleTimeoutMs / 1000)} seconds`)));
+    // Probes keep a network path that forgets idle connections from forgetting a quiet command's.
+    request.on("socket", (socket) => socket.setKeepAlive(true, RUN_KEEPALIVE_DELAY_MS));
     request.on("error", reject);
     request.end(body);
   });
