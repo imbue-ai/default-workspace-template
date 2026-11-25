@@ -23,7 +23,9 @@ service.
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
-   may start by itself; a workspace that already existed never gets it.
+   may start by itself; a workspace that already existed never gets it. It also
+   writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open
+   the workspace's welcome chat once it is running.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

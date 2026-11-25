@@ -1042,6 +1042,35 @@ def test_a_workspaces_first_boot_offers_it_the_tour(
     assert (tmp_path / "data/.state/system_interface/offer_tour").exists()
 
 
+def test_a_workspaces_first_boot_owes_it_a_welcome_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert (tmp_path / "data/.state/chat/owes_welcome_chat").exists()
+
+
+@pytest.mark.parametrize(
+    "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
+)
+def test_a_workspace_that_booted_before_is_owed_no_welcome_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first_boot_signal: str
+) -> None:
+    # An existing workspace that takes this build in an update has its chats already.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    (tmp_path / "data/.state" / first_boot_signal).touch()
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert not (tmp_path / "data/.state/chat/owes_welcome_chat").exists()
+
+
 @pytest.mark.parametrize(
     "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
 )
@@ -1140,7 +1169,9 @@ def test_routines_tick_cron_entry_states_the_boot_host_dir_for_the_wrapper(
 
     lines = (target / ROUTINES_TICK_CRON_NAME).read_text().splitlines()
     assert lines[0] == "MNGR_HOST_DIR=/mngr"
-    assert lines[1].startswith(f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} ")
+    assert lines[1].startswith(
+        f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} "
+    )
     assert len(lines) == 2
 
 

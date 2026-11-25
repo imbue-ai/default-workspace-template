@@ -113,6 +113,9 @@ _LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
 # system_interface's ``DEFAULT_STATE_DIRECTORY``, spelled out rather than imported to keep this
 # first-boot program's dependencies minimal.
 OFFER_TOUR_SIGNAL = STATE_DIR / "system_interface" / "offer_tour"
+# Tells the chat app that this workspace owes its owner a welcome chat (its
+# ``first_boot_welcome.OWES_WELCOME_CHAT_RELATIVE_PATH``), which that app opens and then removes this.
+OWE_WELCOME_CHAT_SIGNAL = STATE_DIR / "chat" / "owes_welcome_chat"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -230,6 +233,17 @@ def _offer_tour_on_first_boot() -> None:
     if _is_main_branch_initialized():
         return
     _touch(OFFER_TOUR_SIGNAL)
+
+
+def _owe_welcome_chat_on_first_boot() -> None:
+    """Mark a workspace booting for the first time as owing its owner a welcome chat, which the chat app opens.
+
+    The workspace opens it for itself, so it does not depend on which client created the workspace, or on any
+    client being there. Must run before ``_initialize_workspace_main_branch``, as the tour's signal must.
+    """
+    if _is_main_branch_initialized():
+        return
+    _touch(OWE_WELCOME_CHAT_SIGNAL)
 
 
 def _initialize_workspace_main_branch() -> None:
@@ -955,7 +969,8 @@ def main() -> None:
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
-    # Then, on a first boot only, mark the workspace new so the shell offers its tour.
+    # Then, on a first boot only, mark the workspace new so the shell offers its tour and the
+    # chat app opens its welcome chat.
     # Then commit the rsynced template and put the work_dir on `main`. Its OWN one-shot
     # signal: "does this workspace have a main branch" and "does it have a chat" are
     # different questions with different answers, so they cannot share one.
@@ -964,6 +979,7 @@ def main() -> None:
     ):
         _ensure_git_identity()
         _offer_tour_on_first_boot()
+        _owe_welcome_chat_on_first_boot()
         _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created

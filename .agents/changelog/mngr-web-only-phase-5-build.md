@@ -1,0 +1,1 @@
+- The `devices` and `file-sharing` skills say what to do when no desktop is connected to a workspace, which is permanent for an owner who uses Imbue Studio in a browser alone: tell the user once that the feature needs the Imbue Studio desktop app, and do not try it again in that conversation.

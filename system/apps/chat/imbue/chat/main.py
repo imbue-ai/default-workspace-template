@@ -37,6 +37,7 @@ from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.first_boot_welcome import start_opening_welcome_chat_owed_from_first_boot
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
@@ -377,6 +378,11 @@ def main() -> None:
         # the one place the follower is started; ``build_application`` only constructs, so
         # tests that build an app never follow anything.
         state.agent_manager.start()
+        if not args.secondary:
+            # A second chat beside the live one opens no chat of its own.
+            is_stopping = threading.Event()
+            atexit.register(is_stopping.set)
+            start_opening_welcome_chat_owed_from_first_boot(state.agent_manager, Path.cwd(), is_stopping)
         state.start_reply_draft_publisher()
         if state.lounge is not None:
             state.lounge.start(state.roster)

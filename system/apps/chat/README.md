@@ -587,6 +587,14 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+A new workspace opens its own first chat, with no client asking (`first_boot_welcome.py`): the
+bootstrap leaves `data/.state/chat/owes_welcome_chat` on a workspace's first boot, and this app,
+once it has read its agent list, opens the first-run chat below and removes the file. A workspace
+that already existed when it took this build is owed none. An Imbue Studio app from before this
+still posts its own first-run seed when a workspace is ready. Whichever of the two comes second
+finds the chat there: the seed route answers the chat that exists, and this app reads the taken
+name as the chat having been opened.
+
 A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
 app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
 (the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the

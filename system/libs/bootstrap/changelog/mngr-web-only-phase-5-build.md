@@ -1,0 +1,1 @@
+- A workspace's first boot writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open the workspace's welcome chat. A workspace that already existed never gets it.
