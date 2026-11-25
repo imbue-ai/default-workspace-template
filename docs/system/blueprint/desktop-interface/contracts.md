@@ -318,12 +318,17 @@ The shell also sends `minds:highlight-chrome {anchor}` (contract version 9) whil
 
 ### 5.7 Workspace routes
 
-The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app's backend, through mngr's forward), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
+The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app, through mngr's forward, and the hosted web client), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
 `system/apps/system_interface/workspace_routes_api.json` is their full description (every request and answer, as an OpenAPI document, each route naming its operation under `x-workspace-operation`), and is what a client is checked against; this section says what holds across them.
 
-`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...]}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty) and the name of every operation the shell has a route for.
+`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...], "compatibility": 1}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty), the name of every operation the shell has a route for, and the template's compatibility number.
 A client asks before the first operation it sends a workspace and calls a route only for an operation named there, so a workspace whose shell names fewer is still served by the client's older path.
 A preview shell names none, and answers every route that changes the workspace `403` with the code `PREVIEW`: it serves a copy, and cannot change the live workspace.
+
+`compatibility` is one whole number the template holds in one place (`WORKSPACE_COMPATIBILITY` in `workspace_api_models.py`), and a status without it means 1.
+It is raised only by a change a client built before it could not work with: a route that changes in a way the frozen descriptions forbid, a format a client's own programs write, or a page the embed contract cannot carry.
+A change every supported client still works with leaves it alone, and it is never lowered.
+A client is built with the highest number it knows. One that reads a higher number still opens the workspace and stops, starts and destroys it, and refuses everything else it would do inside it rather than read a missing operation as a template too old to have it and run its older command.
 
 | Operation | Route |
 |---|---|
@@ -343,9 +348,10 @@ A preview shell names none, and answers every route that changes the workspace `
 | `update.skip` | `POST /api/workspace/update/skip` |
 | `update.dismiss` | `POST /api/workspace/update/dismissals` |
 | `update.liveness.read` | `GET /api/workspace/update/liveness` |
+| `update.settings.write` | `PUT /api/workspace/update/settings` |
 
 A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
-A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
+A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
 A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry.
 
 Two routes answer before their work is done, and a client reads on:
@@ -353,7 +359,32 @@ Two routes answer before their work is done, and a client reads on:
 - `PUT /api/workspace/backups/credentials` takes the whole of `restic.env` and answers `202` with the setup's state `INITIALIZING` (`200` with `READY` when those credentials are already in place); `restic.env` is written only once the repository is initialised, so the backup service never sees credentials for a repository that is not. `GET /api/workspace/backups/setup` then says `NONE`, `INITIALIZING`, `READY`, or `FAILED` with restic's own words, the credentials' values redacted. An initialisation whose process is gone reads as `FAILED`, and sending the credentials again is safe.
 - `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then holds the attempt under `last_start`, with its outcome once it has one. An attempt whose process is gone reads as `CREATE_FAILED`.
 
-A read route changes nothing in the workspace.
+`GET /api/workspace/sharing` also lists the apps that can be shared by themselves, as `shareable_apps`: every registered app that is not internal, in the registry's order, each `{"name", "label", "display_name", "is_system"}` (its grants' key, its origin label, the name a person reads, and whether it is part of the workspace itself). An internal app is reached only through a share of the whole workspace.
+`PUT /api/workspace/profile` leaves the stored snapshot alone when the one sent equals it apart from `written_at`, and answers `is_written: false` then: a client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a change that did not happen.
+
+**The workspace arms its own updates.**
+`PUT /api/workspace/update/settings` stores the update settings and answers them as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), and `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in).
+Settings that cannot be the workspace's are refused with `INVALID_UPDATE_SETTINGS`.
+The hours are read in the timezone the workspace records (`data/.state/user_timezone`), and in UTC when it records none.
+
+The update dispatcher, which cron runs every minute, reads `<feed_base_url>/<channel>-web.json` at most once an hour and keeps the version it names (`templateRef`). That is the channel's version: the newest version the workspace may take.
+While arming is on, nothing is armed or running, and no decision waits for the user, the dispatcher arms a schedule for the channel's version when the workspace is behind it, unless the user skipped that version or a run already went out for it.
+A channel file that cannot be read arms nothing, and the last version read stays on display.
+The dispatcher's cron line is written at every boot as well as by the routes, so a workspace no client has asked anything of runs it.
+
+In `POST /api/workspace/update/start`, `PUT` and `PATCH /api/workspace/update/schedule`, the values a client used to compute are optional, and one left out is the workspace's own:
+
+- `ceiling` left out is the channel's version. When the workspace has read none and cannot, the answer is `200` with the outcome `NO_CHANNEL_VERSION`, unless the request names a version the user chose (`override_ref`), which needs no other.
+- `window_start_minute_utc` and `window_length_minutes` left out (together) are the settings' window. With no settings the answer is the outcome `NO_UPDATE_SETTINGS`.
+- `is_backup_configured` left out is whether the workspace holds `data/.secrets/restic.env`.
+
+A schedule armed with the workspace's own values keeps them current: the dispatcher rewrites them when the channel moves, the settings change, or the timezone's offset does. A `PATCH` rewrites each value it leaves out with the workspace's own, and leaves it as it is where the workspace has none.
+
+A request that names `ceiling` is from a desktop app built before the workspace read its channel, and is served as it always was. Such a desktop names its newest version in every request of its sweep, every 300 seconds, so the workspace holds itself to that version for 15 minutes after the last such request: it arms no update past it, takes the older of the two for a request that names none, and leaves an armed schedule to that desktop's own refreshes.
+
+`GET /api/workspace/update` also answers `settings` (null when no client has written any) and `channel_version`: `{"channel", "template_ref", "read_at", "checked_at", "error"}`, the version as the workspace last read it and how the last read went (null when it has read nothing for the settings' channel), so a client shows what is available without reading the feed.
+
+A read route changes nothing in the workspace, and reads no feed.
 The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
 
 ## 6. The WebSocket

@@ -101,13 +101,70 @@ def test_a_written_snapshot_is_read_back_with_every_key_it_carried(tmp_path: Pat
         "a_setting_this_build_does_not_know": {"kept": True},
     }
 
-    write_workspace_profile_snapshot(tmp_path, document)
+    assert write_workspace_profile_snapshot(tmp_path, document) is True
 
     assert json.loads((tmp_path / SNAPSHOT_RELATIVE_PATH).read_text(encoding="utf-8")) == document
     snapshot = load_workspace_profile_snapshot(tmp_path)
     assert snapshot is not None
     assert snapshot.account_id == "account-123"
     assert snapshot.value_by_key["keybindings"] == {"shell": {"open": ["meta+k"]}}
+
+
+def test_a_snapshot_that_only_differs_in_when_it_was_written_is_not_written_again(tmp_path: Path) -> None:
+    document: dict[str, object] = {
+        "snapshot_format": SUPPORTED_SNAPSHOT_FORMAT,
+        "account_id": "account-123",
+        "owner_user_id": "user-123",
+        "written_at": "2026-11-24T00:00:00+00:00",
+        "written_by": "web",
+        "keybindings": {"shell": {"open": ["meta+k"]}},
+    }
+    path = tmp_path / SNAPSHOT_RELATIVE_PATH
+    write_workspace_profile_snapshot(tmp_path, document)
+    written = path.stat()
+
+    is_written = write_workspace_profile_snapshot(tmp_path, {**document, "written_at": "2026-11-25T09:30:00+00:00"})
+
+    assert is_written is False
+    assert (path.stat().st_ino, path.stat().st_mtime_ns) == (written.st_ino, written.st_mtime_ns)
+    assert json.loads(path.read_text(encoding="utf-8")) == document
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"keybindings": {"shell": {"open": ["meta+j"]}}},
+        {"written_by": "device-9f2c"},
+        {"account_id": "account-456"},
+        {"a_new_setting": True},
+    ],
+)
+def test_a_snapshot_that_differs_in_anything_else_replaces_the_stored_one(
+    tmp_path: Path, changed: dict[str, object]
+) -> None:
+    document: dict[str, object] = {
+        "snapshot_format": SUPPORTED_SNAPSHOT_FORMAT,
+        "account_id": "account-123",
+        "owner_user_id": "user-123",
+        "written_at": "2026-11-24T00:00:00+00:00",
+        "written_by": "web",
+        "keybindings": {"shell": {"open": ["meta+k"]}},
+    }
+    write_workspace_profile_snapshot(tmp_path, document)
+    sent = {**document, **changed}
+
+    assert write_workspace_profile_snapshot(tmp_path, sent) is True
+    assert json.loads((tmp_path / SNAPSHOT_RELATIVE_PATH).read_text(encoding="utf-8")) == sent
+
+
+def test_a_stored_snapshot_that_cannot_be_read_as_one_is_replaced(tmp_path: Path) -> None:
+    path = tmp_path / SNAPSHOT_RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text("not json", encoding="utf-8")
+    document: dict[str, object] = {"snapshot_format": SUPPORTED_SNAPSHOT_FORMAT, "account_id": "account-123"}
+
+    assert write_workspace_profile_snapshot(tmp_path, document) is True
+    assert json.loads(path.read_text(encoding="utf-8")) == document
 
 
 @pytest.mark.parametrize("snapshot_format", [None, "1", 1.5, True])

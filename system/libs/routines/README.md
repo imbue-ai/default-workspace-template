@@ -110,5 +110,6 @@ now. Try again in a moment.", with the file left written.
 wrote before routines existed, carries the old runner's state over, and
 removes both copies of each converted entry; the bootstrap runs it at every
 boot. It leaves the update dispatcher's `update-self-dispatch` entry with cron,
-untouched: the shell's update routes (and an Imbue Studio app from before
-them) rewrite that entry whenever an update is armed.
+untouched: the bootstrap writes that entry at every boot, and the shell's
+update routes (and an Imbue Studio app from before them) rewrite it whenever
+an update is armed.

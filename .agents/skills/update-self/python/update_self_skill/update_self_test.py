@@ -51,54 +51,57 @@ _WORKSPACE_ROOT = _PACKAGE_DIR.parents[4]
 # resolve_target
 
 
-def test_resolve_target_takes_the_release_the_app_names() -> None:
-    # Not the newest tag upstream: the one this app was built against, even with
+def test_resolve_target_takes_the_release_the_ceiling_names() -> None:
+    # Not the newest tag upstream: the one the workspace's channel is on, even with
     # newer releases sitting right beside it.
     tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.4.0"]
-    result = update_target.resolve_target(None, tags, app_version="minds-v0.3.7")
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.7")
     assert result == update_target.ResolvedTarget(
         "minds-v0.3.7", "tag", "minds-v0.3.7", False
     )
 
 
-def test_resolve_target_takes_a_prerelease_app_to_its_own_prerelease_template() -> None:
-    # An rc build is a verified pair like any other, so its workspace runs the
-    # matching rc template rather than the stable release before it.
+def test_resolve_target_takes_a_prerelease_ceiling_to_its_own_prerelease_template() -> (
+    None
+):
+    # A ceiling that names an rc is a release like any other, so the workspace takes
+    # that rc template rather than the stable release before it.
     tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0"]
-    result = update_target.resolve_target(None, tags, app_version="minds-v0.4.0-rc1")
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
     assert result.ref == "minds-v0.4.0-rc1"
 
 
-def test_a_missing_app_release_is_a_fault_not_a_refusal() -> None:
-    # The app names a release the template upstream does not carry: that pairing
-    # was never published as claimed, so the skill is told, and no other release
+def test_a_ceiling_release_missing_upstream_is_a_fault_not_a_refusal() -> None:
+    # The ceiling names a release the template upstream does not carry: it was
+    # never published as claimed, so the skill is told, and no other release
     # is quietly substituted.
     try:
         update_target.resolve_target(
-            None, ["minds-v0.3.8", "minds-v0.4.0"], app_version="minds-v0.3.9"
+            None, ["minds-v0.3.8", "minds-v0.4.0"], ceiling="minds-v0.3.9"
         )
-    except update_target.AppVersionNotReleasedError as exc:
+    except update_target.CeilingNotReleasedError as exc:
         message = str(exc)
         assert "minds-v0.3.9" in message
         assert "no such tag" in message
         assert not isinstance(exc, update_target.NoUpdateTargetError)
     else:
         raise AssertionError(
-            "expected a fault when the app's release is missing upstream"
+            "expected a fault when the ceiling's release is missing upstream"
         )
 
 
-def test_an_app_naming_no_release_is_a_fault() -> None:
-    # A dev build reports its branch. There is no release to match, and which
-    # ref such a workspace should take is the skill's call, not this script's.
+def test_a_ceiling_naming_no_release_is_a_fault() -> None:
+    # A development build of Imbue Studio pins its branch. There is no release to
+    # match, and which ref such a workspace should take is the skill's call, not
+    # this script's.
     try:
         update_target.resolve_target(
-            None, ["minds-v0.3.9", "minds-v0.4.0"], app_version="main"
+            None, ["minds-v0.3.9", "minds-v0.4.0"], ceiling="main"
         )
-    except update_target.AppVersionNotReleasedError as exc:
+    except update_target.CeilingNotReleasedError as exc:
         assert "not a release tag" in str(exc)
     else:
-        raise AssertionError("expected a fault when the app names no release")
+        raise AssertionError("expected a fault when the ceiling names no release")
 
 
 def test_resolve_target_override_main_is_remote_qualified_branch() -> None:
@@ -121,21 +124,17 @@ def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    newer = update_target.resolve_target(
-        "minds-v0.4.0", tags, app_version="minds-v0.3.9"
-    )
+    newer = update_target.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
     assert newer.ref == "minds-v0.4.0"
     assert newer.exceeds_ceiling is True
 
 
 def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.9"]
-    older = update_target.resolve_target(
-        "minds-v0.3.6", tags, app_version="minds-v0.3.9"
-    )
+    older = update_target.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
     assert older.exceeds_ceiling is False
     at_ceiling = update_target.resolve_target(
-        "minds-v0.3.9", tags, app_version="minds-v0.3.9"
+        "minds-v0.3.9", tags, ceiling="minds-v0.3.9"
     )
     assert at_ceiling.exceeds_ceiling is False
 
@@ -146,13 +145,13 @@ def test_unprovable_overrides_are_flagged() -> None:
     tags = ["minds-v0.3.9"]
     assert (
         update_target.resolve_target(
-            "main", tags, app_version="minds-v0.3.9"
+            "main", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
     assert (
         update_target.resolve_target(
-            "abc1234", tags, app_version="minds-v0.3.9"
+            "abc1234", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
@@ -160,7 +159,7 @@ def test_unprovable_overrides_are_flagged() -> None:
     # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
     assert (
         update_target.resolve_target(
-            "minds-v0.3.7-rc1", tags, app_version="minds-v0.3.9"
+            "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
         is False
     )
@@ -169,41 +168,57 @@ def test_unprovable_overrides_are_flagged() -> None:
 def test_overrides_are_never_flagged_without_a_ceiling() -> None:
     assert (
         update_target.resolve_target(
-            "main", ["minds-v0.3.9"], app_version=None
+            "main", ["minds-v0.3.9"], ceiling=None
         ).exceeds_ceiling
         is False
     )
 
 
-# fetch_app_template_ref
+# read_channel_template_ref
 
 
-def _install_fake_latchkey(
-    monkeypatch, directory: Path, body: str, status: str, exit_code: int = 0
+def _write_update_state(repo_root: Path, name: str, content: dict[str, object]) -> None:
+    path = repo_root / "data" / ".state" / "update-apply" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(content))
+
+
+def _stage_channel_version(
+    repo_root: Path,
+    template_ref: str,
+    *,
+    channel: str = "stable",
+    error: str = "",
 ) -> None:
-    """Put a stub ``latchkey`` on PATH that mimics the real curl passthrough.
-
-    The real ``latchkey curl`` forwards its arguments to ``curl`` and passes curl's
-    exit code, stdout and stderr back. The stub honors the two the fetch depends on
-    -- ``--output <file>`` for the body and ``--write-out %{http_code}`` for the
-    status on stdout -- so the test exercises the actual subprocess call.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    script = directory / "latchkey"
-    lines = [
-        "#!/usr/bin/env python3",
-        "import sys",
-        "argv = sys.argv[1:]",
-        "out = argv[argv.index('--output') + 1]",
-        f"open(out, 'w').write({body!r})",
-        f"sys.stdout.write({status!r})",
-    ]
-    if exit_code:
-        lines.append("sys.stderr.write('connection refused')")
-        lines.append(f"sys.exit({exit_code})")
-    script.write_text("\n".join(lines) + "\n")
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+    """Leave ``repo_root`` as a workspace whose update settings follow ``channel`` and whose dispatcher last
+    read ``template_ref`` for it ('' with an ``error`` for a read that never succeeded)."""
+    feed_base_url = "https://feed.example/updates"
+    _write_update_state(
+        repo_root,
+        "settings.json",
+        {
+            "schema": 1,
+            "channel": channel,
+            "feed_base_url": feed_base_url,
+            "is_auto_update_enabled": True,
+            "is_auto_update_enabled_here": None,
+            "window_start_hour": 2,
+            "window_end_hour": 5,
+        },
+    )
+    _write_update_state(
+        repo_root,
+        "channel-version.json",
+        {
+            "schema": 1,
+            "channel": channel,
+            "feed_base_url": feed_base_url,
+            "template_ref": template_ref,
+            "read_at": 1_792_000_000.0 if template_ref else None,
+            "checked_at": 1_792_000_000.0,
+            "error": error,
+        },
+    )
 
 
 def _init_workspace_repo(
@@ -236,94 +251,67 @@ def _init_workspace_repo(
     _git("commit", "--allow-empty", "-q", "-m", "local work")
 
 
-def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
-    tmp_path, monkeypatch
+def test_the_default_target_is_the_release_the_workspaces_channel_is_on(
+    tmp_path: Path,
 ) -> None:
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path,
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
+    _stage_channel_version(tmp_path, "minds-v0.3.9")
 
-    assert update_target.fetch_app_template_ref() == "minds-v0.3.9"
+    assert update_target.read_channel_template_ref(tmp_path) == "minds-v0.3.9"
 
 
-def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
-    tmp_path, monkeypatch
+def test_a_workspace_with_no_update_settings_has_no_channel_to_take_a_version_from(
+    tmp_path: Path,
 ) -> None:
-    """A 403 is the *likelier* old-app signal and must get the same message as a 404.
+    with pytest.raises(update_target.ChannelVersionUnavailableError) as raised:
+        update_target.read_channel_template_ref(tmp_path)
 
-    The route and the gateway grant that reaches it ship together, so an app old
-    enough to lack the route is also old enough to lack the grant -- and the gateway
-    denies before the app is ever asked.
-    """
-    _install_fake_latchkey(
-        monkeypatch, tmp_path, body='{"error": "request not permitted"}', status="403"
-    )
-
-    try:
-        update_target.fetch_app_template_ref()
-    except update_target.AppVersionUnavailableError as exc:
-        assert "too old to report its version" in str(exc)
-        assert "Update the Imbue Studio app itself first" in str(exc)
-    else:
-        raise AssertionError("expected a 403 to block with the old-app message")
+    assert "holds no update settings" in str(raised.value)
+    assert "name the version to update to" in str(raised.value)
 
 
-def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
-    tmp_path, monkeypatch
+def test_a_channel_whose_file_was_never_read_names_no_version_and_says_why(
+    tmp_path: Path,
 ) -> None:
-    # The case the ceiling most needs to catch: an app old enough to lack the
-    # route is also an app a newer template would outrun. It must not degrade to
-    # "no ceiling".
-    _install_fake_latchkey(
-        monkeypatch, tmp_path, body='{"error": "Not Found"}', status="404"
-    )
+    _stage_channel_version(tmp_path, "", error="HTTP Error 404: Not Found")
 
-    try:
-        update_target.fetch_app_template_ref()
-    except update_target.AppVersionUnavailableError as exc:
-        assert "too old to report its version" in str(exc)
-    else:
-        raise AssertionError("expected a 404 to block rather than return no ceiling")
+    with pytest.raises(update_target.ChannelVersionUnavailableError) as raised:
+        update_target.read_channel_template_ref(tmp_path)
+
+    message = str(raised.value)
+    assert "has read no version for its release channel (stable)" in message
+    assert "HTTP Error 404: Not Found" in message
 
 
-def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
-    tmp_path, monkeypatch
+def test_a_version_read_for_another_channel_is_not_the_workspaces(
+    tmp_path: Path,
 ) -> None:
-    _install_fake_latchkey(monkeypatch, tmp_path, body="", status="000", exit_code=7)
+    """The settings moved to beta after the dispatcher last read stable: stable's version is not beta's."""
+    _stage_channel_version(tmp_path, "minds-v0.3.9")
+    settings_path = tmp_path / "data" / ".state" / "update-apply" / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings_path.write_text(json.dumps({**settings, "channel": "beta"}))
 
-    try:
-        update_target.fetch_app_template_ref()
-    except update_target.AppVersionUnavailableError as exc:
-        assert "could not reach the Imbue Studio app" in str(exc)
-        assert "connection refused" in str(exc)
-    else:
-        raise AssertionError("expected a transport failure to block")
+    with pytest.raises(update_target.ChannelVersionUnavailableError) as raised:
+        update_target.read_channel_template_ref(tmp_path)
+
+    assert "(beta)" in str(raised.value)
+    assert "minds-v0.3.9" not in str(raised.value)
 
 
-def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
-    tmp_path, monkeypatch
+def test_a_version_last_read_is_taken_when_the_feed_has_since_gone_down(
+    tmp_path: Path,
 ) -> None:
-    _install_fake_latchkey(
-        monkeypatch, tmp_path, body="<html>gateway error</html>", status="200"
-    )
+    _stage_channel_version(tmp_path, "minds-v0.3.9", error="the feed is down")
 
-    try:
-        update_target.fetch_app_template_ref()
-    except update_target.AppVersionUnavailableError as exc:
-        assert "could not be parsed" in str(exc)
-    else:
-        raise AssertionError("expected an unparseable body to block")
+    assert update_target.read_channel_template_ref(tmp_path) == "minds-v0.3.9"
 
 
-def test_resolve_target_cli_reads_the_ceiling_from_the_app(
-    tmp_path, monkeypatch, capsys
+def test_resolve_target_cli_reads_the_ceiling_from_the_workspaces_channel(
+    tmp_path, capsys
 ) -> None:
-    """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer.
+    """End to end: with no ``--ceiling``, the CLI takes the channel's version and caps on it.
 
-    The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
+    The workspace sits *behind* the ceiling (created from 0.3.5, channel on 0.3.9), so
     the capped target is a real update and the pass proceeds -- otherwise this
     would be asserting the already-merged refusal's territory instead. The output
     carries nothing about 0.4.0, the release above the ceiling.
@@ -334,12 +322,7 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         merged_tags=("minds-v0.3.5",),
         unmerged_tags=("minds-v0.3.9", "minds-v0.4.0"),
     )
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path / "bin",
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
+    _stage_channel_version(repo, "minds-v0.3.9")
 
     assert (
         update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
@@ -359,11 +342,11 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
     "unmerged_tags", [(), ("minds-v0.4.0",)], ids=["newest-upstream", "capped"]
 )
 def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
-    tmp_path, monkeypatch, capsys, unmerged_tags
+    tmp_path, capsys, unmerged_tags
 ) -> None:
     """A workspace at the ceiling hears the same refusal whether or not a newer release exists.
 
-    Created from 0.3.9, app on 0.3.9: the default target is the release the
+    Created from 0.3.9, channel on 0.3.9: the default target is the release the
     workspace is already on. A 0.4.0 upstream is above the ceiling, so it is
     treated as absent.
     """
@@ -371,12 +354,7 @@ def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
     _init_workspace_repo(
         repo, merged_tags=("minds-v0.3.9",), unmerged_tags=unmerged_tags
     )
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path / "bin",
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
+    _stage_channel_version(repo, "minds-v0.3.9")
 
     assert (
         update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
@@ -394,7 +372,7 @@ def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
 
 
 def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
-    tmp_path, monkeypatch, capsys
+    tmp_path, capsys
 ) -> None:
     """An override names a ref explicitly, and that rule outranks saving a no-op merge.
 
@@ -405,12 +383,7 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
     _init_workspace_repo(
         repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
     )
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path / "bin",
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
+    _stage_channel_version(repo, "minds-v0.3.9")
 
     assert (
         update_self.main(
@@ -430,14 +403,11 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
 
 
 def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
-    tmp_path, monkeypatch, capsys
+    tmp_path, capsys
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
-    _install_fake_latchkey(
-        monkeypatch, tmp_path / "bin", body="", status="000", exit_code=7
-    )
 
     assert (
         update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
@@ -446,9 +416,44 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "could not reach the Imbue Studio app" in captured.err
+    assert "holds no update settings" in captured.err
     # A refusal, not a crash: no traceback for the lead to relay.
     assert "Traceback" not in captured.err
+
+
+def test_resolve_target_cli_takes_an_override_in_a_workspace_that_has_read_no_channel(
+    tmp_path, capsys
+) -> None:
+    """The user named the version, so having no channel's version to compare it against is not a fault.
+
+    This is also Step 3a's re-check of an older workspace updating to this release: the staged copy runs in a
+    tree whose template predates the update settings.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.5",), unmerged_tags=("minds-v0.3.9",)
+    )
+
+    assert (
+        update_self.main(
+            [
+                "resolve-target",
+                "--local-tags",
+                "--repo-root",
+                str(repo),
+                "--override",
+                "minds-v0.3.9",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "ref": "minds-v0.3.9",
+        "kind": "tag",
+        "ceiling": None,
+        "exceeds_ceiling": False,
+    }
 
 
 def _clone_workspace_with_upstream_branch(
@@ -481,7 +486,7 @@ def _clone_workspace_with_upstream_branch(
 
 
 def _resolve_override(workspace: Path, override: str, capsys) -> dict:
-    # ``--ceiling`` stands in for the app, so no gateway is reached.
+    # ``--ceiling`` stands in for the channel's version, so no update state is read.
     assert (
         update_self.main(
             [
@@ -1719,19 +1724,23 @@ def _run_step_2(
 
 
 @pytest.mark.flaky
-def test_step_2_resolves_a_pinned_target_without_asking_the_app(
-    tmp_path: Path, monkeypatch
+def test_step_2_resolves_a_pinned_target_without_a_channel_version(
+    tmp_path: Path,
 ) -> None:
-    """A pass the app pinned must resolve with the app unreachable (closed, on a sleeping laptop); the
-    same block with no pin asks the app, so the unreachable app is a fault there."""
-    _install_fake_latchkey(
-        monkeypatch, tmp_path / "bin", body="", status="", exit_code=7
-    )
+    """A pinned pass takes its ceiling from the message; the same block with no pin takes the release the
+    workspace's channel is on, so a workspace that has read none is a fault there, until it has."""
     workspace = _release_repos(tmp_path)
 
     unpinned = _run_step_2(workspace, tmp_path, {})
     assert unpinned.returncode != 0
-    assert "could not reach the Imbue Studio app" in unpinned.stderr
+    assert "holds no update settings" in unpinned.stderr
+
+    _stage_channel_version(workspace, "minds-v0.2.0")
+    followed = _run_step_2(workspace, tmp_path, {})
+    assert followed.returncode == 0, followed.stderr
+    target = json.loads((tmp_path / "target.json").read_text())
+    assert (target["ref"], target["ceiling"]) == ("minds-v0.2.0", "minds-v0.2.0")
+    shutil.rmtree(workspace / "data")
 
     pinned = _run_step_2(workspace, tmp_path, {"PINNED_CEILING": "minds-v0.2.0"})
     assert pinned.returncode == 0, pinned.stderr

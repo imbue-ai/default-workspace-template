@@ -1,8 +1,9 @@
 # workspace-update-control
 
-A workspace's updates as a client asks for them, and the dispatcher that starts a
-scheduled update and watches over a running one. Standard library only: cron runs
-the dispatcher's tick with no venv, since a running update may have broken it.
+A workspace's updates as a client asks for them, and the dispatcher that arms the
+workspace's own updates, starts a scheduled one and watches over a running one.
+Standard library only: cron runs the dispatcher's tick with no venv, since a running
+update may have broken it.
 
 Everything here acts on the workspace whose root is the current directory, which is
 where supervisord runs the shell and where the cron line changes to.
@@ -13,17 +14,36 @@ where supervisord runs the shell and where the cron line changes to.
   (`/api/workspace/update...`): start an update now, arm the schedule, refresh the
   client's values in an armed schedule, cancel it, skip a version, record a
   dismissal, read all of it, and read what tells whether a running update is alive.
-  Each takes every value it acts on as an argument (the newest version the client
-  knows, a version the user typed, the window in UTC, whether the client holds
-  backup credentials). Starting answers at once: the create of the update's chat
+  A client may name the values an update runs with (the newest version it knows, a
+  version the user typed, the window in UTC, whether it holds backup credentials),
+  and one it leaves out is the workspace's own: the version its release channel is
+  on, the window of its update settings, whether it holds backup credentials
+  itself. A schedule armed with the workspace's own values keeps them current.
+  Starting answers at once: the create of the update's chat
   runs on in the background and `data/.state/update-apply/last-start.json` records
   how it went, naming the process that runs it, so an attempt whose process is gone
   reads as `CREATE_FAILED`.
 - `dispatcher` -- the minute-by-minute tick: it dispatches an armed schedule inside
   its window, closes out or reminds a run with no verdict (and brings a stopped
   lead back), and holds the run's agents out of the memory guard's way.
+- `settings` -- the update settings a client writes (the release channel, the feed
+  its file is read from, whether the workspace arms its own updates, and the owner's
+  local hours an update may start in), the conversion of those hours to the UTC
+  window a schedule holds, in the timezone the workspace records, and whether the
+  workspace holds backup credentials.
+- `channel` -- the version the release channel is on, read off the feed
+  (`<feed>/<channel>-web.json`) at most once an hour and kept with how the last read
+  went, and the newest version a client from before all this last named, which
+  bounds the channel's for `CLIENT_CEILING_HOLD_SECONDS` after that client last
+  asked.
+- `arming` -- the workspace arming its own updates, each minute: the decision the
+  Imbue Studio desktop's sweep made (`should_auto_arm`), taken from the workspace's
+  own files.
+- `installed_version` -- the version of the checkout, read from git, and how
+  releases order. The shell's status route reads the version by the same rules.
 - `tick` -- the tick as a program. `system/scripts/update_dispatcher_tick.py` is its
-  entry file, which the `update-self-dispatch` cron line runs.
+  entry file, which the `update-self-dispatch` cron line runs, and
+  `system/scripts/install_update_dispatcher_cron.py` writes that line at boot.
 - `agents` -- the workspace's agents read from the events file `mngr observe`
   writes, for the routes, which run no `mngr`. Where the file cannot vouch for the
   agents the answer is "unknown", never "none".
@@ -40,4 +60,18 @@ desktop from before the workspace's update routes ships into the workspace
 the two wrote the cron line last decides which dispatcher runs, so both must act
 the same on the same files: the formats keep `UPDATE_PROGRAM_SCHEMA`, and a fix to
 the dispatcher is made in both places, until no supported desktop ships that
-program. `last-start.json` is this library's alone.
+program. `last-start.json` is this library's alone, and so are the files a
+workspace that arms its own updates keeps: `settings.json`, `channel-version.json`
+(which the update-self skill reads for its default target), `client-ceiling.json`,
+`schedule-origin.json` and `installed-version.json`. A desktop from before them
+reads none, and `schedule.json` gains no field for them.
+
+## A desktop from before the workspace armed its own updates
+
+Such a desktop still sweeps the workspace every 300 seconds, and every request of
+its sweep names the newest version it knows (`ceiling`). The routes serve those
+requests as they always did and record the last one (`client-ceiling.json`). For
+`CLIENT_CEILING_HOLD_SECONDS` after it, the dispatcher arms nothing past that
+version, a request that names none takes the older of the two, and an armed schedule
+is left to that desktop's refreshes. A workspace no such desktop is asking follows
+its channel.

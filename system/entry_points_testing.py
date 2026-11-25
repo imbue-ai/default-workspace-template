@@ -82,6 +82,7 @@ STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
     SYSTEM_SCRIPTS / "forward_port.py",
     SYSTEM_SCRIPTS / "update_dispatcher_tick.py",
+    SYSTEM_SCRIPTS / "install_update_dispatcher_cron.py",
 )
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its

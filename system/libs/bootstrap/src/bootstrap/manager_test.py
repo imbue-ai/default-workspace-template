@@ -23,8 +23,10 @@ from bootstrap.manager import (
     BOOTSTRAP_STEP_STARTED_EVENT,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
+    RUNTIME_CRON_DIR,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
+    UPDATE_DISPATCHER_CRON_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
@@ -41,6 +43,7 @@ from bootstrap.manager import (
     _supervisord_environment,
     _wake_update_dri_agent,
     _write_routines_tick_cron_entry,
+    _write_update_dispatcher_cron_entry,
     _write_update_recovery_cron_entry,
     main,
 )
@@ -413,6 +416,69 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     # This runs on the path to supervisord; a boot that reaches the services is
     # worth more than the guard.
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
+
+
+# _write_update_dispatcher_cron_entry
+
+
+def _stage_the_update_dispatchers_entry(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lay the real cron-line entry and its library out under ``workspace_root`` as the template holds them,
+    with a stand-in ``cron`` on PATH, and make it the working directory."""
+    repo_root = Path(__file__).resolve().parents[5]
+    scripts = workspace_root / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(repo_root / UPDATE_DISPATCHER_CRON_SCRIPT, scripts)
+    library = workspace_root / "system" / "libs" / "workspace_update_control"
+    library.mkdir(parents=True)
+    (library / "src").symlink_to(
+        repo_root / "system" / "libs" / "workspace_update_control" / "src",
+        target_is_directory=True,
+    )
+    bin_dir = workspace_root.parent / "stub-bin"
+    bin_dir.mkdir()
+    (bin_dir / "cron").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "cron").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.chdir(workspace_root)
+
+
+def test_the_update_dispatchers_cron_entry_is_written_at_boot_under_its_one_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A workspace no client has armed or started an update in has no line yet, so until the boot
+    # writes it nothing there runs the dispatcher that arms the workspace's own updates.
+    workspace_root = tmp_path / "workspace"
+    _stage_the_update_dispatchers_entry(workspace_root, monkeypatch)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _write_update_dispatcher_cron_entry(target_dir=target)
+    _install_runtime_cron_entries(target_dir=target)
+
+    assert [entry.name for entry in target.iterdir()] == ["update-self-dispatch"]
+    entry = (target / "update-self-dispatch").read_text()
+    assert (
+        f"cd {workspace_root.resolve()} && python3 system/scripts/update_dispatcher_tick.py"
+        in entry
+    )
+    # The durable copy is the one the routes write, so a later boot installs the same line again.
+    assert (RUNTIME_CRON_DIR / "update-self-dispatch").read_text() == entry
+
+
+def test_the_update_dispatchers_cron_entry_tolerates_a_tree_without_its_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This runs on the path to supervisord; a boot that reaches the services is worth more than
+    # the line.
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _write_update_dispatcher_cron_entry(target_dir=target)
+
+    assert list(target.iterdir()) == []
 
 
 # _supervisord_environment

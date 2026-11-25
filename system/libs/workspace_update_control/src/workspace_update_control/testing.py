@@ -3,8 +3,10 @@
 import json
 import os
 import stat
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 from uuid import uuid4
@@ -12,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from workspace_update_control.agents import agent_events_path
+from workspace_update_control.channel import ChannelFileUnreadableError
 from workspace_update_control.dispatcher import (
     AGENT_PIDS_DIR,
     AgentEnvironment,
@@ -38,6 +41,56 @@ STAGED_CREATED_CHAT: Final[dict[str, str]] = {
     "name": "Update-to-v090",
     "display_name": "Update to v0.9.0",
 }
+
+
+# Where the staged update settings say the release channels' files are published.
+STAGED_FEED_BASE_URL: Final[str] = "https://feed.example/updates"
+
+
+class RecordingFeed:
+    """A stand-in for the release feed: names ``template_ref`` for every channel (or cannot be read, when it is
+    None), and remembers each address it was asked for."""
+
+    def __init__(self, template_ref: str | None) -> None:
+        self.template_ref = template_ref
+        self.asked: list[str] = []
+
+    def __call__(self, url: str) -> str:
+        self.asked.append(url)
+        if self.template_ref is None:
+            raise ChannelFileUnreadableError("the feed is down")
+        return json.dumps({"templateRef": self.template_ref})
+
+
+class LocalFeedHandler(BaseHTTPRequestHandler):
+    """A feed that publishes the stable channel's file, naming ``minds-v0.10.5``, and no other."""
+
+    def do_GET(self) -> None:
+        if self.path == "/stable-web.json":
+            body = b'{"templateRef": "minds-v0.10.5"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def update_settings_document(**fields: Any) -> dict[str, Any]:
+    """Update settings as a client sends them: the stable channel, arming on, a window of 02:00 to 05:00, with
+    ``fields`` over them."""
+    return {
+        "channel": "stable",
+        "feed_base_url": STAGED_FEED_BASE_URL,
+        "is_auto_update_enabled": True,
+        "is_auto_update_enabled_here": None,
+        "window_start_hour": 2,
+        "window_end_hour": 5,
+        **fields,
+    }
 
 
 class ScriptedToolAnswer(NamedTuple):
@@ -272,6 +325,28 @@ def stage_update_workspace(
     monkeypatch.setenv("STUB_CREATED_AGENT_ID", staged.bare_created_agent_id)
     monkeypatch.chdir(root)
     return staged
+
+
+def stage_checkout_at(
+    repo_root: Path, *commit_subjects_and_tags: tuple[str, str]
+) -> None:
+    """Make ``repo_root`` a checkout with one empty commit per ``(subject, tag)``, in order; a tag of '' tags
+    nothing."""
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run(
+        [*git, "init", "--quiet"], cwd=repo_root, check=True, capture_output=True
+    )
+    for subject, tag in commit_subjects_and_tags:
+        subprocess.run(
+            [*git, "commit", "--allow-empty", "--quiet", "-m", subject],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        )
+        if tag:
+            subprocess.run(
+                [*git, "tag", tag], cwd=repo_root, check=True, capture_output=True
+            )
 
 
 def listed_agent(name: str, state: str, agent_id: str = "") -> dict[str, str]:

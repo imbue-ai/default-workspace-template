@@ -19,6 +19,7 @@ from workspace_update_control.dispatcher import (
 )
 from workspace_update_control.testing import (
     STAGED_CREATED_CHAT,
+    RecordingFeed,
     ScriptedToolAnswer,
     StagedUpdateWorkspace,
     armed_schedule,
@@ -595,6 +596,7 @@ def test_a_run_whose_chat_was_renamed_is_neither_closed_out_nor_counted_as_over(
         read_agents=staged.read_listed_agents,
         run_in_background=run_in_place,
         clock=lambda: _IN_WINDOW,
+        fetch_channel_file=RecordingFeed(None),
     )
 
     assert staged.tool_calls("update_self.py") == []

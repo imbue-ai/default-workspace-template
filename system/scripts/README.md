@@ -89,7 +89,9 @@ needs a directory put on `sys.path`, and each stub says which. See
 - The update dispatcher's tick: `update_dispatcher_tick.py`, one minute of
   `system/libs/workspace_update_control`'s dispatcher, which the
   `update-self-dispatch` cron line runs from the workspace root with the system
-  `python3`. The shell's update routes write that line.
+  `python3`. The shell's update routes write that line, and so does
+  `install_update_dispatcher_cron.py`, which the bootstrap runs at every boot
+  with the directory cron reads its drop-ins from.
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`. A changelog
   consolidation branch owes no entry.
 

@@ -62,18 +62,19 @@ target release's own copy (or the local one, when the ref predates the skill).
 
 ## The scheduled entry: a pinned target and ceiling
 
-The Imbue Studio app starts every pass with one message, scheduled or pressed,
-that names the target and the app's ceiling, so the lead never has to reach the
-app (which may be closed, on a laptop that is asleep). The app writes that
-message and the template only reads it, from Steps 1 and 2 of the workspace's
+Every pass the workspace's update dispatcher or the Imbue Studio app starts
+begins with one message, scheduled or pressed, that names the target and the
+ceiling, so the lead never has to work either out. The dispatcher writes that
+message (a desktop app from before the workspace's update routes writes its
+own), and the skill only reads it, from Steps 1 and 2 of the workspace's
 *local* copy, so it is a contract with every release's Steps 1 and 2:
 
 - **Step 2 must honor the pin in every version.** One that knows the pin reads
   its `Ceiling:`, and a `Target:` the user chose, into `resolve-target`. One
   that predates the pin follows the message's own instruction to append
   `--ceiling <ref>` to `resolve-target`, so `--ceiling` must stay an accepted
-  spelling of `--app-version`. Neither kind asks the app, and Step 3a's
-  re-check passes the same pin.
+  spelling of `--app-version`. Neither kind looks the ceiling up anywhere
+  else, and Step 3a's re-check passes the same pin.
 - **Step 1 must never stop to ask.** Nobody may be watching a pass, so a future
   Step 1 must keep taking an abandoned lease over by rule and saving a dirty
   tree as one commit rather than refusing it.

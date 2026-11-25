@@ -62,9 +62,11 @@ README for details.
   and sets whether backups are verified.
 - `workspace_update_control/` - A workspace's updates as a client asks for
   them through the shell's update routes (start one, schedule one, skip a
-  version, read it all), and the dispatcher cron runs every minute through
-  `system/scripts/update_dispatcher_tick.py` to start a scheduled update and
-  watch over a running one. Stdlib-only, so the tick runs with no venv.
+  version, write the update settings, read it all), and the dispatcher cron
+  runs every minute through `system/scripts/update_dispatcher_tick.py` to arm
+  an update to the version the workspace's release channel is on, start a
+  scheduled update, and watch over a running one. Stdlib-only, so the tick
+  runs with no venv.
 
 Apps live in `system/apps/`; standalone background services live in
 `system/services/`.

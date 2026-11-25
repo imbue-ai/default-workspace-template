@@ -30,8 +30,10 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.workspace_api_models import WORKSPACE_COMPATIBILITY
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
 from imbue.system_interface.workspace_routes import BACKUP_CREDENTIALS_ROUTE
 from imbue.system_interface.workspace_routes import BACKUP_SETUP_ROUTE
@@ -45,6 +47,11 @@ from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _ENV_TEXT = restic_env_text("rest:https://backups.example/workspace-5f3c", "correct-horse-battery-staple-91f2")
+# The apps of ``write_two_app_registry`` as the sharing read lists them: neither is internal.
+_TWO_SHAREABLE_APPS = [
+    {"name": "terminal", "label": "", "display_name": "Terminal", "is_system": False},
+    {"name": "files", "label": "", "display_name": "Files", "is_system": False},
+]
 
 
 def _workspace_root(app: Flask) -> Path:
@@ -99,7 +106,13 @@ def test_the_status_names_every_operation_and_no_version_for_a_tree_that_names_n
     response = client.get(STATUS_ROUTE, headers=OWNER_IDENTITY_HEADERS)
 
     assert response.status_code == 200
-    assert response.get_json() == {"schema": 1, "template_ref": "", "operations": list(WORKSPACE_OPERATIONS)}
+    assert response.get_json() == {
+        "schema": 1,
+        "template_ref": "",
+        "operations": list(WORKSPACE_OPERATIONS),
+        "compatibility": 1,
+    }
+    assert WORKSPACE_COMPATIBILITY == 1
 
 
 def test_every_operation_named_is_named_once() -> None:
@@ -113,7 +126,8 @@ def test_a_preview_shell_names_no_operation_and_refuses_to_change_the_workspace(
     preview = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
     client = preview.test_client()
 
-    assert client.get(STATUS_ROUTE).get_json()["operations"] == []
+    status = client.get(STATUS_ROUTE).get_json()
+    assert (status["operations"], status["compatibility"]) == ([], WORKSPACE_COMPATIBILITY)
     refused = client.put(TIMEZONE_ROUTE, json={"zone": "Europe/Berlin"})
 
     assert refused.status_code == 403
@@ -125,7 +139,44 @@ def test_a_preview_shell_names_no_operation_and_refuses_to_change_the_workspace(
 
 
 def test_reading_the_sharing_state_of_a_workspace_that_never_shared(client: FlaskClient) -> None:
-    assert client.get(SHARING_ROUTE).get_json() == {"is_shared": False, "grants": None, "grants_error": ""}
+    assert client.get(SHARING_ROUTE).get_json() == {
+        "is_shared": False,
+        "grants": None,
+        "grants_error": "",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
+    }
+
+
+def test_the_sharing_state_lists_the_apps_that_can_be_shared_and_no_internal_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry = write_two_app_registry(
+        tmp_path,
+        registry_row_toml(
+            "system_interface", "http://localhost:8000", is_internal=True, label="system-interface-k2j9"
+        ),
+        registry_row_toml(
+            "getting-started",
+            "http://localhost:7400",
+            is_system=True,
+            display_name="Getting Started",
+            label="getting-started-x7q2",
+        ),
+        registry_row_toml("terminal-pty", "http://localhost:7682", is_internal=True, is_system=True),
+        registry_row_toml("my_notes", "http://localhost:9100", display_name="My notes", label="my-notes-p4m1"),
+    )
+    client = shell_application(tmp_path, build_inventory(registry, broadcaster), broadcaster).test_client()
+
+    assert client.get(SHARING_ROUTE).get_json()["shareable_apps"] == [
+        *_TWO_SHAREABLE_APPS,
+        {
+            "name": "getting-started",
+            "label": "getting-started-x7q2",
+            "display_name": "Getting Started",
+            "is_system": True,
+        },
+        {"name": "my_notes", "label": "my-notes-p4m1", "display_name": "My notes", "is_system": False},
+    ]
 
 
 def test_reading_the_sharing_state_answers_the_grants_and_whether_the_workspace_is_shared(
@@ -146,13 +197,19 @@ def test_reading_the_sharing_state_answers_the_grants_and_whether_the_workspace_
             "services": {"web": {"users": [], "emails": ["carol@example.com"], "email_domains": []}},
         },
         "grants_error": "",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
     }
 
 
 def test_a_grants_file_that_cannot_be_read_is_reported_and_is_not_replaced(client: FlaskClient, app: Flask) -> None:
     (_workspace_root(app) / SHARE_GRANTS_RELATIVE_PATH).mkdir(parents=True)
 
-    assert client.get(SHARING_ROUTE).get_json() == {"is_shared": False, "grants": None, "grants_error": "UNREADABLE"}
+    assert client.get(SHARING_ROUTE).get_json() == {
+        "is_shared": False,
+        "grants": None,
+        "grants_error": "UNREADABLE",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
+    }
     refused = client.put(SHARING_GRANTS_ROUTE, json={"grants": {"workspace": {"users": ["user-1"]}}})
 
     assert refused.status_code == 500
@@ -281,6 +338,36 @@ def test_the_profile_snapshot_is_written_as_it_was_sent(client: FlaskClient, app
     assert json.loads((_workspace_root(app) / SNAPSHOT_RELATIVE_PATH).read_text()) == document
 
 
+def test_a_profile_snapshot_that_only_differs_in_when_it_was_written_leaves_the_stored_one_alone(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A client sends the snapshot whenever it opens the workspace, and the shell watches the file."""
+    document = {
+        "snapshot_format": 1,
+        "account_id": "account-123",
+        "owner_user_id": "account-123",
+        "written_at": "2026-11-24T00:00:00+00:00",
+        "written_by": "web",
+        "keybindings": {"shell": {"open": ["meta+k"]}},
+    }
+    snapshot_path = _workspace_root(app) / SNAPSHOT_RELATIVE_PATH
+    client.put(PROFILE_ROUTE, json=document)
+    written = snapshot_path.stat()
+
+    reopened = client.put(PROFILE_ROUTE, json={**document, "written_at": "2026-11-25T09:30:00+00:00"})
+
+    assert reopened.status_code == 200
+    assert reopened.get_json() == {"is_written": False}
+    assert (snapshot_path.stat().st_ino, snapshot_path.stat().st_mtime_ns) == (written.st_ino, written.st_mtime_ns)
+    assert json.loads(snapshot_path.read_text())["written_at"] == "2026-11-24T00:00:00+00:00"
+
+    changed = {**document, "written_at": "2026-11-25T09:31:00+00:00", "keybindings": {"shell": {"open": ["meta+j"]}}}
+    rebound = client.put(PROFILE_ROUTE, json=changed)
+
+    assert rebound.get_json() == {"is_written": True}
+    assert json.loads(snapshot_path.read_text()) == changed
+
+
 @pytest.mark.parametrize("snapshot_format", [None, "1", 1.5, True])
 def test_a_profile_snapshot_without_a_whole_number_format_is_refused(
     client: FlaskClient, app: Flask, snapshot_format: object
@@ -356,7 +443,10 @@ def test_backup_credentials_that_name_no_repository_are_refused(
     refused = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": "RESTIC_PASSWORD=only-a-password\n"})
 
     assert refused.status_code == 400
-    assert refused.get_json() == {"detail": "The credentials do not set RESTIC_REPOSITORY.", "code": "INVALID_CREDENTIALS"}
+    assert refused.get_json() == {
+        "detail": "The credentials do not set RESTIC_REPOSITORY.",
+        "code": "INVALID_CREDENTIALS",
+    }
     assert fake_restic_calls(fake_restic_control) == []
     assert _backup_state(client) == "NONE"
 

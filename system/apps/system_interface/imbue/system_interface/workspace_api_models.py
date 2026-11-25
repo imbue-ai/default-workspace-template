@@ -20,6 +20,14 @@ from imbue.imbue_common.frozen_model import FrozenModel
 
 WORKSPACE_STATUS_SCHEMA: Final[int] = 1
 
+# The template's compatibility number, which the status route answers. A client is built with the highest number
+# it knows, and one that reads a higher number still opens the workspace and runs its lifecycle, and refuses
+# everything else it would do inside it rather than fall back to an older path. It is raised only by a change a
+# client built before it could not work with: a route that changes in a way the frozen descriptions forbid
+# (``workspace_routes_api_frozen/``), a format a client's own programs write, or a page the embed contract cannot
+# carry. A change every supported client still works with leaves it alone, and it is never lowered.
+WORKSPACE_COMPATIBILITY: Final[int] = 1
+
 # The operations a workspace on this template serves, each named for good: a release adds names and never renames
 # one. A client calls a route only for an operation its workspace names.
 OPERATION_SHARING_READ: Final[str] = "sharing.read"
@@ -38,6 +46,7 @@ OPERATION_UPDATE_SCHEDULE_REFRESH: Final[str] = "update.schedule.refresh"
 OPERATION_UPDATE_SKIP: Final[str] = "update.skip"
 OPERATION_UPDATE_DISMISS: Final[str] = "update.dismiss"
 OPERATION_UPDATE_LIVENESS_READ: Final[str] = "update.liveness.read"
+OPERATION_UPDATE_SETTINGS_WRITE: Final[str] = "update.settings.write"
 
 WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_SHARING_READ,
@@ -56,6 +65,7 @@ WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_UPDATE_SKIP,
     OPERATION_UPDATE_DISMISS,
     OPERATION_UPDATE_LIVENESS_READ,
+    OPERATION_UPDATE_SETTINGS_WRITE,
 )
 
 # The codes a workspace route's refusal or failure carries beside its ``detail``, for a caller that acts on it.
@@ -67,6 +77,7 @@ CODE_INVALID_PROFILE: Final[str] = "INVALID_PROFILE"
 CODE_INVALID_TIMEZONE: Final[str] = "INVALID_TIMEZONE"
 CODE_INVALID_CREDENTIALS: Final[str] = "INVALID_CREDENTIALS"
 CODE_SETUP_RUNNING: Final[str] = "SETUP_RUNNING"
+CODE_INVALID_UPDATE_SETTINGS: Final[str] = "INVALID_UPDATE_SETTINGS"
 CODE_WRITE_FAILED: Final[str] = "WRITE_FAILED"
 CODE_NOT_AT_WORKSPACE_ROOT: Final[str] = "NOT_AT_WORKSPACE_ROOT"
 
@@ -97,7 +108,8 @@ class InvalidGrantsError(WorkspaceRouteError):
 
 
 class WorkspaceStatusResponse(FrozenModel):
-    """What the workspace serves: the version of its checkout, and the operations it has a route for."""
+    """What the workspace serves: the version of its checkout, the operations it has a route for, and the
+    compatibility number a client checks before it acts inside the workspace."""
 
     model_config = ConfigDict(serialize_by_alias=True)
 
@@ -107,6 +119,11 @@ class WorkspaceStatusResponse(FrozenModel):
         "nearest minds-v* tag when there is no such merge or the tag is a newer release; '' when it names none"
     )
     operations: tuple[str, ...] = Field(description="The name of every operation this workspace serves a route for")
+    compatibility: int = Field(
+        description="The template's compatibility number, raised only by a change an older client could not work "
+        "with; an answer without it means 1. A client that knows a lower number opens the workspace and runs its "
+        "lifecycle, and does nothing else inside it"
+    )
 
 
 class GrantListModel(FrozenModel):
@@ -135,8 +152,22 @@ class GrantsDocumentModel(FrozenModel):
     )
 
 
+class ShareableApp(FrozenModel):
+    """One app of the workspace that can be shared by itself."""
+
+    name: str = Field(description="The app's registered name, which its grants are keyed by")
+    label: str = Field(
+        description="The app's origin label, the first part of its share address; '' for an app that has none yet"
+    )
+    display_name: str = Field(description="What a person reads for the app; '' when it registered without one")
+    is_system: bool = Field(
+        description="Whether the app is part of the workspace itself rather than built on it, which a sharing panel "
+        "lists apart from the apps it offers up front"
+    )
+
+
 class SharingStateResponse(FrozenModel):
-    """Whether the workspace holds share materials, and its grants."""
+    """Whether the workspace holds share materials, its grants, and the apps that can be shared."""
 
     is_shared: bool = Field(description="Whether share.env exists, the share stack's on-switch")
     grants: GrantsDocumentModel | None = Field(
@@ -145,6 +176,10 @@ class SharingStateResponse(FrozenModel):
     )
     grants_error: str = Field(
         description="'UNREADABLE' when the grants file is there and cannot be read; '' otherwise"
+    )
+    shareable_apps: tuple[ShareableApp, ...] = Field(
+        description="The registered apps that are not internal, in the registry's order: each can be shared by "
+        "itself, and an internal app is reached only through a share of the whole workspace"
     )
 
 
@@ -185,7 +220,10 @@ class ProfileSnapshotRequest(FrozenModel):
 class ProfileWrittenResponse(FrozenModel):
     """What writing the profile snapshot answers."""
 
-    is_written: bool = Field(description="Whether the snapshot was written")
+    is_written: bool = Field(
+        description="Whether the snapshot was written; false when the one stored already equals the one sent apart "
+        "from when it was written, which is then left as it is"
+    )
 
 
 class TimezoneRequest(FrozenModel):
@@ -224,38 +262,82 @@ class BackupVerificationModel(FrozenModel):
     is_enabled: StrictBool = Field(description="Whether backup verification is on")
 
 
-class UpdateStartRequest(FrozenModel):
-    """The values an update started now runs with."""
+class UpdateSettingsModel(FrozenModel):
+    """The update settings a workspace holds: the release channel it follows, and when it arms its own updates."""
 
-    ceiling: str = Field(
-        min_length=1, description="The newest template version the client knows; an update goes no further"
+    channel: str = Field(min_length=1, description="The release channel the workspace follows")
+    feed_base_url: str = Field(
+        description="Where that channel's file is read from (<feed_base_url>/<channel>-web.json); '' on a tier that "
+        "publishes none, where the workspace reads no version"
+    )
+    is_auto_update_enabled: StrictBool = Field(description="Whether the account's workspaces arm their own updates")
+    is_auto_update_enabled_here: StrictBool | None = Field(
+        default=None,
+        description="This workspace's own answer, which wins over the account's; null when it has none",
+    )
+    window_start_hour: StrictInt = Field(
+        ge=0, le=23, description="The hour of the owner's day an armed update may start from"
+    )
+    window_end_hour: StrictInt = Field(
+        ge=0, le=23, description="The hour it may no longer start at; an earlier hour than the start is the next day's"
+    )
+
+
+class UpdateStartRequest(FrozenModel):
+    """The values an update started now runs with. Each one left out is the workspace's own."""
+
+    ceiling: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The newest template version the client knows; an update goes no further. Left out, it is the "
+        "version the workspace's release channel is on, and only a client from before the workspace read that "
+        "itself names one",
     )
     override_ref: str = Field(default="", description="A version the user typed; the target is this, or the ceiling")
-    is_backup_configured: StrictBool = Field(
-        description="Whether the client holds backup credentials for the workspace"
+    is_backup_configured: StrictBool | None = Field(
+        default=None,
+        description="Whether the client holds backup credentials for the workspace. Left out, it is whether the "
+        "workspace holds them",
     )
 
 
 class UpdateScheduleRefreshRequest(FrozenModel):
-    """The client's own values in a schedule: what a refresh rewrites in an armed one."""
+    """The values a refresh rewrites in an armed schedule. Each one left out is rewritten with the workspace's own."""
 
-    ceiling: str = Field(
-        min_length=1, description="The newest template version the client knows; an update goes no further"
+    ceiling: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The newest template version the client knows; an update goes no further. Left out, it is the "
+        "version the workspace's release channel is on, and only a client from before the workspace read that "
+        "itself names one",
     )
-    window_start_minute_utc: StrictInt = Field(
-        ge=0, lt=24 * 60, description="Minutes past UTC midnight the update window opens at"
+    window_start_minute_utc: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        lt=24 * 60,
+        description="Minutes past UTC midnight the update window opens at. Left out with the length, the window is "
+        "the update settings', in the workspace's timezone",
     )
-    window_length_minutes: StrictInt = Field(ge=0, lt=24 * 60, description="How long the window stays open")
-    is_backup_configured: StrictBool = Field(
-        description="Whether the client holds backup credentials for the workspace"
+    window_length_minutes: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        lt=24 * 60,
+        description="How long the window stays open; given with the start or not at all",
+    )
+    is_backup_configured: StrictBool | None = Field(
+        default=None,
+        description="Whether the client holds backup credentials for the workspace. Left out, it is whether the "
+        "workspace holds them",
     )
 
 
 class UpdateScheduleRequest(UpdateScheduleRefreshRequest):
-    """Everything a schedule is armed with."""
+    """Everything a schedule is armed with. A value left out is the workspace's own, which it then keeps current."""
 
     override_ref: str = Field(default="", description="A version the user typed; the target is this, or the ceiling")
-    is_auto_armed: StrictBool = Field(description="Whether the client armed the schedule by itself")
+    is_auto_armed: StrictBool = Field(
+        default=False, description="Whether the client armed the schedule by itself, rather than the user"
+    )
 
 
 class UpdateSkipRequest(FrozenModel):
@@ -283,6 +365,8 @@ class UpdateOutcomeResponse(FrozenModel):
 
     ``outcome`` is one of ``STARTING``, ``CREATED``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``,
     ``CHAT_APP_UNREACHABLE``, ``CREATE_FAILED``, ``NO_CRON`` and ``TOO_OLD_TO_UPDATE``; a later template may add one.
+    A request that left its version or its window to the workspace may also be answered ``NO_CHANNEL_VERSION`` (the
+    workspace has read no version for its release channel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).
     """
 
     outcome: str = Field(description="What the request came to")
@@ -315,9 +399,32 @@ class UpdateStartAttempt(FrozenModel):
     finished_at: float | None = Field(default=None, description="When it ended; null while it runs")
 
 
+class UpdateChannelVersion(FrozenModel):
+    """The version the workspace's release channel is on, as the workspace last read it off the feed."""
+
+    channel: str = Field(description="The channel that was read")
+    template_ref: str = Field(description="The version the channel's file named; '' when no read has succeeded")
+    read_at: float | None = Field(
+        default=None, description="When that version was read, seconds since the epoch; null when none was"
+    )
+    checked_at: float | None = Field(
+        default=None, description="When the channel's file was last asked for, whether or not it could be read"
+    )
+    error: str = Field(
+        default="", description="Why the last read failed; '' when it succeeded. A failed read keeps the last version"
+    )
+
+
 class UpdateStateResponse(FrozenModel):
     """Everything a client reads about the workspace's updates. The files are answered as they are on disk."""
 
+    settings: UpdateSettingsModel | None = Field(
+        description="The update settings the workspace holds; null when no client has written any"
+    )
+    channel_version: UpdateChannelVersion | None = Field(
+        description="The version the settings' channel is on, as the workspace last read it; null when it has read "
+        "nothing for that channel. The workspace reads it at most once an hour, and this read does not"
+    )
     schedule: dict[str, object] | None = Field(description="The armed schedule's file; null when none is armed")
     run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
     last_dispatch: dict[str, object] | None = Field(description="The record of the update chat last created")
