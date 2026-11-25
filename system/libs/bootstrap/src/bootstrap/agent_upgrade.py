@@ -154,7 +154,8 @@ def _decoded_output(output: bytes | str | None) -> str:
 
 
 def _list_agent_states(mngr_binary: Path) -> tuple[dict[str, str], bool]:
-    """Each local agent's state by id, from whatever ``mngr list`` listed, and whether it listed every agent."""
+    """Each local agent's state by id, from whatever ``mngr list`` listed, and whether it listed every agent and
+    printed nothing else."""
     returncode, stdout, stderr = _run_mngr(
         mngr_binary, MNGR_LIST_AGENT_STATES_ARGV, _MNGR_LIST_TIMEOUT_SECONDS
     )
@@ -162,11 +163,18 @@ def _list_agent_states(mngr_binary: Path) -> tuple[dict[str, str], bool]:
         return {}, False
     if returncode != 0:
         logger.warning("mngr list exited {}: {}", returncode, stderr.strip()[-500:])
-    rows = (
-        [column.strip() for column in line.split(_MNGR_LIST_FIELD_SEPARATOR)]
-        for line in stdout.splitlines()
-    )
-    return {row[0]: row[1] for row in rows if len(row) == 2 and row[0]}, returncode == 0
+    states: dict[str, str] = {}
+    is_every_line_a_row = True
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        row = [column.strip() for column in line.split(_MNGR_LIST_FIELD_SEPARATOR)]
+        if len(row) == 2 and all(row):
+            states[row[0]] = row[1]
+        else:
+            logger.warning("mngr list printed a line that is not an agent: {}", line)
+            is_every_line_a_row = False
+    return states, returncode == 0 and is_every_line_a_row
 
 
 def _log_upgrade_outcomes(stdout: str) -> set[str]:

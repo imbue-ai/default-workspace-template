@@ -44,8 +44,9 @@ service.
    `data/.state/agent_upgrade/coverage.json` names the mngr that last left every
    agent current, as the commit each of its installed packages (mngr and its
    plugins) came from, read from their `direct_url.json` in the venv. A pass
-   writes it only when the listing succeeded, every agent but the one running the
-   pass (`MNGR_AGENT_ID`, the services agent at boot) read `STOPPED`, and
+   writes it only when the listing succeeded (exit 0, every line an `id|state`
+   row), every agent but the one running the pass (`MNGR_AGENT_ID`, the services
+   agent at boot) read `STOPPED`, and
    `mngr upgrade` (run with `--format jsonl`) reported each of those upgraded or
    current, or skipped as one its harness has no upgrade for (an `UNSUPPORTED`
    skip, which no later pass would change); a failure, a timeout or any other skip

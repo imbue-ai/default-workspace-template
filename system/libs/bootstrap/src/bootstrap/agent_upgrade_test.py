@@ -555,12 +555,37 @@ def test_a_listing_that_exits_non_zero_writes_no_record(
     # An agent the listing could not read may be running, or may be stale.
     stub = _stub_in_workspace(monkeypatch, tmp_path, "")
     stub.reply_on["list"] = (1, "agent-a|STOPPED\n")
+    stub.reply_on["upgrade"] = (0, _upgraded("agent-a"))
     install_mngr(WORKSPACE_VENV, "c0ffee")
 
     upgrade_stopped_agents()
 
     assert stub.calls[1:] == [_upgrade_argv("agent-a")]
     assert not COVERAGE_RECORD.exists()
+
+
+@pytest.mark.parametrize(
+    "stray_line",
+    ["agent-b\tSTOPPED", "agent-b|", "|STOPPED", "agent-b|STOPPED|extra"],
+    ids=["another-separator", "no-state", "no-id", "three-columns"],
+)
+def test_a_listing_with_a_line_that_is_not_an_agent_writes_no_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stray_line: str
+) -> None:
+    # A listing format that changed under a pin bump could hide every agent behind rows the pass cannot read.
+    stub = _stub_in_workspace(monkeypatch, tmp_path, f"agent-a|STOPPED\n{stray_line}\n")
+    stub.reply_on["upgrade"] = (0, _upgraded("agent-a"))
+    install_mngr(WORKSPACE_VENV, "c0ffee")
+
+    with _captured_log_lines("WARNING") as warnings:
+        upgrade_stopped_agents()
+
+    assert stub.calls[1:] == [_upgrade_argv("agent-a")]
+    assert not COVERAGE_RECORD.exists()
+    assert any(
+        f"mngr list printed a line that is not an agent: {stray_line}" in line
+        for line in warnings
+    )
 
 
 def test_another_mngrs_record_is_gone_before_any_agent_is_touched(
