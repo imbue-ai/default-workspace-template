@@ -4,6 +4,7 @@ of them the reaper ends, over a fleet whose tokens, lease and clock are real (th
 import os
 from pathlib import Path
 
+from imbue.imbue_common.model_update import to_update
 from mock_cli_sessions_test import RecordingCliSessions
 from screen.browser_fleet import Browser
 from screen.cdp_proxy import ProxyServer
@@ -94,7 +95,11 @@ def test_every_session_of_a_stopped_or_unknown_browser_is_ended(tmp_path: Path) 
     harness.stack_up()
     browser = harness.running_browser()
     current = _session("browser-1", _attach(harness, browser), harness.proxy_server, pid=401)
-    elsewhere = current.model_copy(update={"pid": 402, "session_name": "other", "browser_name": "browser-9"})
+    elsewhere = current.model_copy_update(
+        to_update(current.field_ref().pid, 402),
+        to_update(current.field_ref().session_name, "other"),
+        to_update(current.field_ref().browser_name, "browser-9"),
+    )
     sessions = RecordingCliSessions(running=[current, elsewhere])
     harness.fleet.stop_browser(browser.name)
     ended = _reaper(harness, sessions).sweep()
