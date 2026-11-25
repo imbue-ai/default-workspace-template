@@ -915,13 +915,7 @@ def stoppable_app_candidates(
     listed: a stopped one frees nothing, and a registry row naming a program supervisord does not
     have at all (a stale row outlives the drop-in that ran it) could not be started again.
     """
-    critical_programs = {
-        app["program"]
-        for app in apps
-        if app.get("critical")
-        and isinstance(app.get("program"), str)
-        and app["program"]
-    }
+    critical_programs = _critical_programs(apps)
     candidates: list[AppCandidate] = []
     for app in apps:
         name = app.get("name")
@@ -952,6 +946,16 @@ def stoppable_app_candidates(
     return sorted(candidates, key=lambda c: _memory_order(c.anonymous_kib))
 
 
+def _critical_programs(apps: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        app["program"]
+        for app in apps
+        if app.get("critical")
+        and isinstance(app.get("program"), str)
+        and app["program"]
+    }
+
+
 def held_programs(
     apps: Sequence[Mapping[str, Any]],
     candidates: Sequence[AppCandidate],
@@ -963,11 +967,7 @@ def held_programs(
 
     The Screen's service launches the browser's Chromium processes as its children, so its row
     leaves them out: the browser section holds them."""
-    critical_programs = {
-        app["program"]
-        for app in apps
-        if app.get("critical") and isinstance(app.get("program"), str)
-    }
+    critical_programs = _critical_programs(apps)
     screen_programs = {
         app["program"]
         for app in apps
