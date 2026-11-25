@@ -702,6 +702,17 @@ def _generated_image_output(
     ]
 
 
+def _yielded_output(cell_id: str) -> list[dict[str, Any]]:
+    """An ``exec`` result whose program is still running in cell ``cell_id``."""
+    return [
+        {"type": "input_text", "text": f"Script running with cell ID {cell_id}\nWall time 120.0 seconds\nOutput:\n"}
+    ]
+
+
+def _viewed_image_output() -> list[dict[str, Any]]:
+    return [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
+
+
 _IMAGEGEN_PROGRAM = (
     '// @exec: {"yield_time_ms": 120000}\n'
     'const result = await tools.image_gen__imagegen({prompt:"a red bicycle"}); generatedImage(result);\n'
@@ -742,12 +753,11 @@ def test_a_viewed_image_is_counted_but_not_marked_generated() -> None:
 
 def test_a_generation_that_outlives_its_yield_window_is_marked_on_the_wait_that_returns_it() -> None:
     """The exec yields with no image; the image arrives on the ``wait`` for that cell."""
-    yielded = [{"type": "input_text", "text": "Script running with cell ID 7\nWall time 120.0 seconds\nOutput:\n"}]
     results = _tool_results(
         _parse_all(
             [
                 _exec_call_line("c1", _IMAGEGEN_PROGRAM),
-                _result_line("c1", yielded),
+                _result_line("c1", _yielded_output("7")),
                 _wait_call_line("w1", "7"),
                 _result_line("w1", _generated_image_output(), payload_type="function_call_output"),
             ]
@@ -759,15 +769,13 @@ def test_a_generation_that_outlives_its_yield_window_is_marked_on_the_wait_that_
 
 
 def test_a_wait_on_a_cell_that_only_viewed_an_image_is_not_marked_generated() -> None:
-    yielded = [{"type": "input_text", "text": "Script running with cell ID 8\n"}]
-    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
     results = _tool_results(
         _parse_all(
             [
                 _exec_call_line("c1", _VIEW_IMAGE_PROGRAM),
-                _result_line("c1", yielded),
+                _result_line("c1", _yielded_output("8")),
                 _wait_call_line("w1", "8"),
-                _result_line("w1", viewed, payload_type="function_call_output"),
+                _result_line("w1", _viewed_image_output(), payload_type="function_call_output"),
             ]
         )
     )
@@ -807,19 +815,17 @@ def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> 
 
 def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_its_number() -> None:
     """codex numbers cells afresh after a restart, so cell 3 can return for a program that only views an image."""
-    yielded = [{"type": "input_text", "text": "Script running with cell ID 3\n"}]
-    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
     results = _tool_results(
         _parse_all(
             [
                 _exec_call_line("c1", _IMAGEGEN_PROGRAM),
-                _result_line("c1", yielded),
+                _result_line("c1", _yielded_output("3")),
                 _wait_call_line("w1", "3"),
                 _result_line("w1", _generated_image_output(), payload_type="function_call_output"),
                 _exec_call_line("c2", _VIEW_IMAGE_PROGRAM),
-                _result_line("c2", yielded),
+                _result_line("c2", _yielded_output("3")),
                 _wait_call_line("w2", "3"),
-                _result_line("w2", viewed, payload_type="function_call_output"),
+                _result_line("w2", _viewed_image_output(), payload_type="function_call_output"),
             ]
         )
     )
@@ -830,17 +836,15 @@ def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_it
 
 def test_a_generation_cut_off_by_a_restart_does_not_mark_a_later_program_that_reuses_its_cell() -> None:
     """The generating program never ends on the record, so its cell is forgotten when another program yields it."""
-    yielded = [{"type": "input_text", "text": "Script running with cell ID 3\n"}]
-    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
     results = _tool_results(
         _parse_all(
             [
                 _exec_call_line("c1", _IMAGEGEN_PROGRAM),
-                _result_line("c1", yielded),
+                _result_line("c1", _yielded_output("3")),
                 _exec_call_line("c2", _VIEW_IMAGE_PROGRAM),
-                _result_line("c2", yielded),
+                _result_line("c2", _yielded_output("3")),
                 _wait_call_line("w2", "3"),
-                _result_line("w2", viewed, payload_type="function_call_output"),
+                _result_line("w2", _viewed_image_output(), payload_type="function_call_output"),
             ]
         )
     )
