@@ -1,6 +1,6 @@
 ---
 name: datalib
-description: Search and mirror the user's own personal data (chat history, Slack, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
+description: Search and mirror the user's own personal data (chat history, Slack, Linear, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 160 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
 metadata:
   author: imbue
@@ -10,17 +10,23 @@ metadata:
 
 ## Instructions
 
+<!-- dark-launch -->
 **datalib is not announced to users yet.** It ships in every workspace so it
 can be tried without adopting a template, but a user should not come across it
 by accident. Use this skill only when the user's own message says "datalib".
 A question about their history that does not name it ("find the email
 where...") is not a reason to use it, to offer it, or to mention it.
 
+<!-- /dark-launch -->
 datalib (the `datalib-*` binaries) mirrors the user's personal data out of the
-services they use -- Slack, email, GitHub, Notion, chat exports, and more -- into
-a single local store you can search. Once the user has asked for datalib, this
-is where you look for their history; do **not** scrape or re-download the
-original services yourself.
+services they use -- Slack, Linear, email, GitHub, Notion, chat exports, and
+more -- into a single local store you can search and query. It is where you
+look for the user's history ("what did I say to X about Y?", "find the email
+where..."), and where a copy of a service the user wants kept up to date
+lives. Do **not** scrape or re-download the original services yourself for a
+source datalib covers: its syncs are incremental, resumable and paced against
+the services' rate limits, and a script written against the raw API is none of
+those.
 
 The skill's folder, `data/.skills/datalib` (relative to the workspace root),
 is a **libraries folder** laid out like the desktop app's `~/Datalib`: one
@@ -28,21 +34,24 @@ folder per library. The library this workspace uses is `Default`, so the
 **data root** is `data/.skills/datalib/Default`, and the store's config file
 is `config.toml` inside it. `data/` is the workspace's own data tree on the
 persistent volume, so the store survives restarts. The binaries live in
-`~/.local/bin`, which is not on PATH for every shell, so establish all of
-this once at the top of your shell work:
+`/home/user/.local/bin`, which is not on PATH for every shell. The paths
+below are spelled out from the workspace's home, `/home/user`, not from
+`$HOME`: an agent's shell has `HOME=/root`, which is not the home the
+workspace and the Datalib app live under. Establish all of this once at the
+top of your shell work:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holding the store
+export PATH="/home/user/.local/bin:$PATH"
+DATA_ROOT="/home/user/workspace/data/.skills/datalib/Default"   # the data root holding the store
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
-# binaries (pinned to datalib v0.55.0), datalib's agent guide, and the Node
+# binaries (pinned to datalib v0.56.0), datalib's agent guide, and the Node
 # runtime a sync shells out to, about 160 MB together on the first run, then
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
 # running, so run it every time:
-bash "$HOME/workspace/.agents/skills/datalib/scripts/install_datalib.sh"
+bash /home/user/workspace/.agents/skills/datalib/scripts/install_datalib.sh
 mkdir -p "$DATA_ROOT"
 ```
 
@@ -73,20 +82,43 @@ mkdir -p "$DATA_ROOT"
    every source. With no chat to be woken in (`MINDS_CHAT_ID` and
    `MNGR_AGENT_ID` both unset), run the `wait` command directly instead.
 
-   `datalib-dag <config> --sync <step>` from the agent guide does the same
+   `datalib-pipeline sync <data_root> <step>` from the agent guide does the same
    sync and blocks until it ends, printing progress as it goes. Use it for a
    refresh you expect to take seconds, or when you need that progress output
    to diagnose a failure. It runs alongside the app's server on the same root
    without conflict; never start a second `datalib-http` on this root, though
    -- the running one holds the root's `system/` lock.
-3. **Credentials go through latchkey.** The web-API sources authenticate via
+3. **Read how a sync ended before answering from it.** A request that ended
+   `failed` left part of the mirror unfinished: a conversation a transient
+   error interrupted stays missing until the next sync completes it. Run the
+   sync again before building anything on the store, and say what was
+   finished late if the user has already seen an answer from it. The
+   problems the Manage screen lists name the conversations concerned.
+4. **Size the copy to the data, not to the question.** A source's `since`
+   bounds what the mirror holds, and anything older is never read, so a
+   thread older than `since` that gains a reply is invisible. Set `since` to
+   how far back the user wants the copy to go; narrow the *question* with a
+   query over the store, not the copy with `since`. A copy the user will ask
+   you to refresh on demand should also set `refresh_every_minutes = 0` in
+   the source's method table, so every sync re-reads the recent window for
+   edits and deletions; the default re-reads it at most once an hour, and
+   two refreshes less than an hour apart otherwise leave an edit made
+   between them unseen. Every source's knobs, with their defaults, are in
+   `datalib-step examples <type>`.
+5. **Credentials go through latchkey.** The web-API sources authenticate via
    `latchkey`, already wired to the user through the Imbue Studio app. If a sync
    reports missing credentials or "not permitted", file a permission request
    for that service, then re-run the sync (see "Authorizing a source").
-4. **Never commit the store.** Everything under `data/` is gitignored by the
+6. **Never commit the store.** Everything under `data/` is gitignored by the
    workspace, which is why the store lives there. Don't try to force it into
    git, and don't copy it anywhere that is tracked.
-5. **The Datalib app is the user's way in; open it for them.** datalib's own
+7. **Query with SQL when the question is mechanical.** A source's raw store is
+   `$DATA_ROOT/<source id>/ingest/entities.doltlite_db`, and `datalib-doltlite`
+   is a `sqlite3` shell that reads it: `datalib-doltlite -readonly <file>
+   "<sql>"`. The `ingest` step alone is enough to answer from SQL; the render
+   and search steps are for reading and for full-text search. What each
+   store holds is in `datalib-step help raw-stores` (below).
+8. **The Datalib app is the user's way in; open it for them.** datalib's own
    web UI -- the Manage screen (every configured source and its sync state)
    and the Add/Edit source wizard -- runs as the supervised `datalib` app
    (started above) over this same store, so a source the user adds there is one you can search, and
@@ -101,7 +133,7 @@ mkdir -p "$DATA_ROOT"
    missing from the launcher, `supervisorctl status datalib` says why: `STOPPED`
    means it was never started (start it as above), and one that keeps
    exiting is missing its binary (run the install script above).
-6. **The API is reachable with the bearer token.** The same server answers
+9. **The API is reachable with the bearer token.** The same server answers
    `http://127.0.0.1:8731` from inside the workspace, and every route needs
    the token it publishes at `$DATA_ROOT/system/api-token` (stable across
    restarts of the app):
@@ -113,13 +145,13 @@ mkdir -p "$DATA_ROOT"
 
    Which endpoints exist, and what the search query language looks like, is
    datalib's own surface -- read the agent guide below rather than guessing.
-7. **The store rides the workspace backup.** `data/` is covered by the encrypted
-   host backup. That is fine for a modest mirror, but the store is large and
-   fully rebuildable by re-syncing, so if it grows enough to bloat snapshots,
-   add `**/data/.skills/datalib` to the `excludes` list in
-   `data/system/backup.toml` -- copying the service's default patterns in
-   alongside it, since a list in that file *replaces* the defaults rather than
-   adding to them (see `system/services/host_backup/README.md`).
+10. **The store rides the workspace backup.** `data/` is covered by the encrypted
+    host backup. That is fine for a modest mirror, but the store is large and
+    fully rebuildable by re-syncing, so if it grows enough to bloat snapshots,
+    add `**/data/.skills/datalib` to the `excludes` list in
+    `data/system/backup.toml` -- copying the service's default patterns in
+    alongside it, since a list in that file *replaces* the defaults rather than
+    adding to them (see `system/services/host_backup/README.md`).
 
 ## Driving datalib: start at `datalib-step help`
 
@@ -130,7 +162,7 @@ page. **Run this before doing any datalib work:**
 datalib-step help
 ```
 
-It prints the steps that set a source up from the shell (`datalib-dag init`,
+It prints the steps that set a source up from the shell (`datalib-pipeline init`,
 `datalib-step examples <type> --append`, a probe, a sync, a search), then an
 index of every other page. Those pages print from the installed binary, so
 they always match the tools you have:
@@ -148,7 +180,7 @@ they always match the tools you have:
 The install script also saved the agent guide as a file beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.55.0/docs/agent_user.md"
+cat /home/user/.local/share/datalib/v0.56.0/docs/agent_user.md
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -156,20 +188,20 @@ the tools you have. Two docs it links are saved with it, at the same relative
 paths: `user/getting_your_data.md` (each source's setup) and
 `user/config_examples/all_sources.toml` (a config naming every source). Its
 other relative links resolve against
-`https://github.com/imbue-ai/datalib/blob/v0.55.0/docs/`, and that is also
+`https://github.com/imbue-ai/datalib/blob/v0.56.0/docs/`, and that is also
 where to read the guide if the local copy is missing. Don't rely on remembered
 command lines or config shapes -- go read it.
 
 ## Authorizing a source
 
-The web-API sources (Slack, GitHub, Notion, ...) need the user's credentials,
-which flow through the same `latchkey` gateway used elsewhere. If a sync fails
-for a source with a missing-credentials or "request not permitted by the user"
-error, request access the way the `connect-external-service` skill's
-`references/latchkey.md` describes ("Ask for user permission"): POST a
+The web-API sources (Slack, Linear, GitHub, Notion, ...) need the user's
+credentials, which flow through the same `latchkey` gateway used elsewhere. If
+a sync fails for a source with a missing-credentials or "request not permitted
+by the user" error, request access the way the `connect-external-service`
+skill's `references/latchkey.md` describes ("Ask for user permission"): POST a
 `predefined` permission request for that service's scope (e.g. `slack-api`,
-`github-api`, `notion-api`), wait for the user's approval, then re-run
-`datalib-dag`. If datalib's own error hint says to run `latchkey auth set`,
+`linear-api`, `github-api`, `notion-api`), wait for the user's approval, then
+re-run the sync. If datalib's own error hint says to run `latchkey auth set`,
 ignore it: the gateway refuses that command here, and the permission request
 is what works.
 
@@ -178,11 +210,13 @@ is what works.
 A source is a `[[groups]]` entry with a `type`, and its ingest step names
 the method as a params table: `[steps.params.api]` for a service, or
 `[steps.params.export]` / `[steps.params.mbox]` for files on disk. Reliable through the Imbue Studio
-latchkey gateway: **Slack** (`type = "slack"`), **GitHub** (`github`),
-**Notion** (`notion`), and **email** (`email` -- a Google Takeout `.mbox`
-on disk, Gmail over Google's API, or a JMAP server). Gmail can also start
-from a Takeout of the same account: give its ingest step both tables, and
-it downloads only the mail newer than the Takeout.
+latchkey gateway: **Slack** (`type = "slack"`), **Linear** (`linear`),
+**GitHub** (`github`), **Notion** (`notion`), and **email** (`email` -- a
+Google Takeout `.mbox` on disk, Gmail over Google's API, or a JMAP server).
+Linear is download-only: its ingest step copies the workspace as raw JSON
+tables and there is no render step. Gmail can also start from a Takeout of
+the same account: give its ingest step both tables, and it downloads only the
+mail newer than the Takeout.
 
 Cloudflare-walled web sources -- `claude` over claude.ai's `api` method,
 and `chatgpt` -- also work, given a recent Imbue Studio app. Two things have

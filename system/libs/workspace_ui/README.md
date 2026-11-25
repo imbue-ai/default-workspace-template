@@ -3,11 +3,12 @@
 The workspace frontends' shared JavaScript library: what the shell
 (`system/apps/system_interface/frontend`), the chat page
 (`system/apps/chat/frontend`), the Getting Started page
-(`system/apps/getting_started/frontend`), Files
+(`system/apps/getting_started/frontend`), the Onboarding checklist
+(`system/apps/onboarding_checklist/frontend`), Files
 (`system/apps/files/frontend`), and Routines
 (`system/apps/routines/frontend`) have in common. Source only: there is
 no build here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the six packages are one npm
+(`@imbue/workspace-ui/src/<module>`), and the packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the
@@ -17,7 +18,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   them.
 - `src/components/`: the shared Mithril recipes (Button, Modal, NoticeDialog,
   the Menu, the Dropdown that picks a value, the SegmentedControl, icons,
-  badges, tooltips, toasts, the modal backdrop); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
+  badges, tooltips, toasts, the modal backdrop, and the coach mark, a bubble
+  with an arrow and a "Got it" button that points at one control of the page
+  that draws it); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
   `menu-position.ts` (the pure geometry the Menu and the Dropdown place
   themselves with).
 - `src/base-path.ts`, `src/origin.ts`, and
@@ -73,6 +76,10 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   on the `shell:keybindings-changed` message of `src/app_contract.ts`; its
   contract test holds the named-key vocabulary to the desktop's (the vendored
   `workspace_profile_contract.json`).
+- `src/onboarding_pointers.ts`: the words of the two onboarding pointers more
+  than one app shows (building an app, connecting some data), which the chat's
+  new-chat suggestions and the onboarding checklist both send, so they are
+  written once.
 - `src/download.ts`: `startDownload`, how the workspace's own pages download a
   file of their own origin: by loading it in a hidden frame rather than through
   a `download` link, whose request the browser sends without the workspace's

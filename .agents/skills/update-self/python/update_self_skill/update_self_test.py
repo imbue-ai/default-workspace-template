@@ -2492,6 +2492,7 @@ def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
         "system/apps/routines/frontend/src/views/App.ts",
         "system/apps/routines/frontend/index.html",
         "system/apps/style_guide/frontend/src/views/StyleGuidePage.ts",
+        "system/apps/onboarding_checklist/frontend/src/views/ChecklistPage.ts",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2511,6 +2512,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/apps/files/frontend/package.json",
         "system/apps/routines/frontend/package.json",
         "system/apps/style_guide/frontend/package.json",
+        "system/apps/onboarding_checklist/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )

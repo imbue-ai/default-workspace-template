@@ -240,6 +240,17 @@ def test_queued_command_reconciles_alongside_normal_turns() -> None:
     assert events[2]["content"] == "actually do gmail instead"
 
 
+def test_only_a_queued_command_is_marked_delivered_mid_turn() -> None:
+    """The chat shows everything the agent says after a message it took into a running turn."""
+    lines = [
+        _make_user_line("uuid-1", "2026-01-01T00:00:00Z", "fetch my slack unreads"),
+        _make_queued_command_line("uuid-2", "2026-01-01T00:00:01Z", "which channel is busiest?"),
+    ]
+    events = parse_lines(lines)
+    assert "delivered_mid_turn" not in events[0]
+    assert events[1]["delivered_mid_turn"] is True
+
+
 def test_queued_task_notification_attachment_not_emitted() -> None:
     """Background-task notices (commandMode=task-notification) are not user turns."""
     lines = [

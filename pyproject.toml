@@ -17,6 +17,7 @@ dependencies = [
     "chat",
     "files-app",
     "getting-started",
+    "onboarding-checklist",
     "routines-app",
     "screen",
     "style-guide-app",
@@ -27,6 +28,8 @@ dependencies = [
     # The scripts that read the chat's background task markers reach this library through
     # sys.path; the tests of those scripts, run from the root venv, import it directly.
     "chat-background-tasks",
+    # The build-app skill's scaffolder, run from the root venv, sets a marker through this library.
+    "onboarding-activity",
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
@@ -143,6 +146,7 @@ members = [
     "system/libs/github_sync",
     "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
+    "system/libs/onboarding_activity",
     "system/libs/pytest_executable_tmp",
     "system/libs/pytest_workspace_env",
     "system/libs/routines",
@@ -159,6 +163,7 @@ members = [
     "system/apps/chat",
     "system/apps/files",
     "system/apps/getting_started",
+    "system/apps/onboarding_checklist",
     "system/apps/routines",
     "system/apps/screen",
     "system/apps/style_guide",
@@ -181,6 +186,7 @@ pytest-executable-tmp = { workspace = true }
 pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
+onboarding-activity = { workspace = true }
 share-grants = { workspace = true }
 event-streams = { workspace = true }
 oom-priority = { workspace = true }
@@ -197,6 +203,7 @@ disk-headroom = { workspace = true }
 chat = { workspace = true }
 files-app = { workspace = true }
 getting-started = { workspace = true }
+onboarding-checklist = { workspace = true }
 routines-app = { workspace = true }
 screen = { workspace = true }
 style-guide-app = { workspace = true }
@@ -207,16 +214,16 @@ terminal-app = { workspace = true }
 workspace-scripts = { workspace = true }
 agents-shared = { workspace = true }
 update-self-skill = { workspace = true }
-imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/imbue_common" }
-imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr" }
-imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_claude" }
-imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_codex" }
-imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_pi_coding" }
-imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_opencode" }
-imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_antigravity" }
-imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_autocompact" }
-concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/concurrency_group" }
-imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "6cc7541c8c50addbdc0b16a8c586c50479deda50", subdirectory = "libs/mngr_ttyd" }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/imbue_common" }
+imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr" }
+imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_claude" }
+imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_codex" }
+imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_pi_coding" }
+imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_opencode" }
+imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_autocompact" }
+concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "65093d119f2572bd8983593546061cca320093ee", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]

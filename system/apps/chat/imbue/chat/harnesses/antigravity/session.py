@@ -11,7 +11,6 @@ delivers it when no turn is open. See :meth:`send` and
 **The model chip.** See :meth:`switch_options`.
 """
 
-import threading
 from datetime import datetime
 from datetime import timezone
 
@@ -24,7 +23,6 @@ from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import match_option
 from imbue.chat.harnesses.model import read_model_identity
-from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
@@ -36,11 +34,10 @@ class AntigravityHarnessSession(FileHarnessSession):
     @classmethod
     def build(cls, deps: SessionDeps) -> "AntigravityHarnessSession":
         # Declared so the subclass is the STATIC type too; the base already constructs via
-        # ``cls``, so this only narrows the annotation (same as CodexHarnessSession).
+        # ``cls``, so this only narrows the annotation (same as CodexHarnessSession). The fields
+        # come from the base's own initializer, so every one its methods read is set.
         self = cls.__new__(cls)
-        self._deps = deps
-        self._sending = SendingRegistry.build()
-        self._sending_lock = threading.Lock()
+        self._init_file_session(deps)
         return self
 
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:

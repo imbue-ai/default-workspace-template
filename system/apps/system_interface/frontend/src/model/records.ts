@@ -203,6 +203,8 @@ export interface AppRecord {
   readonly label: string;
   readonly url: string;
   readonly internal: boolean;
+  /** Whether the app is part of the workspace itself rather than one built on it. */
+  readonly system: boolean;
   readonly program: string;
   readonly critical: boolean;
   /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
@@ -285,10 +287,11 @@ export interface ClientArrival {
 }
 
 /** One app's part of the answer to a message every app took (contracts.md section 5.6), as far as a page reads it:
- *  for a page shown, whether the client has only pop-outs open, so the page waits on its desktop for a desktop
- *  window (false for a posted message). */
+ *  for a page shown, the window that shows it, and whether the client has only pop-outs open, so the page waits
+ *  on its desktop for a desktop window (null and false for a posted message). */
 export interface MessageDelivery {
   readonly app: string;
+  readonly window_id: string | null;
   readonly has_no_desktop_window: boolean;
 }
 
@@ -643,6 +646,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     label: typeof record.label === "string" ? record.label : "",
     url: asString(record.url, "app.url"),
     internal: record.internal === true,
+    system: record.system === true,
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,
@@ -795,6 +799,7 @@ function parseMessageDelivery(raw: unknown): MessageDelivery {
   const record = asObject(raw, "message delivery");
   return {
     app: asString(record.app, "message delivery.app"),
+    window_id: typeof record.window_id === "string" && record.window_id !== "" ? record.window_id : null,
     has_no_desktop_window: asBoolean(record.has_no_desktop_window ?? false, "message delivery.has_no_desktop_window"),
   };
 }

@@ -744,6 +744,7 @@ icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
 uses_microphone = true
+seeds_shortcuts = false
 system = true
 priority = "files"
 launcher_rank = 20
@@ -840,6 +841,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
     assert row["uses_microphone"] is True
+    assert row["seeds_shortcuts"] is False
     assert row["system"] is True
     assert row["priority"] == "files"
     assert row["program"] == "files"
@@ -1140,6 +1142,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "instances_url",
         "stop_when_no_windows",
         "uses_microphone",
+        "seeds_shortcuts",
         "system",
         "default_shortcut",
         "default_shortcuts",

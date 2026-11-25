@@ -23,12 +23,21 @@ from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.manifest import load_manifest
+from app_manifest.registry_location import registry_path
+from app_manifest.user_apps import has_user_built_app
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import mark
+from onboarding_checklist.items import read_checklist_items
+from onboarding_checklist.server import STATIC_DIR as CHECKLIST_STATIC_DIRECTORY
+from onboarding_checklist.server import create_app as create_checklist_app
 from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
@@ -47,16 +56,26 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.first_run import finish_provider_step
+from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
+from imbue.chat.first_run_tree import START_IDEAS_LABEL
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.registry import get_model_state_path
+from imbue.chat.main import install_suggestion_generator
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import HookedSendMngrMessenger
+from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
@@ -79,6 +98,7 @@ from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
+from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
@@ -103,6 +123,9 @@ pytestmark = [
 ]
 
 _TRIGGER_TIMEOUT_MS = 20000
+
+# imbue/chat/test_e2e.py -> the template's root.
+_TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
 
 # The default desktop every shell starts with, where the chat's seeded shortcut and every window here live.
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
@@ -425,6 +448,578 @@ def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Pa
     expect(send_button).to_be_enabled()
 
 
+def _set_fixture_agent(server: RunningWorkspace, agent_state: str, activity_state: ActivityState) -> None:
+    """Put the fixture chat's agent in a state, and tell the pages."""
+    manager = server.chat_state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+    seed_agent_state(
+        manager,
+        FIXTURE_AGENT_ID,
+        name=agent.name,
+        state=agent_state,
+        labels=agent.labels,
+        activity_state=activity_state,
+    )
+    manager._broadcast_chats_updated()
+
+
+def _offer_fixed_suggestions(server: RunningWorkspace, labels: Sequence[str]) -> str:
+    """Store a set of the chat app's own under the fixture chat's last reply, and tell the pages: its pills show at
+    once. Return that reply's event id."""
+    state = server.chat_state
+    chat_id = ChatId(FIXTURE_AGENT_ID)
+    events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
+    reply_event_id = [event["event_id"] for event in events if event["type"] == "assistant_message"][-1]
+    state.agent_manager.suggestion_store.write(
+        chat_id,
+        ChatSuggestions(
+            after_event_id=reply_event_id,
+            source=SuggestionSource.FIXED,
+            suggestions=tuple(
+                Suggestion(suggestion_id=f"start-{index}", label=label) for index, label in enumerate(labels)
+            ),
+        ),
+    )
+    state.broadcaster.broadcast_suggestions_updated(chat_id)
+    return reply_event_id
+
+
+def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) -> None:
+    """One pill to a row, all as wide as the widest, their right edge 16px in from the column's."""
+    boxes = [_box(pills.nth(index)) for index in range(pills.count())]
+    assert len(boxes) > 1
+    column_box = _box(column)
+    for upper, lower in zip(boxes, boxes[1:], strict=False):
+        assert lower["top"] >= upper["bottom"], "each pill has a row of its own"
+    assert max(box["right"] - box["left"] for box in boxes) - min(box["right"] - box["left"] for box in boxes) < 1
+    for box in boxes:
+        assert abs(column_box["right"] - 16 - box["right"]) < 1, "the pills are set in 16px from the column's edge"
+        assert box["left"] > column_box["left"] + (column_box["right"] - column_box["left"]) / 3, (
+            "the pills sit on the user's side of the column"
+        )
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_the_reply_once_answered(
+    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+) -> None:
+    """The line above the composer keeps its height, so a set that arrives moves nothing. The chat app's own set
+    shows at once, as a list on the user's side; a model's waits behind "See N suggestions". Once the reply is
+    answered its set is the same line in the transcript, hidden, and a pill clicked there is sent."""
+    state = e2e_server.chat_state
+    manager = state.agent_manager
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    chat_id = ChatId(FIXTURE_AGENT_ID)
+
+    def set_agent(agent_state: str, activity_state: ActivityState) -> None:
+        _set_fixture_agent(e2e_server, agent_state, activity_state)
+
+    set_agent("WAITING", ActivityState.IDLE)
+    generated_labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "No"]
+    answer = "\n".join(
+        f'<suggestion recommended="true">{label}</suggestion>' if index == 0 else f"<suggestion>{label}</suggestion>"
+        for index, label in enumerate(generated_labels)
+    )
+    completion = ScriptedOneShotCompletion([answer])
+    install_suggestion_generator(state, lambda _harness: completion, InlineExecutor())
+    assert state.suggestion_generator is not None
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+    column = chat.locator(".chat-suggestions")
+    line = column.locator(".suggestion-line")
+    toggle = column.locator(".suggestion-line-toggle")
+    pills = chat.locator(".suggestion-layer .suggestion-pill")
+    composer = chat.locator(".message-input-box")
+    answered_lines = chat.locator(".answered-reply-suggestions")
+
+    # With no set, the line is there and empty.
+    expect(line).to_have_count(1)
+    expect(line).to_have_text("")
+    expect(pills).to_have_count(0)
+    empty_line_box, composer_box = _box(line), _box(composer)
+
+    # The chat app's own set, under the fixture's reply, shows at once.
+    fixed_labels = ["Describe what you want to make", "Get ideas for what to make", "See what Studio can do"]
+    first_reply_event_id = _offer_fixed_suggestions(e2e_server, fixed_labels)
+
+    expect(pills).to_have_text(fixed_labels, timeout=15000)
+    expect(toggle).to_have_text("Hide suggestions")
+    disable = column.locator(".suggestion-strip-disable")
+    expect(disable).to_have_text("disable suggestions")
+    _assert_pills_are_a_list_on_the_users_side(pills, column)
+    assert _box(pills.last)["bottom"] <= _box(line)["top"]
+    assert _box(line) == empty_line_box, "the line stays where it was"
+    assert _box(composer) == composer_box, "the composer does not move"
+    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    # The link sits immediately left of the button that hides the suggestions, 16px away, on the same line.
+    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 16) < 1
+    assert abs(_box(toggle)["top"] - _box(disable)["top"]) < 1
+    page.screenshot(path=str(tmp_path / "1-fixed-set-shown.png"))
+
+    # A turn starts: the set leaves the composer for the transcript, under its reply and hidden.
+    _append_user_turn(e2e_server.session_file, "sugg-u-1", "Plan my week")
+    set_agent("RUNNING", ActivityState.THINKING)
+
+    expect(answered_lines).to_have_count(1, timeout=15000)
+    first_answered = chat.locator(f'.answered-reply-suggestions[data-after-event-id="{first_reply_event_id}"]')
+    answered_toggle = first_answered.locator(".suggestion-line-toggle")
+    expect(answered_toggle).to_have_text("See 3 suggestions")
+    expect(answered_toggle).to_have_attribute("aria-expanded", "false")
+    expect(pills).to_have_count(0)
+    expect(line).to_have_text("")
+    assert _box(line) == empty_line_box
+
+    # The reply lands, and a model's set for it waits behind the line.
+    reply = [{"type": "text", "text": "Here is a plan for your week."}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("sugg-a-1", "2026-01-01T00:02:00Z", reply, "end_turn")) + "\n")
+    set_agent("WAITING", ActivityState.IDLE)
+    expect(chat.locator(".message-assistant").last).to_contain_text("Here is a plan for your week.", timeout=15000)
+    composer_box_before_the_set = _box(composer)
+    state.suggestion_generator.consider_turn_end(chat_id)
+
+    expect(toggle).to_have_text("See 5 suggestions", timeout=15000)
+    expect(pills).to_have_count(0)
+    expect(column.locator(".suggestion-strip-disable")).to_have_count(0)
+    assert _box(composer) == composer_box_before_the_set, "the set's arrival moves nothing"
+    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    page.screenshot(path=str(tmp_path / "2-generated-set-line.png"))
+
+    toggle.click()
+
+    expect(pills).to_have_text(generated_labels)
+    expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
+    expect(toggle).to_have_text("Hide suggestions")
+    _assert_pills_are_a_list_on_the_users_side(pills, column)
+    assert _box(composer) == composer_box_before_the_set
+    page.screenshot(path=str(tmp_path / "3-generated-set-shown.png"))
+
+    # The answered reply kept its line: its pills open under it, and one clicked there is sent.
+    toggle.click()
+    expect(pills).to_have_count(0)
+    expect(answered_lines).to_have_count(1)
+    answered_toggle.click()
+
+    answered_pills = first_answered.locator(".suggestion-pill")
+    expect(answered_pills).to_have_text(fixed_labels)
+    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(first_answered.locator(".suggestion-strip-disable")).to_have_count(0)
+    assert _box(answered_toggle)["bottom"] <= _box(answered_pills.first)["top"]
+    _assert_pills_are_a_list_on_the_users_side(answered_pills, chat.locator(".message-list"))
+    page.screenshot(path=str(tmp_path / "4-answered-reply-line-shown.png"))
+
+    answered_pills.nth(1).click()
+
+    wait_for(lambda: (FIXTURE_AGENT_ID, fixed_labels[1]) in messenger.sent, timeout=10.0)
+    expect(answered_toggle).to_have_text("Hide suggestions")
+    # That send answered the second reply, whose set joins the first's in the transcript.
+    expect(answered_lines).to_have_count(2)
+    expect(toggle).to_have_count(0)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_good_on_its_first_message(
+    tmp_path: Path, page: Page
+) -> None:
+    """Once the tour has finished, a chat nobody has spoken in shows the Things to try strip above the composer:
+    the things this page can point at, over a quiet line with the link that switches them off. The chat's first
+    message takes the strip away, and nothing is left to open it by."""
+    with _running_e2e_server(tmp_path, session_events=_WELCOME_ONLY_SESSION_EVENTS) as server:
+        mark(Marker.TOUR_FINISHED)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-list")).to_contain_text("Welcome! What shall we build?")
+        column = chat.locator(".chat-suggestions")
+        strip = column.locator('.suggestion-strip[data-placement="new_chat"]')
+        shown = chat.locator('.suggestion-layer [data-placement="new_chat"]')
+        pills = shown.locator(".suggestion-strip-pills .suggestion-pill")
+        line = column.locator(".suggestion-line")
+        disable = strip.locator(".suggestion-line .suggestion-strip-disable")
+        composer = chat.locator(".message-input-box")
+
+        # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
+        expect(pills).to_have_text(["Work in parallel by starting a new chat", "Build an app"], timeout=15000)
+        expect(shown).to_have_attribute("aria-label", "Things to try")
+        expect(disable).to_have_text("disable new chat suggestions")
+        # The strip's line is the column's one quiet line, and holds the link alone.
+        expect(line).to_have_count(1)
+        expect(line).to_have_text("disable new chat suggestions")
+        expect(column.get_by_role("button")).to_have_count(1)
+        _assert_pills_are_a_list_on_the_users_side(pills, column)
+        assert _box(disable)["top"] >= _box(pills.last)["bottom"]
+        assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
+        assert _box(line)["bottom"] <= _box(composer)["top"]
+        page.screenshot(path=str(tmp_path / "new-chat-strip.png"))
+
+        textbox = chat.locator(".message-input-textbox")
+        textbox.fill("Plan my week")
+        textbox.press("Enter")
+
+        expect(strip).to_have_count(0)
+        expect(chat.locator(".suggestion-pill")).to_have_count(0)
+        # Nothing is left to bring the strip back: the column holds the line's kept height, with nothing to click.
+        expect(column.get_by_role("button")).to_have_count(0)
+        expect(line).to_have_count(1)
+        expect(line).to_have_text("")
+        page.screenshot(path=str(tmp_path / "new-chat-strip-gone.png"))
+
+
+# Whether the pills in the layer over the transcript have finished rising in, so their boxes are where they stay.
+_PILLS_HAVE_RISEN_JS = "() => document.querySelector('.suggestion-layer-scroll')?.getAnimations().length === 0"
+
+# Whether the transcript is taller than its viewport and scrolled all the way down.
+_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS = (
+    "() => { const el = document.querySelector('.transcript-scroll'); "
+    "return el.scrollHeight > el.clientHeight * 2 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }"
+)
+
+# Whether the transcript has moved up from ``before`` by more than 100px.
+_TRANSCRIPT_SCROLLED_UP_FROM_JS = "(before) => document.querySelector('.transcript-scroll').scrollTop < before - 100"
+
+# The transcript's scrollTop once it has stopped moving: unchanged over ten animation frames.
+_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS = """
+async () => {
+  const el = document.querySelector('.transcript-scroll');
+  let last = el.scrollTop;
+  let stillFrames = 0;
+  while (stillFrames < 10) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    stillFrames = el.scrollTop === last ? stillFrames + 1 : 0;
+    last = el.scrollTop;
+  }
+  return last;
+}
+"""
+
+# What lies under a point beside the pills and under the middle of the first pill: the point is inside the layer's
+# box, level with the first pill and 40px in from the layer's left edge.
+_HITS_BESIDE_AND_ON_THE_FIRST_PILL_JS = """
+() => {
+  const layer = document.querySelector('.suggestion-layer').getBoundingClientRect();
+  const pill = document.querySelector('.suggestion-layer .suggestion-pill').getBoundingClientRect();
+  const y = (pill.top + pill.bottom) / 2;
+  const beside = document.elementFromPoint(layer.left + 40, y);
+  const onPill = document.elementFromPoint((pill.left + pill.right) / 2, y);
+  return {
+    isPointLeftOfThePill: layer.left + 40 < pill.left,
+    isPointInTheLayerBox: layer.top <= y && y <= layer.bottom,
+    isBesideInTheLayer: beside.closest('.suggestion-layer') !== null,
+    isBesideInTheMessageList: beside.closest('.message-list') !== null,
+    isOnPillAPill: onPill.classList.contains('suggestion-pill'),
+  };
+}
+"""
+
+_START_LABELS = ["Describe what you want to make", "Get ideas for what to make", "See what Studio can do"]
+
+
+def _open_long_idle_chat(page: Page, server: RunningWorkspace) -> None:
+    """Open the fixture chat, whose turn is over and whose transcript is taller than its window, at its end."""
+    _set_fixture_agent(server, "WAITING", ActivityState.IDLE)
+    _open_fixture_chat(page, server)
+    expect(_chat(page).locator(".turn-done-mark")).to_have_count(1, timeout=15000)
+    _chat_frame(page).wait_for_function(_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS, timeout=15000)
+
+
+def _show_start_pills(page: Page, server: RunningWorkspace, labels: Sequence[str] = _START_LABELS) -> Locator:
+    """Offer the fixture chat's last reply a set whose pills show at once, and return the pills once in place."""
+    _offer_fixed_suggestions(server, labels)
+    pills = _chat(page).locator(".suggestion-layer .suggestion-pill")
+    expect(pills).to_have_text(list(labels), timeout=15000)
+    _chat_frame(page).wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+    return pills
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_open_suggestion_pills_float_over_the_end_of_the_transcript_and_leave_the_footer_as_it_is(
+    tmp_path: Path, page: Page
+) -> None:
+    """At the end of a chat, the last reply's done mark ends some 20px above what follows it: the footer's quiet line,
+    or the first pill once pills are shown. The pills are drawn over the transcript's area, above the footer, whose
+    box and composer stay where they are as the pills come and go."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        area = chat.locator(".chat-transcript-area")
+        footer = chat.locator(".app-footer")
+        line = chat.locator(".chat-suggestions .suggestion-line")
+        toggle = chat.locator(".chat-suggestions .suggestion-line-toggle")
+        composer = chat.locator(".message-input-box")
+        done_mark = chat.locator(".turn-done-mark")
+
+        footer_box, composer_box, line_box = _box(footer), _box(composer), _box(line)
+        assert 12 <= line_box["top"] - _box(done_mark)["bottom"] <= 32
+
+        pills = _show_start_pills(page, server)
+
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+        area_box = _box(area)
+        for index in range(pills.count()):
+            pill_box = _box(pills.nth(index))
+            assert area_box["top"] <= pill_box["top"] and pill_box["bottom"] <= area_box["bottom"]
+            assert pill_box["bottom"] <= footer_box["top"]
+        assert _box(footer) == footer_box, "the footer keeps its box with the pills shown"
+        assert _box(composer) == composer_box
+        assert _box(line) == line_box
+        page.screenshot(path=str(tmp_path / "1-pills-shown-at-the-end.png"))
+
+        toggle.click()
+
+        expect(pills).to_have_count(0)
+        expect(toggle).to_have_text("See 3 suggestions")
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert _box(footer) == footer_box, "the footer keeps its box with the pills hidden"
+        assert _box(composer) == composer_box
+        assert 12 <= _box(line)["top"] - _box(done_mark)["bottom"] <= 32
+        page.screenshot(path=str(tmp_path / "2-pills-hidden-at-the-end.png"))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_suggestion_pills_come_and_go_without_moving_a_reader_who_scrolled_up_or_one_off_the_end(
+    tmp_path: Path, page: Page
+) -> None:
+    """A reader who has scrolled up sees nothing move as the pills are hidden and shown: the transcript keeps its
+    place under them. A reader at the end stays at the end, with the last reply clear of the pills."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(30)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        transcript = chat.locator(".transcript-scroll")
+        message_list = chat.locator(".message-list")
+        toggle = chat.locator(".chat-suggestions .suggestion-line-toggle")
+        done_mark = chat.locator(".turn-done-mark")
+        pills = _show_start_pills(page, server)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        top_at_the_end = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        transcript.hover(position={"x": 80, "y": 80})
+        page.mouse.wheel(0, -700)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLED_UP_FROM_JS, arg=top_at_the_end, timeout=5000)
+        top_scrolled_up = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+        list_box = _box(message_list)
+        page.screenshot(path=str(tmp_path / "1-scrolled-up-under-the-pills.png"))
+
+        toggle.click()
+        expect(pills).to_have_count(0)
+        assert frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS) == top_scrolled_up
+        assert _box(message_list)["top"] == list_box["top"]
+
+        toggle.click()
+        expect(pills).to_have_count(3)
+        assert frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS) == top_scrolled_up
+        assert _box(message_list)["top"] == list_box["top"]
+
+        # Back at the end, the reader stays there as the pills go and come back.
+        transcript.hover(position={"x": 80, "y": 80})
+        page.mouse.wheel(0, 100000)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        toggle.click()
+        expect(pills).to_have_count(0)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+
+        toggle.click()
+        expect(pills).to_have_count(3)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+
+        # A press on the transcript stops it following its end, and the reader there is still kept at the end.
+        toggle.click()
+        expect(pills).to_have_count(0)
+        transcript.click(position={"x": 80, "y": 80})
+        toggle.click()
+        expect(pills).to_have_count(3)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_the_space_beside_floating_suggestion_pills_is_the_transcripts_and_a_pill_takes_its_own_click(
+    tmp_path: Path, page: Page
+) -> None:
+    """The layer the pills float in takes no pointer: a wheel turned over a pill scrolls the transcript, a point
+    beside the pills hits the message underneath, and a pill is still a button that sends its label."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(30)) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        _open_long_idle_chat(page, server)
+        frame = _chat_frame(page)
+        pills = _show_start_pills(page, server)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        top_at_the_end = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        pills.first.hover()
+        page.mouse.wheel(0, -700)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLED_UP_FROM_JS, arg=top_at_the_end, timeout=5000)
+        frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        assert frame.evaluate(_HITS_BESIDE_AND_ON_THE_FIRST_PILL_JS) == {
+            "isPointLeftOfThePill": True,
+            "isPointInTheLayerBox": True,
+            "isBesideInTheLayer": False,
+            "isBesideInTheMessageList": True,
+            "isOnPillAPill": True,
+        }
+        page.screenshot(path=str(tmp_path / "beside-the-pills.png"))
+
+        pills.nth(1).click()
+
+        wait_for(lambda: (FIXTURE_AGENT_ID, _START_LABELS[1]) in messenger.sent, timeout=10.0)
+        expect(pills).to_have_count(0)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_tall_list_of_suggestion_pills_keeps_to_its_share_of_the_transcript_and_scrolls_inside_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """Ten pills do not cover the transcript: the layer stops at about 60% of the transcript's height, the last
+    reply still ends above it, and the list scrolls inside the layer to its last pill."""
+    labels = [f"Suggestion number {index + 1}" for index in range(10)]
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        layer = chat.locator(".suggestion-layer")
+        pills = _show_start_pills(page, server, labels)
+
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        area_box, layer_box = _box(chat.locator(".chat-transcript-area")), _box(layer)
+        area_height = area_box["bottom"] - area_box["top"]
+        assert layer_box["bottom"] - layer_box["top"] <= 0.6 * area_height + 1
+        assert layer_box["bottom"] - layer_box["top"] >= 0.4 * area_height
+        assert abs(layer_box["bottom"] - area_box["bottom"]) <= 1
+        assert 8 <= layer_box["top"] - _box(chat.locator(".turn-done-mark"))["bottom"] <= 32
+        assert _box(pills.last)["top"] >= layer_box["bottom"], "the last pill waits below the layer's edge"
+        page.screenshot(path=str(tmp_path / "1-ten-pills.png"))
+
+        pills.nth(2).hover()
+        page.mouse.wheel(0, 2000)
+
+        frame.wait_for_function(
+            "() => { const el = document.querySelector('.suggestion-layer-scroll'); "
+            "return el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }",
+            timeout=5000,
+        )
+        expect(pills.last).to_be_in_viewport()
+        assert _box(pills.last)["bottom"] <= _box(layer)["bottom"]
+        page.screenshot(path=str(tmp_path / "2-ten-pills-scrolled-to-the-last.png"))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_suggestion_pills_float_over_the_transcript_in_the_phone_layout_in_line_with_its_messages(
+    tmp_path: Path, page: Page
+) -> None:
+    """At a phone's width the pills float over the transcript the same way: set in 16px from the edge of the
+    transcript's own column, above a footer that keeps its box, the last reply ending just above them."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _set_fixture_agent(server, "WAITING", ActivityState.IDLE)
+        _open_narrow_chat_root(page, server)
+        chat = _shown_chat_of_root(page)
+        frame = _chat_frame(page)
+        expect(chat.locator(".turn-done-mark")).to_have_count(1, timeout=15000)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS, timeout=15000)
+        footer = chat.locator(".app-footer")
+        footer_box = _box(footer)
+
+        # Short enough to leave the far side of a phone's column clear.
+        labels = ["Go ahead", "Change the plan", "Stop here"]
+        _offer_fixed_suggestions(server, labels)
+        pills = chat.locator(".suggestion-layer .suggestion-pill")
+        expect(pills).to_have_text(labels, timeout=15000)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+
+        _assert_pills_are_a_list_on_the_users_side(pills, chat.locator(".message-list"))
+        assert _box(pills.last)["bottom"] <= footer_box["top"]
+        assert _box(pills.first)["top"] >= _box(chat.locator(".chat-transcript-area"))["top"]
+        assert _box(footer) == footer_box
+        assert 12 <= _box(pills.first)["top"] - _box(chat.locator(".turn-done-mark"))["bottom"] <= 32
+        page.screenshot(path=str(tmp_path / "phone-pills-shown.png"))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points_at_send_once(
+    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+) -> None:
+    """A reply that carries a picker's tag draws the picker in its place. A pill puts its label in the composer and
+    takes it out again; the first category picked points a coach mark at the send button, once per workspace; and
+    a picker in a reply that has been answered takes no more clicks."""
+    state = e2e_server.chat_state
+    manager = state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+    seed_agent_state(
+        manager,
+        FIXTURE_AGENT_ID,
+        name=agent.name,
+        state="WAITING",
+        labels=agent.labels,
+        activity_state=ActivityState.IDLE,
+    )
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+
+    asked = [{"type": "text", "text": "**What do you want to use this Studio for?**\n\n<studio_category_picker/>"}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("picker-a-1", "2026-01-01T00:02:00Z", asked, "end_turn")) + "\n")
+    categories = chat.locator('[data-studio-picker="category"]')
+    expect(categories.locator(".studio-picker-pill")).to_have_count(24, timeout=15000)
+    expect(categories.locator(".studio-picker-heading")).to_have_text(["Work", "Life", "Creative"])
+    textarea = chat.locator(".message-input-textbox")
+    send_button = chat.locator(".message-input-send-button")
+    hint = chat.locator(".coach-mark")
+
+    categories.get_by_role("button", name="Money", exact=True).click()
+    categories.get_by_role("button", name="Sales", exact=True).click()
+
+    expect(textarea).to_have_value("Money, Sales, ")
+    expect(categories.get_by_role("button", name="Money", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(hint).to_have_count(1)
+    expect(hint).to_contain_text("Click this button to send your message")
+    hint_box, send_box = _box(hint), _box(send_button)
+    assert hint_box["left"] <= (send_box["left"] + send_box["right"]) / 2 <= hint_box["right"]
+    assert hint_box["bottom"] <= send_box["top"] or hint_box["top"] >= send_box["bottom"]
+    wait_until_true(
+        lambda: state.chat_settings.read().is_picker_send_hint_shown, 10, "the hint's recording in the chat settings"
+    )
+    page.screenshot(path=str(tmp_path / "category-picker.png"))
+
+    hint.get_by_role("button", name="Got it").click()
+    categories.get_by_role("button", name="Money", exact=True).click()
+    categories.get_by_role("button", name="Health", exact=True).click()
+
+    expect(textarea).to_have_value("Sales, Health, ")
+    expect(hint).to_have_count(0)
+
+    _append_user_turn(e2e_server.session_file, "picker-u-1", "Sales, Health, ")
+    apps = [{"type": "text", "text": "**Which apps do you use most?**\n\n<studio_connector_picker/>"}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("picker-a-2", "2026-01-01T00:03:00Z", apps, "end_turn")) + "\n")
+    connectors = chat.locator('[data-studio-picker="connector"]')
+    expect(connectors.locator(".studio-picker-pill")).to_have_count(16, timeout=15000)
+    expect(categories.get_by_role("button", name="Money", exact=True)).to_be_disabled()
+    gmail = connectors.get_by_role("button", name="Gmail", exact=True)
+    expect(gmail).to_be_enabled()
+    wait_until_true(
+        lambda: gmail.locator("img").evaluate("image => image.complete && image.naturalWidth > 0") is True,
+        10,
+        "the Gmail mark's load",
+    )
+
+    textarea.fill("")
+    gmail.click()
+
+    expect(textarea).to_have_value("Gmail, ")
+    page.screenshot(path=str(tmp_path / "connector-picker.png"))
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_composer_bar_survives_a_shorter_window(e2e_server: RunningWorkspace, page: Page) -> None:
     """A browser window that gets shorter keeps the whole composer on screen.
@@ -700,6 +1295,159 @@ def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tm
                 assert segment["bottom"] <= bubble["top"] + 0.5 or segment["top"] >= bubble["bottom"] - 0.5, (
                     "the line runs through a bubble"
                 )
+
+
+def _bash_line(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
+    return _assistant_line(
+        uuid,
+        timestamp,
+        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
+        "tool_use",
+    )
+
+
+def _text_line(uuid: str, timestamp: str, text: str) -> dict[str, Any]:
+    return _assistant_line(uuid, timestamp, [{"type": "text", "text": text}], "tool_use")
+
+
+def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, Any]]:
+    """The shape of a real Opus run: asked mid-task, the agent moves a step and looks it up before answering."""
+    return [
+        {
+            "type": "user",
+            "uuid": "uuid-mt-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Summarize each app, one at a time"},
+        },
+        _bash_line("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
+        _tool_result_line(
+            "uuid-mt-3",
+            "2026-01-01T00:00:02Z",
+            "toolu_mt1",
+            "Updated ws-step-chat -> in_progress\ntk-step ws-step-chat title: Summarize the chat app",
+        ),
+        _bash_line("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
+        _tool_result_line("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
+        question_line,
+        _bash_line(
+            "uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"
+        ),
+        _tool_result_line(
+            "uuid-mt-8",
+            "2026-01-01T00:00:07Z",
+            "toolu_mt3",
+            "Updated ws-step-chat -> closed\ntk-step ws-step-chat title: Summarize the chat app\n"
+            "tk-step ws-step-chat summary: Read it\n"
+            "Updated ws-step-data -> in_progress\ntk-step ws-step-data title: Summarize the data library",
+        ),
+        _bash_line("uuid-mt-9", "2026-01-01T00:00:08Z", "toolu_mt4", "du -sh system/apps/*"),
+        _tool_result_line("uuid-mt-10", "2026-01-01T00:00:09Z", "toolu_mt4", "92K chat"),
+        _text_line("uuid-mt-11", "2026-01-01T00:00:10Z", "The chat folder is the biggest, at 92 KB."),
+        _bash_line("uuid-mt-12", "2026-01-01T00:00:11Z", "toolu_mt5", "cat system/apps/datalib/README.md"),
+        _tool_result_line("uuid-mt-13", "2026-01-01T00:00:12Z", "toolu_mt5", "readme"),
+    ]
+
+
+_QUEUED_QUESTION = {
+    "type": "attachment",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "attachment": {"type": "queued_command", "prompt": "Which app folder is the biggest?", "commandMode": "prompt"},
+}
+
+_NEW_TURN_QUESTION = {
+    "type": "user",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "message": {"role": "user", "content": "Which app folder is the biggest?"},
+}
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_answer_to_a_question_asked_mid_task_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """A question the agent took into its running turn: its answer, given after a step move and a lookup, is a
+    bubble the user reads without opening a step."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_QUEUED_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_be_visible()
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(tmp_path: Path, page: Page) -> None:
+    """The same lines after a message that started a turn of its own (sent after a Stop): once the agent has moved a
+    step, what it says is that step's progress, not a bubble."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_NEW_TURN_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.get_by_text("Summarize the data library", exact=True)).to_be_visible()
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_have_count(0)
+
+
+_REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-rc-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Summarize each app; tell me anything surprising"},
+    },
+    _bash_line("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
+    _tool_result_line(
+        "uuid-rc-3",
+        "2026-01-01T00:00:02Z",
+        "toolu_rc1",
+        "Updated ws-step-short -> in_progress\ntk-step ws-step-short title: Read the shorter write-ups",
+    ),
+    _bash_line("uuid-rc-4", "2026-01-01T00:00:03Z", "toolu_rc2", "cat system/apps/datalib/README.md"),
+    _tool_result_line("uuid-rc-5", "2026-01-01T00:00:04Z", "toolu_rc2", "readme"),
+    _text_line(
+        "uuid-rc-6", "2026-01-01T00:00:05Z", "Datalib stays off by default, and its server can run shell commands."
+    ),
+    _bash_line("uuid-rc-7", "2026-01-01T00:00:06Z", "toolu_rc3", "cd /repo && tk close ws-step-short done"),
+    {
+        "type": "user",
+        "uuid": "uuid-rc-8",
+        "timestamp": "2026-01-01T00:00:07Z",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_rc3",
+                    "is_error": True,
+                    "content": "PreToolUse:Bash hook error: Blocked: a `tk start` / `tk close` may share its tool call "
+                    "only with other tk commands",
+                }
+            ],
+        },
+    },
+    _bash_line("uuid-rc-9", "2026-01-01T00:00:08Z", "toolu_rc4", "tk close ws-step-short done"),
+    _tool_result_line(
+        "uuid-rc-10",
+        "2026-01-01T00:00:09Z",
+        "toolu_rc4",
+        "Updated ws-step-short -> closed\ntk-step ws-step-short title: Read the shorter write-ups\n"
+        "tk-step ws-step-short summary: Read them",
+    ),
+    _assistant_line(
+        "uuid-rc-11", "2026-01-01T00:00:10Z", [{"type": "text", "text": "I wrote a summary of each app."}], "end_turn"
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_finding_said_before_a_refused_close_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """The agent says a finding at the end of a step, then its first try at closing the step is refused (a `cd`
+    before `tk close`): the refused call did no work, so the finding is a bubble, not folded into the step."""
+    with _running_e2e_server(tmp_path, session_events=_REFUSED_CLOSE_SESSION) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator("[data-machine-bubble]", has_text="I wrote a summary of each app.")).to_be_visible(
+            timeout=15000
+        )
+        expect(chat.locator("[data-machine-bubble]", has_text="Datalib stays off by default")).to_be_visible()
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1516,20 +2264,20 @@ def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_l
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_own_page(
+def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_over_the_chat_list(
     tmp_path: Path, page: Page
 ) -> None:
-    """With no account the chat app mints a chat that waits for its first send, and that chat's page offers the
-    provider chooser, so signing in happens where the chat will be rather than on the shell or the chat list; no agent
-    is created until an account is chosen (post-launch-paths plan section 4.6)."""
+    """With no account the chat app mints a chat that waits for its first send, and the chat list showing it opens the
+    provider chooser over everything it frames, so the chooser outlives a change of the chat on screen; no agent is
+    created until an account is chosen (post-launch-paths plan section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
         expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
-        # Neither the shell nor the chat list draws a chooser of its own: the chat's page is the one place it opens.
+        # Neither the shell nor the chat's page draws a chooser of its own: the chat list's is the one that opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
-        assert _chat_root(page).locator('[data-e2e="provider-chooser"]').count() == 0
+        assert chat_frame.locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
             FIXTURE_AGENT_ID
         ]
@@ -1542,7 +2290,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_ow
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
-        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1858,17 +2606,175 @@ def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider
     tmp_path: Path, page: Page
 ) -> None:
     """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
-    stays in view but disabled, under a sentence and a button that opens the same chooser again."""
+    stays in view but disabled, under a sentence and a button that opens the same chooser again, over the chat list
+    that opened it."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-        chat_frame.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        chooser = _chat_root(page).locator('[data-e2e="provider-chooser"]')
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
         expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
             "Connect an AI provider to start chatting.", timeout=15000
         )
         expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
         chat_frame.locator(".message-input-choose-provider").click()
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chooser).to_be_visible(timeout=15000)
+        assert chat_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_provider_chooser_stays_up_when_the_seeded_welcome_chat_arrives_over_an_awaiting_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The welcome chat the Imbue Studio app seeds can arrive after the chat list has opened a chat awaiting its first
+    send, and its window moves the list onto it. The chooser the list opened is the same one throughout, so a
+    sign-in the user has started is neither lost nor redrawn, and the welcome chat's page opens no second one."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        awaiting_frame = _start_new_chat(page, server)
+        chooser = _chat_root(page).locator('[data-e2e="provider-chooser"]')
+        expect(chooser).to_be_visible(timeout=15000)
+        expect(awaiting_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        drawn = chooser.element_handle()
+
+        welcome = server.chat_state.agent_manager.seed_chat(
+            "Welcome",
+            (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
+        )
+        # What the Imbue Studio app sends once its seed answers, as the shell's relay hands it to this app.
+        _post_chat_json(
+            server,
+            "/api/focus-chat",
+            {"type": "minds:focus-chat", "client_id": _client_id(page), "chatId": welcome.chat_id},
+        )
+
+        _wait_for_chat_window_path(
+            server, lambda path: path == chat_root_path(welcome.chat_id), "the welcome chat's selection"
+        )
+        welcome_frame = _chat(page, welcome.chat_id)
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        expect(chooser).to_be_visible()
+        assert drawn.evaluate("element => element.isConnected") is True
+        assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+
+
+# Installed in every frame before its scripts run: the shell's document (the top frame here, with no Imbue Studio chrome
+# above it) records each ``minds:provider-chooser-on-screen`` a frame of it posts, into ``window.__chooserReports``.
+_RECORD_CHOOSER_REPORTS_SCRIPT = """
+(() => {
+  if (window !== window.top) return;
+  window.__chooserReports = [];
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "minds:provider-chooser-on-screen") window.__chooserReports.push(event.data);
+  });
+})();
+"""
+
+_WELCOME_TURNS = {"turns": [{"role": "assistant", "text": "Your workspace is ready! How would you like to start?"}]}
+
+
+def _seed_welcome_chat(page: Page, server: RunningWorkspace) -> str:
+    """Seed the welcome chat and show it, as the Imbue Studio app does once the seed answers; its id."""
+    seeded = _post_chat_json(server, "/api/chats/seed", _WELCOME_TURNS, expected_status=201)
+    _post_chat_json(
+        server,
+        "/api/focus-chat",
+        {"type": "minds:focus-chat", "client_id": _client_id(page), "chatId": seeded["chat_id"]},
+    )
+    return str(seeded["chat_id"])
+
+
+def _enter_new_workspace(page: Page, server: RunningWorkspace) -> Locator:
+    """Land on a brand-new workspace's shell and ask for the chat list as the Imbue Studio app does on entry (a
+    ``minds:focus-chat`` with no chat, as the shell's relay hands it to the chat app); the chat list's chooser."""
+    page.add_init_script(_RECORD_CHOOSER_REPORTS_SCRIPT)
+    _land(page, server)
+    _post_chat_json(server, "/api/focus-chat", {"type": "minds:focus-chat", "client_id": _client_id(page)})
+    return _chat_root(page).locator('[data-e2e="provider-chooser"]')
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_workspace_with_nothing_signed_in_shows_the_provider_chooser_before_any_chat_exists(
+    tmp_path: Path, page: Page
+) -> None:
+    """Entering a brand-new workspace, the chat list comes up from its pinned window with the provider chooser over it
+    before the welcome chat is seeded and before the first agent listing, and tells the chrome once that the chooser
+    is on screen. The listing finding no chats starts no empty chat beside the welcome chat to come; the welcome chat
+    lands under the same chooser, whose page opens no second one."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        expect(chooser).not_to_contain_text("Loading providers", timeout=15000)
+        page.wait_for_function("() => window.__chooserReports.length === 1", timeout=15000)
+        assert page.evaluate("() => window.__chooserReports") == [{"type": "minds:provider-chooser-on-screen"}]
+        (window,) = _chat_windows(server)
+        assert window["path"] == "/"
+        manager = server.chat_state.agent_manager
+        assert not manager.is_agent_list_known()
+        expect(_chat_root(page).locator(".chat-root-empty")).to_contain_text(
+            "Connect an AI provider to start chatting."
+        )
+        drawn = chooser.element_handle()
+
+        manager._adopt_initial_listing([])
+        expect(_chat_root(page).locator(".chat-root-empty")).to_be_visible()
+        page.wait_for_timeout(1000)
+        assert manager.get_provisional_chats() == []
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(0)
+
+        welcome_id = _seed_welcome_chat(page, server)
+        expect(_chat_root(page).locator(f'iframe.chat-root-frame[data-chat-id="{welcome_id}"]')).to_be_visible(
+            timeout=15000
+        )
+        welcome_frame = _chat(page, welcome_id)
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(1)
+        expect(chooser).to_be_visible()
+        assert drawn.evaluate("element => element.isConnected") is True
+        assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+        assert page.evaluate("() => window.__chooserReports.length") == 1
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_provider_chooser_shown_at_entry_closes_reopens_from_the_empty_list_and_stays_closed_for_the_welcome_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The chooser a new workspace opens before any chat exists can be closed: the empty list then says a provider
+    comes first, with a button that opens it again. Closed when the welcome chat arrives, it stays closed, and the
+    welcome chat's own notice offers it."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+        empty = _chat_root(page).locator(".chat-root-empty")
+        expect(empty).to_contain_text("Connect an AI provider to start chatting.")
+        empty.locator(".chat-root-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+
+        server.chat_state.agent_manager._adopt_initial_listing([])
+        welcome_frame = _chat(page, _seed_welcome_chat(page, server))
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(1000)
+        expect(chooser).to_have_count(0)
+        welcome_frame.locator(".message-input-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1890,7 +2796,7 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
         menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         chat_frame = _chat(page, None)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         expect(chat_frame.locator(".message-input-textbox")).to_have_value("Plan my week", timeout=15000)
         expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
         assert dialogs == []
@@ -3217,3 +4123,462 @@ def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWo
     expect(_shown_chat_of_root(page).locator(".message-input-textbox")).to_have_value(
         "Half a thought, typed on a phone", timeout=15000
     )
+
+
+# the onboarding checklist, opened by the shell's tour and asking the shell and the chat for its pointers
+
+_CHECKLIST_APP_NAME = "onboarding-checklist"
+_CHECKLIST_LABELS = [
+    "Work in parallel by starting a new chat",
+    "Access Studio from your phone",
+    "Build an app",
+    "Connect some data",
+]
+_TOUR_CARD_IDS_BEFORE_THE_LAST = [
+    "intro",
+    "agent",
+    "workspace",
+    "chat-window",
+    "apps",
+    "connect",
+    "security",
+    "share",
+    "devices",
+    "feedback",
+    "providers",
+    "durable",
+]
+_TOUR_LAST_CARD_PARAGRAPHS = [
+    "That\u2019s the tour.",
+    "You can take it again anytime from the launcher.",
+    "Click on any of the entries in the onboarding checklist to learn more!",
+]
+_BUILD_APP_COACH_TEXT = (
+    "Provide some context on a problem you're facing and tell the agent to build an app to help with it."
+)
+_NEW_CHAT_COACH_TEXT = (
+    "Start a new chat here any time. Each chat has its own agent, so several can work for you at once."
+)
+_DESKTOP_VIEWPORT: ViewportSize = {"width": 1440, "height": 900}
+# Where the tour's end puts the checklist's window, and where the tour's chat card snaps the avatar's, in fractions
+# of the backdrop.
+_CHECKLIST_FRAME = {"x": 0.0, "y": 0.0, "width": 0.3, "height": 0.85}
+_SNAPPED_RIGHT_FRAME = {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}
+
+# Whether the window is drawn at the frame, given in fractions of the backdrop, to within two pixels.
+_WINDOW_IS_AT_FRAME_JS = """
+([windowId, frame]) => {
+  const backdrop = document.querySelector('[data-backdrop-area]')?.getBoundingClientRect();
+  const box = document.querySelector(`[data-window-id="${windowId}"]`)?.getBoundingClientRect();
+  if (backdrop === undefined || box === undefined) return false;
+  const near = (actual, expected) => Math.abs(actual - expected) <= 2;
+  return (
+    near(box.x, backdrop.x + frame.x * backdrop.width) &&
+    near(box.y, backdrop.y + frame.y * backdrop.height) &&
+    near(box.width, frame.width * backdrop.width) &&
+    near(box.height, frame.height * backdrop.height)
+  );
+}
+"""
+
+# Whether the window is the focused one and drawn over every other window on the desktop.
+_WINDOW_IS_IN_FRONT_JS = """
+(windowId) => {
+  const stackLevel = (element) => Number(getComputedStyle(element).zIndex);
+  const own = document.querySelector(`[data-window-id="${windowId}"]`);
+  if (own === null || own.getAttribute('data-focused') !== 'true') return false;
+  return [...document.querySelectorAll('[data-window-id]')].every(
+    (other) => other === own || stackLevel(other) < stackLevel(own),
+  );
+}
+"""
+
+# Every window's box by its id.
+_WINDOW_BOXES_JS = """
+() => Object.fromEntries([...document.querySelectorAll('[data-window-id]')].map((element) => {
+  const box = element.getBoundingClientRect();
+  return [element.getAttribute('data-window-id'), [box.x, box.y, box.width, box.height]];
+}))
+"""
+
+
+def _is_checklist_frontend_built() -> bool:
+    return (CHECKLIST_STATIC_DIRECTORY / "index.html").is_file()
+
+
+_needs_the_checklist_frontend = pytest.mark.skipif(
+    not _is_checklist_frontend_built(),
+    reason="The onboarding checklist's frontend is not built (run `npm run build` in system/); skipping e2e.",
+)
+
+
+@contextmanager
+def _running_onboarding_workspace(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
+    """The shell, the chat (pinned, as its manifest pins it) and the onboarding checklist served together, the
+    checklist and the chat registered for the onboarding messages their manifests declare."""
+    checklist_manifest = load_manifest(_TEMPLATE_ROOT / "system/apps/onboarding_checklist/app.toml")
+    chat_manifest = load_manifest(_TEMPLATE_ROOT / "system/apps/chat/app.toml")
+    checklist = create_checklist_app(
+        CHECKLIST_STATIC_DIRECTORY,
+        lambda: read_checklist_items(lambda: has_user_built_app(_TEMPLATE_ROOT, registry_path()), None),
+    )
+    with serve_app(checklist) as served:
+        checklist_row = registry_row_toml(
+            str(checklist_manifest.name),
+            served.http_url,
+            is_system=checklist_manifest.system,
+            display_name=str(checklist_manifest.display_name),
+            seeds_shortcuts=checklist_manifest.seeds_shortcuts,
+            default_shortcuts=[("open", "focus")],
+            shown_message_handlers=[
+                (str(handler.type), str(handler.show), [str(page) for page in handler.showing])
+                for handler in checklist_manifest.message_handlers
+                if handler.show is not None
+            ],
+        )
+        with running_workspace(
+            tmp_path,
+            find_free_port(),
+            find_free_port(),
+            extra_rows=(checklist_row,),
+            is_chat_pinned=True,
+            chat_message_handlers=[
+                (str(handler.type), str(handler.path))
+                for handler in chat_manifest.message_handlers
+                if str(handler.type).startswith("onboarding:") and handler.path is not None
+            ],
+        ) as server:
+            yield server
+
+
+def _size_the_page_for_the_tour(page: Page) -> None:
+    """Give the page a desktop's size, and refuse the tour's pictures, the one thing a card loads from outside the
+    workspace."""
+    page.set_viewport_size(_DESKTOP_VIEWPORT)
+    page.route("https://onboarding-media.imbueminds.com/**", lambda route: route.abort())
+
+
+def _land_on_the_desktop(page: Page, server: RunningWorkspace) -> None:
+    _size_the_page_for_the_tour(page)
+    _land(page, server)
+
+
+def _start_the_tour(page: Page) -> Locator:
+    """Run the tour from the launcher's row; the tour's box, on its first card."""
+    page.locator("[data-launcher-field] textarea").click()
+    page.locator("[data-launcher-overlay] [data-tour-row]").click()
+    card = page.locator("[data-tour-card]")
+    expect(card).to_have_attribute("data-tour-card", "intro", timeout=10000)
+    return card
+
+
+def _press_next_through_the_tour(page: Page, card: Locator, until_card_id: str) -> None:
+    """Press Next on each card in turn until the card with ``until_card_id`` is the one shown."""
+    for card_id in [*_TOUR_CARD_IDS_BEFORE_THE_LAST, "done"]:
+        expect(card).to_have_attribute("data-tour-card", card_id)
+        if card_id == until_card_id:
+            return
+        card.locator("[data-tour-next]").click()
+    raise AssertionError(f"the tour has no card {until_card_id}")
+
+
+def _pinned_chat_window_id(server: RunningWorkspace) -> str:
+    (window,) = [window for window in _chat_windows(server) if window["is_pinned"]]
+    return str(window["id"])
+
+
+def _checklist_window_id(server: RunningWorkspace) -> str:
+    wait_until_true(
+        lambda: len(_app_windows(server, _CHECKLIST_APP_NAME)) == 1, 15.0, "the checklist's one window opening"
+    )
+    return str(_app_windows(server, _CHECKLIST_APP_NAME)[0]["id"])
+
+
+def _page_of_window(page: Page, window_id: str) -> FrameLocator:
+    return page.frame_locator(f'iframe[data-live-page="{window_id}"]')
+
+
+def _wait_for_window_at_frame(page: Page, window_id: str, frame: Mapping[str, float]) -> None:
+    page.wait_for_function(_WINDOW_IS_AT_FRAME_JS, arg=[window_id, dict(frame)], timeout=15000)
+
+
+def _wait_for_window_in_front(page: Page, window_id: str) -> None:
+    page.wait_for_function(_WINDOW_IS_IN_FRONT_JS, arg=window_id, timeout=15000)
+
+
+def _gap_between(first: Locator, second: Locator) -> float:
+    """How far apart the two elements' boxes are, zero when they touch or overlap."""
+    a, b = _box(first), _box(second)
+    across = max(a["left"] - b["right"], b["left"] - a["right"], 0.0)
+    down = max(a["top"] - b["bottom"], b["top"] - a["bottom"], 0.0)
+    return max(across, down)
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_tours_last_card_opens_the_onboarding_checklist_down_the_left_in_front_of_the_other_windows(
+    tmp_path: Path, page: Page
+) -> None:
+    """Next on the tour's last-but-one card shows the card that says to click the checklist's entries, and the
+    checklist's window opens with it: a column down the left of the desktop, in front, with every other window
+    where and as large as it was, and nothing said about it in a notice."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _size_the_page_for_the_tour(page)
+        # A chat window of the user's own beside the pinned one, so two windows stand where the checklist opens.
+        _open_fixture_chat(page, server)
+        card = _start_the_tour(page)
+        _press_next_through_the_tour(page, card, "durable")
+        # The chat card's Next snapped the avatar's window aside; it has arrived before the boxes are read.
+        _wait_for_window_at_frame(page, _pinned_chat_window_id(server), _SNAPPED_RIGHT_FRAME)
+        boxes_before = page.evaluate(_WINDOW_BOXES_JS)
+        assert len(boxes_before) == 2
+        assert _app_windows(server, _CHECKLIST_APP_NAME) == []
+        page.screenshot(path=str(tmp_path / "tour-last-but-one-card.png"))
+
+        card.locator("[data-tour-next]").click()
+
+        expect(card).to_have_attribute("data-tour-card", "done")
+        expect(card.locator("p")).to_have_text(_TOUR_LAST_CARD_PARAGRAPHS)
+        expect(card.locator("[data-tour-next]")).to_have_text("Done")
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        expect(_page_of_window(page, checklist_id).locator("[data-checklist-item]")).to_have_text(_CHECKLIST_LABELS)
+        boxes_after = page.evaluate(_WINDOW_BOXES_JS)
+        assert set(boxes_after) == {*boxes_before, checklist_id}
+        for window_id, box in boxes_before.items():
+            assert boxes_after[window_id] == pytest.approx(box, abs=0.5), f"{window_id} moved or changed size"
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "tour-last-card.png"))
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_onboarding_checklist_lists_the_four_items_and_checks_one_once_it_is_done(
+    tmp_path: Path, page: Page
+) -> None:
+    """The checklist is an app in the launcher with no shortcut on the desktop. Its page lists the four onboarding
+    items in order under its heading, none checked in a workspace where none is done; the two whose pointers need the
+    Imbue Studio chrome are plain rows here, where no chrome frames the workspace. An item that becomes done is
+    checked the next time the page reads."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        expect(page.locator(f'[data-shortcut^="{_CHECKLIST_APP_NAME}:"]')).to_have_count(0)
+        page.locator("[data-launcher-field] textarea").click()
+        page.locator(f'[data-launcher-overlay] [data-launch="{_CHECKLIST_APP_NAME}:open"]').click()
+        checklist_id = _checklist_window_id(server)
+        checklist = _page_of_window(page, checklist_id)
+
+        expect(checklist.locator("[data-checklist-title]")).to_have_text("Click to learn more", timeout=15000)
+        # The page reports its title once the shell has greeted it.
+        wait_until_true(
+            lambda: _app_windows(server, _CHECKLIST_APP_NAME)[0]["title"] == "Onboarding checklist",
+            15.0,
+            "the checklist's page reporting its title to the shell",
+        )
+        items = checklist.locator("[data-checklist-item]")
+        expect(items).to_have_text(_CHECKLIST_LABELS)
+        for item_id in ("new_chat", "phone_access", "build_app", "connect_data"):
+            expect(checklist.locator(f'[data-checklist-item="{item_id}"]')).to_have_attribute("data-done", "false")
+        expect(checklist.locator("[data-checklist-check] svg")).to_have_count(0)
+        expect(checklist.locator("button[data-checklist-item]")).to_have_text(
+            [_CHECKLIST_LABELS[0], _CHECKLIST_LABELS[2]]
+        )
+        expect(checklist.locator("div[data-checklist-item]")).to_have_text(
+            [_CHECKLIST_LABELS[1], _CHECKLIST_LABELS[3]]
+        )
+        # A row that can be clicked ends in an arrow; a plain one has none.
+        expect(checklist.locator("button[data-checklist-item] [data-checklist-arrow] svg")).to_have_count(2)
+        expect(checklist.locator("div[data-checklist-item] [data-checklist-arrow]")).to_have_count(0)
+        page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-none-done.png"))
+
+        mark(Marker.SECOND_CHAT_STARTED)
+        # Putting the window away and bringing it back has the page read again; its slow timer would too.
+        _taskbar_entry(page, checklist_id).click()
+        expect(page.locator(f'[data-window-id="{checklist_id}"]')).to_have_count(0)
+        _taskbar_entry(page, checklist_id).click()
+
+        new_chat = checklist.locator('[data-checklist-item="new_chat"]')
+        expect(new_chat).to_have_attribute("data-done", "true", timeout=20000)
+        expect(new_chat.locator("[data-checklist-check] svg")).to_have_count(1)
+        expect(checklist.locator('[data-checklist-item][data-done="true"]')).to_have_count(1)
+        expect(items).to_have_text(_CHECKLIST_LABELS)
+        page.locator(f'[data-window-id="{checklist_id}"]').screenshot(path=str(tmp_path / "checklist-one-done.png"))
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_the_checklists_build_an_app_and_new_chat_entries_point_from_the_tours_last_card(
+    tmp_path: Path, page: Page
+) -> None:
+    """A click on "Build an app" while the tour's last card is up closes that card as Done would and pops a card
+    out of the avatar with the avatar's window in front; Got it removes it, and a second click shows it again. A
+    click on "Work in parallel by starting a new chat" then has the chat list point at its New chat button, with
+    the chat's window in front again although the click raised the checklist's, and does so again once that mark
+    is dismissed."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        chat_id = _pinned_chat_window_id(server)
+        card = _start_the_tour(page)
+        _press_next_through_the_tour(page, card, "done")
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        checklist = _page_of_window(page, checklist_id)
+        build_app = checklist.locator('button[data-checklist-item="build_app"]')
+        coach = page.locator('[data-tour-coach="avatar"]')
+        avatar = page.locator('[data-floating-entries] [data-pinned-entry][data-entry-style="avatar"]')
+
+        build_app.click()
+
+        expect(page.locator("[data-tour-card]")).to_have_count(0)
+        expect(coach.locator("p")).to_have_text([_BUILD_APP_COACH_TEXT])
+        expect(coach.get_by_role("button")).to_have_text(["Got it"])
+        _wait_for_window_in_front(page, chat_id)
+        expect(coach).to_be_visible()
+        assert _gap_between(coach, avatar) < 24
+        wait_until_true(
+            lambda: get_json(f"{server.shell_url}/api/tour")["is_finished"] is True, 10.0, "the tour being finished"
+        )
+        page.screenshot(path=str(tmp_path / "build-app-card.png"))
+
+        coach.get_by_role("button", name="Got it").click()
+        expect(coach).to_have_count(0)
+
+        build_app.click()
+        expect(coach.locator("p")).to_have_text([_BUILD_APP_COACH_TEXT])
+        _wait_for_window_in_front(page, chat_id)
+
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+
+        chat_root = _page_of_window(page, chat_id)
+        mark_text = chat_root.locator(".coach-mark .coach-mark-text")
+        expect(mark_text).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        expect(chat_root.locator(".chat-rail-new")).to_have_class(re.compile(r"\bcoach-pulse\b"))
+        _wait_for_window_in_front(page, chat_id)
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "new-chat-pointer.png"))
+
+        chat_root.locator(".coach-mark .coach-mark-dismiss").click()
+        expect(mark_text).to_have_count(0)
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+        expect(mark_text).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        _wait_for_window_in_front(page, chat_id)
+
+
+@_needs_the_checklist_frontend
+@pytest.mark.timeout(120, func_only=False)
+def test_leaving_the_tour_on_its_first_card_opens_the_onboarding_checklist_down_the_left(
+    tmp_path: Path, page: Page
+) -> None:
+    """ "Exit walkthrough" on the tour's first card leaves the badge at the launcher and opens the checklist's
+    window down the left of the desktop, in front. Its new-chat entry brings up the chat list, which nothing had
+    shown yet, pointing at its New chat button, and its build-an-app entry takes the badge's place."""
+    with _running_onboarding_workspace(tmp_path) as server:
+        _land_on_the_desktop(page, server)
+        card = _start_the_tour(page)
+        assert _app_windows(server, _CHECKLIST_APP_NAME) == []
+
+        card.locator("[data-tour-exit]").click()
+
+        badge = page.locator("[data-tour-badge]")
+        expect(badge).to_be_visible()
+        checklist_id = _checklist_window_id(server)
+        _wait_for_window_at_frame(page, checklist_id, _CHECKLIST_FRAME)
+        _wait_for_window_in_front(page, checklist_id)
+        checklist = _page_of_window(page, checklist_id)
+        expect(checklist.locator("[data-checklist-item]")).to_have_text(_CHECKLIST_LABELS)
+        expect(page.locator("[data-toast]")).to_have_count(0)
+        page.screenshot(path=str(tmp_path / "tour-left-early.png"))
+
+        chat_id = _pinned_chat_window_id(server)
+        expect(page.locator(f'[data-window-id="{chat_id}"]')).to_have_count(0)
+        checklist.locator('button[data-checklist-item="new_chat"]').click()
+
+        chat_root = _page_of_window(page, chat_id)
+        expect(chat_root.locator(".coach-mark .coach-mark-text")).to_have_text(_NEW_CHAT_COACH_TEXT, timeout=15000)
+        _wait_for_window_in_front(page, chat_id)
+        expect(badge).to_be_visible()
+        page.screenshot(path=str(tmp_path / "new-chat-pointer-from-a-hidden-chat.png"))
+
+        # The chat's window, never snapped aside by the tour, came up over the checklist: its bar entry brings the
+        # checklist back.
+        _taskbar_entry(page, checklist_id).click()
+        _wait_for_window_in_front(page, checklist_id)
+        checklist.locator('button[data-checklist-item="build_app"]').click()
+
+        expect(badge).to_have_count(0)
+        expect(page.locator('[data-tour-coach="avatar"] p')).to_have_text([_BUILD_APP_COACH_TEXT])
+        _wait_for_window_in_front(page, chat_id)
+        expect(page.locator("[data-toast]")).to_have_count(0)
+
+
+# Keeps, on the shell's own window, every word a page it frames has said of the first conversation, in order.
+_RECORD_FIRST_CONVERSATION_STEPS_JS = """
+window.addEventListener('message', (event) => {
+  if (event.data?.type !== 'shell:first-conversation-step') return;
+  (window.firstConversationSteps ??= []).push(event.data.isPending);
+});
+"""
+_LAST_FIRST_CONVERSATION_STEP_JS = "() => (window.firstConversationSteps ?? []).slice(-1)[0]"
+_FIRST_CONVERSATION_IS_PENDING_JS = "() => (window.firstConversationSteps ?? []).slice(-1)[0] === true"
+
+
+def _put_an_agent_to_work(server: RunningWorkspace) -> None:
+    """Have the shell's avatar read an agent as running, off the agent events it follows."""
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
+    lines = [
+        {
+            "timestamp": now,
+            "type": "AGENT_STATE",
+            "agent": {"id": "services", "state": "RUNNING", "labels": {"is_primary": "true"}},
+        },
+        {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "worker", "state": "RUNNING", "labels": {}}},
+    ]
+    with (server.state_dir / "agent-events.jsonl").open("a") as stream:
+        stream.writelines(json.dumps(line) + "\n" for line in lines)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_tour_waits_for_the_first_conversation_to_leave_its_tree_and_starts_as_it_does(
+    tmp_path: Path, page: Page
+) -> None:
+    """In a new workspace whose first-run chat is still following its tree, an agent going to work starts no tour:
+    the chat root told the shell the conversation is under way. The message that ends the tree reaches the shell
+    through the chat list's push, and the tour's first card pops out while that same stretch of work goes on."""
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), is_chat_pinned=True) as server:
+        server.state_dir.mkdir(parents=True, exist_ok=True)
+        # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
+        (server.state_dir / OFFER_TOUR_FILENAME).touch()
+        manager = server.chat_state.agent_manager
+        first_run_chat_id = ChatId(manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id)
+        # The owner has left the provider page, which holds the tour for a reason of its own.
+        finish_provider_step(manager.chat_files_root)
+        manager.advance_first_run_tree(first_run_chat_id, START_IDEAS_LABEL)
+        page.add_init_script(_RECORD_FIRST_CONVERSATION_STEPS_JS)
+        _land_on_the_desktop(page, server)
+        avatar = page.locator('[data-floating-entries] [data-pinned-entry][data-entry-style="avatar"]')
+        tour_card = page.locator("[data-tour-card]")
+        # The first conversation is had in the avatar's window, whose page is the one that tells the shell.
+        avatar.click()
+        expect(_page_of_window(page, _pinned_chat_window_id(server)).locator(".chat-rail-new").first).to_be_visible(
+            timeout=15000
+        )
+        page.wait_for_function(_FIRST_CONVERSATION_IS_PENDING_JS, timeout=15000)
+
+        _put_an_agent_to_work(server)
+
+        expect(avatar).to_have_attribute("data-mood", "working", timeout=15000)
+        # The start the shell scheduled as the agent went to work has run by the time a later timer of the page has.
+        page.evaluate("() => new Promise((resolve) => setTimeout(resolve, 0))")
+        expect(tour_card).to_have_count(0)
+        assert get_json(f"{server.shell_url}/api/tour")["is_seen"] is False
+        page.screenshot(path=str(tmp_path / "tour-held-by-the-first-conversation.png"))
+
+        for message in ("Sales", "Slack", SOMETHING_ELSE_LABEL):
+            manager.advance_first_run_tree(first_run_chat_id, message)
+
+        expect(tour_card).to_have_attribute("data-tour-card", "intro", timeout=10000)
+        expect(avatar).to_have_attribute("data-mood", "working")
+        assert page.evaluate(_LAST_FIRST_CONVERSATION_STEP_JS) is False
+        page.screenshot(path=str(tmp_path / "tour-started-as-the-first-conversation-ended.png"))

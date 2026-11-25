@@ -4,6 +4,422 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-23
+
+### .agents
+
+The `first-run-onboarding` skill:
+
+- Its reply to "Describe what you want to make" opens with "What’s annoying, overwhelming, or tedious in your digital life? Go ahead and complain--I’ll help you build something that makes it better." in place of the sentence about what current apps don't do, and gains an example of a problem described with context, in italics above the line about the mic.
+
+- Its "See what Studio can do" path opens Getting Started on the left half of the desktop, in front, with the chat on the right half. It used to open it on the right with the chat on the left, where the tour's step that moves the chat to the right covered it.
+
+### system
+
+The shared frontend library's connect-data pointer (`system/libs/workspace_ui/src/onboarding_pointers.ts`) ends in "You can always see your connections here as well."
+
+The shared icons (`system/libs/workspace_ui/src/components/icons.ts`) gain `arrow-up-right`.
+
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list `firstConversationStep(isPending)` among what `connectToShell` returns, and the comment on `shell:show-coach-card` in `workspace_ui`'s app contract says when the shell shows a card as the shell does it: while its tour shows nothing, in place of a coach card that is up, and in place of the tour's last card or exit badge.
+
+`uv.lock` lists the Onboarding checklist app among the chat app's dev dependencies.
+
+### system/apps/chat
+
+The first run's provider page:
+
+- The dialog a provider tile opens wears the page's cream and brown ink in place of the workspace's own look, and fades the page into its cream behind it. The provider chooser opened from anywhere else is unchanged.
+
+- Each account under "Connected" ends in Remove, which asks first (in the same cream) and then signs the account out. Removing the last one brings Skip back and holds Next. A removal that fails keeps the row and says "That didn't go through. Try again."
+
+Suggested replies:
+
+- The model that works out a chat's next-step suggestions may think for 20,000 tokens, up from 4,000, and has 120 seconds to answer, up from 60. Chat naming keeps its 60 seconds.
+
+- The pointer the "connect some data" suggestion shows reads "Just ask your agent to connect anything!" over "You can always see your connections here as well."
+
+The README says where the connect-data pointer's card sits: under the right end of the Imbue Studio title bar, by the Settings button it rings.
+
+The chat's dev dependencies name the Onboarding checklist app (`onboarding-checklist`), which its browser tests serve beside the shell and the chat.
+
+### system/apps/onboarding_checklist
+
+The card the "connect some data" entry shows by the Imbue Studio title bar's Settings button reads "Just ask your agent to connect anything!" over "You can always see your connections here as well."
+
+The page is headed "Click to learn more" in place of "Onboarding checklist", and each entry that can be clicked ends in an arrow pointing up and to the right. The window's title and the launcher's row still read "Onboarding checklist".
+
+The README says where the "Connect some data" entry's card sits: under the right end of the Imbue Studio title bar, by the Settings button it rings.
+
+### system/apps/system_interface
+
+A window of an app that is part of the workspace itself (Chat, Terminal, Files, Getting Started, Screen, Routines, System Monitor, the Style Guide, the onboarding checklist) no longer shows Share in its title bar. Its window menu still offers "Share <app>". A window of an app built on the workspace keeps Share in both places.
+
+A tour card or a page's coach card about a control of the Imbue Studio title bar now sits under the end of the bar the control is at. Settings (which holds a workspace's permissions and settings) and Share are at the bar's right end, so their cards sit there, as the card about reporting a bug already did; only the card about the workspace's name stays at the left.
+
+### system/libs/workspace_layout
+
+`InventoryApp`, the app object of the shell's inventory answer, gains `system`: whether the app is part of the workspace itself rather than one built on it. An answer from an older shell reads as false.
+
+## 2026-11-22
+
+### .agents
+
+A new `first-run-onboarding` skill holds the agent's replies in a new workspace's first conversation: what to say when the user picks "Describe what you want to make" or "See what Studio can do" under the welcome (the second also opens the Getting Started app beside the chat). The chat app sends the first chat's agent to it, and any other first message is answered as an ordinary request.
+
+The `first-run-onboarding` skill gains the path behind the welcome's new "Get ideas for what to make" suggestion: the two questions it asks (what the workspace is for, and which apps the user has, each with a picker tag the chat draws), the rules for the list of ideas that follows, and the replies to "More ideas", a picked idea, and "Something else". A new reference beside it, `references/app-ideas.md`, holds starter ideas for each category and what makes an idea a good fit for Studio.
+
+The `build-app` skill's scaffolder sets the workspace's `app_build_started` onboarding marker on every run, so the chat does not suggest building an app while one is being built. A run that cannot write the marker prints a warning and scaffolds as before.
+
+The `first-run-onboarding` skill lists Books, Movies and Music as three Creative categories in place of "Books, movies & music", and its ideas reference has a row of ideas for each. The skill also says that the pickers' "Other" pills put "Write whatever you want!" and "Write whatever data you want here!" in the message as prompts to write over, so either sentence arriving unchanged names no category and no app.
+
+The `update-self` skill counts the Onboarding checklist's frontend among the bundles its apply builds, installs, snapshots and verifies (`--worker-bundle onboarding_checklist=<path>`), so a worker now reports eight built bundles.
+
+### system
+
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list the `opensWorkspaceSettings` flag the shell now puts in `shell:handshake`.
+
+The shared frontend library (`system/libs/workspace_ui`) gains a coach mark component, `components/CoachMark.ts`: a bubble with an arrow and a "Got it" button that a page points at one of its own controls. Its README lists it with the other shared components.
+
+The check that keeps the retired word "application" out of prose (`system/test_meta_ratchets.py`) no longer counts "job application", which names no app.
+
+The new `onboarding_activity` library joins the uv workspace and the root project's dependencies, and `docs/system/blueprint/desktop-interface/contracts.md` describes the tour record's `is_finished` field and the `data/.state/onboarding_activity/` marker directory.
+
+The same contracts (section 7) list the new page message `shell:show-coach-card` with its two places (a chrome control, or the agent's avatar), the coach card it shows, and the `showsCoachMarks` flag of `shell:handshake`. In the shared `workspace_ui` library the app contract gains that message and that flag, `embed.ts` the `coachMark` of `minds:open-share-settings`, and the new `onboarding_pointers.ts` the words two onboarding pointers show.
+
+The new Onboarding checklist app (`system/apps/onboarding_checklist`) joins the uv workspace, the root project's dependencies, the npm workspace and the image's manifest layer, with its supervisord program (`onboarding-checklist`, port 8070) and its built bundle ignored by git. The contracts list its manifest row, the manifest key `seeds_shortcuts`, the chat's `onboarding:show-new-chat-pointer` handler, and how the tour's end opens and places the checklist; `test_app_manifests.py` holds the app to the built-in rules.
+
+The contracts also list the page message `shell:agent-working {isWorking}`, which the tour's start reads beside the avatar's status, and the app contract in `workspace_ui` gains it (`connection.agentWorking`).
+
+They list `shell:first-conversation-step {isPending}` the same way (`connection.firstConversationStep`), which holds the tour's start while a new workspace's first conversation follows its script, and the workspace app model's contracts name the `is_first_conversation_pending` the chat's `chats_updated` push carries.
+
+The Classic Mac and Windows 2000 themes hide the title bar's new Share control, whose word their title bar boxes have no room for; Share stays in the window menu there.
+
+The desktop interface's concepts and contracts say where Share is offered and name the `share` window control, and the theme contract's part table lists it among the title bar's controls, with how a theme hides it.
+
+The shared icon set (`workspace_ui`) gains a `share` glyph.
+
+A workspace no longer runs the `vm-exec-register` one-shot at start: `system/supervisord.conf.d/vm-exec-register.conf` and `system/scripts/register_vm_exec.sh` are removed. The program probed the machine around the container for an owner-exec daemon and registered it as the `vm-exec` service; Imbue Studio no longer installs that daemon, and nothing called it. A `vm-exec` row a workspace registered earlier stays in its app registry, unused.
+
+### system/apps/chat
+
+The chat now offers suggestions: short replies above the composer that the user can click instead of typing.
+
+- When a chat has suggested replies to its last message, they appear as a list of pills above the composer. Clicking one sends it as a message; with text already in the composer, that text is sent with the suggestion on a new line, along with any attachments. Once a message is sent, they stay with the reply they were made for. A chat room shows none.
+
+- A new workspace's first chat opens on a shorter welcome that ends in "How do you want to start?", over two suggestions: "Describe what you want to make" and "See what Studio can do". Once a provider is connected the agent no longer speaks first: it waits for a pick or a typed message, and answers a pick with a prepared reply (the second also opens the Getting Started app beside the chat). What an older Imbue Studio app says the user wants Studio for still reaches the agent.
+
+- The workspace's owner can turn the suggestions off with the "disable suggestions" link beside them, with "Undo" offered for a few seconds. The chat settings gain two switches, both on by default: `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`. `PUT /api/settings/suggestions` changes either or both and leaves every other setting as it is, and every settings change is pushed to the open pages as `settings_updated` on `/api/ws`.
+
+- `GET /api/chats/<chat-id>/suggestions` answers the suggestions stored for a chat (`suggestions.json` in the chat's folder), or `none`.
+
+The chat now works out its own suggested replies.
+
+- When an agent finishes a reply, the chat suggests two or three replies to it a few seconds later, as the pills above the composer. One may be marked as the recommended one, in green. Nothing is suggested when no reply would make sense, under a reply that is a provider failure, in a chat room, or in a chat an agent started.
+
+- The suggestions come from one call per finished reply to a mid-sized model (Sonnet for Claude, the account's newest "terra" model for Codex) on the account the chat already runs on, sent the last few turns of the conversation. The call stays outside the chat's transcript. Every chat gets them, whether or not it is on screen; switching "Next step suggestions" off stops the calls. Chats on Pi, Antigravity and OpenCode get none.
+
+- A chat's suggestions never outlive the reply they were made for: the stored set is replaced or removed each time a turn ends.
+
+- `GET /api/chats/<chat-id>/suggestions` answers `pending` while a set is being worked out, and `/api/ws` pushes `suggestions_updated` with the `chat_id` when a chat's stored set is replaced or removed.
+
+A new workspace's first conversation can now help its user find something to build.
+
+- The welcome offers a third start suggestion, "Get ideas for what to make", between "Describe what you want to make" and "See what Studio can do". Picking it has the agent ask what the workspace is for and which apps the user has, and then list ideas that fit both answers.
+
+- The two questions come with pickers drawn in the agent's message: three columns of categories (Work, Life, Creative), and a row of fifteen apps, each with its logo where the workspace has one for it. Clicking a pill adds its name to the message box, and clicking it again takes it out; the user sends the message themselves and can type anything of their own. A picker in a message that has been answered is greyed out. The first category picked in a workspace points a bubble at the send button, "Click this button to send your message", which goes once the message is sent.
+
+- The replies offered under these messages are the chat's own, with no model asked, so they appear the moment the reply ends and work with every AI provider: "Show me some ideas" under the question about apps, and one per idea, then "More ideas" and "Something else", under a list of ideas. Typing anything else at the start or under the ideas ends the scripted conversation, after which the chat gets suggested replies like any other.
+
+- An assistant message that carries `<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own draws that picker. The chat's folder holds the conversation's step in `first_run_tree.json`, and the chat settings gain `is_picker_send_hint_shown`.
+
+- New route `GET /api/suggestions/new-chat?chat_id=<chat-id>`: the things worth trying in Studio that the workspace's owner has not done yet (start a second chat, open Studio on a phone, build an app, connect some data), each an action suggestion. They are the four onboarding items the `onboarding_activity` library names, which the onboarding checklist shows too. It answers nothing to a visitor, with new chat suggestions switched off, before the tour has finished, or in the first-run chat while its first conversation follows its tree.
+
+- A suggestion gains `action`, null for a reply suggestion, which every next-step suggestion is.
+
+- `POST /api/chats/create` takes an optional `client_id`, naming the page a person asked for the chat from.
+
+- The chat app sets two onboarding markers: `second_chat_started` when a person starts a chat (through the create route, or through an intake that makes a new chat, as the shell launcher's "New Chat" does) while another chat a person talks to exists, and `permission_request_filed` when it reads a filed permission request.
+
+- The chat settings hold two suggestion switches, `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`, and `PUT /api/settings/suggestions` takes those two. The settings file and both settings routes drop a field they do not know, so a file or a writer that carries one keeps every other value.
+
+- A chat nobody has said anything in shows a strip above the composer offering the workspace's owner up to three of those things. It goes for good on the chat's first message.
+
+- Clicking one of these sends nothing: it points a bubble at the chat list's New chat button, at the message box, at the Imbue Studio app's permissions button, or at the phone-access control of its share panel, every time it is clicked. A suggestion whose bubble this page cannot have drawn is not offered.
+
+- The chat app takes a new message, `onboarding:show-new-chat-pointer` (`POST /api/show-new-chat-pointer`), which another app's page sends through the shell: the chat list comes forward and its New chat button gets the same bubble, with the chat on screen left as it is. The onboarding checklist's first entry sends it.
+
+- Each strip is its pills over one quiet line, which holds the strip's link with Undo: "disable new chat suggestions" at the right end of the new-chat strip's line, and "disable suggestions" immediately left of "Hide suggestions" on the next-step line while its pills are shown.
+
+- A strip's suggestions are a list on the user's side of the transcript's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a solid fill and a light shadow. While shown they float over the end of the transcript, directly above the footer, which keeps its height: the transcript scrolls underneath, a click beside the pills reaches it, a reader at its end stays there with the last reply clear of the pills, and one who has scrolled up sees nothing move. A list taller than 60% of the transcript scrolls in place.
+
+- A chat ends closer to the composer: about 20px separates the end of the last reply (its "Done" mark) from the line above the composer, and about 24px from the first shown pill, where about 70px did.
+
+- A reply's suggestions wait on one quiet line directly above the composer, whose height is always kept in a chat with an agent so their arrival moves nothing: "See N suggestions" shows them above it and becomes "Hide suggestions". The first conversation's fixed sets start shown and a generated set hidden, and every suggestion of a set is drawn.
+
+- An answered reply keeps its suggestions: on a send or a turn's start they move to the transcript as the same line under that reply, hidden until asked for, and a pill clicked there is sent. `GET /api/chats/<chat-id>/suggestions` gains `sets`, every set the chat app remembers for the chat (in memory, the newest 200), so after it restarts only the last reply's is left.
+
+- The chat list's New chat button names the browser it was pressed in (`client_id`) when it creates a chat, as does "Start a new chat" in the switch dialog and the failed-switch notice, and a chat waiting for its first send names it when it launches.
+
+- The first run's provider page reads "Studio runs your agents and apps 24/7. Connect your provider to start.", and "Add another (optional)" over "Studio can use multiple subscriptions and switch between providers mid-conversation." The first account connected there is pinned as the workspace's default, so connecting a second provider no longer moves the first conversation onto it. With two or more connected, the page marks the default and a click on another connected account makes that one the default.
+
+- A first-run chat's start suggestions stay shown while the agent the provider page started comes up: a chat whose first agent is starting with nothing sent to it counts as having no turn under way, for its suggestions and for a picker in a message.
+
+- The category picker offers Books, Movies and Music in place of "Books, movies & music", and each picker ends in an "Other" pill that puts a prompt to write over in the draft ("Write whatever you want!", "Write whatever data you want here!").
+
+- The prompt that works out next-step suggestions asks for a question's own answers when the reply's one main question has a small set of them.
+
+- A chat page says when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`), and the chat root tells the shell an agent is working while any chat page it holds says so, so the show-around tour starts on every harness.
+
+- The show-around tour waits for a new workspace's first conversation to leave its tree. Every `chats_updated` push carries `is_first_conversation_pending`, true while a first-run chat the app lists stands at a step other than `done`, and the message that ends the tree pushes the chat list at once. The chat root passes it to the shell as `shell:first-conversation-step {isPending}`, so the tour begins with the reply to that message, or with the next one.
+
+### system/apps/onboarding_checklist
+
+New built-in app, the Onboarding checklist (`onboarding-checklist`, port 8070): one small page listing the four things worth trying in a new workspace (start a second chat, open Studio on a phone, build an app, connect some data), with a check mark on the ones already done.
+
+A click on an entry shows where that thing is, whether or not it is done: the chat list's New chat button with its bubble, the share panel with a bubble at its phone control, a card popping out of the agent's avatar, or a card under the permissions button. The two entries that need the Imbue Studio app to draw a bubble cannot be clicked where it does not.
+
+The app is in the launcher and has no desktop shortcut. The desktop's tour opens it as the tour ends. It stores nothing: `GET /api/items` reads what is done from the `onboarding_activity` library and the app registry, and answers an item it could not read as not done.
+
+### system/apps/style_guide
+
+The Components group shows the shared coach mark: a button points one at a control, with its arrow, its text and its "Got it" button.
+
+### system/apps/system_interface
+
+The shell keeps what Imbue Studio says with `minds:embedder-capabilities` about `opensWorkspaceSettings` and puts it in every window's `shell:handshake` (false when no chrome said so), so a page opened after Studio spoke still knows whether it can ask for the workspace settings with `minds:open-workspace-settings`. The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`, section 7) list the new field.
+
+The tour record (`GET` and `POST /api/tour`, `tour.json`) gains `is_finished`, false by default so an older file reads whole. A record written finished sets the `tour_finished` onboarding marker, and the owner's phone layout reporting what it shows (`POST /api/clients/<client_id>/shown`) sets `phone_layout_used`; the chat's new-chat suggestions read both. A marker that cannot be written is logged and does not fail the request. The markers come from the new `onboarding_activity` library, which the shell's "updated, not activated" check counts among the code it runs.
+
+The shell's page records the tour as finished when Done on its last card or Exit walkthrough is pressed, and the owner's page does so for a tour that has run and has nothing to resume.
+
+The tour's last card reads "That’s the tour.", "You can take it again anytime from the launcher." and "Click on any of the entries in the onboarding checklist to learn more!". As that card shows, and when Exit walkthrough is pressed on a card before it, the onboarding checklist's window opens down the left of the desktop, in front of the other windows, none of which is moved. The shell sends the message `onboarding:show-checklist` to whichever app registered it and places the window that opens; it names no app, does nothing when none registered the message, and logs a relay that fails without telling the user.
+
+A page can ask for a coach card with the new `shell:show-coach-card`, naming exactly one place: `{text, chromeAnchor}` shows its words and a Got it button under a control of the Imbue Studio chrome, which is ringed until the card goes, and `{text, target: "avatar"}` brings the avatar's window forward and pops the card out of the avatar. The card is shown only in the desktop layout: while the tour shows nothing, in place of another coach card, and in place of the tour's last card or its exit badge, which it closes as that card's own button would. Any other tour card, and the pause notice, drop it, and it gives way to a tour that starts. `shell:handshake` tells each page, with `showsCoachMarks`, whether the chrome draws coach marks on its own controls.
+
+A message a page sends for another app (`shell:message`) is relayed after the shell's page has saved a raise that was still waiting, so a window the message brings forward ends in front of the window whose page was clicked. Before, a click in a window behind the one the message was for left the clicked window in front.
+
+An app whose manifest says `seeds_shortcuts = false` gets no desktop shortcut: neither a new desktop's seed nor the pass that offers a late app's shortcut adds one. The launcher still lists it.
+
+The tour begins, resumes and pauses on an agent working as the shell hears it from two places: the avatar's status, as before, and the pages it frames, each of which can say so with the new `shell:agent-working {isWorking}`. The shell keeps each page's last report and drops it when the page's frame loads again or its window goes, so the tour starts for an agent whose activity never reaches the avatar's status.
+
+The tour neither begins nor resumes by itself while a page says, with the new `shell:first-conversation-step {isPending}`, that the workspace's first conversation is still following its script, so a new workspace's tour does not run on top of its first scripted replies. When a page says that conversation is over the tour begins right then if an agent is already at work, and with the next work otherwise. The report is kept per page and dropped with it, which only stops holding the tour, and the launcher's "Show me around" row starts it whatever a page says.
+
+A coach card's text is drawn as a paragraph per blank line, with the words between a pair of `**` in bold.
+
+A focused window's title bar offers Share after "Chat about this app": a glyph and the word "Share" that ask the Imbue Studio chrome to open its share settings for the window's app. It is offered to the workspace's owner, under a chrome that has announced its capabilities, on every window of an app that is not internal. It never sits over the centred title: where the title leaves no room for the word it is the glyph alone, and where it leaves no room for the glyph either it is not drawn, which leaves Share to the window menu.
+
+The window menu's Share row, on the desktop and on the phone, is offered by the same rule and drawn with the same glyph, so the chat and the terminal now have it: any app that is not internal can be shared, where before a critical app could not.
+
+### system/apps/system_monitor
+
+The System Monitor no longer has a label for `vm-exec-register`, which the template no longer runs.
+
+### system/libs/app_manifest
+
+New `user_apps` module: `has_user_built_app(repo_root, registry)` says whether the registry holds an app the workspace's user built, which is a row that is neither `system` nor `internal` and that a package outside the root workspace's members registered. The template's own apps, a new app's mock frame and a preview never count. The chat's "Build an app" suggestion reads it.
+
+A manifest can say `seeds_shortcuts = false` (default true), and the registry row carries it: the app's default shortcuts are kept off every desktop, and the launcher lists it all the same. The onboarding checklist declares it.
+
+The comment on the reserved app names says `vm` stays reserved from the retired `vm-exec-register` program, whose `vm-exec` row a workspace's registry may still hold. The reserved names themselves are unchanged.
+
+### system/libs/app_registration
+
+`forward_port.py --manifest` copies the manifest's new `seeds_shortcuts` boolean onto the registry row, and clears it from the row when a later manifest drops it.
+
+### system/libs/onboarding_activity
+
+New library: one-way markers recording what a workspace's owner has already done (finished the tour, used the phone layout, started a second chat, filed a permission request, started an app build), one empty file each under `data/.state/onboarding_activity/`. `mark`, `is_marked` and `marked_at` set and read them, and a reader can tell a marker that is not set from one that could not be read. `onboarding_activity.items` names the four onboarding items in order, with their labels and one rule for when each is done (`is_item_done`), which the chat's new-chat suggestions and the onboarding checklist share.
+
+### system/libs/workspace_ui
+
+`shell:handshake` has an `opensWorkspaceSettings` flag, read as false when the shell does not send it: whether the Imbue Studio chrome opens its workspace settings when a page asks. `embed.ts` exports `OPEN_WORKSPACE_SETTINGS` (`minds:open-workspace-settings {group?}`, embed contract v18), probed by name with the literal as its fallback, so an older vendored contract still builds.
+
+Added a coach mark to the shared components (`components/CoachMark.ts`): a small bubble with an arrow, a line of text and a "Got it" button that points at one control of the page. It sits below, above, right or left of the control, whichever has room, follows the control as the page changes, and goes when "Got it" or the control itself is clicked, or when the control leaves the page. The chat uses it to point at its send button.
+
+The app contract has a new page-to-shell message, `shell:show-coach-card` (`connection.showCoachCard(text, place)`): the shell shows the page's words as a one-button card at exactly one place, under a control of the Imbue Studio chrome, which it rings (`{chromeAnchor}`), or popping out of the agent's avatar (`{target: "avatar"}`). `coachCardPlaceOf` reads the place a payload names. `shell:handshake` has a `showsCoachMarks` flag, read as false when the shell does not send it: whether the chrome draws coach marks on its own controls. `embed.ts` documents the optional `coachMark` of `minds:open-share-settings` (embed contract v19) and exports its type.
+
+The app contract also has `shell:agent-working {isWorking}` (`connection.agentWorking`): a page says whether an agent is working in what it shows, and the shell keeps each page's last report until the page loads again or goes away. `shell:first-conversation-step {isPending}` (`connection.firstConversationStep`) is kept the same way: a page says whether the workspace's first conversation is still following its script, and the shell's tour does not start by itself while one does.
+
+New `onboarding_pointers.ts`: the words of the build-an-app and connect-some-data pointers, which the chat app and the onboarding checklist both show.
+
+The icon set gains `share` (Lucide's "forward"), for the shell's Share control and its window menu's Share row.
+
+### system/services/oom_priority
+
+New service band `onboarding-checklist` (82), for the Onboarding checklist app: between Getting Started's and the Style Guide's, since a shed costs one reload of a page that stores nothing.
+
+The memory-priority bands no longer name `vm-exec-register`, which the template no longer runs.
+
+## 2026-11-21
+
+### .agents
+
+`manage-routines` says how a routine tells a run started by hand from a scheduled one: a command reads `$ROUTINES_TRIGGER` (`scheduled` or `manual`), and a skill run reads the trigger of its own run, the newest record of `routines runs <id> --limit 1 --format json`.
+
+### system
+
+The template pins mngr to the export of the paired mngr branch, which carries embed contract v17 (`minds:first-run-provider-step`); the system frontends' lockfile adds `@fontsource/besley` for the chat app's first-run headline.
+
+The desktop plan now says that a window being moved or resized neither covers nor is covered for the length of the gesture, so the pages behind the windows that stay put stay parked, and that the moved window gets a compositor layer of its own until the move ends.
+
+The phone interface plan now describes landing without a home-screen flash, the provisional home shown when there is nothing to land on, and how the shell revives its connection when the page comes back into sight.
+
+The routines spec lists `ROUTINES_TRIGGER` (`scheduled` or `manual`) among the variables a run is given, and says where a skill run reads its trigger.
+
+The Routines spec shows the tick's cron entry with the `MNGR_HOST_DIR` line the boot writes ahead of it.
+
+- `AGENTS.md` now tells agents more firmly never to tell the user something in the middle of a step, even when the user asked to hear things as they go: say it at the end of the step, before the call that closes it (a line written after that call opens the next step and folds the same way), or end the step early to say it. In real runs with the previous wording, Opus folded a finding into a step in every run.
+
+The post-launch-paths plan now says the chat root opens the provider chooser for a chat waiting for its first message with nothing signed in, and the desktop-interface contracts list `reportsProviderChooserOnScreen` in the shell's `minds:workspace-ready` and the chat list's `minds:provider-chooser-on-screen {}` report that the shell forwards up (embed contract v16).
+
+- `AGENTS.md` tells an agent where to put something the user must read before it finishes (a finding, a heads-up, a question it will keep working past): at a step boundary, right after the step's last piece of work. Prose in the middle of a step shows only as its passing caption, replaced by the next line and then folded inside the step, so things the user needed to see were going unread.
+
+The app contract gains `shell:first-run-provider-step`, an app's word to the shell that the first run's provider page is owed (or no longer is).
+
+### system/apps/chat
+
+The first run's "Your own cloud computer, any AI" page matches Imbue Studio's own first-run pages: its headline is set in Besley Medium (bundled with the chat app, SIL Open Font License) at 40px with a 1.15 line height, the line under it is 18px semibold, Next is the same 18px button as Studio's Sign in and Continue, and Skip is 14px.
+
+The chat page's built scripts and styles are cached by the browser for good, since their names change with their contents, so reopening a chat (from a phone above all) no longer asks for them again. The voice files kept under stable names are still checked on every load.
+
+- The agent's answer to a message you send while it is working no longer folds into a progress step. A Claude chat takes such a message into the turn it is already running, and the agent often moves a step, looks something up, or says a line about the earlier work before it answers, so the answer used to show as a step's passing caption and then vanish into the step. Everything the agent says after a message it took mid-task, until it finishes, now shows as a message; its work still groups under the steps. A message sent after Stop or after the agent finished is unchanged: once the agent takes up a step, its progress lines stay that step's captions. Codex and Pi chats keep the previous rule (the agent's first words after your message are its answer).
+
+- Something the agent says just before closing a step no longer folds into that step when its first try at closing it was refused (agents often put a `cd` before `tk close`, which the step hooks refuse). The refused call did nothing, so it no longer counts as work and no longer shows as a failed command.
+
+On a new workspace with no AI account signed in, the provider chooser now opens as soon as the chat list is on screen. It no longer waits for the welcome chat to be seeded or for the chat app's first read of the agent list.
+
+- The provider chooser that a chat with nothing signed in asks for now belongs to the chat list rather than to the chat's page. The chat list opens it over everything it shows, and the chat's "Choose a provider" button opens the same one. It stays open when the chat on screen changes, so a sign-in already under way is kept when the welcome chat arrives, and no second chooser opens behind it. A chat page opened on its own, outside the chat list, still opens its own chooser.
+
+- With nothing signed in, the chat list opens the chooser even before any chat exists, once per page load. The first chat it shows after that counts as covered by that chooser; if the user closed it, it stays closed. While nothing is signed in, the empty list says "Connect an AI provider to start chatting." and has a "Choose a provider" button, and it no longer creates an empty "Chat 1", so the welcome chat lands on its own. With an account signed in, nothing changes.
+
+- A sign-in launches the chat waiting on screen when it finishes. If no waiting chat is on screen, it launches the first waiting chat the list shows afterwards (the welcome chat).
+
+- `POST /api/focus-chat` takes a missing `chatId` to mean "show the chat list as it stands". The Imbue Studio app sends this when it enters a new workspace. A chat list window already showing a chat stays on it; if none is open, the pinned one comes up.
+
+- The chat list tells the Imbue Studio app once per page load, with `minds:provider-chooser-on-screen {}`, when its chooser is drawn with its providers listed in a window the user can see.
+
+A question asked while a step is still open is answered as a reply again, even when the agent does something before answering and goes back to the earlier work after. The agent's first words after your message, before it closes or starts a step, are its answer: they show as a reply (and stream there while being written), and the work before and after them still groups under the step. Before, the agent re-starting that step (which the open-steps reminder asks it to do) or running a quick lookup took the step up again, so the answer showed as the spinning step's caption and then vanished into the step once the agent's next note replaced it. A re-start alone no longer takes the step up at all; it joins the turn with the agent's next real work.
+
+The seed route takes Imbue Studio's first-run body: a first-run seed opens the Main chat on the agent's welcome ("Hi, I'm your Studio agent...", what Studio is for, "How would you like to get started?"), and what the user told the first run about what they want Studio for goes ahead of the chat's first send for the agent, without being shown in the chat.
+
+A first-run workspace now opens on a full-window page, "Your own cloud computer, any AI": a tile per provider, each opening that provider's sign-in, the connected ones listed above "Add another", and Skip / Next. It is shown to the workspace's owner once; while it is owed, the chat's own provider dialog no longer opens by itself.
+
+Once a provider is connected on that page, Skip goes away and Next is the way on. Leaving the page with a provider connected starts the Main chat's agent at once, and it speaks first: about the (up to three) things the user said they want Studio for, or, with nothing said, that it is here and ready to help. The note that starts it is hidden from the chat.
+
+### system/apps/files
+
+The Files app's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/routines
+
+The Routines app's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/screen
+
+The browser launch-path integration test no longer fails when the browser-command test runs before it in the same process. The module shares one browser, so the earlier test's tab was restored into this one's launch and broke its exact tab-list check; it now checks that its own tab was checkpointed once.
+
+### system/apps/style_guide
+
+The style guide's built scripts and styles are now marked immutable as well as cached for a year, so the browser does not revalidate them on reload.
+
+### system/apps/system_interface
+
+The shell tells Imbue Studio while the first run's provider page covers a new workspace (`minds:first-run-provider-step`), so Studio's title bar stays in the page's cream instead of the workspace's color. When the owner connects a provider or skips, a Studio that announces `washesFirstRunExit` grows the workspace's color over the window from its center, and the shell takes the page down under that color; an older Studio sees the page come down at once, as before.
+
+Dragging a window no longer makes the desktop flicker. Two things together ran the browser out of the GPU memory it draws the desktop with during a drag. First, every window hidden behind another started rendering again for as long as a window was dragged or resized; now only a window that the moving one was covering does, and windows behind ones that stay put stay paused. Second, the dragged window was repainted on every pointer move; it now gets a compositor layer of its own until the drag ends, so a move only slides it. On a test desktop with three maximized windows behind a fourth and a chat floating on top, a drag used to fill that memory (about 650 MB against a budget of 655 MB); with this change, drags on a similar desktop peaked at about 440 MB, with no flicker or lag.
+
+On a phone, the workspace no longer flashes its home screen before opening on a window. Until the page knows where it lands, the bar reads "Opening…" over a plain background, and the page lands as soon as it knows its desktop. A window other than the pinned chat therefore starts loading without waiting for that desktop's layout.
+
+If the shell cannot be read when the page opens (while it restarts, say), the phone shows home rather than a blank page, and lands where it was once the shell answers.
+
+Coming back to the workspace after the phone slept reconnects at once, instead of waiting out a reconnect delay that can grow to 30 seconds. A connection that still looks open is checked and replaced if it does not answer. The shown page is no longer reloaded by a reconnect long after a return during which the connection held.
+
+The page's built scripts and styles are cached by the browser for good, since their names change with their contents, so reopening the workspace no longer asks for them again.
+
+The shell's `minds:workspace-ready` announces `reportsProviderChooserOnScreen: true` when the embed contract it is built with is v16 or later: the chat list then sends `minds:provider-chooser-on-screen` once its provider chooser is on screen, and a `minds:focus-chat` with no chat brings the chat list up, so the chooser can open before any chat exists on a workspace with nothing signed in. With an older contract, which drops that `minds:focus-chat`, it announces `false`. The shell forwards the new message up like the other `minds:` messages.
+
+A first-run workspace opens with the chat app's "Your own cloud computer, any AI" page covering the whole desktop, for the workspace's owner, until they connect an AI provider or skip. The show-around tour waits until the cover is down.
+
+The shell stops its page layer's focus watcher when its view is removed, so the watcher's timer no longer goes on ticking against a document that is gone (the cause of a `document is not defined` error at the end of the shell's frontend test run).
+
+### system/libs/app_manifest
+
+New `built_assets` module: `send_built_asset` serves a file of an app's frontend build. A flat, content-hashed script or stylesheet is cached for a year and marked immutable; anything else is revalidated on every load. The shell, chat, Files, Routines and style guide apps now share it, in place of five copies of the same rule.
+
+### system/libs/bootstrap
+
+The routines tick's cron entry states the boot's `MNGR_HOST_DIR`, so routines run on their schedule on a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`).
+
+### system/libs/routines
+
+A command routine's run has `ROUTINES_TRIGGER` in its environment, beside `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_RUN_DIR`: `scheduled` for a run the tick started, `manual` for one started with Run now or `routines run`. The README says how a skill run finds the same: the newest record of `routines runs <id> --format json` is its own run, with its trigger.
+
+`with_agent_env.sh` reads the agent environment from the host dir named in `MNGR_HOST_DIR`, falling back to `/home/user/.mngr`, so a scheduled routine runs on a host that keeps the dir elsewhere.
+
+### system/libs/workspace_ui
+
+The embed module exposes contract v17's `FIRST_RUN_PROVIDER_STEP` and `FIRST_RUN_EXIT_COVER_MS`, probed with fallbacks like the other optional contract entries, so a template pinned to an older mngr still builds.
+
+`announceReadyToEmbedder` takes `reportsProviderChooserOnScreen`. The new `reportProviderChooserOnScreen` sends `minds:provider-chooser-on-screen {}` (embed contract v16), and `IS_CHAT_ROOT_FOCUS_ACCEPTED` says whether the vendored contract lets a `minds:focus-chat` with no chat through. Both are probed by name, so an older vendored contract still builds.
+
+### system/services/share_gateway
+
+A shared workspace now compresses the pages, scripts, styles, JSON and SVGs its apps serve (zstd or gzip, as the client accepts). Over a phone's connection, the workspace's main script shrinks to about a third of its size. A HEAD request, a ranged request, an event stream and any already-compressed type pass through untouched, so file sizes, partial downloads and live streams behave as before.
+
+## 2026-11-20
+
+### .agents
+
+The datalib skill is written as the skill it will be once datalib is announced, with the dark-launch gating confined to its frontmatter description and one paragraph between `<!-- dark-launch -->` markers, so an eval can derive the announced skill from it by stripping that block and replacing the description. Its body now tells the agent to read how a sync ended before answering from the store (a `failed` request leaves a conversation missing until the next sync), to size a source's `since` to the data the user wants kept rather than to the question and to set `refresh_every_minutes = 0` for a copy refreshed on demand, and that a mechanical question is a SQL query over the raw store with `datalib-doltlite -readonly`. Linear joins the list of sources that work through the gateway, with its scope in the permission-request example.
+
+### system
+
+- The interactive-shell line that sources mngr's host env, written into `.bashrc` at provisioning, names the provisioning run's own host dir rather than always `/home/user/.mngr`, so a terminal on a Modal-hosted workspace (host dir `/mngr`) gets the agent environment.
+
+- The apt hook that refreshes the environment record looks for the host dir named in `MNGR_HOST_DIR`, falling back to `/home/user/.mngr`.
+
+### system/apps/system_monitor
+
+On a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`), the System Monitor names chats and attributes their processes to them: it reads the agent records from `MNGR_HOST_DIR` and recognises agent paths under `/mngr/agents/`.
+
+## 2026-11-19
+
+### .agents
+
+A newly built app's harden pass can now run its browser tests.
+
+- `build-app`'s scaffold gives each new app's own test environment Playwright and pytest-timeout, and registers the `browser` and `frontend` test marks. Before, an app's suite had neither package, so a harden worker's phone browser test failed with `No module named 'playwright'` or `No module named 'pytest_timeout'` and never ran.
+
+- The worker guides `type-app.md` and `web-frontend-testing.md` say the scaffold provides these, and give the one `uv add --dev playwright pytest-timeout` an app scaffolded earlier needs.
+
+Skills and shared agent references that pointed at `CLAUDE.md` for content that lives in `AGENTS.md` (the preserve-and-surface principle, the shared instruction sections) now point at `AGENTS.md`. `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`, keeping only Claude-specific notes for `CLAUDE.md`.
+
+Preview and UI-sketch frames now load their framed app on a shared workspace. The frame pointed its inner page at `<service name>.<workspace host>`, but a share routes only a service's registered `<name>-<rand>` origin label, so the inner page never loaded there: the bare name is refused when connecting, or answered with "Not shared with you". Locally the forwarder's name fallback hid this. `preview_wrapper_server.py` takes `--apps-file` and reads the inner service's label from the app registry on each request, so a service registered again under a fresh label is followed. It answers 503 when the service has no valid label or the registry cannot be read. `serve_isolated_instance.py` passes the registry it registers into.
+
+### system
+
+The step reminder hooks (including the pi harness extension) now say "See AGENTS.md > Task management", since `CLAUDE.md` only imports `AGENTS.md`. `README.md`, `docs/system/workspace-internals.md` and `.gitignore` point at `AGENTS.md` for the agent instructions as well. `AGENTS.md`'s self-modification note names `AGENTS.md` as the file to update, and the `docker_runsc` template comment in `.mngr/settings.toml` drops its pointer to `CLAUDE.md`, which never covered installing gVisor.
+
+The earlyoom shed-order plan (`docs/system/blueprint/earlyoom-gvisor-shed-order/plan-earlyoom-gvisor-shed-order.md`) no longer plans a release test of its own for the OOM drill; the drill's recurring run in a real workspace is the Imbue Studio smoke journey's step 3c.
+
+The npm workspace's lockfile adds `@panzoom/panzoom` 4.6.2 (MIT, no dependencies), which Files uses to zoom and move an image on its view page.
+
+### system/apps/chat
+
+A Claude browser sign-in no longer drops to the paste-a-code flow just because the port Claude's CLI drew for its callback is already in use on the user's machine, often by a Docker container's published SSH port. When Imbue Studio says the port is taken, the chooser starts the same sign-in again, which draws a fresh port, trying up to three ports in all before it falls back as before. ChatGPT's CLI listens on a fixed port, so a ChatGPT sign-in falls back to the one-time code as soon as a fresh start lands on the same taken port. Any other reason the desktop app cannot relay still falls back at once.
+
+### system/apps/files
+
+An image open in a Files window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, and drag to move around while zoomed. The picture always covers its window and never moves past its own edges.
+
+### system/apps/screen
+
+The Screen's acceptance test hands Imbue Studio its throwaway roots as `STUDIO_ROOTS_OVERRIDE` instead of the retired `MINDS_DATA_HOME`, which an mngr checkout from after the override's rename no longer honors, so the run's state stays under its own temporary directory.
+
+### system/services/oom_priority
+
+The OOM drill (`bin/oom_drill.py`) puts its sleepers at the shed policy's own scores unless `--bands` names others: an aged chat (1000), Chromium's tabs (960), its GPU and utility processes (943) and main process (910), an agent's commands (900), the Screen's stack (850), a worker agent (600), a fresh chat (560) and a user agent (300). It stops the Screen's desktop and its watcher before its sleepers start and starts the watcher again when it ends, so a run needs only the chats stopped, and it counts every built-in service, up to 86, as one that must not be shed while an agent's command or a browser process remains. Tests hold the bands, that limit and the two Screen programs to the template's own definitions. The README's "Changing the policy" has a policy change run the drill (`just dwt-oom-drill` from an mngr checkout), and `OOM_DRILL.md` covers that command, the drill's run in the Imbue Studio smoke journey, running it by hand in a local Docker workspace (`docker exec --privileged`), and checking Chromium's scores.
+
 ## 2026-11-18
 
 ### .agents

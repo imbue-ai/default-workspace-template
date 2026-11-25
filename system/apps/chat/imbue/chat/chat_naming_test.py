@@ -19,6 +19,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatAccountBinding
@@ -187,6 +188,16 @@ def test_a_minted_chat_is_named_from_its_first_message_and_never_again(tmp_path:
     assert harness.renames == ["Five days in Rome"]
     assert harness.completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome in May")]
     assert harness.naming_state().is_settled
+
+
+def test_a_name_is_asked_of_the_small_model_with_no_thinking_and_a_minute_to_answer(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Five days in Rome"])
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome in May")
+
+    assert harness.completion.model_tiers == [OneShotModelTier.SMALL]
+    assert harness.completion.thinking_token_allowances == [None]
+    assert harness.completion.timeouts_seconds == [60.0]
 
 
 def test_a_message_with_no_subject_leaves_the_minted_name_and_the_next_message_names_it(tmp_path: Path) -> None:

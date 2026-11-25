@@ -103,7 +103,7 @@ describe("parseClientArrival", () => {
 });
 
 describe("parseMessageRelay", () => {
-  it("reads a shown page's wait for a desktop window, a posted message as not waiting, and refuses the wrong shape", () => {
+  it("reads a shown page's window and its wait for a desktop window, a posted message as neither, and refuses the wrong shape", () => {
     const relay = parseMessageRelay({
       type: "open:file",
       deliveries: [
@@ -113,8 +113,8 @@ describe("parseMessageRelay", () => {
       detail: null,
     });
     expect(relay.deliveries).toEqual([
-      { app: "logger", has_no_desktop_window: false },
-      { app: "files", has_no_desktop_window: true },
+      { app: "logger", window_id: null, has_no_desktop_window: false },
+      { app: "files", window_id: "win-1", has_no_desktop_window: true },
     ]);
     expect(() => parseMessageRelay({ type: "open:file" })).toThrow(WireShapeError);
   });
@@ -218,6 +218,7 @@ describe("parseAppRecord", () => {
     expect(app.critical).toBe(false);
     expect(app.stop_when_no_windows).toBe(false);
     expect(app.uses_microphone).toBe(false);
+    expect(app.system).toBe(false);
     expect(app.pin).toBeNull();
     const bare = parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true });
     expect(bare.stop_when_no_windows).toBe(true);
@@ -225,6 +226,7 @@ describe("parseAppRecord", () => {
     expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", uses_microphone: true }).uses_microphone).toBe(
       true,
     );
+    expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", system: true }).system).toBe(true);
   });
 
   it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
