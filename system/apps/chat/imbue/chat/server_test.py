@@ -804,9 +804,7 @@ def test_event_image_route_serves_a_codex_generated_image_and_404s(client: Flask
     rollout = sessions_dir / "rollout-2026-11-25T00-00-00-test.jsonl"
     rollout.write_text("".join(json.dumps(line) + "\n" for line in codex_image_generation_rollout_lines()))
     (state_dir / "codex_transcript_path").write_text(str(rollout))
-    state_of(app).agent_manager._agents["agent-456"] = AgentStateItem(
-        id="agent-456", name="codex-agent", state="RUNNING", labels={}, work_dir="/code", harness=HarnessType.CODEX
-    )
+    seed_agent_state(state_of(app).agent_manager, "agent-456", name="codex-agent", harness=HarnessType.CODEX)
 
     events = client.get("/api/chats/agent-456/events").get_json()["events"]
     result_event = next(e for e in events if e["type"] == "tool_result")
