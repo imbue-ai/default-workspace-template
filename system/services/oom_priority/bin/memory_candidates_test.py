@@ -696,6 +696,20 @@ def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
         "  app      screen     screen           the Screen's service: its browser is listed on its own"
         "  40 MiB\n" in table
     )
+    assert memory_candidates.report_to_json(report)["browsers"] == {
+        "candidates": [],
+        "notes": [],
+        "others": [
+            {
+                "kind": "browser",
+                "name": "browser-1",
+                "title": "https://a.test/",
+                "why": "a window shows the Screen it runs on",
+                "pids": [300],
+                "anonymous_kib": 700 * 1024,
+            }
+        ],
+    }
 
 
 def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
