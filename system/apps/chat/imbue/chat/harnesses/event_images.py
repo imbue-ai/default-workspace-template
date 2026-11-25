@@ -7,7 +7,6 @@ image from the event's source line.
 """
 
 import base64
-import binascii
 import re
 from typing import Final
 
@@ -41,13 +40,12 @@ def served_media_type(image_url: str) -> str | None:
 
 @pure
 def decode_image_data_url(image_url: str) -> EventImage | None:
-    """The image a base64 ``data:`` URL holds, or None when it is not a servable image."""
+    """The image a base64 ``data:`` URL holds, or None when it is not a servable image.
+
+    Raises ``binascii.Error`` when the URL names a servable image but its payload is not base64.
+    """
     media_type = served_media_type(image_url)
     if media_type is None:
         return None
     _, _, encoded = image_url.partition(",")
-    try:
-        data = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    return EventImage(media_type=media_type, data=data)
+    return EventImage(media_type=media_type, data=base64.b64decode(encoded, validate=True))

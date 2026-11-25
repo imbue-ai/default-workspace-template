@@ -799,6 +799,10 @@ def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> 
     assert parse_line_image(line, "codex-result-c1", 1) is None
     assert parse_line_image(line, "codex-result-other", 0) is None
     assert parse_line_image(_exec_call_line("c1", _IMAGEGEN_PROGRAM), "codex-result-c1", 0) is None
+    # A PNG whose payload is not base64 is counted on the event, but there is nothing to serve.
+    corrupt = _result_line("c1", [{"type": "input_image", "image_url": "data:image/png;base64,not base64!"}])
+    assert _tool_results(_parse_all([corrupt]))["c1"]["image_count"] == 1
+    assert parse_line_image(corrupt, "codex-result-c1", 0) is None
 
 
 def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_its_number() -> None:
