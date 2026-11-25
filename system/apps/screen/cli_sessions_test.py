@@ -147,3 +147,32 @@ def test_only_daemons_attached_through_this_proxy_are_found_with_their_directory
             environment=environ,
         )
     ]
+
+
+def test_ending_a_daemon_runs_detach_from_its_own_directory_with_its_own_environment_and_waits_for_it_to_go(
+    tmp_path: Path,
+) -> None:
+    proc = tmp_path / "proc"
+    proxy_server = ProxyServer(requested_port=0)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # Above any pid_max, so a failed detach's SIGTERM fallback can never reach a real process.
+    pid = 4_230_588
+    entry = proc / str(pid)
+    environ = {"PATH": os.environ["PATH"], "DAEMON_PROC_ENTRY": str(entry)}
+    attach_url = proxy_server.attach_url("browser-1", "tok-ours")
+    _write_process(proc, pid, ["node", _DAEMON, "plaud-sync-1", f"--cdp={attach_url}"], environ, workspace)
+    calls = tmp_path / "calls.log"
+    # Removing the entry its environment names stands in for the daemon exiting once detached.
+    cli = tmp_path / "playwright-cli"
+    cli.write_text(f"""#!/usr/bin/env bash
+set -eu
+printf '%s %s\\n' "$(pwd -P)" "$*" >> "{calls}"
+rm -rf "$DAEMON_PROC_ENTRY"
+""")
+    cli.chmod(0o755)
+    sessions = ProcCliSessions(proc_dir=proc, playwright_cli=str(cli))
+    [session] = sessions.attached_through(proxy_server)
+    assert sessions.end(session) is True
+    assert calls.read_text().splitlines() == [f"{workspace.resolve()} -s=plaud-sync-1 detach"]
+    assert not entry.exists()
