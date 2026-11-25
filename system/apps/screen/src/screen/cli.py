@@ -101,7 +101,8 @@ def own_chat_id() -> str | None:
     return os.environ.get("MINDS_CHAT_ID") or os.environ.get("MNGR_AGENT_ID")
 
 
-def _headers(is_identity_required: bool) -> dict[str, str]:
+def identity_headers() -> dict[str, str]:
+    """The JSON content type, and the caller's agent identity when it has one."""
     headers = {"Content-Type": "application/json"}
     chat_id = own_chat_id()
     if chat_id:
@@ -109,7 +110,12 @@ def _headers(is_identity_required: bool) -> dict[str, str]:
         name = os.environ.get("MNGR_AGENT_NAME")
         if name:
             headers[AGENT_NAME_HEADER] = name
-    elif is_identity_required:
+    return headers
+
+
+def _headers(is_identity_required: bool) -> dict[str, str]:
+    headers = identity_headers()
+    if is_identity_required and AGENT_ID_HEADER not in headers:
         _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync screen control ...` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
     return headers

@@ -10,7 +10,6 @@ attaches by hand and is killed or times out leaves the session's daemon running 
 service's reaper (``screen.cli_sessions``); the block ends it at once.
 """
 
-import os
 import shutil
 import subprocess
 from collections.abc import Generator
@@ -24,12 +23,12 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from screen.cli import ServiceAnswer
 from screen.cli import call_service
-from screen.cli import own_chat_id
+from screen.cli import identity_headers
 from screen.cli_sessions import PLAYWRIGHT_CLI_COMMAND
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
+from screen.errors import ScreenServiceUnreachableError
 from screen.identity import AGENT_ID_HEADER
-from screen.identity import AGENT_NAME_HEADER
 
 DEFAULT_BROWSER_NAME: Final[str] = "browser-1"
 DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 300.0
@@ -64,7 +63,9 @@ def driven_browser(
     playwright_cli = shutil.which(PLAYWRIGHT_CLI_COMMAND)
     if playwright_cli is None:
         raise BrowserSessionError(f"{PLAYWRIGHT_CLI_COMMAND} is not installed")
-    headers = _agent_headers()
+    headers = identity_headers()
+    if AGENT_ID_HEADER not in headers:
+        raise BrowserSessionError("MNGR_AGENT_ID is not set: run the script from inside an agent")
     acquired = call_service("POST", f"/browsers/{browser_name}/acquire", {"reclaim": is_reclaim}, headers)
     if not acquired.body.get("ok"):
         raise _unavailable(acquired, browser_name, "acquire")
@@ -79,25 +80,28 @@ def driven_browser(
         yield DrivenBrowser(browser_name=browser_name, session_name=session_name, playwright_cli=playwright_cli)
         is_body_done = True
     finally:
-        detach_error = _detach(playwright_cli, session_name)
-        released = call_service("POST", f"/browsers/{browser_name}/release", {}, headers)
-        if released.status != 200:
-            logger.warning("Releasing browser {} answered {}: {}", browser_name, released.status, released.body)
+        detach_error: BrowserSessionError | None = None
+        try:
+            # A session the attach never started detaches cleanly.
+            _run_cli(playwright_cli, session_name, ["detach"], _DETACH_TIMEOUT_SECONDS)
+        except BrowserSessionError as e:
+            detach_error = BrowserSessionError(f"could not detach the playwright-cli session {session_name}: {e}")
+        _release(browser_name, headers)
         if detach_error is not None:
             if is_body_done:
                 raise detach_error
             logger.warning("{}", detach_error)
 
 
-def _agent_headers() -> dict[str, str]:
-    chat_id = own_chat_id()
-    if not chat_id:
-        raise BrowserSessionError("MNGR_AGENT_ID is not set: run the script from inside an agent")
-    headers = {AGENT_ID_HEADER: chat_id, "Content-Type": "application/json"}
-    name = os.environ.get("MNGR_AGENT_NAME")
-    if name:
-        headers[AGENT_NAME_HEADER] = name
-    return headers
+def _release(browser_name: str, headers: dict[str, str]) -> None:
+    """Give the lease back; a failure is logged, since the lease also expires on its own when unused."""
+    try:
+        released = call_service("POST", f"/browsers/{browser_name}/release", {}, headers)
+    except ScreenServiceUnreachableError as e:
+        logger.warning("Releasing browser {} did not reach the Screen service: {}", browser_name, e)
+        return
+    if released.status != 200:
+        logger.warning("Releasing browser {} answered {}: {}", browser_name, released.status, released.body)
 
 
 def _unavailable(answer: ServiceAnswer, browser_name: str, verb: str) -> BrowserUnavailableError:
@@ -109,15 +113,6 @@ def _unavailable(answer: ServiceAnswer, browser_name: str, verb: str) -> Browser
         or f"browser {browser_name} could not be reserved ({verb}: {status})"
     )
     return BrowserUnavailableError(status, detail)
-
-
-def _detach(playwright_cli: str, session_name: str) -> BrowserSessionError | None:
-    """Detach the session; the error to report, or None. A session the attach never started detaches cleanly."""
-    try:
-        _run_cli(playwright_cli, session_name, ["detach"], _DETACH_TIMEOUT_SECONDS)
-    except BrowserSessionError as e:
-        return BrowserSessionError(f"could not detach the playwright-cli session {session_name}: {e}")
-    return None
 
 
 def _run_cli(playwright_cli: str, session_name: str, args: list[str], timeout_seconds: float) -> str:
