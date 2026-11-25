@@ -145,6 +145,10 @@ mkdir -p "$DATA_ROOT"
    unless `all_channels = true` or `dms = true` says otherwise, and a user who
    says "our Slack" may mean all of it. State the scope in your first answer
    from the copy, or ask before the first sync when it would change the answer.
+   Widening has a running cost: a refresh skips the channels whose sidebar
+   entry (`client.counts`) shows nothing new, and a channel the account has
+   not joined has no sidebar entry, so every refresh asks each such channel
+   for history, one request apiece.
 5. **Credentials go through latchkey.** The web-API sources authenticate via
    `latchkey`, already wired to the user through the Imbue Studio app. If a sync
    reports missing credentials or "not permitted", file a permission request
