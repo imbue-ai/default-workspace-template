@@ -36,9 +36,10 @@ needs a directory put on `sys.path`, and each stub says which. See
   Install failures warn without blocking launch; use `--strict` for verification.
   The marketplace source and plugin enablement are declared in the Codex agent
   type's `config_overrides`, which also turn off every other plugin (including
-  those the ChatGPT account enables) and Codex's bundled skills. Existing reviewer settings still control gates;
-  the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
-  workspace-trust consent governs hook execution.
+  those the ChatGPT account enables) and Codex's bundled skills. Existing
+  reviewer settings still control gates; the worker's disabled review/CI/fetch
+  gates are unchanged. mngr's existing workspace-trust consent governs hook
+  execution.
 - Session start: `session_start_sync.sh`, claude's and codex's `SessionStart`
   hook (wired in `.claude/settings.json` and `.codex/hooks.json`). It never
   relocks: it syncs the venv `--frozen` from the committed `uv.lock`, and when
