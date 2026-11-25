@@ -101,7 +101,7 @@ def read_rollup(entry: Path) -> Rollup | None:
 
 
 def read_smaps(
-    pid: int, proc: Path, counted_segment_kib: dict[str, int]
+    pid: int, proc: Path, counted_segment_kib_out: dict[str, int]
 ) -> Rollup | None:
     """The figures gVisor allows, from ``/proc/<pid>/smaps`` where there is no smaps_rollup, or None
     when it cannot be read either.
@@ -109,18 +109,19 @@ def read_smaps(
     gVisor reports every page as private (``Pss`` equals ``Rss``), so only the anonymous memory and
     the shared memory segments are read: no private or proportional figure. A segment several
     processes map is counted once, at the largest resident size any of them reports (each one's
-    covers only the pages it touched): ``counted_segment_kib`` holds the size counted so far, and
-    this process's ``shmem`` is how far it raises those, so the Shared row's sum holds each once.
+    covers only the pages it touched): ``counted_segment_kib_out`` holds the size counted so
+    far, and this process's ``shmem`` is how far it raises those, so the Shared row's sum holds
+    each once.
     """
     memory = read_smaps_memory(pid, proc)
     if memory is None:
         return None
     raised_kib = 0
     for key, kib in memory.shared_segment_kib.items():
-        counted = counted_segment_kib.get(key, 0)
+        counted = counted_segment_kib_out.get(key, 0)
         if kib > counted:
             raised_kib += kib - counted
-            counted_segment_kib[key] = kib
+            counted_segment_kib_out[key] = kib
     return Rollup(
         private=None,
         pss=None,
