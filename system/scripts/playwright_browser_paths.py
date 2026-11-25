@@ -1,6 +1,6 @@
 """Print where the locked Playwright looks for each named browser's executable, one per line.
 
-The env.d browser units run this under the root venv (``uv run python``) on every converge
+The env.d browser units run this under the root venv (``uv run --no-sync python``) on every converge
 to find the paths they link or install into. Each argument is a Playwright registry browser
 name (``chromium``, ``chromium-headless-shell``), optionally followed by ``=<dir>`` to ask
 where it would live under ``PLAYWRIGHT_BROWSERS_PATH=<dir>``. The answer comes from
