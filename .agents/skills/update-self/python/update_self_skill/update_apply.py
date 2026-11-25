@@ -1946,6 +1946,7 @@ def _holding_rollback_point_lock(repo_root: Path) -> Generator[None, None, None]
 # What the notice reads while a rollback runs, step by step.
 _ROLLBACK_PROGRESS_REVERTING = "Reverting the update"
 _ROLLBACK_PROGRESS_RESTORING = "Restoring the previous version"
+_ROLLBACK_PROGRESS_UPGRADING_AGENTS = "Bringing your chats up to date"
 _ROLLBACK_PROGRESS_RESTARTING = "Restarting"
 _ROLLBACK_PROGRESS_CHECKING = "Checking that everything came back"
 SERVICES_RESTART_COMMAND = "mngr start --restart system-services"
@@ -2169,6 +2170,9 @@ def _run_rollback(
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
     if resyncs_venv:
+        _record_rollback_progress(
+            record, repo_root, _ROLLBACK_PROGRESS_UPGRADING_AGENTS
+        )
         _upgrade_stopped_agents(repo_root, runner)
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)

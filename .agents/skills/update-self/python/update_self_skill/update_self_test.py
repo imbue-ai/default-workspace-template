@@ -7545,19 +7545,21 @@ def test_an_apply_landing_a_tree_from_before_the_upgrade_command_runs_no_upgrade
     assert "stopped agents" not in err
 
 
-def _record_presence_at_upgrade(runner: _RecordingRunner, record: Path) -> list[bool]:
-    """Whether ``record`` exists each time ``runner`` runs the stopped-agent upgrade, filled in as it runs."""
-    presence: list[bool] = []
+def _seen_at_upgrade(
+    runner: _RecordingRunner, look: Callable[[], object]
+) -> list[object]:
+    """What ``look`` returns each time ``runner`` runs the stopped-agent upgrade, filled in as it runs."""
+    seen: list[object] = []
     observe = runner.on_command
 
     def on_command(argv: list[str]) -> None:
         if argv == _UPGRADE_STOPPED_AGENTS:
-            presence.append(record.exists())
+            seen.append(look())
         if observe is not None:
             observe(argv)
 
     runner.on_command = on_command
-    return presence
+    return seen
 
 
 def test_a_landed_apply_upgrades_the_stopped_agents_whatever_the_agent_upgrade_record_says(
@@ -7567,7 +7569,7 @@ def test_a_landed_apply_upgrades_the_stopped_agents_whatever_the_agent_upgrade_r
     record = _plant_agent_upgrade_record(apply_repo)
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _syncs_the_upgrade_command(runner, apply_repo)
-    presence = _record_presence_at_upgrade(runner, record)
+    presence = _seen_at_upgrade(runner, record.exists)
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
@@ -10227,6 +10229,23 @@ def test_rollback_last_upgrades_the_stopped_agents_on_the_restored_venv(
     assert runner.cwds_of(*_UPGRADE_STOPPED_AGENTS) == [str(apply_repo)]
 
 
+def test_rollback_last_says_on_the_notice_that_it_is_upgrading_the_stopped_agents(
+    apply_repo: Path,
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+
+    def caption() -> str | None:
+        point = _rollback_point(apply_repo)
+        assert point is not None
+        return point.progress
+
+    captions = _seen_at_upgrade(runner, caption)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert captions == [update_apply._ROLLBACK_PROGRESS_UPGRADING_AGENTS]
+
+
 @pytest.mark.parametrize(
     "outcome",
     [
@@ -10282,7 +10301,7 @@ def test_rollback_last_upgrades_the_stopped_agents_whatever_the_agent_upgrade_re
 ) -> None:
     record = _plant_agent_upgrade_record(apply_repo)
     runner = _venv_moving_rollback_point(apply_repo)
-    presence = _record_presence_at_upgrade(runner, record)
+    presence = _seen_at_upgrade(runner, record.exists)
 
     assert _rollback(runner, apply_repo) == 0
 
