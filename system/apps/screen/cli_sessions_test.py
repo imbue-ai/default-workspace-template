@@ -4,14 +4,12 @@ of them the reaper ends, over a fleet whose tokens, lease and clock are real (sp
 import os
 from pathlib import Path
 
-from pydantic import Field
-
+from mock_cli_sessions_test import RecordingCliSessions
 from screen.browser_fleet import Browser
 from screen.cdp_proxy import ProxyServer
 from screen.cli_sessions import AbandonReason
 from screen.cli_sessions import AttachedCliSession
 from screen.cli_sessions import CliSessionReaper
-from screen.cli_sessions import CliSessionsInterface
 from screen.cli_sessions import IDLE_LIMIT_SECONDS
 from screen.cli_sessions import ProcCliSessions
 from screen.cli_sessions import abandonment_reason
@@ -20,21 +18,6 @@ from testing import FleetHarness
 
 _AGENT = AgentId("chat-a")
 _DAEMON = "/usr/local/lib/node_modules/@playwright/cli/node_modules/playwright-core/lib/entry/cliDaemon.js"
-
-
-class _RecordingCliSessions(CliSessionsInterface):
-    """The daemons a test says are running; ending one records it and takes it out of the list."""
-
-    running: list[AttachedCliSession] = Field(default_factory=list, description="The daemons running")
-    ended: list[str] = Field(default_factory=list, description="The session names ended, in order")
-
-    def attached_through(self, proxy_server: ProxyServer) -> list[AttachedCliSession]:
-        return list(self.running)
-
-    def end(self, session: AttachedCliSession) -> bool:
-        self.ended.append(session.session_name)
-        self.running = [running for running in self.running if running.pid != session.pid]
-        return True
 
 
 def _session(name: str, attach_url: str, proxy_server: ProxyServer, pid: int) -> AttachedCliSession:
@@ -50,7 +33,7 @@ def _session(name: str, attach_url: str, proxy_server: ProxyServer, pid: int) ->
     )
 
 
-def _reaper(harness: FleetHarness, sessions: _RecordingCliSessions) -> CliSessionReaper:
+def _reaper(harness: FleetHarness, sessions: RecordingCliSessions) -> CliSessionReaper:
     return CliSessionReaper(fleet=harness.fleet, sessions=sessions)
 
 
@@ -66,7 +49,7 @@ def test_a_session_whose_token_a_later_attach_replaced_is_ended_and_the_latest_i
     browser = harness.running_browser()
     first = _session("plaud-sync-1", _attach(harness, browser), harness.proxy_server, pid=101)
     second = _session("plaud-sync-2", _attach(harness, browser), harness.proxy_server, pid=102)
-    sessions = _RecordingCliSessions(running=[first, second])
+    sessions = RecordingCliSessions(running=[first, second])
     ended = _reaper(harness, sessions).sweep()
     assert [(session.session_name, reason) for session, reason in ended] == [
         ("plaud-sync-1", AbandonReason.SUPERSEDED)
@@ -82,7 +65,7 @@ def test_the_current_session_is_ended_only_once_idle_past_the_limit_and_a_frame_
     browser = harness.running_browser()
     url = _attach(harness, browser)
     token = url.rsplit("/", 1)[1]
-    sessions = _RecordingCliSessions(running=[_session("browser-1", url, harness.proxy_server, pid=201)])
+    sessions = RecordingCliSessions(running=[_session("browser-1", url, harness.proxy_server, pid=201)])
     reaper = _reaper(harness, sessions)
     harness.clock.advance(IDLE_LIMIT_SECONDS - 60)
     # A frame through the gate counts as use.
@@ -112,7 +95,7 @@ def test_every_session_of_a_stopped_or_unknown_browser_is_ended(tmp_path: Path) 
     browser = harness.running_browser()
     current = _session("browser-1", _attach(harness, browser), harness.proxy_server, pid=401)
     elsewhere = current.model_copy(update={"pid": 402, "session_name": "other", "browser_name": "browser-9"})
-    sessions = _RecordingCliSessions(running=[current, elsewhere])
+    sessions = RecordingCliSessions(running=[current, elsewhere])
     harness.fleet.stop_browser(browser.name)
     ended = _reaper(harness, sessions).sweep()
     assert sorted((session.session_name, reason) for session, reason in ended) == [
