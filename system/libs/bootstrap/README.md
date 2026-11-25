@@ -13,8 +13,10 @@ service.
   from the workspace root with `uv run --no-sync upgrade-stopped-agents`. The
   update-self apply runs it once an update that re-synced the workspace venv has
   landed, and its `rollback-last` once it has put such an update's venv back, so
-  the agents stopped then get files that match the mngr just installed. It
-  prints one line per outcome on stderr and exits 0 whatever the pass finds.
+  the agents stopped then get files that match the mngr just installed. The chat
+  app is running then, so an agent it starts after the pass's listing is
+  restarted by `mngr upgrade`; that outcome is a warning. It prints one line per
+  outcome on stderr and exits 0 whatever the pass finds.
 
 ## What it does
 

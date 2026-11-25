@@ -2,8 +2,8 @@
 
 The boot runs it before anything starts an agent, and update-self runs it (``upgrade-stopped-agents``) once an
 update that moved the venv's mngr has landed or been rolled back. A running agent is never named: ``mngr upgrade``
-restarts an idle one, and restarts are the chat app's. Both run from the repo root, which every path here is
-relative to.
+restarts an idle one, and restarts are the chat app's; one that something starts between the listing and its
+upgrade is still restarted. Both run from the repo root, which every path here is relative to.
 """
 
 import argparse
@@ -194,13 +194,14 @@ def _log_upgrade_outcomes(stdout: str) -> set[str]:
         agent_id = str(event.get("agent_id"))
         agent_name = event.get("agent_name")
         match event.get("event"):
+            case "agent_upgraded" if event.get("plan") == _LEAVE_STOPPED_PLAN:
+                logger.info("mngr upgrade: upgraded {} (stopped)", agent_name)
+                settled_ids.add(agent_id)
             case "agent_upgraded":
-                how = (
-                    "stopped"
-                    if event.get("plan") == _LEAVE_STOPPED_PLAN
-                    else "restarted"
+                logger.warning(
+                    "mngr upgrade: upgraded {} (restarted: it started after the listing)",
+                    agent_name,
                 )
-                logger.info("mngr upgrade: upgraded {} ({})", agent_name, how)
                 settled_ids.add(agent_id)
             case "agent_current":
                 logger.info("mngr upgrade: current {}", agent_name)

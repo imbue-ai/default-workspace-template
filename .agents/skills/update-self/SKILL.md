@@ -773,8 +773,9 @@ workspace's health, and reverts the entire merge on any failure. Once an update
 that re-synced the workspace venv has landed, it also rewrites the mngr-written
 files of every chat and background agent that is stopped then, the ones you
 paused included, so the resume below starts them on files that match the new
-mngr; its `agent upgrade:` lines say what it did. Exit codes, each spelled out
-in `references/apply-outcomes.md`:
+mngr; a chat that something starts while it runs can be restarted by it. Its
+`agent upgrade:` lines say what it did. Exit codes, each spelled out in
+`references/apply-outcomes.md`:
 
 - **`0` -- applied.** Read its closing stderr lines before signing off.
 - **`2` -- automatically rolled back.** The update did not land and the

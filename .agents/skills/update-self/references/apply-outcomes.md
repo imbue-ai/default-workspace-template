@@ -39,10 +39,15 @@ which step was slow.
 An apply that re-synced the workspace venv then runs `upgrade-stopped-agents`
 (`system/libs/bootstrap/README.md`): every chat and background agent stopped at
 that moment, the ones 5b paused included, gets mngr-written files that match the
-new mngr and stays stopped; a running one is left as it is. Its lines start
-`agent upgrade:`. A `warning:` about it (it failed, timed out or could not run)
-changes nothing about the landing and needs nothing from you: the update stays
-applied, and the workspace's next boot brings every agent current.
+new mngr and stays stopped. A running one is never named, but the chat app is up
+by then, so a chat that something starts between the pass's listing and its own
+upgrade (a message to a stopped chat, the main chat's wake) is restarted by
+`mngr upgrade` itself, outside the chat app. Its lines start `agent upgrade:`,
+and such a chat's reads `upgraded <chat> (restarted: ...)`. A line that reports
+a failure or a restart, or a `warning:` about the pass itself (it timed out or
+could not run), changes nothing about the landing and needs nothing from you:
+the update stays applied, and the workspace's next boot brings every agent
+current.
 
 ## Exit 2 -- automatically rolled back
 

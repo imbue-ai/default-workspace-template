@@ -256,6 +256,29 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
     assert not any("WARNING" in line for line in lines)
 
 
+def test_an_agent_mngr_restarted_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Something started it between the listing and its upgrade, so mngr restarted it behind the chat app.
+    stub = _stub_in_workspace(monkeypatch, tmp_path, "agent-a|STOPPED\n")
+    stub.reply_on["upgrade"] = (
+        0,
+        mngr_upgrade_outcome(
+            "agent_upgraded", "agent-a", plan="RESTART_IDLE", prior_state="WAITING"
+        ),
+    )
+    installed = install_mngr(WORKSPACE_VENV, "c0ffee")
+
+    with _captured_log_lines("WARNING") as warnings:
+        upgrade_stopped_agents()
+
+    assert any(
+        "mngr upgrade: upgraded a (restarted: it started after the listing)" in line
+        for line in warnings
+    ), warnings
+    assert json.loads(COVERAGE_RECORD.read_text()) == {"mngr": installed}
+
+
 @pytest.mark.parametrize(
     ("detail", "logged"),
     [
