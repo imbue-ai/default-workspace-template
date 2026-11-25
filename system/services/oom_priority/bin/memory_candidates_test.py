@@ -389,6 +389,12 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             14,
             provider="modal",
         ),
+        # No activity time at all, so nothing says it has sat idle.
+        {
+            **_agent_record("no-times", "WAITING", {"user_created": "true"}, old, 15),
+            "start_time": None,
+            "agent_activity_time": None,
+        },
     ]
 
     report = memory_candidates.collect_report(
@@ -405,6 +411,7 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     assert [(e.name, e.why) for e in report.agents.others] == [
         ("busy-chat", "mid-turn"),
         ("just-answered", "in use: active 5m ago"),
+        ("no-times", "no activity time to judge it by"),
     ]
     table = memory_candidates.render_table(report)
     assert (
