@@ -76,11 +76,7 @@ describe("a refused request to the Files server", () => {
     expect(await isGone("/home/notes.txt")).toBe(true);
 
     const pipe = "It isn't a file that can be read.";
-    answering(
-      404,
-      JSON.stringify({ detail: pipe, user_facing_message: pipe, kind: "not_a_file" }),
-      "application/json",
-    );
+    answering(404, JSON.stringify({ detail: pipe, user_facing_message: pipe }), "application/json");
     expect(await isGone("/home/notes.txt")).toBe(false);
 
     answering(200, JSON.stringify({ kind: "file", is_text: true }), "application/json");

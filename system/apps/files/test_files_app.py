@@ -580,9 +580,9 @@ def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, fil
 
 
 def test_a_new_folder_in_a_folder_that_cannot_be_written_says_what_failed_and_why(
-    open_files_page: OpenFilesPage, files_root: Path, read_only_folders: set[str]
+    open_files_page: OpenFilesPage, files_root: Path, unwritable_folders: set[str]
 ) -> None:
-    read_only_folders.add("/photos/")
+    unwritable_folders.add("/photos/")
     page = open_files_page("/photos/")
     expect(_entry(page, "/photos/sunset.png")).to_be_visible()
     page.locator('[data-action="add"]').click()
@@ -590,7 +590,10 @@ def test_a_new_folder_in_a_folder_that_cannot_be_written_says_what_failed_and_wh
 
     toast = page.locator("[data-toast]")
     expect(
-        toast.get_by_text('Couldn\'t create "untitled folder". This folder is read-only.', exact=True)
+        toast.get_by_text(
+            "Couldn't create \"untitled folder\". You don't have permission to change things in this folder.",
+            exact=True,
+        )
     ).to_be_visible()
     toast.get_by_text("See details").click()
     expect(toast.locator(".see-details pre")).to_contain_text("HTTP 403")

@@ -9,6 +9,7 @@
 import { readFailure, type RequestKind } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError, fetchOrNotAnswered, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
 
+import { filesFailureKindOf } from "./failures";
 import { childPath, encodePath } from "./paths";
 
 /** One entry of a folder as the server lists it. A folder's `size` is how many entries it holds; `mtime` is in
@@ -124,7 +125,7 @@ export async function isGone(path: string): Promise<boolean> {
     await send(`${urlOf(path)}?json`, {}, "read");
     return false;
   } catch (error) {
-    return error instanceof HttpError && error.failure.kind === "not_found";
+    return error instanceof HttpError && filesFailureKindOf(error.failure.kind) === "not_found";
   }
 }
 

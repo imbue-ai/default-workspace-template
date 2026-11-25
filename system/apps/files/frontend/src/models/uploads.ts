@@ -5,7 +5,7 @@
 
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 
-import { isNotWritable, toldFailure } from "./failures";
+import { filesFailureKindOf, toldFailure, type FilesFailureKind } from "./failures";
 import { uploadFile, type Upload } from "./server";
 
 /** A file to send and where it goes below the target folder: `a.png`, or `photos/2024/a.png` from a folder. */
@@ -35,17 +35,22 @@ export interface UploadFailure {
   readonly explanation: string;
 }
 
-/** What a failed upload's row says: a dropped connection was interrupted, a refusal of a kind that says the folder
- *  cannot be written or the disk is full says so, and any other names no cause of its own. The sentence and what the
- *  server said go in the explanation. */
+/** The row's short line for a refusal whose kind says why the file could not go up. */
+const UPLOAD_LINE_BY_KIND: Readonly<Partial<Record<FilesFailureKind, string>>> = {
+  permission_denied: "Failed — no permission",
+  read_only: "Failed — read-only folder",
+  shared_read_only: "Failed — shared to read only",
+  out_of_space: "Failed — out of disk space",
+};
+
+/** What a failed upload's row says: a dropped connection was interrupted, a refusal whose kind says why says so in
+ *  short, and any other names no cause of its own. The sentence and what the server said go in the explanation. */
 export function uploadFailureOf(error: unknown, name: string): UploadFailure {
   const { status, kind } = describeRequestFailure(error, "change");
   const whatFailed = `"${name}" couldn't be uploaded`;
   const told = toldFailure(error, { whatFailed, operation: "into-folder", tried: null, item: null });
-  let line = "Failed";
-  if (status === 0) line = "Interrupted";
-  else if (isNotWritable(kind)) line = "Failed — read-only folder";
-  else if (kind === "out_of_space") line = "Failed — out of disk space";
+  const known = filesFailureKindOf(kind);
+  const line = status === 0 ? "Interrupted" : ((known === null ? undefined : UPLOAD_LINE_BY_KIND[known]) ?? "Failed");
   return { line, explanation: [told.message, told.details].filter((part) => part !== null).join("\n") };
 }
 

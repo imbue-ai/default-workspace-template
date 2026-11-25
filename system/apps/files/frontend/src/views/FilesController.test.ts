@@ -281,7 +281,7 @@ describe("a folder that cannot be listed", () => {
         status: 403,
         body: {
           detail: "GET /home/: [Errno 13]",
-          user_facing_message: "You don't have permission to change or read this.",
+          user_facing_message: "You don't have permission to open this.",
           kind: "permission_denied",
         },
       },
@@ -289,7 +289,9 @@ describe("a folder that cannot be listed", () => {
     );
 
     await vi.waitFor(() =>
-      expect(root.querySelector(".files-empty")?.textContent).toContain("You don't have permission to open it."),
+      expect(root.querySelector(".files-empty")?.textContent).toContain(
+        "Couldn't open this folder. You don't have permission to open this.",
+      ),
     );
     expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]);
   });

@@ -43,15 +43,19 @@ between the workspace and the browser answer with an error in place of the file.
 
 A refusal is an `ErrorResponse` (`app_schema`): a `user_facing_message` naming
 only the cause ("It's no longer there.", "Something with that name is already
-there."), since the page's own words name the file; a `kind` the page words per
-action where the refusing folder matters; and `detail`. A disk error people can
-act on is classified by its errno (`os_refusals.py`): no permission
+there."), since the page's own words name the file; `detail`; and, for the cases
+the page tells apart, a `kind` (`os_refusals.FailureKind`, which the frontend's
+`FILES_FAILURE_KINDS` lists too, and a test holds the two lists together). Each
+sentence is defined once, in `os_refusals.py`, and raised from there. A disk
+error people can act on is classified by its errno: no permission
 (`permission_denied`) or a read-only file system (`read_only`), out of disk
-space (`out_of_space`, 507), gone, already there, a name too long, a file where a
-folder should be or the reverse, in use, too large, or a link loop. A MOVE refused
-for want of write access says which end refused (`destination_not_writable`,
-`source_not_writable`). Any other disk error carries a `detail` only, so the
-page can say no more than to try again. A computer's file server refusing a
+space (`out_of_space`, 507), gone (`not_found`), already there, a name too
+long, a file where a folder should be or a folder already there, in use, too
+large, or a link loop. A MOVE refused for want of write access says which end
+refused (`destination_not_writable`, `source_not_writable`) without saying
+read-only, since either end may lack permission or be on a read-only file
+system. Any other disk error carries a `detail` only, so the page can say no
+more than to try again. A computer's file server refusing a
 change is "Your computer only shares this to read." (`shared_read_only`), "It's
 no longer there." (`not_found`, which a read or a listing of a path the computer
 says is gone answers too), or else "Your computer couldn't do this.", its status
@@ -184,17 +188,21 @@ shared by every window.
 
 A failed request is told through `workspace_ui`'s reader (`models/failures.ts`):
 a sentence naming what failed, then the cause the server gave (`Couldn't move
-"notes.txt" into "reports". That folder is read-only.`), worded by Files where it
-depends on which folder refused, with what was tried in full (`Tried to move
-/home/user/notes.txt into /home/user/reports/`), the status and the server's
-text behind "See details". A request nothing answered says only that.
+"notes.txt" into "reports". You can't add things to that folder.`), with what
+was tried in full (`Tried to move /home/user/notes.txt into
+/home/user/reports/`), the status and the server's text behind "See details".
+The cause is the server's sentence, except where its words depend on what the
+person was doing: no permission and the side of a move that refused are worded
+by kind and then operation (making something in the folder on show, changing
+an item in place, moving it), so a rename, which the server sees as a move,
+speaks of the folder the item is in. A request nothing answered says only that.
 
 A failure that owes the person help leaves a toast that stays, on which the
 page's `Toasts` draws "Ask an agent to fix this" where a shell frames the page,
 and "Report a bug" only where no agent can be asked. That is every failure
 nothing explained and every refusal that leaves the person unable to do what
-they meant, known cause or not: a read-only folder, a name already taken, no
-permission, a computer that shares read-only. The ask (`askAgentFromToasts`, sending the
+they meant, known cause or not: a folder that can't be written, a name already
+taken, no permission, a computer that shares read-only. The ask (`askAgentFromToasts`, sending the
 toast's `agentRequest` through the app contract's `askAgentToFix`) carries the
 sentence and the details, which say what was being done and where, to the chat
 about Files, opened beside the window (the
@@ -232,8 +240,9 @@ fix this", under which an ask the shell refused is said with "Draft it in a
 chat", and then one "Report a bug" that files the refused ask with the failure.
 A file whose text cannot be loaded says so in place of the editor, and a failed
 read of what your computers share says so in the sidebar, each with the same
-buttons; an upload that failed says why in its row (interrupted, a read-only
-folder, out of disk space, or failed), with the details on hover; and a file
+buttons; an upload that failed says why in its row (interrupted, no
+permission, a read-only folder, shared to read only, out of disk space, or
+failed), with the details on hover; and a file
 whose location is too long for a window of its own is told rather than asked of
 the shell.
 

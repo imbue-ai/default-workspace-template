@@ -76,7 +76,7 @@ describe("the upload panel's lifetime", () => {
 describe("a failed upload's row", () => {
   it("says why each failed from the refusal's kind, with the sentence and details behind it", async () => {
     const uploads = queue();
-    uploads.add("/home/", [file("a.txt"), file("b.txt"), file("c.txt"), file("d.txt"), file("e.txt")]);
+    uploads.add("/home/", [file("a.txt"), file("b.txt"), file("c.txt"), file("d.txt"), file("e.txt"), file("f.txt")]);
     settles[0].reject(httpFailure(0, null));
     const readOnly = "Your computer only shares this to read.";
     settles[1].reject(httpFailure(403, { detail: readOnly, user_facing_message: readOnly, kind: "shared_read_only" }));
@@ -88,14 +88,19 @@ describe("a failed upload's row", () => {
     await vi.advanceTimersByTimeAsync(0);
     settles[3].reject(httpFailure(403, { detail: "forbidden" }));
     settles[4].reject(httpFailure(500, { detail: "PUT /home/e.txt: [Errno 5] Input/output error" }));
+    const denied = "You don't have permission to change this.";
+    settles[5].reject(
+      httpFailure(403, { detail: "PUT /home/f.txt", user_facing_message: denied, kind: "permission_denied" }),
+    );
     await vi.advanceTimersByTimeAsync(0);
 
     expect(uploads.items.map((item) => [item.status, item.failure?.line])).toEqual([
       ["failed", "Interrupted"],
-      ["failed", "Failed — read-only folder"],
+      ["failed", "Failed — shared to read only"],
       ["failed", "Failed — out of disk space"],
       ["failed", "Failed"],
       ["failed", "Failed"],
+      ["failed", "Failed — no permission"],
     ]);
     expect(uploads.items[1].failure?.explanation).toBe(`"b.txt" couldn't be uploaded. ${readOnly}\nHTTP 403`);
     expect(uploads.items[4].failure?.explanation).toBe(

@@ -149,19 +149,19 @@ class RefusingLocalFiles(LocalFiles):
     (``/reports/``) or a file's (``/notes.txt``), as the server is asked for it.
     """
 
-    def __init__(self, root: Path, read_only_folders: set[str], unreadable_paths: set[str]) -> None:
+    def __init__(self, root: Path, unwritable_folders: set[str], unreadable_paths: set[str]) -> None:
         super().__init__(root)
-        self._read_only_folders = read_only_folders
+        self._unwritable_folders = unwritable_folders
         self._unreadable_paths = unreadable_paths
 
     def _refused(self, path: str) -> PermissionError:
         return PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self._on_disk(path)))
 
-    def _is_in_read_only_folder(self, path: str) -> bool:
+    def _is_in_unwritable_folder(self, path: str) -> bool:
         return not self.is_folder_writable(self._on_disk(path.rstrip("/")).parent)
 
     def is_folder_writable(self, folder: Path) -> bool:
-        if any(folder == self._on_disk(read_only.rstrip("/")) for read_only in self._read_only_folders):
+        if any(folder == self._on_disk(unwritable.rstrip("/")) for unwritable in self._unwritable_folders):
             return False
         return super().is_folder_writable(folder)
 
@@ -178,21 +178,21 @@ class RefusingLocalFiles(LocalFiles):
         return super().read(path, headers)
 
     def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:
-        if self._is_in_read_only_folder(path):
+        if self._is_in_unwritable_folder(path):
             raise self._refused(path)
         super().write(path, body, length)
 
     def make_folder(self, path: str) -> None:
-        if self._is_in_read_only_folder(path):
+        if self._is_in_unwritable_folder(path):
             raise self._refused(path)
         super().make_folder(path)
 
     def delete(self, path: str) -> None:
-        if self._is_in_read_only_folder(path):
+        if self._is_in_unwritable_folder(path):
             raise self._refused(path)
         super().delete(path)
 
     def move(self, path: str, destination: str) -> None:
-        if self._is_in_read_only_folder(path) or self._is_in_read_only_folder(destination):
+        if self._is_in_unwritable_folder(path) or self._is_in_unwritable_folder(destination):
             raise self._refused(destination)
         super().move(path, destination)

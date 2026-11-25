@@ -20,6 +20,7 @@ from files_app.connections import list_on_device
 from files_app.gateway import Gateway
 from files_app.gateway import device_files_path
 from files_app.local_files import EDITABLE_LIMIT
+from files_app.os_refusals import GONE
 from files_app.sources import EntryRecord
 from files_app.sources import FileData
 from files_app.sources import FilesError
@@ -28,7 +29,6 @@ from files_app.sources import PageData
 from files_app.webdav import DavEntry
 
 UNREACHABLE: Final[str] = "Your computer isn't answering. It may be asleep, or Imbue Studio may be closed."
-_GONE: Final[str] = "It's no longer there."
 _TEXT_TYPES: Final[re.Pattern[str]] = re.compile(r"^(text/|application/(json|xml|javascript|x-sh|toml|yaml))")
 _HOP_BY_HOP: Final[frozenset[str]] = frozenset(
     {
@@ -112,7 +112,7 @@ class DeviceFiles:
         if described is None:
             raise FilesError(502, UNREACHABLE, is_routine=True)
         if len(described) == 0:
-            raise FilesError(404, _GONE, "not_found")
+            raise FilesError.from_refusal(GONE)
         entry = described[0]
         if entry.is_folder:
             return FolderData(entries=tuple(_record(child) for child in described[1:]))
@@ -141,7 +141,7 @@ class DeviceFiles:
                 answered = upstream.read().decode("utf-8", "replace").strip()
                 detail = f"{method} {path}: {answered}" if answered else None
                 if upstream.status_code == 404:
-                    raise FilesError(404, _GONE, "not_found", detail=detail)
+                    raise FilesError.from_refusal(GONE, detail=detail)
                 # The status goes behind "See details" with the rest; the page names what failed.
                 raise FilesError(upstream.status_code, "Your computer couldn't do this.", detail=detail)
         finally:
@@ -153,7 +153,7 @@ class DeviceFiles:
         upstream = self._send(request.method, path, ranged, None)
         if upstream.status_code == 404:
             upstream.close()
-            raise FilesError(404, _GONE, "not_found")
+            raise FilesError.from_refusal(GONE)
         return _relayed(upstream)
 
     def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:

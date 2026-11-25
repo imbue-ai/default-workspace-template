@@ -58,14 +58,14 @@ def connections() -> Connections:
 
 
 @pytest.fixture
-def read_only_folders() -> set[str]:
+def unwritable_folders() -> set[str]:
     """Folders of `files_root` (``/photos/``) that refuse to be written, as they would to anyone but root; empty
     until a test adds one."""
     return set()
 
 
 @pytest.fixture
-def files_origin(files_root: Path, connections: Connections, read_only_folders: set[str]) -> Iterator[str]:
+def files_origin(files_root: Path, connections: Connections, unwritable_folders: set[str]) -> Iterator[str]:
     """The origin of the Files server over `files_root`."""
     if not (STATIC_DIRECTORY / "index.html").is_file():
         pytest.fail("Files is not built: run `npm run build` at system/ first")
@@ -73,7 +73,7 @@ def files_origin(files_root: Path, connections: Connections, read_only_folders: 
         gateway=None,
         static_directory=STATIC_DIRECTORY,
         agent_id="agent-main",
-        local=RefusingLocalFiles(files_root, read_only_folders, set()),
+        local=RefusingLocalFiles(files_root, unwritable_folders, set()),
     )
 
     def listed_connections() -> Response:

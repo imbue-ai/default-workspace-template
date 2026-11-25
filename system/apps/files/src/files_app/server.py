@@ -50,9 +50,9 @@ from files_app.gateway import Gateway
 from files_app.keybindings import FILES_APP_NAME
 from files_app.keybindings import files_keybinding_actions
 from files_app.local_files import LocalFiles
-from files_app.local_files import MoveSide
 from files_app.local_files import content_disposition
-from files_app.os_refusals import OsRefusal
+from files_app.os_refusals import FailureKind
+from files_app.os_refusals import MOVE_REFUSAL_BY_SIDE
 from files_app.os_refusals import WRITE_REFUSAL_KINDS
 from files_app.os_refusals import refusal_for_os_error
 from files_app.sources import FileSource
@@ -72,11 +72,6 @@ _METHODS: Final[list[str]] = ["GET", "HEAD", "PUT", "DELETE", "MKCOL", "MOVE"]
 _CHUNK: Final[int] = 64 * 1024
 _NO_MOVE_TO_COMPUTER: Final[str] = "Moving isn't supported on files shared from your computer."
 _NO_GATEWAY: Final[str] = "This workspace isn't connected to Imbue Studio, so it can't reach your computers."
-# A move refused for want of write access, by the end that refused it, so the page can say which folder that was.
-_MOVE_REFUSAL_BY_SIDE: Final[dict[MoveSide, OsRefusal]] = {
-    "destination": OsRefusal(403, "destination_not_writable", "The folder it would move into is read-only."),
-    "source": OsRefusal(403, "source_not_writable", "The folder it's in is read-only."),
-}
 # Queries that ask for data or a download rather than a page, so a failure is never answered with Files' own pages.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
 # Queries that load in the hidden frame a download goes through, which can read only a plain-text refusal.
@@ -130,10 +125,10 @@ def _is_plain_text_asked() -> bool:
 
 
 def _refusal(
-    sentence: str, status: int, kind: str | None = None, detail: str | None = None, is_routine: bool = False
+    sentence: str, status: int, kind: FailureKind | None = None, detail: str | None = None, is_routine: bool = False
 ) -> Response:
     """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
-    page's own words name what failed), ``kind`` for a page that words the cause itself, ``detail`` for a script (the
+    page's own words name what failed), ``kind`` for a page that reads the case, ``detail`` for a script (the
     sentence when there is nothing more to say), and ``is_routine`` for a refusal that is ordinary operation the
     sentence fully explains. A download or a page load is answered with the sentence in plain text instead."""
     if _is_plain_text_asked():
@@ -199,9 +194,7 @@ def create_app(
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _refusal(
-            error.message, error.status, kind=error.kind, detail=error.detail, is_routine=error.is_routine
-        )
+        return _refusal(error.message, error.status, kind=error.kind, detail=error.detail, is_routine=error.is_routine)
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
@@ -252,7 +245,7 @@ def create_app(
             if request.method == "MOVE" and isinstance(source, LocalFiles) and refusal.kind in WRITE_REFUSAL_KINDS:
                 side = source.unwritable_side(path, _destination_path()[len(prefix) :])
                 if side is not None:
-                    refusal = _MOVE_REFUSAL_BY_SIDE[side]
+                    refusal = MOVE_REFUSAL_BY_SIDE[side]
             logger.debug("{} {} refused as {}: {}", request.method, path, refusal.kind, error)
             return _refusal(
                 refusal.sentence, refusal.status, kind=refusal.kind, detail=detail, is_routine=refusal.is_routine
@@ -329,9 +322,10 @@ def create_app(
         with ``name``, ``is_folder``, ``is_symlink``, ``size`` and ``mtime``), a file's bytes (``?view`` or ``?edit``
         its page, ``?json`` ``{"kind": "file", "is_text": ...}``), or ``?zip`` a folder as a zip. PUT writes a file
         from the body, MKCOL makes a folder, MOVE (to the ``Destination`` header) renames, DELETE removes. A refusal
-        is an ``ErrorResponse`` under its status: ``detail``, with ``user_facing_message`` and ``kind`` when the cause
-        is one a person can act on, and ``routine`` when it is ordinary operation the sentence fully explains. A refused ``?download`` or ``?zip``, or a page the browser loads, is answered with
-        the sentence as plain text instead.
+        is an ``ErrorResponse`` under its status: ``detail``, with ``user_facing_message`` when the cause is one a
+        person can act on, a ``kind`` (``os_refusals.FailureKind``) for the cases the page tells apart, and ``routine``
+        when it is ordinary operation the sentence fully explains. A refused ``?download`` or ``?zip``, or a page the
+        browser loads, is answered with the sentence as plain text instead.
         """
         return answer(local, "", _requested_path())
 

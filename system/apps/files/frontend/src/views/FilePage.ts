@@ -121,7 +121,7 @@ export class FilePageModel {
       const name = nameOf(path);
       const failure = toldFailure(error, {
         whatFailed: `Couldn't save "${name}"`,
-        operation: "item",
+        operation: "in-place",
         tried: `save ${path}`,
         item: name,
       });
@@ -163,7 +163,7 @@ export class FilePageModel {
     } catch (error) {
       const failure = toldFailure(error, {
         whatFailed: `Couldn't delete "${nameOf(path)}"`,
-        operation: "item",
+        operation: "in-place",
         tried: `delete ${path}`,
         item: nameOf(path),
       });

@@ -282,12 +282,12 @@ def test_a_move_never_replaces_what_is_there_nor_puts_a_folder_inside_itself(tmp
     assert (root / "box").is_dir()
 
 
-def _refusing_app(tmp_path: Path, read_only_folders: set[str], unreadable_paths: set[str]) -> FlaskClient:
+def _refusing_app(tmp_path: Path, unwritable_folders: set[str], unreadable_paths: set[str]) -> FlaskClient:
     """The app over files where those folders refuse to be written and those paths to be read, as they would to
     anyone but root."""
     root = tmp_path / "root"
     root.mkdir(exist_ok=True)
-    return _app(None, tmp_path, RefusingLocalFiles(root, read_only_folders, unreadable_paths))
+    return _app(None, tmp_path, RefusingLocalFiles(root, unwritable_folders, unreadable_paths))
 
 
 def test_a_move_into_a_folder_that_cannot_be_written_says_that_folder_refused_without_naming_the_file(
@@ -338,7 +338,7 @@ def test_a_name_too_long_is_refused_as_routine_since_its_sentence_is_the_whole_r
 
     assert response.status_code == 400
     answer = response.get_json()
-    assert (answer["kind"], answer["user_facing_message"]) == ("name_too_long", "That name is too long.")
+    assert answer["user_facing_message"] == "That name is too long."
     assert answer["routine"] is True
 
 

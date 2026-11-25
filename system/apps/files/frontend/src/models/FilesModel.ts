@@ -132,7 +132,7 @@ export async function renameOnServer(path: string, target: string, name: string)
     return null;
   } catch (error) {
     const whatFailed = `Couldn't rename "${nameOf(path)}" to "${name}"`;
-    return toldFailure(error, { whatFailed, operation: "item", tried, item: nameOf(path) });
+    return toldFailure(error, { whatFailed, operation: "in-place", tried, item: nameOf(path) });
   }
 }
 
@@ -477,7 +477,7 @@ export class FilesModel {
       } catch (error) {
         const whatFailed = `Couldn't delete "${entry.name}"`;
         const tried = `delete ${entry.path}`;
-        const failure = toldFailure(error, { whatFailed, operation: "item", tried, item: entry.name });
+        const failure = toldFailure(error, { whatFailed, operation: "in-place", tried, item: entry.name });
         // Already gone is what was asked for.
         if (failure.isGone) deleted.add(entry.path);
         else failures.push(failure);

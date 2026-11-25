@@ -159,7 +159,6 @@ describe("a file that could not be saved", () => {
       httpFailure(409, {
         detail: "PUT /home/user/workspace/notes.md",
         user_facing_message: said,
-        kind: "in_use",
         routine: true,
       }),
     );
@@ -197,7 +196,7 @@ describe("a file that could not be saved", () => {
     expect(page.reporter.reportBug).toHaveBeenCalledWith({ message: toast.message, details: toast.details });
   });
 
-  it("asks an agent to save what a read-only folder refused, from its toast, which stays up", async () => {
+  it("asks an agent to save what a folder without permission refused, from its toast, which stays up", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
     const { page, root, host } = await openedPage(true);
     page.draft = "draft, changed";
@@ -220,7 +219,9 @@ describe("a file that could not be saved", () => {
     m.redraw.sync();
 
     const [task] = host.askAgent.mock.calls[0];
-    expect(task).toContain("Couldn't save \"notes.md\". The folder it's in is read-only.");
+    expect(task).toContain(
+      "Couldn't save \"notes.md\". You don't have permission to change things in the folder it's in.",
+    );
     expect(task).toContain(`Tried to save ${PATH}\nHTTP 403\nPUT: [Errno 13]`);
     expect(task).toMatch(/\n\nDo what the user was trying to do if you can; otherwise [^\n]*$/);
     expect(actions()).toEqual(["Ask an agent to fix this"]);

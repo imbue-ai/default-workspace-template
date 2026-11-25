@@ -1,48 +1,80 @@
 """What the disk's refusals mean to the person using Files: an ``OSError`` whose cause they can act on becomes a
-status, a kind the frontend words per action, and a sentence naming only the cause (the frontend's sentence already
-names the file). Anything else is a failure nobody explained, which the frontend can only say to try again."""
+status and a sentence naming only the cause (the frontend's sentence already names the file), and, where the frontend
+reads it, a kind. Anything else is a failure nobody explained, which the frontend can only say to try again.
+
+A sentence the server says in more than one place is defined here once and raised from here."""
 
 import errno
 from typing import Final
+from typing import Literal
 from typing import NamedTuple
+
+# The kinds of refusal the frontend reads (its ``FILES_FAILURE_KINDS`` in ``models/failures.ts``): one it words per
+# operation, one it tells as an item gone, one it offers a different remedy for. A refusal of any other cause carries
+# its sentence alone.
+FailureKind = Literal[
+    "not_found",
+    "permission_denied",
+    "read_only",
+    "out_of_space",
+    "destination_not_writable",
+    "source_not_writable",
+    "shared_read_only",
+]
+
+# Which end of a move: the folder the item is in, or the folder it goes into.
+MoveSide = Literal["source", "destination"]
 
 
 class OsRefusal(NamedTuple):
     status: int
-    kind: str
     sentence: str
+    kind: FailureKind | None = None
     # Ordinary operation the sentence fully explains, so the person is owed no more help than it gives.
     is_routine: bool = False
 
 
-# Refusals to change something the person may not change here; a MOVE answering one says which side refused.
-WRITE_REFUSAL_KINDS: Final[frozenset[str]] = frozenset({"permission_denied", "read_only"})
+GONE: Final[OsRefusal] = OsRefusal(404, "It's no longer there.", "not_found")
+ALREADY_EXISTS: Final[OsRefusal] = OsRefusal(409, "Something with that name is already there.")
+# A MOVE onto something is refused as WebDAV refuses one sent with ``Overwrite: F``.
+NOT_REPLACED: Final[OsRefusal] = ALREADY_EXISTS._replace(status=412)
+FOLDER_IN_THE_WAY: Final[OsRefusal] = OsRefusal(409, "There's already a folder with that name.")
 
-_PERMISSION_DENIED: Final[OsRefusal] = OsRefusal(403, "permission_denied", "You don't have permission to change this.")
+# Refusals to change something the person may not change here; a MOVE answering one says which side refused.
+WRITE_REFUSAL_KINDS: Final[frozenset[FailureKind]] = frozenset({"permission_denied", "read_only"})
+# Which end of a MOVE refused for want of write access, so the page can say which folder that was. Either may be a
+# folder without write permission or on a read-only file system, so neither says which.
+MOVE_REFUSAL_BY_SIDE: Final[dict[MoveSide, OsRefusal]] = {
+    "destination": OsRefusal(
+        403, "You can't add things to the folder it would move into.", "destination_not_writable"
+    ),
+    "source": OsRefusal(403, "You can't take things out of the folder it's in.", "source_not_writable"),
+}
+
+_PERMISSION_DENIED: Final[OsRefusal] = OsRefusal(403, "You don't have permission to change this.", "permission_denied")
 # A download's refusal is shown as the server words it, so a refused read must not speak of changing anything.
-_PERMISSION_DENIED_TO_READ: Final[OsRefusal] = OsRefusal(
-    403, "permission_denied", "You don't have permission to open this."
+_PERMISSION_DENIED_TO_READ: Final[OsRefusal] = _PERMISSION_DENIED._replace(
+    sentence="You don't have permission to open this."
 )
-_ALREADY_EXISTS: Final[OsRefusal] = OsRefusal(409, "already_exists", "Something with that name is already there.")
-_IN_USE: Final[OsRefusal] = OsRefusal(409, "in_use", "It's in use right now. Try again in a moment.", is_routine=True)
-_OUT_OF_SPACE: Final[OsRefusal] = OsRefusal(507, "out_of_space", "This workspace is out of disk space.")
+_IN_USE: Final[OsRefusal] = OsRefusal(409, "It's in use right now. Try again in a moment.", is_routine=True)
+_OUT_OF_SPACE: Final[OsRefusal] = OsRefusal(507, "This workspace is out of disk space.", "out_of_space")
 
 _REFUSAL_BY_ERRNO: Final[dict[int, OsRefusal]] = {
     errno.EACCES: _PERMISSION_DENIED,
     errno.EPERM: _PERMISSION_DENIED,
-    errno.EROFS: OsRefusal(403, "read_only", "This part of the workspace is read-only."),
+    errno.EROFS: OsRefusal(403, "This part of the workspace is read-only.", "read_only"),
     errno.ENOSPC: _OUT_OF_SPACE,
     errno.EDQUOT: _OUT_OF_SPACE,
-    errno.ENOENT: OsRefusal(404, "not_found", "It's no longer there."),
-    errno.EEXIST: _ALREADY_EXISTS,
-    errno.ENOTEMPTY: _ALREADY_EXISTS,
-    errno.ENAMETOOLONG: OsRefusal(400, "name_too_long", "That name is too long.", is_routine=True),
-    errno.ENOTDIR: OsRefusal(409, "not_a_folder", "There's a file where a folder should be."),
-    errno.EISDIR: OsRefusal(409, "is_a_folder", "There's a folder where a file should be."),
+    errno.ENOENT: GONE,
+    errno.EEXIST: ALREADY_EXISTS,
+    errno.ENOTEMPTY: ALREADY_EXISTS,
+    errno.ENAMETOOLONG: OsRefusal(400, "That name is too long.", is_routine=True),
+    errno.ENOTDIR: OsRefusal(409, "There's a file where a folder should be."),
+    errno.EISDIR: FOLDER_IN_THE_WAY,
     errno.EBUSY: _IN_USE,
     errno.ETXTBSY: _IN_USE,
-    errno.EFBIG: OsRefusal(413, "too_large", "It's too large."),
-    errno.ELOOP: OsRefusal(400, "link_loop", "It links back to itself."),
+    errno.EFBIG: OsRefusal(413, "It's too large."),
+    errno.ELOOP: OsRefusal(400, "It links back to itself."),
 }
 
 
