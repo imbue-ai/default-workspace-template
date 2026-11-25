@@ -1603,6 +1603,7 @@ workspace every frontend belongs to.
 Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`
 (`presence.py`; the contract is `docs/system/blueprint/desktop-interface/contracts.md`
 section 7, "Chat presence"): whether it is shown, whether its document has focus,
+and, at most every 20 seconds, that a person pressed a key or the pointer in it,
 keyed by an instance id the page mints once per load, so two pages of one chat never
 overwrite each other, and numbered in the order the page sent them, so a report that
 arrives after a later one from its page is dropped. A page is *watching* its chat

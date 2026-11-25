@@ -24,6 +24,7 @@ vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
   reportFocusChange: vi.fn(),
+  reportInput: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
 const ensureParticipants = vi.fn(() => Promise.resolve());
@@ -59,6 +60,7 @@ async function loadShell(): Promise<{
     startPresenceReporting: ReturnType<typeof vi.fn>;
     reportPresence: ReturnType<typeof vi.fn>;
     reportFocusChange: ReturnType<typeof vi.fn>;
+    reportInput: ReturnType<typeof vi.fn>;
   };
 }> {
   vi.resetModules();
@@ -66,6 +68,7 @@ async function loadShell(): Promise<{
     startPresenceReporting: ReturnType<typeof vi.fn>;
     reportPresence: ReturnType<typeof vi.fn>;
     reportFocusChange: ReturnType<typeof vi.fn>;
+    reportInput: ReturnType<typeof vi.fn>;
   };
   const shell = await import("./shell");
   return {
@@ -156,6 +159,35 @@ describe("connectChatToShell", () => {
     windowListeners("blur").forEach((listener) => listener(new Event("blur")));
 
     expect(presence.reportFocusChange).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["framed", true],
+    ["visited directly", false],
+  ])("reports a person's key and pointer input on the chat's own page, %s", async (_how, isFramed) => {
+    if (isFramed) framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    });
+
+    windowListeners("pointerdown").forEach((listener) => listener(new Event("pointerdown")));
+    windowListeners("keydown").forEach((listener) => listener(new Event("keydown")));
+
+    expect(presence.reportInput).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports no input from a subagent view of the chat", async () => {
+    framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
+    });
+
+    windowListeners("pointerdown").forEach((listener) => listener(new Event("pointerdown")));
+    windowListeners("keydown").forEach((listener) => listener(new Event("keydown")));
+
+    expect(presence.reportInput).not.toHaveBeenCalled();
   });
 
   it("reports no focus from a subagent view of the chat", async () => {

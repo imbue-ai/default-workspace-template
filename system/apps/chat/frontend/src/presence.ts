@@ -1,15 +1,18 @@
 /**
  * The chat page's presence reports (see `presence.py`): `hidden` once the shell has handed
  * the page its handshake, `visible` on `shell:shown`, `hidden` on `shell:hidden`, `closed` on
- * `pagehide`, whether the document has focus on every window `focus` and `blur`, and a
- * heartbeat of all of it every thirty seconds, so a page that vanished without its `pagehide`
- * stops counting on its own. Every report names this page load's instance id, so two pages of
+ * `pagehide`, whether the document has focus on every window `focus` and `blur`, that a person
+ * pressed a key or the pointer in the page (at most once per `INPUT_REPORT_INTERVAL_MS`, as the
+ * page's input report to the shell), and a heartbeat of all of it every thirty seconds, so a
+ * page that vanished without its `pagehide` stops counting on its own. Every report names this page load's instance id, so two pages of
  * the chat in one client never overwrite each other's report, and its place in the order this
  * page sent them, since the chat app can receive two reports sent a moment apart in either
  * order. Only the chat's own page reports, never a subagent view. The OOM prioritizer reads
- * the aggregate, and the notify path asks which pages are watching (shown and focused).
+ * the aggregate and counts the input as use of the chat, and the notify path asks which pages
+ * are watching (shown and focused).
  */
 
+import { INPUT_REPORT_INTERVAL_MS } from "@imbue/workspace-ui/src/app_contract";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 
 export type PresenceState = "visible" | "hidden" | "closed";
@@ -28,8 +31,9 @@ let heartbeat: ReturnType<typeof setInterval> | null = null;
 let currentState: PresenceState = "hidden";
 let reportingChatId: string | null = null;
 let reportingClientId: string | null = null;
+let lastInputReportedAt = Number.NEGATIVE_INFINITY;
 
-function post(chatId: string, clientId: string, state: PresenceState): void {
+function post(chatId: string, clientId: string, state: PresenceState, isInput: boolean = false): void {
   // keepalive lets the closed report leave with the page on pagehide.
   void fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/presence`), {
     method: "POST",
@@ -39,6 +43,7 @@ function post(chatId: string, clientId: string, state: PresenceState): void {
       client_id: clientId,
       state,
       is_focused: document.hasFocus(),
+      is_input: isInput,
       sequence: ++lastSequence,
     }),
     keepalive: true,
@@ -71,6 +76,16 @@ export function reportPresence(state: PresenceState): void {
 /** Report that the document gained or lost focus; a no-op until reporting has started, and after closed. */
 export function reportFocusChange(): void {
   postCurrent();
+}
+
+/** Report that a person pressed a key or the pointer in the page; a no-op until reporting has started, after
+ *  closed, and within `INPUT_REPORT_INTERVAL_MS` of the last such report. */
+export function reportInput(): void {
+  if (reportingChatId === null || reportingClientId === null || currentState === "closed") return;
+  const now = Date.now();
+  if (now - lastInputReportedAt < INPUT_REPORT_INTERVAL_MS) return;
+  lastInputReportedAt = now;
+  post(reportingChatId, reportingClientId, currentState, true);
 }
 
 export function currentPresenceState(): PresenceState {

@@ -13,6 +13,8 @@ Signals, and where each comes from:
   the page itself through the chat app's presence route and aggregated by the
   ``PresenceTracker`` (open while any instance has an unexpired visible or hidden
   report, visible while any instance's last report says so),
+- **input** -- a person pressing a key or the pointer in the chat's page, reported on the
+  same route,
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
@@ -23,7 +25,7 @@ Signals, and where each comes from:
   also reports a chat waiting on one of its harness's own background tasks as
   mid-turn, but not one waiting only on ``run_in_background`` commands.
 
-Idle time is measured against the most recent of those events, wall-clock, with
+Idle time is measured against the most recent message, input, or running edge, wall-clock, with
 the agent's own process-start time as a floor so a freshly revived chat counts as
 fresh. Across a system-interface restart the message stamps are re-seeded from
 the durable client-activity log (``seed_last_message_times``), so a restart does
@@ -130,7 +132,7 @@ class ChatOomPrioritizer:
         # chat_id -> time of its most recent message, for recency ranking.
         self._last_message_at: dict[ChatId, float] = {}
         # chat_id -> time of its most recent engagement of *any* kind (messaged,
-        # switched to, or entered a running state), for the staleness clock.
+        # input in its page, or either edge of a turn), for the staleness clock.
         self._last_engaged_at: dict[ChatId, float] = {}
         # Chats whose active agent is in a running lifecycle state, i.e. mid-turn.
         self._running: set[ChatId] = set()
@@ -185,19 +187,21 @@ class ChatOomPrioritizer:
         below it (self-healing: the page's heartbeat corrects any missed one). Non-chat
         ids are accepted and ignored by the pass, which only iterates the managed chats.
 
-        Engagement is stamped on the *transition* into visibility, not for
-        everything currently visible: a window left visible and untouched is not
-        continuing engagement, and re-stamping it every heartbeat would make it
-        permanently fresh. A report that leaves the chat as open and as visible as
-        it was (the heartbeat, almost always) asks for no pass: every band it would
-        write is already written, and a page that vanished unannounced stops
-        counting by expiry, which the sweep notices.
+        Engagement is stamped on a person's input in the page, never on visibility: a page
+        becomes visible again without anyone there (a heartbeat returning after its report
+        expired, a reload, a desktop switch), and a window left visible and untouched is not
+        continuing engagement. A report that leaves the chat as open and as visible as
+        it was (the heartbeat, almost always) asks for no pass unless it stamped: every band it
+        would write is already written, and a page that vanished unannounced stops counting by
+        expiry, which the sweep notices.
         """
         transition = self._presence.record(chat_id, report)
-        if transition.is_newly_visible:
+        if report.is_input:
             now = self._clock()
             with self._lock:
-                self._stamp_engagement_locked(chat_id, now)
+                self._stamp_engagement_locked(chat_id, now, "input in its page")
+            self.reapply()
+            return transition
         if transition.is_open_changed or transition.is_visible_changed:
             self.reapply()
         return transition
@@ -207,6 +211,7 @@ class ChatOomPrioritizer:
         now = self._clock()
         with self._lock:
             self._stamp_message_locked(chat_id, now)
+            self._log_engagement(chat_id, "a message")
         self.reapply()
 
     def forget_chat(self, chat_id: ChatId) -> None:
@@ -236,7 +241,8 @@ class ChatOomPrioritizer:
             if new_running == self._running:
                 return
             for chat_id in new_running ^ self._running:
-                self._stamp_engagement_locked(chat_id, now)
+                cause = "its turn started" if chat_id in new_running else "its turn ended"
+                self._stamp_engagement_locked(chat_id, now, cause)
             self._running = new_running
         self.reapply()
 
@@ -350,11 +356,17 @@ class ChatOomPrioritizer:
             return None
         return max(0.0, now - max(candidates))
 
-    def _stamp_engagement_locked(self, chat_id: ChatId, at: float) -> None:
-        """Record engagement with ``chat_id``, never moving the stamp backwards."""
+    def _stamp_engagement_locked(self, chat_id: ChatId, at: float, cause: str | None = None) -> None:
+        """Record engagement with ``chat_id``, never moving the stamp backwards; a ``cause`` is logged."""
         previous = self._last_engaged_at.get(chat_id)
         if previous is None or at > previous:
             self._last_engaged_at[chat_id] = at
+        if cause is not None:
+            self._log_engagement(chat_id, cause)
+
+    @staticmethod
+    def _log_engagement(chat_id: ChatId, cause: str) -> None:
+        logger.debug("Chat {} counts as in use: {}", chat_id, cause)
 
     def _stamp_message_locked(self, chat_id: ChatId, at: float) -> None:
         """Record a message to ``chat_id`` (which is also engagement with it)."""

@@ -66,6 +66,11 @@ class PresenceReport(FrozenModel):
     )
     state: PresenceState = Field(description="The page's state")
     is_focused: bool = Field(description="Whether the page's document has focus")
+    is_input: bool = Field(
+        default=False,
+        description="Whether the report is of a person pressing a key or the pointer in the page; a page loaded "
+        "before the field existed sends none",
+    )
     sequence: int = Field(ge=1, description="The report's place in the order the page sent its reports")
 
 

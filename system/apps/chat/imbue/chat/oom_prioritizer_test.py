@@ -61,7 +61,7 @@ class _Harness:
             presence=PresenceTracker(clock=lambda: self.now),
         )
 
-    def report(self, chat_id: str, state: PresenceState, instance_id: str = "page-1") -> None:
+    def report(self, chat_id: str, state: PresenceState, instance_id: str = "page-1", is_input: bool = False) -> None:
         self.reports_sent += 1
         self.prioritizer.record_presence(
             ChatId(chat_id),
@@ -70,6 +70,7 @@ class _Harness:
                 client_id="client-1",
                 state=state,
                 is_focused=False,
+                is_input=is_input,
                 sequence=self.reports_sent,
             ),
         )
@@ -348,21 +349,29 @@ def test_seeding_never_moves_an_engagement_stamp_backwards() -> None:
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0)
 
 
-def test_a_visible_tab_is_only_stamped_when_it_becomes_visible() -> None:
-    # A tab left visible is not continuing engagement -- re-stamping it on every
-    # heartbeat would make it permanently fresh and defeat the ramp entirely.
+def test_a_visible_page_whose_heartbeat_returns_after_expiring_keeps_aging() -> None:
+    # A sleeping laptop's frontmost chat: its heartbeats stop, its report expires, and when they
+    # resume the chat reads as newly visible. Nobody used it, so it must not count as engagement.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.process_started_at[ChatId("a")] = h.now
     h.report("a", PresenceState.VISIBLE)
-    for _ in range(int(_AGED.idle_seconds // 60.0)):
-        h.advance(60.0)
-        h.report("a", PresenceState.VISIBLE)
-    # The heartbeats change nothing, so none re-tags; the sweep is what notices the time passing.
+    h.advance(_AGED.idle_seconds)
+    h.report("a", PresenceState.VISIBLE)
     h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == _AGED.adj
 
-    # Switching back to it does re-engage.
+
+def test_input_in_the_page_counts_as_use_and_showing_it_does_not() -> None:
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.process_started_at[ChatId("a")] = h.now
+    h.report("a", PresenceState.VISIBLE)
+    h.advance(_AGED.idle_seconds)
     h.report("a", PresenceState.HIDDEN)
     h.report("a", PresenceState.VISIBLE)
+    h.prioritizer.reapply()
+    assert h.latest_adj_by_pid()[10] == _AGED.adj
+
+    h.report("a", PresenceState.VISIBLE, is_input=True)
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
 
 
