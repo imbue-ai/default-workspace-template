@@ -3,8 +3,7 @@
 Every skill's name and description is in the agent's context from the first turn, and that
 listing is all that tells an agent a skill exists. A harness gives the listing a budget and,
 past it, cuts descriptions without the agent knowing, so the skills it cut stop being found.
-The budgets, at the versions the workspace pins (``.mngr/settings.toml``), each found by padding
-a listing until the harness cut it:
+The budgets, at the versions the workspace pins (``.mngr/settings.toml``):
 
 - Claude Code gives it 30,000 characters on every model the workspace offers: 1% of the window
   it budgets against, a share ``skillListingBudgetFraction`` in ``.claude/settings.json`` sets.
@@ -14,8 +13,8 @@ a listing until the harness cut it:
 - Antigravity, Pi and OpenCode state no budget.
 
 The same listing holds skills this repo does not: each harness's own, and those of the plugins
-the workspace enables. Each reserve below is what they took in a real chat (9,476 characters on
-Claude Code; 1,362 tokens on Codex, its table of skill roots included), rounded up for growth.
+the workspace enables. Each reserve below is what they took in a real chat (on Codex, its table
+of skill roots included), rounded up for growth.
 """
 
 from __future__ import annotations
