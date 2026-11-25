@@ -382,7 +382,8 @@ that launched its own worker. Four rules are yours alone.
 
 ## Copying files to or from a worker
 
-The launcher makes this transfer itself at `launch`. To move files to or from a
-worker yourself, or to debug a transfer, use `mngr rsync`; the module docstring
-of `.agents/skills/launch-task/python/launch_task_skill/create_worker.py`
-explains its flags and path rules.
+The launcher copies files to and from the worker itself (`mngr rsync`) at
+launch and teardown. If that transfer fails, or you need to sync files to or
+from a worker yourself, read the launcher's module docstring in
+`.agents/skills/launch-task/python/launch_task_skill/create_worker.py` first:
+it explains the argument order, path rules and flags.
