@@ -210,8 +210,7 @@ class ChatOomPrioritizer:
         """Stamp a chat as just-messaged so it ranks newest, then re-tag every chat."""
         now = self._clock()
         with self._lock:
-            self._stamp_message_locked(chat_id, now)
-            self._log_engagement(chat_id, "a message")
+            self._stamp_message_locked(chat_id, now, "a message")
         self.reapply()
 
     def forget_chat(self, chat_id: ChatId) -> None:
@@ -362,15 +361,11 @@ class ChatOomPrioritizer:
         if previous is None or at > previous:
             self._last_engaged_at[chat_id] = at
         if cause is not None:
-            self._log_engagement(chat_id, cause)
+            logger.debug("Chat {} counts as in use: {}", chat_id, cause)
 
-    @staticmethod
-    def _log_engagement(chat_id: ChatId, cause: str) -> None:
-        logger.debug("Chat {} counts as in use: {}", chat_id, cause)
-
-    def _stamp_message_locked(self, chat_id: ChatId, at: float) -> None:
-        """Record a message to ``chat_id`` (which is also engagement with it)."""
+    def _stamp_message_locked(self, chat_id: ChatId, at: float, cause: str | None = None) -> None:
+        """Record a message to ``chat_id`` (which is also engagement with it); a ``cause`` is logged."""
         previous = self._last_message_at.get(chat_id)
         if previous is None or at > previous:
             self._last_message_at[chat_id] = at
-        self._stamp_engagement_locked(chat_id, at)
+        self._stamp_engagement_locked(chat_id, at, cause)
