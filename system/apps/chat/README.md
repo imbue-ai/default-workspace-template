@@ -1218,15 +1218,16 @@ the pair replaces it. The state comes from two signals:
   chat app polls the marker every second. This covers every compaction of a
   Claude chat: the sweep's, a `/compact` typed in the composer or the terminal,
   and Claude's own. mngr writes these hooks when it creates an agent, and the
-  boot's `upgrade_agents` step writes them into an older Claude agent that is
-  stopped at boot; until then an older agent lacks them (a handoff's successor
-  is a new agent; a rebind keeps the old one).
+  workspace's stopped-agent upgrade (`system/libs/bootstrap/README.md`) writes
+  them into an older Claude agent that is stopped at a boot or when an update
+  that moves mngr lands; until then an older agent lacks them (a handoff's
+  successor is a new agent; a rebind keeps the old one).
 - The chat app's own requests: the sweep's and a composer `/compact`'s, on every
   harness mngr can compact.
 
 So the status does not show for a Codex or Pi chat's own compaction, or for an
 older Claude agent's own compaction or a `/compact` typed in its terminal until
-a boot has upgraded it. It
+that upgrade has reached it. It
 clears when the compaction finishes: the "Context was compacted" event arrives,
 or for Claude the marker goes or `last_compaction.json` records a finish after
 the request, or for Pi a user turn starts after it. One that never reports completion (cancelled, failed, or crashed)
