@@ -126,7 +126,8 @@ class ProcCliSessions(CliSessionsInterface):
     def attached_through(self, proxy_server: ProxyServer) -> list[AttachedCliSession]:
         try:
             entries = [entry for entry in self.proc_dir.iterdir() if entry.name.isdigit()]
-        except OSError:
+        except OSError as e:
+            logger.trace("No processes to read at {} ({})", self.proc_dir, e)
             return []
         sessions: list[AttachedCliSession] = []
         for entry in entries:
@@ -146,7 +147,8 @@ class ProcCliSessions(CliSessionsInterface):
             return None
         try:
             working_dir: Path | None = Path(os.readlink(entry / "cwd"))
-        except OSError:
+        except OSError as e:
+            logger.trace("The working directory of pid {} is unreadable ({})", entry.name, e)
             working_dir = None
         return AttachedCliSession(
             pid=int(entry.name),
@@ -180,13 +182,13 @@ class ProcCliSessions(CliSessionsInterface):
                 logger.debug("playwright-cli detach of {} did not run ({})", session.session_name, e)
             if self._wait_until_gone(session):
                 return True
-        if not self._is_still(session):
+        if not self._is_daemon_of(session):
             return True
         logger.info("The playwright-cli daemon of {} outlived detach; sending SIGTERM", session.session_name)
         _signal(session.pid, signal.SIGTERM)
         return self._wait_until_gone(session)
 
-    def _is_still(self, session: AttachedCliSession) -> bool:
+    def _is_daemon_of(self, session: AttachedCliSession) -> bool:
         """Whether the pid is still this session's daemon (not gone, and not reused by another process)."""
         argv = _read_argv(self.proc_dir / str(session.pid))
         parsed = parse_cli_daemon_argv(argv) if argv else None
@@ -196,10 +198,10 @@ class ProcCliSessions(CliSessionsInterface):
         deadline = time.monotonic() + _EXIT_WAIT_SECONDS
         pause = threading.Event()
         while time.monotonic() < deadline:
-            if not self._is_still(session):
+            if not self._is_daemon_of(session):
                 return True
             pause.wait(_EXIT_POLL_SECONDS)
-        return not self._is_still(session)
+        return not self._is_daemon_of(session)
 
 
 class CliSessionReaper(MutableModel):
@@ -247,7 +249,8 @@ class CliSessionReaper(MutableModel):
 def _read_argv(entry: Path) -> list[str]:
     try:
         raw = (entry / "cmdline").read_bytes()
-    except OSError:
+    except OSError as e:
+        logger.trace("The command line of pid {} is unreadable ({})", entry.name, e)
         return []
     return [arg.decode(errors="replace") for arg in raw.split(b"\0") if arg]
 
@@ -255,7 +258,8 @@ def _read_argv(entry: Path) -> list[str]:
 def _read_environment(entry: Path) -> dict[str, str]:
     try:
         raw = (entry / "environ").read_bytes()
-    except OSError:
+    except OSError as e:
+        logger.trace("The environment of pid {} is unreadable ({})", entry.name, e)
         return {}
     pairs = (item.decode(errors="replace").partition("=") for item in raw.split(b"\0") if item)
     return {key: value for key, separator, value in pairs if separator}
