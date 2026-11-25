@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
-from update_self_skill import tool_env, user_packages
+from update_self_skill import tool_env, user_packages, venv_links
 from update_self_skill.update_apply_contract import (
     ENV_DRI_AGENT,
     PHASE_BUILT,
@@ -2163,7 +2163,13 @@ def _run_rollback(
         _settle_rollback_record(record, repo_root, reason)
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
-    if resyncs_venv:
+    # A tree from before the command restores a venv without it.
+    if (
+        resyncs_venv
+        and (
+            repo_root / venv_links.VENV_NAME / "bin" / _UPGRADE_STOPPED_AGENTS_ARGV[-1]
+        ).exists()
+    ):
         _upgrade_stopped_agents(repo_root, runner)
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)

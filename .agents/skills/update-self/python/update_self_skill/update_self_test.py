@@ -10083,9 +10083,14 @@ def test_rollback_last_resyncs_the_venv_an_update_moved(apply_repo: Path) -> Non
     assert syncs == [(["uv", "sync", "--all-packages", "--frozen"], None)]
 
 
-def _venv_moving_rollback_point(repo_root: Path) -> _RecordingRunner:
-    """A kept rollback point of an update that moved the venv, and the runner to roll it back."""
-    _link_live_venv(repo_root)
+def _venv_moving_rollback_point(
+    repo_root: Path, *, has_upgrade_command: bool = True
+) -> _RecordingRunner:
+    """A kept rollback point of an update that moved the venv, and the runner to roll it back; the venv it restores
+    holds the stopped-agent upgrade's command when ``has_upgrade_command``."""
+    venv = _link_live_venv(repo_root)
+    if has_upgrade_command:
+        (venv / "bin" / _UPGRADE_STOPPED_AGENTS[-1]).touch()
     update_apply_contract.write_last_good(
         update_apply_contract.LastGoodRecord(
             merge_sha="fedcba9876543",
@@ -10145,6 +10150,17 @@ def test_a_stopped_agent_upgrade_that_fails_leaves_the_rollback_as_it_was(
     assert settled is not None
     assert settled.outcome == "Rolled back to the previous version."
     assert not update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_rollback_last_to_a_tree_from_before_the_upgrade_command_runs_no_upgrade(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo, has_upgrade_command=False)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    assert "warning:" not in capsys.readouterr().err
 
 
 def test_rollback_last_of_an_update_that_left_the_venv_alone_upgrades_no_agent(
