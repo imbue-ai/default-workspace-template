@@ -42,11 +42,12 @@ def served_media_type(image_url: str) -> str | None:
 @pure
 def decode_image_data_url(image_url: str) -> EventImage | None:
     """The image a base64 ``data:`` URL holds, or None when it is not a servable image."""
-    match = _BASE64_DATA_URL_RE.match(image_url)
-    if match is None or match.group(1) not in SERVED_IMAGE_MEDIA_TYPES:
+    media_type = served_media_type(image_url)
+    if media_type is None:
         return None
+    _, _, encoded = image_url.partition(",")
     try:
-        data = base64.b64decode(match.group(2), validate=True)
+        data = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError):
         return None
-    return EventImage(media_type=match.group(1), data=data)
+    return EventImage(media_type=media_type, data=data)
