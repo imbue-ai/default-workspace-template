@@ -16,8 +16,10 @@ a project extension pi loads into every agent whose working directory is this re
 same mechanism `policy_guards.ts` and `tk_workflow.ts` already use, so nothing new has to
 be provisioned). At process startup it compares the model pi resolved against a small
 table of deprecated startup models and, on a match, switches to the listed model on the
-same provider. `opencode/kimi-k2.6`, `opencode-go/kimi-k2.6` and
-`openrouter/moonshotai/kimi-k2.6` now start on `deepseek-v4.1-flash`.
+same provider. `opencode/kimi-k2.6` and `opencode-go/kimi-k2.6` now start on
+`deepseek-v4.1-flash`. The table also lists `openrouter/moonshotai/kimi-k2.6`, which is
+reached only when the seeded OpenRouter default is absent -- a settings file someone
+cleared by hand.
 
 The table is deliberately narrow, and staying on the same provider is the point:
 

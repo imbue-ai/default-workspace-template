@@ -61,9 +61,6 @@ const spec = JSON.parse(specJson);
 const handlers = {};
 const setModelCalls = [];
 const ctxSpec = spec.ctx ?? {};
-// The registry is described declaratively by the spec: `missing` ids the catalog no
-// longer carries, `unauthed` ones whose provider has no credential, `failing` a
-// registry that throws as pi's would if it could not resolve anything.
 const registry = ctxSpec.registry ? {
   find: (provider, modelId) => {
     if (ctxSpec.registry.failing) throw new Error("registry unavailable");
@@ -147,9 +144,7 @@ def _run_event(
 
     Returns the completed process: parse ``.stdout`` for
     ``{"result": ..., "payload": ..., "setModelCalls": ...}`` (see ``_event_output``)
-    and read ``.stderr`` for anything a handler wrote there. ``ctx`` is the extension
-    context pi hands the handler: ``model`` and a declarative ``registry``.
-    """
+    and read ``.stderr`` for anything a handler wrote there."""
     node = _node_that_imports_typescript()
     if node is None:
         pytest.skip("node with TypeScript module support is not available")
@@ -574,11 +569,6 @@ def test_stop_nudge_reports_open_steps_on_stderr(
         assert "Stopping with" not in proc.stderr
 
 
-# ---------------------------------------------------------------------------
-# model_defaults.ts -- the deprecated startup model over OpenCode's providers.
-# ---------------------------------------------------------------------------
-
-
 def _startup_model_calls(
     tmp_path: Path,
     *,
@@ -586,7 +576,6 @@ def _startup_model_calls(
     event: dict[str, Any] | None = None,
     registry: dict[str, list[str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Fire pi's ``session_start`` through model_defaults.ts, return the models it set."""
     out = _event_output(
         _run_event(
             tmp_path,
@@ -618,15 +607,12 @@ def _startup_model_calls(
 def test_a_deprecated_startup_model_switches_to_the_current_one(
     tmp_path: Path, provider: str, started_on: str, expected: str
 ) -> None:
-    """A chat signed into OpenCode starts on pi's compiled per-provider default, which is
-    still a deprecated Kimi. The extension corrects that, on the same provider."""
     assert _startup_model_calls(
         tmp_path, model={"provider": provider, "id": started_on}
     ) == [{"provider": provider, "id": expected}]
 
 
 def test_a_resumed_session_keeps_the_model_it_was_resumed_on(tmp_path: Path) -> None:
-    """Resuming restores the session's own model; that is not a stale default to fix."""
     assert (
         _startup_model_calls(
             tmp_path,
@@ -638,8 +624,6 @@ def test_a_resumed_session_keeps_the_model_it_was_resumed_on(tmp_path: Path) -> 
 
 
 def test_a_model_the_user_actually_picked_is_left_alone(tmp_path: Path) -> None:
-    """Only the deprecated slugs in the table are replaced -- never a deliberate choice,
-    including a newer Kimi the user may have switched to."""
     assert (
         _startup_model_calls(
             tmp_path, model={"provider": "opencode-go", "id": "kimi-k2.7-code"}
@@ -649,7 +633,6 @@ def test_a_model_the_user_actually_picked_is_left_alone(tmp_path: Path) -> None:
 
 
 def test_a_replacement_the_catalog_no_longer_carries_is_skipped(tmp_path: Path) -> None:
-    """If the replacement slug is gone, pi keeps its own choice rather than failing."""
     assert (
         _startup_model_calls(
             tmp_path,
@@ -661,7 +644,6 @@ def test_a_replacement_the_catalog_no_longer_carries_is_skipped(tmp_path: Path) 
 
 
 def test_an_unauthenticated_replacement_is_not_applied(tmp_path: Path) -> None:
-    """A replacement must never need a credential the user has not supplied."""
     assert (
         _startup_model_calls(
             tmp_path,
@@ -673,14 +655,10 @@ def test_an_unauthenticated_replacement_is_not_applied(tmp_path: Path) -> None:
 
 
 def test_no_model_resolved_yet_is_left_alone(tmp_path: Path) -> None:
-    """pi fires session_start before a model can resolve on an agent with no credential;
-    the handler has to be a no-op there rather than throw."""
     assert _startup_model_calls(tmp_path, model=None) == []
 
 
 def test_a_new_session_in_a_running_pi_keeps_the_model_it_had(tmp_path: Path) -> None:
-    """`/new` carries over the model the user is already on, so it is that user's
-    choice by then, not a default: leave the deprecated slug where it is."""
     assert (
         _startup_model_calls(
             tmp_path,
@@ -694,8 +672,6 @@ def test_a_new_session_in_a_running_pi_keeps_the_model_it_had(tmp_path: Path) ->
 def test_a_failing_model_registry_never_breaks_the_session_start(
     tmp_path: Path,
 ) -> None:
-    """A model preference is not worth a failed startup: an error anywhere in the
-    handler is swallowed, and pi keeps the model it resolved."""
     assert (
         _event_output(
             _run_event(
