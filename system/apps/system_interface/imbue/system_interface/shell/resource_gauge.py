@@ -480,7 +480,7 @@ _AGENT_ADVICE: Final[Mapping[GaugeResource, str]] = {
     GaugeResource.DISK: "Do not write large files (downloads, clones, caches, build output, copies of data) until "
     "there is room. `uv run --no-sync disk-headroom` shows the room left. Tell the user, and offer to free space.",
     GaugeResource.MEMORY: "Do not start memory-heavy work (builds, test suites, browsers) until there is room, or "
-    "it is likely to be stopped. Free memory with the user per `.agents/shared/references/freeing-memory.md`.",
+    "it is likely to be stopped. Free memory with the user per the `workspace-memory` skill.",
     GaugeResource.CPU: "Heavy work will run slowly, and slows the user's own. Check whether a job of yours is "
     "responsible before starting more.",
 }

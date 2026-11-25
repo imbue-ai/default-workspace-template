@@ -1,6 +1,6 @@
 ---
 name: caretaker
-description: The single idempotent Caretaker skill, invoked via /caretaker whenever the deterministic weekly check (system/services/caretaker/caretaker_check.sh) wakes the agent. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether (and how often) to keep checking; on every later run it does the weekly routine -- greets the user, scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding), and checks for finished-but-uncommitted work, all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms.
+description: The single idempotent Caretaker skill, invoked via /caretaker whenever the deterministic weekly check (system/services/caretaker/caretaker_check.sh) wakes the agent. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether (and how often) to keep checking; on every later run it does the weekly routine -- greets the user, scans the workspace's service logs for problems, checks basic system health (disk, memory, CPU load, OOM shedding), and checks for finished-but-uncommitted work, all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms.
 metadata:
   author: imbue
 ---
@@ -79,7 +79,10 @@ first impression of you is that single message.
      efficiently (`supervisorctl status` plus a few targeted greps of
      `/var/log/supervisor/`).
    - Check basic system health: disk (`uv run --no-sync disk-headroom`, which
-     also sees a cloud machine's disk quota, where `df` does not), memory and swap (`free -h`),
+     also sees a cloud machine's disk quota, where `df` does not), memory
+     (`python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`, the free
+     memory the memory guard acts on; see the `workspace-memory` skill, since `free -h` reads
+     far more free than there is under a memory cap),
      CPU load (`uptime`), and whether the OOM guard shed anything
      (`data/.state/oom_priority/events/shed.jsonl`, if present).
    - Check for uncommitted work: `git status` in the workspace repo. Note
@@ -213,11 +216,14 @@ finds something.
        (`supervisorctl status` + a few targeted greps of `/var/log/supervisor/`);
      - check basic system health: disk (`uv run --no-sync disk-headroom`, which
        also sees a cloud machine's disk quota, where `df` does not; if it is
-       nearly full, a quick `du` for the biggest offenders), memory and swap (`free -h`),
+       nearly full, a quick `du` for the biggest offenders), memory
+       (`python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`, which says
+       how much room is left before the memory guard starts stopping processes; not `free -h`,
+       which reads far more free than there is under a memory cap -- the `workspace-memory` skill),
        CPU load (`uptime` -- load persistently above the core count means
        something is spinning), and whether the OOM guard shed any processes
        since the last run (`data/.state/oom_priority/events/shed.jsonl`, if
-       present). Worth flagging: disk above ~85 percent, swap heavily used,
+       present). Worth flagging: disk above ~85 percent, little room left before the memory guard acts,
        sustained high load, or anything shed since the last check. These findings are
        usually report-only -- freeing disk means deleting things, so treat
        cleanups as bigger fixes unless the target is unambiguously safe to
