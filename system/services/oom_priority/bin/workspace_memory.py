@@ -1989,8 +1989,8 @@ def render_guard_order(
         )
     lines += [
         "",
-        f"A score is the process's memory plus its band (oom_score_adj) times {order.band_point_kib / KIB_PER_MIB:.1f} MiB,",
-        "a thousandth of the workspace's memory. MEMORY is "
+        "A score is the process's memory, swap and page tables plus its band (oom_score_adj) times",
+        f"{order.band_point_kib / KIB_PER_MIB:.1f} MiB, a thousandth of the workspace's memory and swap. MEMORY is "
         + (
             "its own anonymous memory, as the guard counts it here."
             if order.counts_anonymous
