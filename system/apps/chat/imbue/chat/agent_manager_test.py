@@ -7444,7 +7444,9 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
 
 
 def _stop_lines(argv_log: Path) -> list[str]:
-    return [line for line in argv_log.read_text().splitlines() if line.startswith("stop ")] if argv_log.exists() else []
+    return (
+        [line for line in argv_log.read_text().splitlines() if line.startswith("stop ")] if argv_log.exists() else []
+    )
 
 
 def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_not(
