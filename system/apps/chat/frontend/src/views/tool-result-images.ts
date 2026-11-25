@@ -27,7 +27,7 @@ export function hasOutputImages(result: ToolResultEvent): boolean {
   return result.is_generated_image !== true && imageCount(result) > 0;
 }
 
-export function toolResultImageUrl(chatId: string, resultEventId: string, index: number): string {
+function toolResultImageUrl(chatId: string, resultEventId: string, index: number): string {
   return apiUrl(
     `/api/chats/${encodeURIComponent(chatId)}/events/${encodeURIComponent(resultEventId)}/images/${index}`,
   );
