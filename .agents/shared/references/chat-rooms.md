@@ -1,6 +1,6 @@
 # Answering in a chat room
 
-A chat room is a chat among the people sharing this workspace, with no agent of its own; `mngr list` lists the rooms. A message prefixed `[from: <name> in #<room>]` was said in a room you were mentioned in.
+A chat room is a chat among the people sharing this workspace, with no AI answering in it; `mngr list` lists the rooms. A message prefixed `[from: <name> in #<room>]` was said in a room you were mentioned in.
 
 1. Read the room first: `mngr transcript <room>`.
 2. Answer there, not in your own chat: `mngr message --start <room> "..."`.
