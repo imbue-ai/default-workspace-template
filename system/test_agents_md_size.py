@@ -1,8 +1,8 @@
 """Hold ``AGENTS.md`` to the smallest size every harness reads whole.
 
 A harness that reads only the start of ``AGENTS.md`` drops the rest without the agent knowing,
-so an instruction past the cut is never followed. The limits, at the versions
-``.mngr/settings.toml`` pins:
+so an instruction past the cut is never followed. The limits, at the versions the workspace pins
+(``.mngr/settings.toml``, and ``system/scripts/agy_install.sh`` for agy):
 
 - Antigravity truncates any rule file, ``AGENTS.md`` included, past 24,000 bytes. The figure
   is fixed in agy (its rules docs, and a literal in the binary), with no setting to raise it.
