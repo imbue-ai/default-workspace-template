@@ -4,7 +4,7 @@
  *
  * The section is a flat, ordered list of timeline items produced by the
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
- * (including a step's ejected closing prose), and chips. Step nodes carry their
+ * (including a step's ejected closing prose), generated images, and chips. Step nodes carry their
  * own grouped events; expanding a step reveals that grouped work. The wrap-up
  * reply renders below the timeline. Every piece stands on the stretch's line
  * (see agent-rail), which runs through the step bullets as it does through the
@@ -22,6 +22,7 @@ import { renderAssistantRun, renderPermissionItem, renderUserMessage, stretchRun
 import { STRETCH_PIECES_CLASS } from "./machine-bubbles";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
+import { renderGeneratedImagesItem } from "./tool-result-images";
 import {
   TIMELINE_BODY_CLASS,
   TIMELINE_CHEVRON_CLASS,
@@ -246,6 +247,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               ),
             ),
           );
+          return;
+        }
+        if (item.kind === "generated_images") {
+          // Images a call generated, lifted out of its step so they show while the step stays folded.
+          pieces.push(renderGeneratedImagesItem(item.event, item.results, chatId));
           return;
         }
         // A chip that landed inside an open handoff.

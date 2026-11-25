@@ -462,6 +462,30 @@ describe("the open chip's detail panel", () => {
     // Still loading the real output, and the snippet did not wait for it.
     expect(detailText()).toContain("Loading");
   });
+
+  function paneImages(): HTMLImageElement[] {
+    return [...root.querySelectorAll<HTMLImageElement>(".tool-chip-detail img")];
+  }
+
+  it("shows the images an output carries under its text, each from the result's images route", () => {
+    loadOutput("Viewed the screenshot");
+    mount([chip(call, "a-pc-1")], [{ ...done, image_count: 2 }]);
+    const sections = [...root.querySelectorAll(".tool-call-output, .tool-call-images")];
+    expect(sections.map((section) => section.className.split(" ")[0])).toEqual([
+      "tool-call-output",
+      "tool-call-images",
+    ]);
+    expect(paneImages().map((image) => image.getAttribute("src"))).toEqual([
+      "/api/chats/agent-x/events/r-pc-1/images/0",
+      "/api/chats/agent-x/events/r-pc-1/images/1",
+    ]);
+  });
+
+  it("leaves generated images out, since they show on the transcript by themselves", () => {
+    loadOutput("Generated an image");
+    mount([chip(call, "a-pc-1")], [{ ...done, image_count: 1, is_generated_image: true }]);
+    expect(paneImages()).toEqual([]);
+  });
 });
 
 describe("a status chip in the row", () => {

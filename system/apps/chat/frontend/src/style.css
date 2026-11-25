@@ -246,8 +246,10 @@
 /* Keeps an image's space while it loads: a picture outline under a slow sweep of light. The
    outline is faded as one group, so its crossing strokes do not darken where they overlap. The box
    takes the image's own width and height when the image carries them (markdown.ts sets them for an
-   upload), and it fades in over the box once loaded. */
-.markdown-content img.is-loading {
+   upload), and it fades in over the box once loaded. A tool call's image (views/tool-result-images.ts) holds
+   the same box. */
+.markdown-content img.is-loading,
+.tool-result-image.is-loading {
   border-radius: var(--radius-lg, 12px);
   background-color: var(--c-fill-hover);
   background-image:
@@ -264,7 +266,8 @@
 }
 
 /* An image whose size is unknown (no width and height of its own) holds a fixed shape. */
-.markdown-content img.is-loading:not([width]) {
+.markdown-content img.is-loading:not([width]),
+.tool-result-image.is-loading {
   width: 240px;
   aspect-ratio: 4 / 3;
 }
@@ -299,7 +302,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .markdown-content img.is-loading,
-  .markdown-content img.is-arriving {
+  .markdown-content img.is-arriving,
+  .tool-result-image.is-loading {
     animation: none;
   }
 }

@@ -29,6 +29,7 @@ import { labelForToolCall, runningCallElapsed, runningToolCall } from "./Activit
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { TOOL_CALL_PART } from "./ToolCallBlock";
 import { resolveToolPayloads } from "./tool-payloads";
+import { hasOutputImages, renderToolResultImages } from "./tool-result-images";
 
 /** One call in a run, with the assistant event that issued it. */
 export interface ChipCall {
@@ -450,6 +451,12 @@ function toolDetailSections(chip: ChipCall, toolResult: ToolResultEvent | null, 
     if (outputText) sections.push(renderOutput(chip, "tool-call-output", outputText));
   } else {
     sections.push(renderPaneNote("tool-call-output", outputState));
+  }
+  // Generated images show on the transcript on their own (see tool-result-images), so only the others are here.
+  if (toolResult !== null && hasOutputImages(toolResult)) {
+    sections.push(
+      m("div", { class: "tool-call-images py-1" }, renderToolResultImages(chatId, toolResult, "Image from this call")),
+    );
   }
 
   // A call with nothing recorded either way still says so: an empty box would
