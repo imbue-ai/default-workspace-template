@@ -6147,36 +6147,7 @@ class AgentManager:
         for agent_id in dead_archived_member_ids:
             self._evict_watcher(agent_id)
 
-        # A retired member found running (a handoff's stop that never landed, or one revived since) holds memory for
-        # a chat that has moved on. Checked on every agent a full snapshot lists, so a leak from before a restart is
-        # found, and otherwise on the agent the event reports, so a stop that failed is tried again. UNKNOWN is no
-        # evidence of running. A secondary leaves it to the live chat.
-        match event:
-            case _ if self._is_secondary:
-                checked_ids = set()
-            case FullAgentStateEvent():
-                checked_ids = after_ids
-            case AgentStateEvent():
-                checked_ids = {str(event.agent.id)}
-            case AgentRemovedEvent():
-                checked_ids = set()
-        with self._lock:
-            running_retired_ids = [
-                agent_id
-                for agent_id in sorted(checked_ids)
-                if not is_lifecycle_dead(details_by_id[agent_id].state.value)
-                and details_by_id[agent_id].state.value != UNKNOWN_LIFECYCLE_STATE
-                and self._is_retired_member_locked(agent_id)
-                and agent_id not in self._retired_stops_in_flight
-            ]
-            self._retired_stops_in_flight.update(running_retired_ids)
-        for agent_id in running_retired_ids:
-            self._creation_cg.start_new_thread(
-                target=self._stop_running_retired_member,
-                args=(agent_id,),
-                name=f"stop-retired-{agent_id[:14]}",
-                is_checked=False,
-            )
+        self._stop_running_retired_members(event, details_by_id)
         if self._unviewed_transcript_release is not None:
             self._unviewed_transcript_release()
 
@@ -6194,6 +6165,45 @@ class AgentManager:
                 if agent.state in RUNNING_LIFECYCLE_STATES and agent_id in chat_id_by_agent_id
             )
         self._report_mid_turn_chats()
+
+    def _stop_running_retired_members(
+        self,
+        event: AgentStateEvent | FullAgentStateEvent | AgentRemovedEvent,
+        details_by_id: Mapping[str, AgentDetails],
+    ) -> None:
+        """Start a stop of each retired member the event reports running, which holds memory for a chat that has
+        moved on (a handoff's stop that never landed, or one revived since).
+
+        Every agent a full snapshot lists is checked, so a leak from before a restart is found, and otherwise the
+        agent the event reports, so a stop that failed is tried again. UNKNOWN is no evidence of running. A secondary
+        leaves it to the live chat.
+        """
+        if self._is_secondary:
+            return
+        match event:
+            case FullAgentStateEvent():
+                checked_ids = set(details_by_id)
+            case AgentStateEvent():
+                checked_ids = {str(event.agent.id)}
+            case AgentRemovedEvent():
+                return
+        with self._lock:
+            running_retired_ids = [
+                agent_id
+                for agent_id in sorted(checked_ids)
+                if not is_lifecycle_dead(details_by_id[agent_id].state.value)
+                and details_by_id[agent_id].state.value != UNKNOWN_LIFECYCLE_STATE
+                and self._is_retired_member_locked(agent_id)
+                and agent_id not in self._retired_stops_in_flight
+            ]
+            self._retired_stops_in_flight.update(running_retired_ids)
+        for agent_id in running_retired_ids:
+            self._creation_cg.start_new_thread(
+                target=self._stop_running_retired_member,
+                args=(agent_id,),
+                name=f"stop-retired-{agent_id[:14]}",
+                is_checked=False,
+            )
 
     def _stop_running_retired_member(self, agent_id: str) -> None:
         """Stop a retired chat member the observe stream reports running; a failure is logged, and the next report
