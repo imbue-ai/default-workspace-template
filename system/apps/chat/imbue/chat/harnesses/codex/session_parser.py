@@ -164,8 +164,10 @@ class ImageGenerationCalls(MutableModel):
     A code-mode program that calls image generation usually returns the image on its own
     ``exec`` result, but a program that outlives its yield window returns it on a later
     ``wait`` for the cell it kept running in, so a ``wait`` counts when its cell came from
-    such a program. A cell is forgotten once its program ends: codex numbers cells afresh
-    after a restart, so a remembered number would mark an unrelated later program.
+    such a program. A cell is forgotten once its program ends, or once a program that does not
+    generate yields its number: codex numbers cells afresh after a restart, and a program cut
+    off by one never ends on the record, so a remembered number would mark an unrelated later
+    program.
     """
 
     call_ids: set[str] = Field(default_factory=set, description="Calls whose output carries generated images")
@@ -183,10 +185,12 @@ class ImageGenerationCalls(MutableModel):
             self.call_ids.add(call_id)
 
     def note_output(self, call_id: str, output_text: str) -> None:
+        running_cell_id = yielded_cell_id(output_text)
         if call_id not in self.call_ids:
+            if running_cell_id is not None:
+                self.cell_ids.discard(running_cell_id)
             return
         waited_cell_id = self.waited_cell_by_call_id.pop(call_id, None)
-        running_cell_id = yielded_cell_id(output_text)
         if running_cell_id is not None:
             self.cell_ids.add(running_cell_id)
         elif waited_cell_id is not None:

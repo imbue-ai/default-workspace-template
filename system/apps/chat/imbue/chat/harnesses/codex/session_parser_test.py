@@ -822,3 +822,23 @@ def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_it
     assert results["w1"]["is_generated_image"] is True
     assert results["w2"]["image_count"] == 1
     assert "is_generated_image" not in results["w2"]
+
+
+def test_a_generation_cut_off_by_a_restart_does_not_mark_a_later_program_that_reuses_its_cell() -> None:
+    """The generating program never ends on the record, so its cell is forgotten when another program yields it."""
+    yielded = [{"type": "input_text", "text": "Script running with cell ID 3\n"}]
+    viewed = [{"type": "input_image", "image_url": ONE_PIXEL_PNG_DATA_URL}]
+    results = _tool_results(
+        _parse_all(
+            [
+                _exec_call_line("c1", _IMAGEGEN_PROGRAM),
+                _result_line("c1", yielded),
+                _exec_call_line("c2", _VIEW_IMAGE_PROGRAM),
+                _result_line("c2", yielded),
+                _wait_call_line("w2", "3"),
+                _result_line("w2", viewed, payload_type="function_call_output"),
+            ]
+        )
+    )
+    assert results["w2"]["image_count"] == 1
+    assert "is_generated_image" not in results["w2"]
