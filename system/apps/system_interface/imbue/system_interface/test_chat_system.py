@@ -72,9 +72,9 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 @pytest.mark.timeout(60, func_only=False)
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
     """The chat reaches the shell's inventory as an app: running, with the launch paths of its manifest (the ``root``
-    page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, ``app-chat``, and ``app-ask`` as POSTs onto its
-    intake route with their presets and text, draft, mention, or app params) and its default shortcut, and nothing
-    about the chats inside it."""
+    page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, and ``app-chat`` as POSTs onto its intake route
+    with their presets and text, draft, mention, or app params) and its default shortcut, and nothing about the chats
+    inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
@@ -87,7 +87,6 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             ("draft", "/api/chats/intake", "POST"),
             ("lounge", "/api/chats/intake", "POST"),
             ("app-chat", "/api/chats/intake", "POST"),
-            ("app-ask", "/api/chats/intake", "POST"),
         ]
         assert [launch["text_param"] for launch in listed["launch_paths"]] == [
             None,
@@ -96,8 +95,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             "message",
             None,
             None,
-            None,
-            None,
+            "message",
         ]
         assert [launch["draft_param"] for launch in listed["launch_paths"]] == [
             None,
@@ -105,7 +103,6 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             None,
             "message",
-            None,
             None,
             None,
         ]
@@ -117,7 +114,6 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             "message",
             None,
-            None,
         ]
         assert [launch["app_params"] for launch in listed["launch_paths"]] == [
             None,
@@ -126,8 +122,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             None,
             None,
-            {"name": "app", "display_name": "app_display_name", "text": None},
-            {"name": "app", "display_name": "app_display_name", "text": "message"},
+            {"name": "app", "display_name": "app_display_name"},
         ]
         assert [launch["presets"] for launch in listed["launch_paths"]] == [
             {},
@@ -137,7 +132,6 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             {"target": "current_chat", "is_draft": "true"},
             {"target": "lounge", "is_draft": "true"},
             {"target": "app_chat"},
-            {"target": "app_ask"},
         ]
         assert listed["default_shortcuts"] == [{"launch": "root", "mode": "new"}]
 
@@ -178,8 +172,8 @@ def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: 
 def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens_beside_the_asking_window(
     tmp_path: Path,
 ) -> None:
-    """The seam a page's ask crosses: the shell runs the chat's ``app-ask`` launch path as the registry row carries
-    it (the app's name, its display name and the text as the params ``app_params`` names), the chat's intake sends
+    """The seam a page's ask crosses: the shell runs the chat's ``app-chat`` launch path as the registry row carries
+    it (the app's name and its display name as the params ``app_params`` names, and the text as its ``text_param``), the chat's intake sends
     the text to the chat about that app, led by the sentence that names the app, and the shell shows the chat it
     answers beside the window the ask came from."""
     docs_chat_id = "agent-00000000000000000000000000000d0c"
@@ -206,7 +200,7 @@ def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens
                 f"{workspace.shell_url}/api/desktops/{_HOME_DESKTOP_ID}/launch",
                 {
                     "app": "chat",
-                    "launch": "app-ask",
+                    "launch": "app-chat",
                     "params": {
                         "app": "docs",
                         "app_display_name": "Docs",

@@ -31,7 +31,8 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `models/request-error.ts`): one reader, `readFailure`, says what went wrong,
   for the REST helpers (`HttpError.failure`) and for a mithril rejection
   (`describeRequestFailure`) alike: a route's `user_facing_message` (a sentence
-  for people, which owes the person help unless the body says `expected: true`), else its
+  for people, which owes the person help unless the body says `routine: true`:
+  ordinary operation the sentence fully explains, so nothing is broken), else its
   `detail` or `error` (a reason, developer text), else no answer (nothing
   answered, or a gateway status 502, 503 or 504 with no JSON reason), else
   nothing. `failureSentence(failure, whatFailed)` is the one place that becomes
@@ -97,8 +98,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the
   shell's handshake said `canReportBug` (the embedder's `opensHelp`, which
-  only the shell hears; it hands every page a fresh handshake when that
-  changes). Each reads the connection as it renders, so the page redraws on a
+  only the shell hears, and only for a built-in app's page: a user's own app's
+  faults are not Imbue's bugs; the shell hands every page a fresh handshake
+  when that changes). Each reads the connection as it renders, so the page redraws on a
   handshake. The shell opens the report directly (`src/report-bug.ts`), with
   the sentence and details attached as the report's `errorDetails`, capped at
   the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
@@ -115,7 +117,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   the handler is given the toast's `agentRequest`, which is its message and
   details unless the caller named more, such as an instruction)
   unless the toast says `isAgentWithheld`, and "Report a bug" in its place
-  while the page passes only `onReportBug`, each decided at each draw, so a toast shown before
+  while the page passes only `onReportBug` (unless the caller passed
+  `isBugReportWithheld`, for a failure a user's own app caused), each decided
+  at each draw, so a toast shown before
   the page learned it can ask an agent or open a bug report gains the button
   once it does. Pressing a button dismisses
   its toast, except one marked `keepsToast` (a button that hands the failure

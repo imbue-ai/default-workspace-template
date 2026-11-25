@@ -508,19 +508,13 @@ describe("the tray's records (the multiplayer spec)", () => {
     expect(
       parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [aboutAnApp] }).launch_paths[0]
         .app_params,
-    ).toEqual({ name: "app", display_name: "app_display_name", text: null });
-    const asking = { ...aboutAnApp, app_params: { ...aboutAnApp.app_params, text: "message" } };
-    expect(
-      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [asking] }).launch_paths[0].app_params,
-    ).toEqual({ name: "app", display_name: "app_display_name", text: "message" });
-    for (const malformed of [{ name: "app" }, { ...aboutAnApp.app_params, text: 7 }]) {
-      expect(() =>
-        parseAppRecord({
-          name: "chat",
-          url: "http://127.0.0.1:1",
-          launch_paths: [{ ...aboutAnApp, app_params: malformed }],
-        }),
-      ).toThrow(WireShapeError);
-    }
+    ).toEqual({ name: "app", display_name: "app_display_name" });
+    expect(() =>
+      parseAppRecord({
+        name: "chat",
+        url: "http://127.0.0.1:1",
+        launch_paths: [{ ...aboutAnApp, app_params: { name: "app" } }],
+      }),
+    ).toThrow(WireShapeError);
   });
 });

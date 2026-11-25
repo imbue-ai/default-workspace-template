@@ -793,15 +793,6 @@ params = [{name = "app", label = "App", required = true}, {name = "app_display_n
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
-[[launch_paths]]
-id = "app-ask"
-label = "Ask about this app"
-path = "/api/intake"
-method = "POST"
-params = [{name = "app", label = "App", required = true}, {name = "app_display_name", label = "App name", required = true}, {name = "message", label = "Message", required = false}]
-presets = {target = "app_ask"}
-app_params = {name = "app", display_name = "app_display_name", text = "message"}
-
 [pin]
 path = "/"
 style = "avatar"
@@ -900,19 +891,6 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             "params": ["app", "app_display_name"],
             "presets": {"target": "app_chat"},
             "app_params": {"name": "app", "display_name": "app_display_name"},
-        },
-        {
-            "id": "app-ask",
-            "label": "Ask about this app",
-            "path": "/api/intake",
-            "method": "POST",
-            "params": ["app", "app_display_name", "message"],
-            "presets": {"target": "app_ask"},
-            "app_params": {
-                "name": "app",
-                "display_name": "app_display_name",
-                "text": "message",
-            },
         },
     ]
     assert row["pin"] == {
@@ -1045,18 +1023,6 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\npresets = {target = 3}\n',
             "a launch path's presets must be a table of strings",
             id="launch-path-preset-not-a-string",
-        ),
-        pytest.param(
-            '[[launch_paths]]\nid = "ask"\nlabel = "Ask"\npath = "/ask"\n'
-            'app_params = {name = "app", display_name = "title", text = 3}\n',
-            "a launch path's app_params is a table of the strings 'name' and 'display_name', and optionally 'text'",
-            id="launch-path-app-params-text-not-a-string",
-        ),
-        pytest.param(
-            '[[launch_paths]]\nid = "ask"\nlabel = "Ask"\npath = "/ask"\n'
-            'app_params = {name = "app", display_name = "title", hint = "message"}\n',
-            "a launch path's app_params is a table of the strings 'name' and 'display_name', and optionally 'text'",
-            id="launch-path-app-params-with-an-unknown-member",
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',

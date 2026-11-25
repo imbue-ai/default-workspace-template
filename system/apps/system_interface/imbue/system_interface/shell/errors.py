@@ -64,13 +64,13 @@ class DesktopValueError(ShellError, ValueError):
 
 class LaunchFailureError(ShellError):
     """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
-    sentence the app itself wrote for people about it, passed on as written, and ``expected`` the app's own word that
-    the refusal is ordinary operation its sentence fully explains; both are None when the app gave none (the frontends
+    sentence the app itself wrote for people about it, passed on as written, and ``is_routine`` the app's own word that
+    the refusal is ordinary operation its sentence fully explains (nothing is broken, so no help is owed); both are None when the app gave none (the frontends
     word it then)."""
 
-    def __init__(self, message: str, user_facing_message: str | None = None, expected: bool | None = None) -> None:
+    def __init__(self, message: str, user_facing_message: str | None = None, is_routine: bool | None = None) -> None:
         self.user_facing_message = user_facing_message
-        self.expected = expected
+        self.is_routine = is_routine
         super().__init__(message)
 
 

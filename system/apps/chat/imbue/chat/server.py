@@ -2739,11 +2739,11 @@ def _can_chat_take_an_ask(agent_manager: AgentManager, chat_id: ChatId) -> bool:
 
 
 def _app_ask_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
-    """The chat an ask from a page of an app goes to: the chat about the app (``_find_chat_about_app``) when it can
-    take a message; with none, one created with the app chat's title and label on the default account, the ask its
-    first message (never auto-named). The ``main_chat`` rules apply wherever that cannot be: the chat about the app
-    cannot take a message, nothing is signed in, the text is a draft (a chat is created by its first message, which
-    a draft is not), or the create is refused."""
+    """The chat an ask from a page of an app (an ``app_chat`` intake with a text) goes to: the chat about the app
+    (``_find_chat_about_app``) when it can take a message; with none, one created with the app chat's title and label
+    on the default account, the ask its first message (never auto-named). The ``main_chat`` rules apply wherever that
+    cannot be: the chat about the app cannot take a message, nothing is signed in, the text is a draft (a chat is
+    created by its first message, which a draft is not), or the create is refused."""
     if not intake.app or not intake.app_display_name:
         return error_response("An ask about an app names the app and its display name", 400)
     agent_manager = state.agent_manager
@@ -2776,8 +2776,8 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
     ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
-    when there is none, ``app_chat`` the chat about the named app, made when there is none, and ``app_ask`` that
-    chat when it can take a message, else what ``main_chat`` answers.
+    when there is none, and ``app_chat`` the chat about the named app: with no text, made when there is none; with
+    a text (an ask), that chat when it can take a message, else what ``main_chat`` answers.
     """
     agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
@@ -2785,9 +2785,9 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
         case IntakeTarget.LOUNGE:
             return _lounge_or_refusal(state)
         case IntakeTarget.APP_CHAT:
+            if intake.message:
+                return _app_ask_chat_or_refusal(state, intake)
             return _app_chat_or_refusal(state, intake)
-        case IntakeTarget.APP_ASK:
-            return _app_ask_chat_or_refusal(state, intake)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -2920,7 +2920,7 @@ def _intake_chat() -> Response:
         _note_chat_started_by_a_person(state, resolved.chat_id, ChatKind.AGENT, intake.client_id)
     if resolved.is_sent_with_create:
         return model_response(IntakeResponse(path=intake_path(resolved.chat_id, None)))
-    if intake.target is IntakeTarget.APP_CHAT:
+    if intake.target is IntakeTarget.APP_CHAT and not intake.message:
         # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
         # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
         prefilled = intake.model_copy_update(
