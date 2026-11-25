@@ -615,6 +615,13 @@ def test_run_refuses_a_body_it_cannot_act_on(tmp_path: Path) -> None:
         ({"command": ["ls"], "cwd": 5}, "cwd must be a string"),
         ({"command": ["ls"], "timeout_seconds": "30"}, "timeout_seconds must be a number of seconds"),
     ]
+    huge_timeout = harness.client.post(
+        "/_agent/run",
+        data='{"command": ["true"], "timeout_seconds": 1' + "0" * 400 + "}",
+        content_type="application/json",
+        headers=headers,
+    )
+    assert run_events(huge_timeout) == [{"type": "exit", "code": 0}]
     for body, error in error_by_body:
         response = harness.client.post("/_agent/run", json=body, headers=headers)
         assert response.status_code == 400 and response.get_json() == {"error": error}, body
@@ -723,6 +730,8 @@ def test_files_read_says_a_missing_file_does_not_exist_and_refuses_what_it_canno
     for body in ({}, {"path": ""}, {"path": 5}):
         response = harness.client.post("/_agent/files/read", json=body, headers=headers)
         assert response.status_code == 400 and response.get_json() == {"error": "path must be a non-empty string"}
+    null_byte = harness.client.post("/_agent/files/read", json={"path": "data/a\x00b"}, headers=headers)
+    assert null_byte.status_code == 400 and null_byte.get_json() == {"error": "path is not one a file can have"}
     oversized = json.dumps({"path": "x" * (20 * 1024)})
     too_large = harness.client.post(
         "/_agent/files/read", data=oversized, content_type="application/json", headers=headers

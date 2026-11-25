@@ -49,10 +49,12 @@ def test_a_command_is_allowed_ten_minutes_unless_it_asks_and_never_more_than_an_
     assert resolve_timeout_seconds(7200) == MAX_COMMAND_TIMEOUT_SECONDS == 3600.0
     assert resolve_timeout_seconds(0) == MIN_COMMAND_TIMEOUT_SECONDS == 1.0
     assert resolve_timeout_seconds(-5) == 1.0
+    assert resolve_timeout_seconds(10**400) == 3600.0
+    assert resolve_timeout_seconds(float("inf")) == 3600.0
 
 
-@pytest.mark.parametrize("raw", ["30", True, [30], {"seconds": 30}, float("nan"), float("inf")])
-def test_a_timeout_that_is_not_a_finite_number_is_refused(raw: object) -> None:
+@pytest.mark.parametrize("raw", ["30", True, [30], {"seconds": 30}, float("nan")])
+def test_a_timeout_that_is_not_a_number_is_refused(raw: object) -> None:
     with pytest.raises(InvalidAgentRequestError, match="timeout_seconds must be a number of seconds"):
         resolve_timeout_seconds(raw)
 
@@ -97,6 +99,14 @@ def test_a_file_request_without_a_path_is_refused(path: object) -> None:
     with pytest.raises(InvalidAgentRequestError, match="path must be a non-empty string"):
         parse_read_file_request({"path": path}, _ROOT)
     with pytest.raises(InvalidAgentRequestError, match="path must be a non-empty string"):
+        parse_write_file_request({"path": path, "content_b64": ""}, _ROOT)
+
+
+@pytest.mark.parametrize("path", ["data/a\x00b", "data/\ud800"])
+def test_a_file_request_whose_path_no_file_could_have_is_refused(path: str) -> None:
+    with pytest.raises(InvalidAgentRequestError, match="path is not one a file can have"):
+        parse_read_file_request({"path": path}, _ROOT)
+    with pytest.raises(InvalidAgentRequestError, match="path is not one a file can have"):
         parse_write_file_request({"path": path, "content_b64": ""}, _ROOT)
 
 

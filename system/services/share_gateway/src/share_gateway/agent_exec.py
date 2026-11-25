@@ -97,9 +97,10 @@ def resolve_timeout_seconds(raw: object) -> float:
     """How long a command may run: the default when none is asked for, else what was asked, held to the allowed range."""
     if raw is None:
         return DEFAULT_COMMAND_TIMEOUT_SECONDS
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or (isinstance(raw, float) and math.isnan(raw)):
         raise InvalidAgentRequestError("timeout_seconds must be a number of seconds")
-    return min(max(float(raw), MIN_COMMAND_TIMEOUT_SECONDS), MAX_COMMAND_TIMEOUT_SECONDS)
+    # Held to the range before the conversion, which an integer of any size survives only once it is in range.
+    return float(min(max(raw, MIN_COMMAND_TIMEOUT_SECONDS), MAX_COMMAND_TIMEOUT_SECONDS))
 
 
 def parse_file_mode(raw: object) -> int:
@@ -119,10 +120,20 @@ def _command_words(raw: object) -> list[str]:
     raise InvalidAgentRequestError("command must be a non-empty list of strings")
 
 
+def _is_file_path(raw_path: str) -> bool:
+    """Whether the operating system takes ``raw_path`` as a path at all."""
+    try:
+        return b"\x00" not in os.fsencode(raw_path)
+    except UnicodeEncodeError:
+        return False
+
+
 def _required_path(body: Mapping[str, object]) -> str:
     raw_path = body.get("path")
     if not isinstance(raw_path, str) or not raw_path:
         raise InvalidAgentRequestError("path must be a non-empty string")
+    if not _is_file_path(raw_path):
+        raise InvalidAgentRequestError("path is not one a file can have")
     return raw_path
 
 
