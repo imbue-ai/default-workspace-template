@@ -185,7 +185,13 @@ class ProcCliSessions(CliSessionsInterface):
                 logger.debug("playwright-cli detach of {} did not run ({})", session.session_name, e)
             if self._wait_until_gone(session):
                 return True
-        logger.info("The playwright-cli daemon of {} outlived detach; sending SIGTERM", session.session_name)
+            logger.info("The playwright-cli daemon of {} outlived detach; sending SIGTERM", session.session_name)
+        else:
+            logger.info(
+                "The playwright-cli session {} cannot be detached (no playwright-cli, or its working directory is "
+                "unreadable); sending SIGTERM",
+                session.session_name,
+            )
         _signal(session.pid, signal.SIGTERM)
         return self._wait_until_gone(session)
 
