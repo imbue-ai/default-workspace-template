@@ -534,9 +534,9 @@ by separate threads -- no asyncio needed.
 
 If your service needs to call a model (classify/summarize content, run a one-shot
 agentic task, or launch a full agent), follow the `use-ai-integration` skill: it
-covers the library that calls the workspace's signed-in Anthropic or OpenAI
-account, how the app adds it as a dependency, and the cost model, and saves you
-from hand-rolling the call.
+covers the library that calls any of the workspace's signed-in AI accounts,
+how the app adds it as a dependency, and the cost model, and saves you from
+hand-rolling the call.
 
 ### Always surface the raw data and its source
 

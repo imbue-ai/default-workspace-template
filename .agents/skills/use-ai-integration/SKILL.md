@@ -1,6 +1,6 @@
 ---
 name: use-ai-integration
-description: Use when writing or reasoning about code that calls an AI model -- an AI-driven app or service, an AI integration, or a skill's scripted [ai-script] step. Covers the library that calls the workspace's signed-in Anthropic or OpenAI account, which account a call uses, what each provider supports from code, the three scenarios (one-shot completion, one-shot agentic task, full agent), and the cost and usage-limit model.
+description: Use when writing or reasoning about code that calls an AI model -- an AI-driven app or service, an AI integration, or a skill's scripted [ai-script] step. Covers the library that calls any of the workspace's signed-in AI accounts (Anthropic, OpenAI, Google, Opencode Go, OpenRouter, API keys), which account a call uses, what each account type supports from code, the three scenarios (one-shot completion, one-shot agentic task, full agent), and the cost and usage-limit model.
 metadata:
   author: imbue
 ---
@@ -14,17 +14,17 @@ is the how.
 
 One library does it: `use_ai_integration_skill.ai`, with `complete()` and
 `run_task()`. Each call runs on one of the workspace's signed-in accounts:
-through the vendor's own CLI (`claude -p`, `codex exec`) on a sign-in, and
-through litellm on an API key. Never hand-roll a litellm, `claude -p` or
-`codex exec` call: the library picks the account and its credential, keeps the
-child process from being mistaken for the agent that started it, and reports
-how the call was billed.
+through the vendor's own CLI (`claude -p`, `codex exec`, `agy`, `pi`) on a
+sign-in or key, and through litellm on an Anthropic or OpenAI API key. Never
+hand-roll a litellm or CLI call: the library picks the account and its
+credential, keeps the child process from being mistaken for the agent that
+started it, and reports how the call was billed.
 
 ## Contents
 
 - [Pick the scenario](#pick-the-scenario-weakest-that-does-the-job)
 - [Which account a call uses](#which-account-a-call-uses)
-- [What each provider supports today](#what-each-provider-supports-today)
+- [What each account type supports](#what-each-account-type-supports)
 - [Adding the library](#adding-the-library)
 - [Scenario 1: one-shot completion](#scenario-1-one-shot-completion)
 - [Scenario 2: one-shot agentic task](#scenario-2-one-shot-agentic-task)
@@ -53,15 +53,15 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
 ## Which account a call uses
 
 With no `account` argument, a call runs on the workspace's default account
-among its Anthropic and OpenAI ones: the pinned default, else the most recently
-used, else the oldest. Accounts of other providers are skipped. Neither the
-current chat's own account nor a credential in the calling process's
-environment is consulted, so a call made from inside a chat can run on a
-different account than the chat does. To use a specific account, pass its id:
-`complete(..., account="<id>")`. Accounts are read on every call, so a new
-sign-in takes effect without a restart, and the default moves when the user
-pins another account or, with none pinned, starts a chat on another one. List
-them, numbered as the chat shows them, with the default and each one's billing:
+among all its accounts: the pinned default, else the most recently used, else
+the oldest. Neither the current chat's own account nor a credential in the
+calling process's environment is consulted, so a call made from inside a chat
+can run on a different account than the chat does. To use a specific account,
+pass its id: `complete(..., account="<id>")`. Accounts are read on every
+call, so a new sign-in takes effect without a restart, and the default moves
+when the user pins another account or, with none pinned, starts a chat on
+another one. List them, numbered as the chat shows them, with the default and
+each one's billing:
 
 ```bash
 uv run --no-sync python -c "from use_ai_integration_skill.ai import list_accounts; [print(row) for row in list_accounts()]"
@@ -70,28 +70,37 @@ uv run --no-sync python -c "from use_ai_integration_skill.ai import list_account
 **A plan sign-in is for its owner's own use.** An app or automation that other
 people use (through a sharing link, or as other people in this workspace) runs
 on an API-key account, named with `account=`: Anthropic does not allow routing
-other people's requests through plan credentials, and OpenAI recommends API
-keys for automation.
+other people's requests through plan credentials, OpenAI recommends API keys
+for automation, and Google does not support wrapping its CLI in apps on a
+consumer plan.
 
-## What each provider supports today
+## What each account type supports
 
-| Signed in with | `complete()` | `run_task()` | Billed as |
-|---|---|---|---|
-| Anthropic: Claude plan, or a long-lived token | `claude -p` | `claude -p` | the plan's usage limits |
-| Anthropic: API key (also through a proxy) | litellm | `claude -p` on the key | per token |
-| Anthropic: Console sign-in | `claude -p` | `claude -p` | per token |
-| OpenAI: ChatGPT plan | `codex exec` | `codex exec` | the plan's usage limits |
-| OpenAI: API key | litellm | `codex exec` on the key | per token |
-| Google sign-in | never | never | -- |
-| Any key added through the API key option, Opencode Go, OpenRouter | not yet | not yet | -- |
+| Signed in with | `complete()` | `run_task()` | Cost reported | Billed as |
+|---|---|---|---|---|
+| Anthropic: Claude plan or long-lived token | `claude -p`, no tools | `claude -p` | -- | the plan's usage limits |
+| Anthropic: API key (also through a proxy) | litellm, no tools | `claude -p` on the key | yes | per token |
+| Anthropic: Console sign-in | `claude -p`, no tools | `claude -p` | yes | per token |
+| OpenAI: ChatGPT plan | `codex exec`, an agent | `codex exec` | -- | the plan's usage limits |
+| OpenAI: API key | litellm, no tools | `codex exec` on the key | `complete()` only | per token |
+| Google sign-in | `agy`, an agent | `agy` | -- | the plan's usage limits |
+| Opencode Go | `pi`, no tools | `pi` | -- | the subscription |
+| OpenRouter, or a key added through the API key option | `pi`, no tools | `pi` | yes | per token |
 
-Google does not support wrapping its CLI inside apps on a consumer plan, so
-the library refuses a Google sign-in on every call; calling Gemini would need a
-Gemini API key, which is not supported yet. An Anthropic or OpenAI key works
-from code only when it is added under that provider's own option.
-Naming an account of an unsupported provider raises `UnsupportedProviderError`,
-which names the provider. When the user has no Anthropic or OpenAI account,
-tell them in plain words which sign-in the feature needs.
+On a ChatGPT or Google sign-in a completion is an agent turn that can still
+read files, so untrusted text (emails, web pages, other people's messages) goes
+to an account whose `complete()` has no tools -- Anthropic, Opencode Go,
+OpenRouter or a key added through the API key option -- or to an API key,
+named with `account=`.
+
+Google's Antigravity FAQ says wrapping the CLI inside third-party coding agents
+or apps is not supported on consumer plans. The library still runs `agy` on a
+Google sign-in, the way chats do; an app other people use calls Gemini on a
+Gemini API key instead (the API key option's Google Gemini provider).
+
+Flags, default models, and what each CLI leaves in the account folder:
+[references/providers.md](references/providers.md). An account of a type the
+library does not know raises `UnsupportedProviderError`.
 
 ## Adding the library
 
@@ -127,21 +136,18 @@ result = complete(
 print(result.text, result.billing, result.usage)
 ```
 
-- **Tools**: on an Anthropic account or an API key, none. On a ChatGPT sign-in
-  it is a codex agent in a read-only sandbox that can still run commands that
-  read files, and `system` only leads its prompt. Send untrusted text (emails,
-  web pages, other people's messages) only on an Anthropic or API-key account,
-  named with `account=`. A step that needs a tool, web search included, is
-  scenario 2.
+- **Tools**: none on Anthropic, a `pi` account or an API key; an agent on a
+  ChatGPT or Google sign-in, where `system` only leads the prompt (see the
+  table). A step that needs a tool, web search included, is scenario 2.
 - **One prompt, no streaming**: put a conversation's earlier turns in the
   prompt text; the answer arrives whole.
 - **The model is set in the code**: a top-of-file constant plus a `--model`
   override, independent of the chat's `/model`. Code that sets a model id also
   passes `account=`, so the provider cannot change under it. With `None`, an
-  API key runs the small `DEFAULT_ANTHROPIC_MODEL` or
-  `DEFAULT_OPENAI_API_MODEL`, an Anthropic sign-in runs
-  `DEFAULT_ANTHROPIC_MODEL`, and a ChatGPT sign-in runs its account's default
-  model (`result.model` is then `None`).
+  Anthropic sign-in or key runs `DEFAULT_ANTHROPIC_MODEL`, an OpenAI key
+  `DEFAULT_OPENAI_API_MODEL`, a `pi` account `DEFAULT_PI_MODELS[provider]`, and
+  a ChatGPT or Google sign-in its account's default (`result.model` is then
+  `None`).
 - **Calls are synchronous.** Once a few items give good results, run a batch on
   a `concurrent.futures.ThreadPoolExecutor` with enough workers to saturate the
   I/O (well into the dozens), backing off only on rate limits.
@@ -149,7 +155,9 @@ print(result.text, result.billing, result.usage)
   and on a validation error retry once with the error appended to the prompt.
 - **Errors** (`use_ai_integration_skill.errors`): `AICallError` and its
   subclasses `NoUsableAccountError`, `UnsupportedProviderError`,
-  `ProviderCallError` and `ProviderTimeoutError`. Let them fail the step loudly.
+  `ModelRequiredError` (a `pi` provider with no default model, named with
+  `model=`), `ProviderCallError` and `ProviderTimeoutError`. Let them fail the
+  step loudly.
 
 ## Scenario 2: one-shot agentic task
 
@@ -163,8 +171,9 @@ result = run_task(
 )
 ```
 
-It runs `claude -p` with permission prompts bypassed, or `codex exec` without
-codex's own sandbox, in `cwd` (by default the current directory) with file and
+It runs `claude -p` with permission prompts bypassed, `codex exec` without
+codex's own sandbox, `agy` with permissions skipped, or `pi` (which has no
+approval step), in `cwd` (by default the current directory) with file and
 shell access, so scope `instructions` tightly and never give it untrusted
 input. `instructions` layer on the CLI's default agent rather than replace it.
 On an Anthropic account the agent can search the web; on an OpenAI account,
@@ -238,7 +247,7 @@ Read `result.billing`:
   figure for it. Describe its volume in calls and tokens (`result.usage`).
 - `"api_key"`: billed per token, and `result.cost_usd` is the dollars (`None`
   when litellm has no price for the model, and for `codex exec` on a key, which
-  reports none).
+  reports none; on a `pi` account it is pi's own price for the tokens).
 
 **Measure before scaling, don't guess.** Run **one real unit** of the work, read
 its usage (and its cost, on a key) and wall-clock, and extrapolate to the full
@@ -251,5 +260,5 @@ estimate.
 
 See [references/billing-and-credentialing.md](references/billing-and-credentialing.md)
 for the billing buckets, whose use a plan sign-in covers, why `claude -p`
-reloads so much context, how credentials are resolved, and the two footguns (a stray `ANTHROPIC_API_KEY` or
-`CODEX_API_KEY` switches a CLI to API billing).
+reloads so much context, how credentials are resolved, and the footguns (a
+stray provider key in the environment switches a CLI to that key).

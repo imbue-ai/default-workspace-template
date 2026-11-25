@@ -14,6 +14,10 @@ it shares with the user's own chats.
 | OpenAI API key (litellm, or `codex exec` on a pasted key) | Pay-per-token OpenAI API account | No |
 | `codex exec` on a ChatGPT sign-in | The ChatGPT plan's usage limits | Yes |
 | Interactive Codex chat | The ChatGPT plan's usage limits | -- |
+| `agy` on a Google sign-in | The Google AI plan's quota (a Cloud project's, on a Cloud-project sign-in) | Yes |
+| Interactive Antigravity chat | The Google AI plan's quota | -- |
+| `pi` on an Opencode Go key | The Opencode Go subscription | Yes |
+| `pi` on OpenRouter or a key added through the API key option | Pay-per-token account at that provider | No |
 
 Anthropic's help centre ([Use the Claude Agent SDK with your Claude
 plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan),
@@ -30,15 +34,18 @@ when the volume is high.
 
 ## Whose use a plan sign-in covers
 
-A Claude or ChatGPT plan sign-in is for the account owner's own use. Anthropic's
-[legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance)
+A Claude, ChatGPT or Google plan sign-in is for the account owner's own use.
+Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance)
 does not permit routing requests through Free, Pro, Max or Ultra plan
 credentials on behalf of other users, and says advertised plan limits assume
 ordinary, individual usage. OpenAI's [Codex authentication
 page](https://learn.chatgpt.com/docs/auth) recommends API keys for automation
-and says not to expose Codex execution in untrusted or public environments. So
-an app or automation that other people use (through a sharing link, or as other
-people in the workspace) runs on an API-key account.
+and says not to expose Codex execution in untrusted or public environments.
+Google's [Antigravity FAQ](https://antigravity.google/docs/faq#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching)
+says headless `agy -p` is meant for direct scripting and CI, and that wrapping
+the CLI inside third-party coding agents or apps is not supported on consumer
+plans. So an app or automation that other people use (through a sharing link,
+or as other people in the workspace) runs on an API-key account.
 
 ## Why `claude -p` uses more than the direct API
 
@@ -71,16 +78,19 @@ temporary directory, with the account folder's `config.toml` and rules ignored
 saved (`--ephemeral`), so no `AGENTS.md`, MCP server or hook reaches the answer.
 It is still an agent: the read-only sandbox lets it run commands that read any
 file the user can, and `codex exec` has no system prompt option, so `system`
-only leads the prompt. Untrusted input therefore goes to an Anthropic or
-API-key account, where a completion has no tools.
+only leads the prompt. Untrusted input therefore goes to an account whose
+completion has no tools. `complete()` on a Google sign-in is likewise an agent
+turn; see [providers.md](providers.md).
 
 ## Credential resolution
 
 Each sign-in through the provider chooser is an account: a folder
-`~/.minds/accounts/<id>/` and a row in `~/.minds/accounts/index.json` naming its
-provider. The library reads the index on every call and picks the account as
-SKILL.md says; it never takes the account from the calling process's
-`CLAUDE_CONFIG_DIR` or `CODEX_HOME`.
+`.minds/accounts/<id>/` in the user's home and a row in
+`.minds/accounts/index.json` naming its provider. The home is the one in the
+user's passwd entry, not `$HOME`, which a Google chat relocates. The library
+reads the index on every call and picks the account as SKILL.md says; it never
+takes the account from the calling process's `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` or `PI_CODING_AGENT_DIR`.
 
 - **Anthropic.** `read_workspace_ai_credentials(account_dir=...)` resolves the
   key: the `data/.secrets/anthropic.env` snapshot first (with the snapshot's
@@ -109,12 +119,25 @@ SKILL.md says; it never takes the account from the calling process's
   "sk-..."}`) is called through litellm by `complete()` and through `codex exec`
   by `run_task()`. A ChatGPT sign-in is only ever used by `codex exec`, with
   `CODEX_HOME` set to the account folder; the library never reads its tokens.
+- **Google.** The account folder is agy's home; its sign-in is
+  `.gemini/antigravity-cli/antigravity-oauth-token` there, and an account
+  without it is signed out. `agy` runs with `HOME` set to the folder,
+  `AGY_CLI_DISABLE_AUTO_UPDATE=true`, and without `GEMINI_API_KEY`,
+  `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` or `AGY_ADC_AUTH`, any of
+  which would sign agy in some other way.
+- **Opencode Go, OpenRouter and the API key option.** The account folder is
+  pi's config directory, and its `auth.json` holds one key under pi's provider
+  id. `pi` runs with `PI_CODING_AGENT_DIR` set to the folder, `--provider` and
+  `--model` both given, and no provider key or AWS or Google Cloud credential
+  in its environment: given only `--provider`, pi picks its model among every
+  provider it has a key for, so an inherited `ANTHROPIC_API_KEY` would move the
+  call to Anthropic.
 - **Older copies of `claude_p.py`** resolve the account themselves:
   `$CLAUDE_CONFIG_DIR` when set (inside an agent, the chat's account), else the
   workspace's default Anthropic account.
 - A call that cannot be made fails with a typed error (`NoUsableAccountError`,
-  `UnsupportedProviderError`, `ProviderCallError`, `ProviderTimeoutError`)
-  rather than hanging.
+  `UnsupportedProviderError`, `ModelRequiredError`, `ProviderCallError`,
+  `ProviderTimeoutError`) rather than hanging.
 
 ## The mngr `claude -p` session-hook bug
 
@@ -123,9 +146,9 @@ stop/readiness hooks are guarded on that variable. A child `claude -p` that
 inherits it looks like the managed session and trips those hooks. The
 `claude_p.py` helper unsets `MAIN_CLAUDE_SESSION_ID` in the child environment,
 which neutralizes them. The library does the same for `claude -p`, and runs
-`codex exec` without `MNGR_AGENT_STATE_DIR`, so neither child is taken for the
-agent that started it -- one reason to call the library rather than shelling out
-to either CLI yourself.
+`codex exec`, `agy` and `pi` without `MNGR_AGENT_STATE_DIR`, so no child is
+taken for the agent that started it -- one reason to call the library rather
+than shelling out to a CLI yourself.
 
 ## The footguns
 
@@ -141,3 +164,7 @@ silently switches it to API billing on that key, whatever the account folder
 holds. The library removes `CODEX_API_KEY`, `OPENAI_API_KEY` and
 `CODEX_ACCESS_TOKEN` from the codex child's environment, so only the account
 folder decides how a codex call is billed.
+
+A provider key in a `pi` child's environment (`GROQ_API_KEY`,
+`ANTHROPIC_API_KEY`, ...) can take the call off the account, and
+`GEMINI_API_KEY` does the same to `agy`; the library removes them from both.
