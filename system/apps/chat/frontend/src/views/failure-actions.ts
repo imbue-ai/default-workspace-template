@@ -28,19 +28,18 @@ export interface NoticeAsk {
   readonly draft: () => void;
 }
 
-/** What a notice offers for the failure ``lines`` tell (a refused ask's sentence among them) when it owes help: "Ask
- *  an agent to fix this" (``ask``; null where the notice withholds it, because the ask would go through what failed
- *  or nothing could carry it), then, once that ask was refused with a failure that owes help, "Draft it in a chat"
- *  and "Report a bug"; an ask refused for a reason that owes none (nothing answered, a view to stop first) is only
- *  asked again. With no agent to ask, "Report a bug" alone. Nothing for a failure that owes no help, whose notice
- *  offers its own remedy. */
+/** What a notice offers for the failure ``lines`` tell (a refused ask's sentence among them): "Ask an agent to fix
+ *  this" (``ask``; null where the notice offers none: a failure that owes no help and leaves a way out, or one whose
+ *  ask would go through what failed or that nothing could carry), then, once that ask was refused with a failure that
+ *  owes help, "Draft it in a chat" and "Report a bug"; an ask refused for a reason that owes none (nothing answered,
+ *  a view to stop first) is only asked again. With no agent to ask, "Report a bug" alone for a failure that owes
+ *  help. */
 export function failureRemedyActions(
   connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null,
   lines: FailureLines,
   ask: NoticeAsk | null,
 ): NoticeAction[] {
-  if (!lines.isHelpOwed) return [];
-  if (ask === null) return reportBugActions(connection, lines);
+  if (ask === null) return lines.isHelpOwed ? reportBugActions(connection, lines) : [];
   const askAction: NoticeAction = {
     label: ask.isAsking ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL,
     tooltip: "Sends what failed to an agent, and shows its chat",

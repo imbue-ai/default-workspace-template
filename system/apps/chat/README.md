@@ -1366,6 +1366,89 @@ mngr config set --scope local plugins.autocompact.epsilon_offset_minutes 60
 Each request, toggle change, and status change writes an `autocompact: ...` line
 to the chat service log (`/var/log/supervisor/chat-stderr.log`).
 
+## Ways out of a failure
+
+Where a failure has a way out beyond trying again, the page offers it as a
+button beside the failure.
+
+**Switch provider.** For a failure the provider or the account is behind. It
+opens the provider chooser with the failing account listed but refused
+(`frontend/src/views/provider-switch.ts`), and what happens with the account
+signed in to or picked depends on where it was pressed:
+
+- On the page of a chat whose create failed, beside "Try again": the chat is
+  launched on that account.
+- On the composer's notice for a send whose agent could not be started
+  (`agent_start_failed`), and under a failed turn in the transcript that is a
+  rate or usage limit (`api_error_kind: rate_limit`) or a provider fault
+  (`is_provider_fault`): the chat is switched to that account, as a provider
+  row in the model menu switches it (a rebind or a handoff, above). The
+  message of a refused send stays in the composer. A turn that failed on the
+  chat's sign-in keeps its own note, which offers the same switch beside "Sign
+  in again".
+
+It is not offered where another provider would not help: a send nothing
+answered, a conversation too long for the model, a half-done delete, an agent
+that ran on its account until it went down (`agent_unreachable`).
+
+**Ask an agent to fix this.** When a chat cannot be created or its agent
+cannot be started, the cause may be the workspace itself (a full disk, no
+memory left), which a new chat would meet too. So the page of a chat whose
+create failed, and the composer's notice for a send to a chat whose agent
+would not start for the send, was down and would not come back, or whose
+create failed (`agent_start_failed`, `agent_unreachable`,
+`chat_not_started`), offer it only when another agent chat exists, and send
+the task there: to the main chat when it is an agent chat, else to the agent
+chat messaged most recently, and never to the failing chat (`chatToAskAbout`
+in `frontend/src/views/ask-running-agent.ts`). The task is the one every "Ask
+an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
+the details, what to do, written as Imbue Studio about the user), behind
+`/assist`, so the agent runs the workspace's assist flow as it does for an ask
+through the shell. The shell writes that command for every ask that passes
+through it; this one never does, so the chat app puts it in front itself
+(`assistRequest`). It is sent as a message through
+`POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
+may create a chat for it, so these failures never offer the shell's ask, which
+every other failure that owes help offers: with no other agent chat the ask is
+withheld and "Report a bug" stands in its place, and a Try again on the
+failed-create page that fails again offers nothing beside the page's own
+remedies. The button reads "Asking an agent…" until the send is answered, and
+the page then shows the chat the task went to. A failed chat that names no
+account offers neither button, since a sign-in is what it needs ("Choose a
+provider").
+
+A send that was refused leaves the user where they were. Its sentence is
+shown beside another chat's failure, so it leads with the chat that was asked
+(`Couldn't ask "<chat>".`, then the send route's own sentence), and its
+details are headed `Asking "<chat>":`. The composer's notice tells it as its
+last paragraph and keeps one "See details", holding the failure's details and
+then the ask's. An ask refused with a failure that owes help brings "Draft it
+in a chat", which leaves the same request unsent in a chat's message box (the
+shell makes the draft, and writes `/assist` in front of it), and "Report a
+bug", which files both; one refused for a reason that owes none (the chat
+that was asked is waiting on its terminal, nothing answered) is only there to
+ask again. On the
+failed-create page the shared remedies (`FailureRemedies` in `workspace_ui`)
+draw the refused ask under the button, with a "See details" of its own, the
+draft and the bug report, so the button is the last in its row and the
+refused ask ends the page.
+
+While one of the notice's actions runs (the ask, a retry, a restart), every
+button on the notice is disabled, and a retry or a restart drops what an
+earlier ask came to.
+
+**A conversation too long for the model** (`api_error_kind:
+context_too_long`). The failed turn offers "Start a new chat", on the account
+a new chat would start on, and "Compact", which sends `/compact` to the chat
+as a typed one is sent (Compaction, above). A conversation over the limit may
+be too long to compact as well, so both buttons stay under the turn whatever
+comes of it: a `/compact` the chat app declines gets the "/compact wasn't
+sent" notice on the composer, and one that fails gets "Couldn't compact this
+conversation" there, with Try again unless nothing answered it.
+
+The buttons under a failed turn are left out of a subagent view: they act on
+the chat, and the turns a subagent view shows are not the chat's own.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per

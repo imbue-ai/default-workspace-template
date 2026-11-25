@@ -1,0 +1,1 @@
+A dialog taller than the space it opens in (a notice with long text in a short window) now starts at the top of that space, which scrolls to the rest of the dialog, instead of losing its top and bottom past the edges. A dialog that fits looks as before.

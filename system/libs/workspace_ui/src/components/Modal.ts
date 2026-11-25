@@ -32,12 +32,17 @@ import { TEXT_BODY_SIZE } from "./typography";
 // chooser's resizing multi-screen panel) but must still scrim and stack like
 // every other modal.
 export const MODAL_OVERLAY_CLASS =
-  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 " +
+  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center overflow-y-auto bg-black/40 " +
   "animate-[modal-overlay-in_150ms_ease-out]";
 
 export const MODAL_CARD_CLASS =
   "modal-card w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
+
+// How the Modal's card sits in its overlay. Auto margins centre a card that fits, as the overlay's `items-center`
+// would, but a card taller than the overlay then starts at its top and the overlay scrolls to the rest. Centred by
+// `items-center`, the part of a taller card above the overlay could not be scrolled to.
+const MODAL_CARD_PLACEMENT_CLASS = "my-auto";
 
 export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
 
@@ -119,15 +124,19 @@ export function Modal(): m.Component<ModalAttrs> {
       return m(
         "div",
         { class: MODAL_OVERLAY_CLASS, ...omitClassAttrs(overlay ?? {}), ...backdropDismissAttrs(onDismiss) },
-        m("div", { class: MODAL_CARD_CLASS, ...partAttrs("dialog"), ...cardAttrs }, [
-          headerContent === null || headerContent === undefined
-            ? null
-            : m("div", { class: MODAL_HEADER_CLASS, ...partAttrs("dialog-header") }, headerContent),
-          vnode.children,
-          actions === undefined
-            ? null
-            : m("div", { class: MODAL_ACTIONS_CLASS, ...partAttrs("dialog-actions") }, actions),
-        ]),
+        m(
+          "div",
+          { class: `${MODAL_CARD_CLASS} ${MODAL_CARD_PLACEMENT_CLASS}`, ...partAttrs("dialog"), ...cardAttrs },
+          [
+            headerContent === null || headerContent === undefined
+              ? null
+              : m("div", { class: MODAL_HEADER_CLASS, ...partAttrs("dialog-header") }, headerContent),
+            vnode.children,
+            actions === undefined
+              ? null
+              : m("div", { class: MODAL_ACTIONS_CLASS, ...partAttrs("dialog-actions") }, actions),
+          ],
+        ),
       );
     },
   };

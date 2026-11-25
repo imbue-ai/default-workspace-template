@@ -40,4 +40,24 @@ describe("backdropDismissAttrs", () => {
     } as unknown as MouseEvent);
     expect(onDismiss).not.toHaveBeenCalled();
   });
+
+  // An overlay scrolls a dialog taller than itself, and a scrollbar that takes room sits inside the overlay's box.
+  it("ignores a press on the overlay's own scrollbar, and still dismisses on the backdrop beside it", () => {
+    const onDismiss = vi.fn();
+    const overlay = { clientWidth: 573, offsetWidth: 588, clientHeight: 448, offsetHeight: 448 };
+    const press = (offsetX: number): void =>
+      backdropDismissAttrs(onDismiss).onmousedown({
+        button: 0,
+        target: overlay,
+        currentTarget: overlay,
+        offsetX,
+        offsetY: 100,
+      } as unknown as MouseEvent);
+
+    press(580);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    press(40);
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
 });

@@ -847,6 +847,17 @@
   }
 }
 
+/* The opened "See details" of a notice (NoticeDialog in workspace_ui: every notice of the chat page and of the
+   chat root). The box scrolls once it is taller than a share of the window, and a height that is not a whole number
+   of lines cuts its last line through. So its height is whole lines, and the inset above and below the text is
+   border rather than padding, which scrolled text does not run under: the text ends on a line at either end of
+   the scroll. */
+.notice-details .see-details-text {
+  max-height: calc(round(down, 35vh, 1lh) + --spacing(4));
+  padding-block: 0;
+  border-block: --spacing(2) solid transparent;
+}
+
 /* The pills of a strip of suggestions (views/SuggestionStrip.ts) rise into place above the composer as they
    appear. They are dashed, to read as offers rather than as controls of the page, under a shadow light enough to
    lift them off the chat without boxing them; the recommended one is the success green. Reduced motion shows them

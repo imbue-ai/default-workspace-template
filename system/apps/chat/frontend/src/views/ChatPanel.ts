@@ -102,6 +102,8 @@ import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
+import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
   joinDetailLines,
   plainFailureLines,
@@ -116,6 +118,12 @@ const STARTING_STATUS = "Starting your chat…";
 const READY_STATUS = "Your chat is ready.";
 const EMPTY_CONVERSATION_STATUS_CLASS =
   "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
+// The failed-create page's buttons. The shared ask button draws a refused ask under itself as a block of its own
+// (`ask-agent-failure`), which is centred from here like the rest of the page.
+const FAILED_CREATE_BUTTONS_CLASS =
+  "flex flex-wrap items-center justify-center gap-2 " +
+  "[&_.ask-agent-failure]:flex [&_.ask-agent-failure]:flex-col [&_.ask-agent-failure]:items-center " +
+  "[&_.ask-agent-failure-message]:text-center";
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -378,6 +386,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // how the last one failed.
   let pageActionInFlight = false;
   let pageActionError: FailureLines | null = null;
+  // A failed create's "Ask an agent to fix this" waiting for its answer: the page's other ways out wait with it.
+  let askInFlight = false;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -450,13 +460,32 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       });
   }
 
-  /** A failure line under a page's controls, with its details collapsed beneath it. */
-  function renderFailureLines(lines: FailureLines | null, extraClass: string): m.Children {
+  /** What the failed-create page's "Ask an agent to fix this" asks ``targetChatId`` through
+   *  (``askConnectionToChat``), with the page told while the ask is pending. */
+  function pageAskConnection(targetChatId: string): ReturnType<typeof askConnectionToChat> {
+    const connection = askConnectionToChat(targetChatId);
+    return {
+      ...connection,
+      askAgent: async (text, options, delivery) => {
+        askInFlight = true;
+        try {
+          return await connection.askAgent(text, options, delivery);
+        } finally {
+          askInFlight = false;
+          m.redraw();
+        }
+      },
+    };
+  }
+
+  /** A failure line under a page's controls, with its details collapsed beneath it. ``isHelpLeftToPage`` where the
+   *  page's own remedies already cover the failure. */
+  function renderFailureLines(lines: FailureLines | null, extraClass: string, isHelpLeftToPage = false): m.Children {
     if (lines === null) return null;
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isHelpOwed
+      lines.isHelpOwed && !isHelpLeftToPage
         ? m(
             "div",
             { class: "flex flex-wrap items-center justify-center gap-2" },
@@ -615,6 +644,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
     }
     const hasAccount = provisional.account_id !== "";
+    const chatToAskId = chatToAskAboutFailedCreate(provisional);
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
@@ -625,24 +655,41 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           "p",
           { class: "message-list-create-failed-text text-secondary text-center" },
           hasAccount
-            ? "The agent for this chat couldn't be started. Try again, or start a new chat on a different provider."
+            ? "The agent for this chat couldn't be started. Try again, or switch to another provider."
             : "Sign in to a provider to start this chat.",
         ),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
-        renderFailureLines(launchError, "message-list-create-retry-failed"),
+        // A Try again that failed again is the page's own failure, which the page's remedies below are about.
+        renderFailureLines(launchError, "message-list-create-retry-failed", true),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
-        m("div", { class: "flex items-center gap-2" }, [
+        m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
           hasAccount
-            ? m(
-                Button,
-                {
-                  variant: "primary",
-                  extra: "message-list-create-retry",
-                  readonly: launchInFlight,
-                  onclick: () => void relaunch(chatId, provisional.account_id),
-                },
-                launchInFlight ? "Starting…" : "Try again",
-              )
+            ? [
+                m(
+                  Button,
+                  {
+                    variant: "primary",
+                    extra: "message-list-create-retry",
+                    readonly: launchInFlight,
+                    disabled: askInFlight,
+                    onclick: () => void relaunch(chatId, provisional.account_id),
+                  },
+                  launchInFlight ? "Starting…" : "Try again",
+                ),
+                m(
+                  Button,
+                  {
+                    extra: "message-list-switch-provider",
+                    readonly: launchInFlight,
+                    disabled: askInFlight,
+                    onclick: () => {
+                      if (launchInFlight) return;
+                      chooseProviderInPlaceOf(provisional.account_id, (accountId) => void launchOn(chatId, accountId));
+                    },
+                  },
+                  SWITCH_PROVIDER_LABEL,
+                ),
+              ]
             : m(
                 Button,
                 {
@@ -657,10 +704,26 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             {
               extra: "message-list-remove-chat",
               readonly: pageActionInFlight,
+              disabled: askInFlight,
               onclick: () => runPageAction(() => destroyChat(chatId), "This chat couldn't be removed"),
             },
             "Remove this chat",
           ),
+          // Last in the row: the ask says under itself what a refused one came to, which then ends the page, with
+          // its bug report, rather than sitting between the page's buttons. It goes to a chat that is already
+          // running; with none, a new chat would meet what stopped this one, so the bug report stands in for it. A
+          // chat that names no account needs a sign-in, which neither can make.
+          hasAccount
+            ? m(FailureRemedies, {
+                connection: chatToAskId === null ? getShellConnection() : pageAskConnection(chatToAskId),
+                failure: {
+                  message: `The chat "${provisional.name}" couldn't be started`,
+                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                  isHelpOwed: true,
+                },
+                isAgentWithheld: chatToAskId === null,
+              })
+            : null,
         ]),
       ],
     );

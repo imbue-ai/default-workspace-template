@@ -31,3 +31,10 @@ export function getTerminalOriginLabel(): string {
 export function getChatSessionId(): string {
   return document.querySelector('meta[name="system-interface-chat-session-id"]')?.getAttribute("content") ?? "";
 }
+
+/** Whether the document is a subagent view rather than a chat's own page. */
+export function isSubagentPage(): boolean {
+  // Read while a transcript is drawn, so it tolerates a test's document-less environment, as ``getChatKind`` does.
+  if (typeof document === "undefined" || typeof document.querySelector !== "function") return false;
+  return getChatSessionId() !== "";
+}

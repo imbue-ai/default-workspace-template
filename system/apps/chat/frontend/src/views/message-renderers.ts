@@ -13,6 +13,8 @@ import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
+import { failedTurnRemediesSignature, renderFailedTurnRemedies } from "./failed-turn-remedies";
+import { chooseProviderToSwitchChat } from "./provider-switch";
 import {
   isResendingAfterSignIn,
   isSignedInSince,
@@ -208,6 +210,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
+  let renderedRemediesSignature = "";
   let renderedRunningChipSignature = "";
   let renderedPickerSignature = "";
   let renderedIsStretchHead = false;
@@ -234,6 +237,7 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
+        failedTurnRemediesSignature(event, chatId) !== renderedRemediesSignature ||
         runningChipSignature(event, chatId) !== renderedRunningChipSignature ||
         pickerSignature(event, chatId) !== renderedPickerSignature ||
         isStretchHead !== renderedIsStretchHead ||
@@ -253,6 +257,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
+      renderedRemediesSignature = failedTurnRemediesSignature(event, chatId);
       renderedRunningChipSignature = runningChipSignature(event, chatId);
       renderedPickerSignature = pickerSignature(event, chatId);
       renderedIsStretchHead = isStretchHead;
@@ -488,24 +493,15 @@ function renderReauthAction(chatId: string): m.Children {
     ),
     // Two ways out, because the right one depends on whether the credential is fixable, which
     // the user knows and we do not: an expired login is, a spent quota mostly is not. The second
-    // moves this chat to the account picked: a rebind for another account on the same harness and
-    // lane, a handoff otherwise. It waits for the chat list, which can land after the transcript:
-    // the move needs the chat, and the chooser fixes which account it refuses when it opens.
+    // moves this chat to the account picked. It waits for the chat list, which can land after the
+    // transcript: the move needs the chat.
     chat === undefined
       ? null
       : [
           " or ",
           m(
             "button",
-            {
-              type: "button",
-              class: REAUTH_ACTION_CLASS,
-              onclick: () =>
-                openProviderChooser({
-                  onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
-                  ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
-                }),
-            },
+            { type: "button", class: REAUTH_ACTION_CLASS, onclick: () => chooseProviderToSwitchChat(chatId) },
             "switch to another provider",
           ),
         ],
@@ -810,6 +806,7 @@ function appendEventParts(
                 )
               : null,
             event.is_auth_error ? renderReauthAction(chatId) : null,
+            renderFailedTurnRemedies(event, chatId),
             isRaw ? m("div", { class: "mt-[0.4em] text-faint" }, m(SeeDetails, { details: textContent })) : null,
           ]),
           placement,

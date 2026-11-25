@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type m from "mithril";
+import m from "mithril";
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
 // vi.hoisted. Mithril captures requestAnimationFrame at import time, and jsdom has none.
@@ -34,9 +34,19 @@ const mocks = vi.hoisted(() => {
     // The ids the account list holds, and the one a new chat would start on.
     accountIds: ["acct-1"] as string[],
     selectedAccountId: "acct-1" as string | null,
-    openProviderChooser: vi.fn((_intent: { onSignedIn?: (accountId: string) => void }) => undefined),
+    openProviderChooser: vi.fn((_intent: ChooserIntent) => undefined),
+    // Every chat the list names, and which of them is the main chat: where an ask about a failed create can go.
+    chats: [] as unknown[],
+    mainChatId: null as string | null,
+    sendMessage: vi.fn(async (_chatId: string, _text: string, _messageId: string): Promise<string> => "ok"),
+    openChatPage: vi.fn(),
   };
 });
+
+interface ChooserIntent {
+  onSignedIn?: (accountId: string) => void;
+  unpickable?: { accountId: string; reason: string };
+}
 
 vi.mock("../root/verbs", () => ({ destroyChat: mocks.destroyChat, startChat: mocks.startChat }));
 vi.mock("../models/Providers", () => ({
@@ -45,11 +55,17 @@ vi.mock("../models/Providers", () => ({
     const id = accountId !== undefined && mocks.accountIds.includes(accountId) ? accountId : mocks.selectedAccountId;
     return id === null ? null : { id };
   },
-  openProviderChooser: (intent: { onSignedIn?: (accountId: string) => void }) => mocks.openProviderChooser(intent),
+  openProviderChooser: (intent: ChooserIntent) => mocks.openProviderChooser(intent),
 }));
 
 vi.mock("../models/Chats", () => ({
-  getChatById: () => mocks.chat,
+  isLaunchInFlight: () => false,
+  addSuggestionsUpdatedListener: () => undefined,
+  removeSuggestionsUpdatedListener: () => undefined,
+  getChatById: (chatId: string) =>
+    chatId === AGENT_ID ? mocks.chat : (mocks.chats as ChatSnapshot[]).find((chat) => chat.chat_id === chatId),
+  getChats: () => mocks.chats,
+  getMainChatId: () => mocks.mainChatId,
   getProvisionalChat: () => mocks.proto,
   hasReceivedChatList: () => mocks.isChatListReceived,
   launchChat: (chatId: string, accountId: string) => mocks.launchChat(chatId, accountId),
@@ -62,6 +78,7 @@ vi.mock("../models/Chats", () => ({
   isRoomChat: () => false,
 }));
 vi.mock("../models/Response", () => ({
+  hasMoreAfter: () => false,
   addMessageSentListener: () => undefined,
   removeMessageSentListener: () => undefined,
   evictEvents: () => undefined,
@@ -78,10 +95,13 @@ vi.mock("../models/Response", () => ({
   isConversationNotFound: () => mocks.isConversationNotFound,
   isTranscriptLoaded: () => mocks.isTranscriptLoaded,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
+  sendMessage: mocks.sendMessage,
+  mintMessageId: () => "minted-id",
 }));
 vi.mock("../shell", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shell")>()),
   reportChatOnScreenOnce: mocks.reportChatOnScreenOnce,
+  openChatPage: mocks.openChatPage,
 }));
 vi.mock("../models/StreamingMessage", () => ({
   connectToStream: mocks.connectToStream,
@@ -122,8 +142,12 @@ vi.mock("./OutgoingMessageView", async (importOriginal) => ({
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
+import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import type { FailureRemediesAttrs } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { ChatSuggestions } from "./ChatSuggestions";
@@ -258,6 +282,11 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.outgoingBubbles = [];
     mocks.outgoingAfterOwnTurn = [];
     mocks.fetchEvents.mockClear();
+    mocks.chats = [];
+    mocks.mainChatId = null;
+    mocks.sendMessage.mockReset();
+    mocks.sendMessage.mockResolvedValue("ok");
+    mocks.openChatPage.mockClear();
   });
 
   it("shows a chat being created as an empty conversation that says it is starting", () => {
@@ -373,7 +402,7 @@ describe("ChatPanel over a provisional chat", () => {
 
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
     expect(renderedText(tree)).toContain(
-      "The agent for this chat couldn't be started. Try again, or start a new chat on a different provider.",
+      "The agent for this chat couldn't be started. Try again, or switch to another provider.",
     );
     expect(renderedText(tree)).not.toContain("mngr create exited with code 1");
     expect(detailsShown(tree)).toContain("mngr create exited with code 1");
@@ -442,6 +471,12 @@ describe("ChatPanel over a provisional chat", () => {
     expect(detailsShown(refused)).toContain("mngr create exited with code 1");
     expect(renderedText(refused)).toContain("This chat couldn't be started. Try again.");
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
+    // The refused relaunch is the page's own failure again, so it gets no remedies beside the page's, which carry
+    // its details.
+    const remedies = flatten(refused).filter((vnode) => vnode.tag === FailureRemedies);
+    expect(remedies.map((vnode) => (vnode.attrs as unknown as FailureRemediesAttrs).failure.details)).toEqual([
+      expect.stringMatching(/mngr create exited with code 1[\s\S]*is on a lane this build does not have/),
+    ]);
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -458,6 +493,223 @@ describe("ChatPanel over a provisional chat", () => {
 
     expect(detailsShown(tree)).toContain("mngr create exited with code 2");
     expect(detailsShown(tree)).not.toContain("is on a lane this build does not have");
+  });
+
+  describe("the ways out of a failed create beyond trying again", () => {
+    afterEach(unmountViews);
+
+    /** What the page's remedies for the failed create are drawn from; undefined when the page offers none. */
+    function pageRemedies(tree: unknown): FailureRemediesAttrs | undefined {
+      const remedies = flatten(tree).find((vnode) => vnode.tag === FailureRemedies);
+      return remedies === undefined ? undefined : (remedies.attrs as unknown as FailureRemediesAttrs);
+    }
+
+    /** The page's "Ask an agent to fix this", mounted so it can be pressed; null when the page offers none. */
+    function mountAskButton(tree: unknown): HTMLElement | null {
+      const remedies = pageRemedies(tree);
+      if (remedies === undefined || remedies.isAgentWithheld === true) return null;
+      return mountView(() => m(FailureRemedies, remedies));
+    }
+
+    /** Press the mounted button and let the page draw what the press changed. */
+    function press(ask: HTMLElement): void {
+      ask.querySelector("button")!.click();
+      m.redraw.sync();
+    }
+
+    it("relaunches the chat on the provider picked in place of the one it failed on", async () => {
+      failed("acct-1", "mngr create exited with code 1");
+
+      click(findButton(mountPanel()(), "message-list-switch-provider"));
+
+      expect(mocks.launchChat).not.toHaveBeenCalled();
+      expect(mocks.openProviderChooser).toHaveBeenCalledOnce();
+      const intent = mocks.openProviderChooser.mock.calls[0][0];
+      expect(intent.unpickable).toEqual({ accountId: "acct-1", reason: "failing" });
+      intent.onSignedIn?.("acct-2");
+      await flushAsync();
+      expect(mocks.launchChat).toHaveBeenCalledExactlyOnceWith(AGENT_ID, "acct-2");
+    });
+
+    it("offers neither a switch nor an agent to a failed chat that names no account, which a sign-in fixes", () => {
+      mocks.chats = [chatSnapshotFixture("chat-main")];
+      mocks.mainChatId = "chat-main";
+      failed("", "No provider account is signed in for this workspace.");
+
+      const tree = mountPanel()();
+
+      expect(findButton(tree, "message-list-switch-provider")).toBeUndefined();
+      expect(pageRemedies(tree)).toBeUndefined();
+    });
+
+    it("asks the main chat to fix what stopped the create, and shows that chat", async () => {
+      mocks.chats = [chatSnapshotFixture("chat-main"), chatSnapshotFixture("chat-other", { last_messaged_at: 900 })];
+      mocks.mainChatId = "chat-main";
+      failed("acct-1", "mngr create exited with code 1: no space left on device");
+      let accept: (status: string) => void = () => undefined;
+      mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
+
+      const ask = mountAskButton(mountPanel()())!;
+      const button = ask.querySelector("button")!;
+      expect(button.textContent).toBe("Ask an agent to fix this");
+      press(ask);
+
+      expect(button.textContent).toBe("Asking an agent\u2026");
+      expect(button.disabled).toBe(true);
+      expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-main",
+        '/assist Imbue Studio showed the user this failure: The chat "Chat 1" couldn\'t be started.\n\n' +
+          "Details:\n```\nmngr create exited with code 1: no space left on device\n```\n\n" +
+          "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
+        "minted-id",
+      );
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+
+      accept("ok");
+      await flushAsync();
+      m.redraw.sync();
+
+      expect(mocks.openChatPage).toHaveBeenCalledExactlyOnceWith("chat-main");
+      expect(button.textContent).toBe("Ask an agent to fix this");
+      expect(ask.querySelector(".ask-agent-failure")).toBeNull();
+    });
+
+    it("asks the agent chat messaged last when the workspace has no main agent chat", async () => {
+      mocks.chats = [
+        chatSnapshotFixture("chat-older", { last_messaged_at: 100 }),
+        chatSnapshotFixture("chat-newer", { last_messaged_at: 500 }),
+        chatSnapshotFixture("chat-lounge", { kind: "room", last_messaged_at: 900 }),
+      ];
+      failed("acct-1", "mngr create exited with code 1");
+
+      press(mountAskButton(mountPanel()())!);
+      await flushAsync();
+
+      expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith("chat-newer", expect.any(String), "minted-id");
+    });
+
+    it("withholds the agent, leaving the bug report, when the workspace has no other agent chat to ask", () => {
+      mocks.chats = [chatSnapshotFixture(AGENT_ID), chatSnapshotFixture("chat-lounge", { kind: "room" })];
+      mocks.mainChatId = AGENT_ID;
+      failed("acct-1", "mngr create exited with code 1");
+
+      const tree = mountPanel()();
+
+      expect(pageRemedies(tree)).toMatchObject({
+        isAgentWithheld: true,
+        failure: { message: 'The chat "Chat 1" couldn\'t be started', isHelpOwed: true },
+      });
+      expect(findButton(tree, "message-list-switch-provider")).toBeTruthy();
+    });
+
+    it("says under the button that the chat it asked could not be asked, with the reason behind See details", async () => {
+      mocks.chats = [chatSnapshotFixture("chat-main", { title: "Main chat" })];
+      mocks.mainChatId = "chat-main";
+      failed("acct-1", "mngr create exited with code 1");
+      mocks.sendMessage.mockRejectedValueOnce(
+        Object.assign(new Error("{}"), {
+          code: 500,
+          response: {
+            detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+            user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
+            kind: "input_blocked",
+            routine: true,
+          },
+        }),
+      );
+
+      const ask = mountAskButton(mountPanel()())!;
+      press(ask);
+      await flushAsync();
+      m.redraw.sync();
+
+      expect(ask.querySelector(".ask-agent-failure-message")?.textContent).toBe(
+        'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.',
+      );
+      expect(ask.querySelector(".ask-agent-failure .see-details-text")?.textContent).toBe(
+        'Asking "Main chat":\nHTTP 500\n' +
+          "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+      );
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+      expect(ask.querySelector("button")?.textContent).toBe("Ask an agent to fix this");
+    });
+
+    it("tells a refused ask at the end of the page, under every button", async () => {
+      mocks.chats = [chatSnapshotFixture("chat-main")];
+      mocks.mainChatId = "chat-main";
+      failed("acct-1", "mngr create exited with code 1");
+      mocks.sendMessage.mockRejectedValueOnce(
+        Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+      );
+      const render = mountPanel();
+      const page = mountView(() => render() as m.Children);
+
+      page.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+      await flushAsync();
+      m.redraw.sync();
+
+      const refusedAsk = page.querySelector(".message-list-create-failed .ask-agent-failure")!;
+      const pageButtons = [...page.querySelectorAll(".message-list-create-failed button")].filter(
+        (button) => !refusedAsk.contains(button),
+      );
+      expect(pageButtons.map((button) => button.textContent)).toContain("Remove this chat");
+      expect(
+        pageButtons.every(
+          (button) => (button.compareDocumentPosition(refusedAsk) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        ),
+      ).toBe(true);
+      // The refused ask owes help, so the same request can be left as a draft instead.
+      expect(refusedAsk.querySelector(".draft-ask")?.textContent).toBe("Draft it in a chat");
+    });
+
+    it.each([
+      { outcome: "sent", error: null, offeredAfter: [] },
+      {
+        outcome: "refused",
+        error: Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+        offeredAfter: ["Draft it in a chat"],
+      },
+    ])("lets no way out be pressed while an ask is pending, and every one again once it is $outcome", async (ask) => {
+      mocks.chats = [chatSnapshotFixture("chat-main")];
+      mocks.mainChatId = "chat-main";
+      failed("acct-1", "mngr create exited with code 1");
+      let settle: () => void = () => undefined;
+      mocks.sendMessage.mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            settle = () => (ask.error === null ? resolve("ok") : reject(ask.error));
+          }),
+      );
+      const render = mountPanel();
+      const page = mountView(() => render() as m.Children);
+      const buttons = (): [string | null, boolean][] =>
+        [...page.querySelectorAll<HTMLButtonElement>(".message-list-create-failed button")].map((button) => [
+          button.textContent,
+          button.disabled,
+        ]);
+
+      page.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+      m.redraw.sync();
+
+      expect(buttons()).toEqual([
+        ["Try again", true],
+        ["Switch provider", true],
+        ["Remove this chat", true],
+        ["Asking an agent…", true],
+      ]);
+
+      settle();
+      await flushAsync();
+      m.redraw.sync();
+
+      expect(buttons()).toEqual([
+        ["Try again", false],
+        ["Switch provider", false],
+        ["Remove this chat", false],
+        ["Ask an agent to fix this", false],
+        ...ask.offeredAfter.map((label): [string, boolean] => [label, false]),
+      ]);
+    });
   });
 });
 

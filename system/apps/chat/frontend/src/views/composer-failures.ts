@@ -65,6 +65,30 @@ export function describeSendFailure(error: unknown): FailureLines {
   };
 }
 
+// The kinds of the server's refusal of a /compact it declines to run: before the agent has anything to compact, and
+// while it is busy or stopped.
+const DECLINED_COMPACT_KINDS: ReadonlySet<string | null> = new Set(["nothing_to_compact", "compact_unavailable"]);
+
+export const DECLINED_COMPACT_TITLE = "/compact wasn't sent";
+
+/** Whether the server declined to run a /compact: sending it again at once cannot change that, so it is told as a
+ *  declined command rather than as a failure. */
+export function isDeclinedCompact(error: unknown): boolean {
+  return DECLINED_COMPACT_KINDS.has(describeRequestFailure(error).kind);
+}
+
+/** Why a declined /compact was not run, in the server's words. */
+export function declinedCompactSentence(error: unknown): string {
+  return failureSentence(describeRequestFailure(error)).message;
+}
+
+/** A /compact sent for the user (the transcript's Compact) that was refused or got no answer. */
+export function describeCompactFailure(error: unknown): FailureLines {
+  return plainFailureLines(error, "This conversation couldn't be compacted", {
+    notAnswered: "The workspace didn't answer. /compact may not have been sent.",
+  });
+}
+
 /** A first send whose launch of its chat was refused or got no answer: nothing was sent, and the text is back. */
 export function describeLaunchFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
