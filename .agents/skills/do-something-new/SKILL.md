@@ -47,7 +47,8 @@ Pick the flow that fits the ask:
   with `fetch-process-show`.
 
 - **Neither cleanly applies** -- the task is genuinely net-new and not a data
-  fetch or a web view. Read `.agents/shared/references/creation-principles.md` first, then apply the interactive-delivery skeleton directly from
+  fetch or a web view. Read `.agents/shared/references/creation-principles.md`
+  first, then apply the interactive-delivery skeleton directly from
   `.agents/shared/references/interactive-delivery.md`: clarify only what blocks,
   a fast feasibility pass, a small plan, validate the risky dependency first, a
   cheap throwaway creation looped to explicit confirmation, then hardening in the

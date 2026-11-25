@@ -48,8 +48,9 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 
 ## Clarify and scope (skeleton phases 1-3)
 
-Read `.agents/shared/references/creation-principles.md` first. Ask only what blocks (phase 1). Then a small research pass (phase 2) and a
-proposed plan (phase 3), with these data specifics:
+Read `.agents/shared/references/creation-principles.md` first. Ask only what
+blocks (phase 1). Then a small research pass (phase 2) and a proposed plan
+(phase 3), with these data specifics:
 
 For external services, load the `connect-external-service` skill first (it routes
 you to the user's connected accounts, a new connection, an MCP server, a key on
