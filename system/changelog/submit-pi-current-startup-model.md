@@ -14,7 +14,7 @@ OpenCode account that default never matched, and pi fell through to its compiled
 So the correction now lives where pi actually decides: `.pi/extensions/model_defaults.ts`,
 a project extension pi loads into every agent whose working directory is this repo (the
 same mechanism `policy_guards.ts` and `tk_workflow.ts` already use, so nothing new has to
-be provisioned). On a fresh session it compares the model pi resolved against a small
+be provisioned). At process startup it compares the model pi resolved against a small
 table of deprecated startup models and, on a match, switches to the listed model on the
 same provider. `opencode/kimi-k2.6`, `opencode-go/kimi-k2.6` and
 `openrouter/moonshotai/kimi-k2.6` now start on `deepseek-v4.1-flash`.
@@ -27,7 +27,8 @@ The table is deliberately narrow, and staying on the same provider is the point:
   can never need a credential the user has not supplied. If the replacement is missing
   from the catalog or its provider turns out to be unauthenticated, the handler does
   nothing and pi keeps what it chose.
-* It runs on a fresh session only; a resumed session keeps its own model.
+* It runs at process startup only. A resumed session keeps its own model, and `/new`
+  keeps the model you were already on.
 
 Keeping it current is one line: each key is `provider/modelId` as pi's own table spells
 it, each value is the model to start on instead. pi's table is the thing that goes stale,
@@ -40,5 +41,5 @@ two-model startup (`opencode-go/kimi-k2.6` as pi resolved it, then
 mngr's lifecycle extension loaded as it is in a chat, `model_state.json` -- what the
 chat's model bar reads -- ends at `{"model":"opencode-go/deepseek-v4.1-flash",...}`.
 `.pi/extensions/pi_extensions_test.py` covers the replacement, the untouched cases
-(resumed session, a model the user picked), and the two fallbacks (replacement absent
-from the catalog, provider unauthenticated).
+(resumed session, `/new`, a model the user picked), the two fallbacks (replacement absent
+from the catalog, provider unauthenticated), and a model registry that throws.
