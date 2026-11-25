@@ -15,9 +15,7 @@
  */
 
 import m from "mithril";
-import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { cellRect } from "../geometry/grid";
-import type { PixelPoint } from "../geometry/frames";
 import type { Letterbox } from "../geometry/letterbox";
 import { wallpaperBackgroundImage } from "../model/api";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
@@ -49,7 +47,6 @@ export interface BackdropAttrs {
   /** Spread onto a window's maximize control: resting on it opens that window's size menu. */
   readonly sizeMenuTrigger: (windowId: string) => m.Attributes;
   readonly onEntryClick: (windowId: string) => void;
-  readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
   readonly isOverlayOpen: boolean;
   /** Whether a window's title bar may offer Share: under an Imbue Studio chrome that has said what it can do, and
@@ -57,9 +54,6 @@ export interface BackdropAttrs {
   readonly isAppShareOffered: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
-  readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
-  /** A right-click on the bare backdrop: the desktop's menu. */
-  readonly onBackdropContextMenu: (point: PixelPoint, target: Element) => void;
   /** The overview over the backdrop, or null while it is closed. */
   readonly overview: OverviewAttrs | null;
   /** The letterbox a viewed desktop is drawn in, and the colour of the band around it; null draws the desktop
@@ -76,6 +70,10 @@ export interface BackdropLetterbox {
   readonly box: Letterbox;
   readonly color: string;
 }
+
+/** Marks the shortcut grid, which covers the bare backdrop: a right-click on the grid itself is one on the desktop
+ *  (the multiplayer spec, section 8.2), whose menu the shell's element menu opens. */
+export const SHORTCUT_GRID_ATTRIBUTE = "data-shortcut-grid";
 
 /** How much of the owner's colour the band around a letterboxed desktop wears over the page surface. */
 const LETTERBOX_BAND_TINT = "12%";
@@ -152,14 +150,10 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 "div",
                 {
                   class: "shortcut-grid absolute inset-0",
+                  [SHORTCUT_GRID_ATTRIBUTE]: "",
                   onpointerdown: (event: PointerEvent) => {
                     // A press on the bare backdrop (the grid covers all of it) clears the shortcut selection.
                     if (event.target === event.currentTarget) attrs.onSelectShortcut(null);
-                  },
-                  oncontextmenu: (event: MouseEvent) => {
-                    if (event.target !== event.currentTarget) return;
-                    event.preventDefault();
-                    attrs.onBackdropContextMenu({ x: event.clientX, y: event.clientY }, targetElementOf(event));
                   },
                 },
                 placed.map(({ shortcut, cell }) => {
@@ -182,7 +176,6 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     isRunOnClick: state.modes.isTouch,
                     onSelect: () => attrs.onSelectShortcut(key),
                     onRun: () => attrs.onRunShortcut(shortcut),
-                    onContextMenu: (x, y, target) => attrs.onShortcutContextMenu(shortcut, { x, y }, target),
                   });
                 }),
               ),
@@ -254,7 +247,6 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             rectOf: (entry) => store.renderedFloatingEntryRect(entry.window.app, entry.look?.position ?? null),
             openMenuWindowId: attrs.openEntryMenuWindowId,
             onClick: attrs.onEntryClick,
-            onContextMenu: attrs.onEntryContextMenu,
           }),
           m(SnapPreview, { rect: snapRect }),
           attrs.overview === null ? null : m(Overview, attrs.overview),

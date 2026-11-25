@@ -15,6 +15,7 @@
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { MenuRow, SubmenuChildRow } from "@imbue/workspace-ui/src/components/menu";
+import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { glyph } from "./glyphs";
 import { windowSizeSubmenuRow } from "./WindowSizeRow";
@@ -253,16 +254,16 @@ export interface TaskbarEntryMenuActions {
   /** Null for an ordinary window's entry, which has no presentation to choose. */
   readonly presentation: EntryPresentationActions | null;
   /** Add the window's app to the desktop, or take it off; null when the app has no shortcut to add. */
-  readonly desktopShortcut: MenuRow | null;
+  readonly desktopShortcut: ContextMenuRow | null;
 }
 
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show
  *  and Bring back to desktop instead of those), then for a pinned entry Float or Move to taskbar (where the
  *  avatar creature lives) and the avatar chooser when the pin declares one, then Add to desktop or Remove from
  *  desktop, then Close. */
-export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[] {
+export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): ContextMenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window or brings it back.
-  const rows: MenuRow[] = actions.isDetached
+  const rows: ContextMenuRow[] = actions.isDetached
     ? [
         { kind: "action", key: "show", label: "Show", onSelect: actions.show },
         { kind: "action", key: "bring-back", label: "Bring back to desktop", onSelect: actions.bringBack },
@@ -282,7 +283,7 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[
   const presentation = actions.presentation;
   if (presentation !== null) {
     const { look, setMode, changeAvatar } = presentation;
-    const presentationRows: MenuRow[] = [
+    const presentationRows: ContextMenuRow[] = [
       look.mode === "floating"
         ? { kind: "action", key: "move-to-taskbar", label: "Move to taskbar", onSelect: () => setMode("bar") }
         : { kind: "action", key: "float", label: "Float", onSelect: () => setMode("floating") },

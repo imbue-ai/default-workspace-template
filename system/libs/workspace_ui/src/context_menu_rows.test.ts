@@ -2,7 +2,8 @@
 /**
  * Which rows a right-click's target admits, and what the reference rows hand over: the standard
  * rows follow the target (editable, selected, a link, an image), the reference rows are always
- * there, and Explain and Modify grey without a shell to draft through.
+ * there, and Explain and Modify grey without a shell to draft through. Also which right-clicks
+ * belong to the desktop app's native menu.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeElement, referenceBlock } from "./element_reference";
@@ -12,6 +13,7 @@ import {
   elementMenuRows,
   elementReferenceRows,
   explainPromptOf,
+  isNativeMenuTarget,
   joinRowGroups,
   modifyPromptOf,
   standardContextMenuRows,
@@ -43,7 +45,11 @@ function byId(id: string): Element {
   return document.getElementById(id) as Element;
 }
 
-let clipboard: { writeText: ReturnType<typeof vi.fn>; readText?: ReturnType<typeof vi.fn> };
+let clipboard: {
+  writeText: ReturnType<typeof vi.fn>;
+  readText?: ReturnType<typeof vi.fn>;
+  write?: ReturnType<typeof vi.fn>;
+};
 let openLink: ReturnType<typeof vi.fn<(anchor: HTMLAnchorElement) => void>>;
 
 beforeEach(() => {
@@ -64,7 +70,25 @@ afterEach(() => {
   document.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   delete (document as { execCommand?: unknown }).execCommand;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+/** Stands in for the browser's ClipboardItem, which jsdom lacks: it keeps what it was built from. */
+class FakeClipboardItem {
+  constructor(readonly data: Record<string, Promise<Blob>>) {}
+}
+
+/** Give the browser an image clipboard, and ``image`` the pixels a loaded image has. */
+function makeImageCopyable(image: Element): void {
+  vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+  clipboard.write = vi.fn(async () => undefined);
+  Object.defineProperties(image, {
+    complete: { value: true, configurable: true },
+    naturalWidth: { value: 30, configurable: true },
+    naturalHeight: { value: 20, configurable: true },
+  });
+}
 
 /** Make the document's selection the contents of ``element``. */
 function selectContentsOf(element: Element): void {
@@ -132,7 +156,62 @@ describe("standardContextMenuRows", () => {
       "copy-link",
       "open-link",
     ]);
-    expect(keysOf(standardContextMenuRows(targetOf(byId("pic")), openLink))).toEqual(["copy-image"]);
+    expect(keysOf(standardContextMenuRows(targetOf(byId("pic")), openLink))).toEqual(["copy-image-address"]);
+  });
+
+  it("offers Copy image only for a loaded image whose pixels the page can read", () => {
+    const picture = byId("pic") as HTMLImageElement;
+    makeImageCopyable(picture);
+    expect(keysOf(standardContextMenuRows(targetOf(picture), openLink))).toEqual(["copy-image", "copy-image-address"]);
+    // Another origin's image, loaded without CORS, taints the canvas that would read it.
+    picture.src = "https://images.example/a.png";
+    expect(keysOf(standardContextMenuRows(targetOf(picture), openLink))).toEqual(["copy-image-address"]);
+    picture.crossOrigin = "anonymous";
+    expect(keysOf(standardContextMenuRows(targetOf(picture), openLink))).toEqual(["copy-image", "copy-image-address"]);
+    picture.removeAttribute("crossorigin");
+    picture.src = "data:image/png;base64,AAAA";
+    expect(keysOf(standardContextMenuRows(targetOf(picture), openLink))).toEqual(["copy-image", "copy-image-address"]);
+    delete clipboard.write;
+    expect(keysOf(standardContextMenuRows(targetOf(picture), openLink))).toEqual(["copy-image-address"]);
+  });
+
+  it("copies an image as the PNG a canvas of its own size makes of it", async () => {
+    const picture = byId("pic") as HTMLImageElement;
+    makeImageCopyable(picture);
+    const drawImage = vi.fn();
+    const png = new Blob(["png"], { type: "image/png" });
+    const drawnOn: HTMLCanvasElement[] = [];
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      drawnOn.push(this);
+      return { drawImage } as unknown as CanvasRenderingContext2D;
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+      expect(type).toBe("image/png");
+      callback(png);
+    });
+    actionRowOf(standardContextMenuRows(targetOf(picture), openLink), "copy-image").onSelect();
+    await vi.waitFor(() => expect(clipboard.write).toHaveBeenCalledTimes(1));
+    expect(drawImage).toHaveBeenCalledWith(picture, 0, 0);
+    expect([drawnOn[0].width, drawnOn[0].height]).toEqual([30, 20]);
+    const [[item]] = clipboard.write!.mock.calls[0] as [[FakeClipboardItem]];
+    expect(Object.keys(item.data)).toEqual(["image/png"]);
+    expect(await item.data["image/png"]).toBe(png);
+  });
+
+  it("writes nothing, with a warning, when the canvas refuses to hand the image back", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const picture = byId("pic") as HTMLImageElement;
+    makeImageCopyable(picture);
+    // The browser's own ClipboardItem takes a promise without awaiting it; the write is what fails.
+    clipboard.write = vi.fn(async ([item]: [FakeClipboardItem]) => void (await item.data["image/png"]));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(() => {
+      throw new Error("tainted canvas");
+    });
+    actionRowOf(standardContextMenuRows(targetOf(picture), openLink), "copy-image").onSelect();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("tainted canvas")));
   });
 
   it("copies a field's own selection, and cuts it out of the value", async () => {
@@ -265,6 +344,50 @@ describe("elementMenuRows", () => {
       "explain-element",
       "modify-element",
     ]);
+  });
+});
+
+describe("isNativeMenuTarget", () => {
+  afterEach(() => {
+    delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+  });
+
+  /** Draw the document's selection as one box, where a layout (which jsdom lacks) would have put it. */
+  function drawSelectionAt(box: { left: number; right: number; top: number; bottom: number }): void {
+    Object.defineProperty(Range.prototype, "getClientRects", { value: () => [box], configurable: true });
+  }
+
+  it("takes text being edited, in a field or a contenteditable region", () => {
+    expect(isNativeMenuTarget(targetOf(byId("field")), false)).toBe(true);
+    expect(isNativeMenuTarget(targetOf(byId("note")), false)).toBe(true);
+    // The page's own rows for the field do not keep it: the native menu is what corrects a spelling.
+    expect(isNativeMenuTarget(targetOf(byId("field")), true)).toBe(true);
+  });
+
+  it("takes a click on the selection, and leaves one beside it to the page", () => {
+    selectContentsOf(byId("para"));
+    drawSelectionAt({ left: 0, right: 10, top: 0, bottom: 10 });
+    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), false)).toBe(true);
+    expect(
+      isNativeMenuTarget({ ...targetOf(byId("pic"), "plain words"), click: { ...CLICK, clientX: 50 } }, false),
+    ).toBe(false);
+  });
+
+  it("leaves a selection it cannot place to the page", () => {
+    selectContentsOf(byId("para"));
+    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), false)).toBe(false);
+  });
+
+  it("takes a plain link, but not one the page has rows for, nor an image inside one", () => {
+    document.body.innerHTML += '<a id="thumb" href="/full.png"><img id="inner" src="/thumb.png"></a>';
+    expect(isNativeMenuTarget(targetOf(byId("link")), false)).toBe(true);
+    expect(isNativeMenuTarget(targetOf(byId("link")), true)).toBe(false);
+    expect(isNativeMenuTarget(targetOf(byId("inner")), false)).toBe(false);
+  });
+
+  it("leaves an image and plain content to the page", () => {
+    expect(isNativeMenuTarget(targetOf(byId("pic")), false)).toBe(false);
+    expect(isNativeMenuTarget(targetOf(byId("para")), false)).toBe(false);
   });
 });
 

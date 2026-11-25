@@ -100,6 +100,7 @@ describe("connectToShell", () => {
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
+      drawsContextMenus: false,
       isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -130,6 +131,7 @@ describe("connectToShell", () => {
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
+      drawsContextMenus: false,
       isViewing: false,
     });
   });
@@ -141,6 +143,15 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
     deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
+  });
+
+  it("reads whether the desktop app draws the page's context menu, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, drawsContextMenus: true }, parent);
+    deliver({ ...HANDSHAKE, drawsContextMenus: "yes" }, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].drawsContextMenus)).toEqual([true, false]);
   });
 
   it("reads whether the embedder opens its workspace settings, and anything but true as no", () => {

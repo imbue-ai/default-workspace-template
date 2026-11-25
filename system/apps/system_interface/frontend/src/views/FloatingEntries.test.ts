@@ -41,7 +41,6 @@ function render(overrides: Partial<FloatingEntriesAttrs> = {}): HTMLElement {
     rectOf: () => ({ x: 500, y: 400, width: 56, height: 56 }),
     openMenuWindowId: null,
     onClick: vi.fn(),
-    onContextMenu: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(FloatingEntries, attrs));
@@ -51,8 +50,7 @@ function render(overrides: Partial<FloatingEntriesAttrs> = {}): HTMLElement {
 describe("FloatingEntries", () => {
   it("draws each entry at its box with the contract's selectors, and is otherwise inert", () => {
     const onClick = vi.fn();
-    const onContextMenu = vi.fn();
-    const layer = render({ onClick, onContextMenu });
+    const layer = render({ onClick });
     expect(layer.classList.contains("pointer-events-none")).toBe(true);
     const entry = layer.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
     expect(entry.getAttribute("data-entry-mode")).toBe("floating");
@@ -69,8 +67,10 @@ describe("FloatingEntries", () => {
     expect(entry.querySelector("svg")).not.toBeNull();
     entry.click();
     expect(onClick).toHaveBeenCalledWith("win-9");
-    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }));
-    expect(onContextMenu).toHaveBeenCalledWith("win-9", 30, 40, expect.any(Element));
+    // The entry's menu is the shell's element menu, which a right-click left alone reaches.
+    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    entry.dispatchEvent(rightClick);
+    expect(rightClick.defaultPrevented).toBe(false);
   });
 
   it("names the app, not the page its window is on", () => {

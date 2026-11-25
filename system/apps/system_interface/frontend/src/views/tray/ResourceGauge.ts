@@ -32,7 +32,8 @@ export interface ResourceGaugeAttrs {
   /** The shell has stopped sending the gauge: its figures are not drawn. */
   readonly isStale: boolean;
   readonly onOpen: (resource: GaugeResource) => void;
-  readonly onContextMenu: (x: number, y: number) => void;
+  /** A right-click on the gauge, whose menu the shell's element menu opens. */
+  readonly onContextMenu: () => void;
   readonly onHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
 }
@@ -140,10 +141,7 @@ export const ResourceGauge: m.Component<ResourceGaugeAttrs> = {
         role: "group",
         "aria-label": "Workspace resources",
         class: "resource-gauge flex shrink-0 items-center gap-1",
-        oncontextmenu: (event: MouseEvent) => {
-          event.preventDefault();
-          onContextMenu(event.clientX, event.clientY);
-        },
+        oncontextmenu: onContextMenu,
         onmouseenter: (event: MouseEvent) => onHoverStart(event.currentTarget as HTMLElement),
         onmouseleave: onHoverEnd,
       },

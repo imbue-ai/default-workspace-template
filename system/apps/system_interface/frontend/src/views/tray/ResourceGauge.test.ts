@@ -144,7 +144,7 @@ describe("ResourceGauge", () => {
     expect(render({ view: hidden, isStale: true }).querySelector("[data-resource-gauge]")).toBeNull();
   });
 
-  it("opens its card on hover and its menu on a right-click", () => {
+  it("opens its card on hover, and leaves a right-click to the shell's element menu", () => {
     const onContextMenu = vi.fn();
     const onHoverStart = vi.fn();
     const onHoverEnd = vi.fn();
@@ -154,8 +154,10 @@ describe("ResourceGauge", () => {
     expect(onHoverStart).toHaveBeenCalledWith(gauge);
     gauge.dispatchEvent(new MouseEvent("mouseleave"));
     expect(onHoverEnd).toHaveBeenCalledTimes(1);
-    gauge.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 }));
-    expect(onContextMenu).toHaveBeenCalledWith(40, 50);
+    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    gauge.dispatchEvent(rightClick);
+    expect(onContextMenu).toHaveBeenCalledTimes(1);
+    expect(rightClick.defaultPrevented).toBe(false);
   });
 });
 

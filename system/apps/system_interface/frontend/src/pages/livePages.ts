@@ -186,6 +186,8 @@ interface LivePage {
   /** Whether the page's last ``shell:first-conversation-step`` since its load said the workspace's first
    *  conversation is still following its script. */
   isFirstConversationPending: boolean;
+  /** Whether the last handshake said the Imbue Studio desktop app draws a native right-click menu. */
+  greetedDrawsContextMenus: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -545,11 +547,14 @@ export class LivePagesLayer implements PageDriver {
     for (const { page, box, stackIndex, isInteractive } of shown) {
       this.show(page, box, stackIndex, isInteractive, covered.has(page.windowId));
       // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
-      // attaches to its session as a viewer or as a user by it.
+      // attaches to its session as a viewer or as a user by it. So it is when the chrome's word on drawing context
+      // menus arrives after the page's greeting: the page's element menu leaves some right-clicks to the chrome.
       if (
         desktop !== null &&
         page.greetedDesktopId !== null &&
-        (page.greetedDesktopId !== desktop.id || page.greetedIsViewing !== isViewing)
+        (page.greetedDesktopId !== desktop.id ||
+          page.greetedIsViewing !== isViewing ||
+          page.greetedDrawsContextMenus !== this.store.getDrawsContextMenus())
       ) {
         this.greet(page);
       }
@@ -928,6 +933,7 @@ export class LivePagesLayer implements PageDriver {
       greetedIsViewing: false,
       isAgentWorking: false,
       isFirstConversationPending: false,
+      greetedDrawsContextMenus: false,
       lastSentVisibility: null,
       isHeldForStop: false,
       isHidden: true,
@@ -1046,10 +1052,12 @@ export class LivePagesLayer implements PageDriver {
       opensLocalFiles: this.store.getOpensLocalFiles(),
       opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
       showsCoachMarks: this.store.getShowsCoachMarks(),
+      drawsContextMenus: this.store.getDrawsContextMenus(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;
     page.greetedIsViewing = isViewing;
+    page.greetedDrawsContextMenus = this.store.getDrawsContextMenus();
     sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
   }
 
