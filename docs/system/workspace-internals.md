@@ -158,7 +158,7 @@ repository and can read only `mngr/ci/MODAL_TOKEN_ID` and
 
 ## Create templates
 
-- `worker` - For sub-agents created via the launch-task skill and the flows built on it (the crystallize / update / heal creation lifecycle, including the careful flow for a critical app). Includes code review. Nothing is installed into the worker's own `.agents/skills/`: a worker running a harden pass reads the generic worker contract from `.agents/shared/worker/SKILL.md`, which the checkout in its worktree already carries.
+- `worker` - For sub-agents created via the launch-task skill and the flows built on it (the crystallize / update / heal creation lifecycle, including the careful flow for a critical app). Includes code review. Nothing is installed into the worker's own `.agents/skills/`: a worker running a harden pass invokes the `harden-worker` skill, a tracked skill at `.agents/skills/harden-worker/` that the checkout in its worktree already carries.
 
 ## Creation harden lifecycle
 
@@ -168,6 +168,6 @@ The main agent can promote ad-hoc work into reusable creations, fix creations th
 - `heal-creation` - Fix a skill, app, or service that errored or produced wrong results.
 - `update-creation` - Extend / refactor / verify a skill, app, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
 
-Each lead spawns a `worker` sub-agent that follows the single generic worker contract at `.agents/shared/worker/SKILL.md`. The worker reads the operation and the creations (each with its type) from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and a `type-*.md` reference per type among them, under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` for the whole change the critical app is part of, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
+Each lead spawns a `worker` sub-agent whose task file has it invoke the `harden-worker` skill (`.agents/skills/harden-worker/SKILL.md`), the single generic worker contract. The worker reads the operation and the creations (each with its type) from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and a `type-*.md` reference per type among them, under `.agents/skills/harden-worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` for the whole change the critical app is part of, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
 
 Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as the entry point, with the code behind it in the skill's own `python/` uv project -- see "Packaging" in `.agents/shared/references/spec-summary.md` -- companion SKILL.md, optional `references/` and `assets/`).
