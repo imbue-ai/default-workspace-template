@@ -1,0 +1,8 @@
+# Driving Fortress with Playwright
+
+Playwright here drives Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium.
+
+- **Name the executable.** Pass `executable_path="/opt/fortress/tilion-fortress/tilion"` to `chromium.launch(...)`: Playwright's browser-cache lookup only finds builds it downloaded itself.
+- **In a fresh workspace, wait for the install.** Fortress installs asynchronously on first container boot, in the one-shot `env-converge` program's `system/scripts/env.d/2000-screen.sh` unit, which also installs the Screen's stack and points that stable path at the pinned release. Confirm it finished (`supervisorctl status env-converge`, or `test -x /opt/fortress/tilion-fortress/tilion`) before launching, or the launch fails with a clear error. `system/libs/bootstrap/README.md` has the full deferral contract.
+- **Sandbox.** It runs as-is under the docker provider's gVisor runtime. On a runtime without unprivileged user namespaces ("No usable sandbox!"), pass `args=["--no-sandbox"]`.
+- **The cursor glides.** Fortress replays a recorded human cursor trajectory for every pointer move: a `click()` on a target away from the pointer's last position takes up to about a second, and the cursor glides across whatever lies between the two points after the press. Drive hover-sensitive controls such as menus with the keyboard (`locator.press("Space")`) when that glide would change what is under test. Before a `click()` on a control that follows the press from pointerdown to pointerup (a drawer that a leftward drag dismisses), `hover()` the target: a glide landing between the two reads as a drag, while the hover plays it out first, so the click moves nothing.

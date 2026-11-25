@@ -173,7 +173,7 @@ under `DATA_DIR`, the shell page script on every page, the content-security
 policy, a "view raw" control on derived data.
 
 Then edit the code under `system/apps/<package>/`, or wherever the program's
-command points. Three more things the change may owe:
+command points. Four more things the change may owe:
 
 - **The manifest.** Anything the change creates for the app outside its own
   directory is registered under `[[references]]`. If the change gives the app
@@ -187,6 +187,8 @@ command points. Three more things the change may owe:
   change. The contract is `.agents/shared/references/apps/api-schema.md`.
 - **Claude.** If the change calls Claude, follow the `use-ai-integration`
   skill.
+- **The icon.** A changed app icon is built to the same rules as a new one,
+  `docs/system/app-icons.md`.
 
 ## Step 4: Apply and verify it
 
@@ -233,7 +235,12 @@ every page of the app on every client, or
 Anything else about windows is the `manage-desktop` skill. A service has no
 window.
 
-Tell the user what changed, release the lease, and end the turn.
+With the change on screen, commit it and start its test gate in the
+background: run what `uv run --no-sync app-manifest select-tests --diff-base
+<the commit before the change>` prints through
+`system/scripts/workspace_bare_scripts/run_in_background.py`. Do not wait for
+it; what it finds is a follow-up fix. Then tell the user what changed, release
+the lease, and end the turn.
 
 ## Step 6: Harden the change
 

@@ -81,7 +81,8 @@ curl --retry 20 --retry-connrefused --retry-delay 0.1 -sf http://127.0.0.1:<port
 
 **A Playwright script of your own.** Playwright is installed in the root venv and drives Fortress, the workspace's
 Chromium build, when it is installed. Use these flags and `domcontentloaded`
-to avoid a slow cold start and `networkidle` timeouts:
+to avoid a slow cold start and `networkidle` timeouts (Fortress's install wait
+and cursor glide are in `.agents/shared/references/playwright-fortress.md`):
 
 ```python
 # /tmp/verify_<name>.py

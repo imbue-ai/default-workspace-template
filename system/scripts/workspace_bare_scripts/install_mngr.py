@@ -13,7 +13,7 @@ is a shell hazard: an empty plugin list that ``set -e`` cannot see because the s
 that produced it swallowed the lister's exit status, an install that lands under the wrong
 ``$HOME`` because uv's tool directories follow it, strict mode leaking into whatever shell
 sourced the pin. None of those survive being written in Python, and a program can be
-tested where a snippet in AGENTS.md cannot.
+tested where a documented snippet cannot.
 
 The update apply does its own install (``update_environment._reinstall_tool``) and is not
 a caller: it unions the extras already in the tool's receipt with the manifest's, which is

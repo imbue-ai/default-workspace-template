@@ -25,7 +25,7 @@ Facts this design builds on, as of `main` at `2cf9763de7` (2026-10-20).
 - The memory guard package (`oom_priority`) is stdlib-only and already runs an always-on supervisord program, `publish_cgroup_meminfo`, that reads the container's cgroup four times a second.
   It owns the agent-pid registry (`registry.live_pids_by_agent_id`), the app registry reader (`app_registry`), the shed ledger, and the `/proc`-walking helpers.
 - The backup service (`host_backup`) writes its events to `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl` and reads them back with `scan_recent_ticks_across_rotation`; every supervised program inherits `MNGR_AGENT_STATE_DIR`.
-- Walking directories is several times slower under gVisor than on a plain kernel (AGENTS.md), and the workspace's disk holds package caches, uploads and app data that can run to gigabytes.
+- Walking directories is several times slower under gVisor than on a plain kernel (`.agents/shared/references/runtime-failures.md`), and the workspace's disk holds package caches, uploads and app data that can run to gigabytes.
 - The shell restores a window at the path and query the page last reported through the app contract's location beacon; the hash is not reported.
 
 ## 2. Decisions

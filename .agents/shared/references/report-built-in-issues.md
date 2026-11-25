@@ -5,6 +5,11 @@ the initial template, or anything an `update-self:` merge brought in). You do no
 submit it yourself: the POST below makes the desktop app open a pre-filled "report
 a bug" modal, and the user reviews and submits it, so the human gates the send.
 
+**Choose the channel by what you have:**
+
+- **A diagnosis, no fix:** report it, as the rest of this file says.
+- **A fix you can stand behind:** use the `submit-upstream-changes` skill, which opens a PR against the parent template repo. Not for mngr: a fix there is its own PR on the mngr repo, not a template one, so an mngr defect goes in a report.
+
 **Send exactly one report, once, covering every built-in issue you found.** Each POST pops a modal over the user's workspace, so a report per issue means a queue of modals to read and submit one at a time, for a single session's work. Collect the issues as you go and send them together at the end of the pass, numbered, each with its own root cause and classification -- they can be split apart upstream, but they cannot be un-popped here. If you have already sent a report this session and then find something else, say so in chat and ask before sending a second one.
 
 POST your diagnosis to the Imbue Studio report route through the latchkey gateway:

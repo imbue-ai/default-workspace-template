@@ -128,8 +128,9 @@ case), sandbox it with a sandboxed `iframe` or a sanitizer, so the page cannot
 run scripts or phone home through tracking pixels.
 
 This is the surfacing half of the preserve-and-surface principle in
-`AGENTS.md`. The derived page inevitably leaves gaps (a field you did not
-extract, a rendering you did not anticipate), and the raw and source controls
+`.agents/shared/references/creation-principles.md`. The derived page
+inevitably leaves gaps (a field you did not extract, a rendering you did not
+anticipate), and the raw and source controls
 let the user bridge them without waiting for a rebuild. Design it in from the
 first version. It depends on the data layer having persisted the raw payload
 and the source reference, so confirm that is available and flag it if it is

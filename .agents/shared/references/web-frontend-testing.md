@@ -40,10 +40,14 @@ group. Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
 changed, the test gate runs just those two kinds of its tests (any other app
-runs whole). The chat app's and the shell's own suites skip their browser
-tests by default: run them with `-m ''` (everything) or `-m browser --no-cov`
-(only them; each suite fails a run under its coverage floor, so a partial run
-needs `--no-cov`). The test gate passes `-m ''` when the app's Python changed.
+runs whole). Mark a test that runs the real claude binary
+`pytest.mark.real_claude`. The chat app's and the shell's own suites skip their
+browser tests by default, and the chat app its `real_claude` tests too: run
+them with `-m ''` (everything) or `-m browser --no-cov` (only the browser
+tests; each suite fails a run under its coverage floor, so a partial run needs
+`--no-cov`). Naming a browser test file without `-m ''` or `-m browser`
+deselects it, so nothing runs and the run fails on the coverage floor. The
+test gate passes `-m ''` when the app's Python changed.
 
 ## Look at the rendered page
 

@@ -237,7 +237,8 @@ more operations in flight means more failure surface.
 
 If the creation captures data, persist each record's **raw payload and a
 reference to its source, durably** -- not just the extracted/processed fields
-(see the preserve-and-surface principle in AGENTS.md). A pipeline that fetches,
+(see the preserve-and-surface principle in
+`.agents/shared/references/creation-principles.md`). A pipeline that fetches,
 transforms, and discards the raw payload cannot satisfy that principle no matter
 what consumers do: persisting it is what lets a later change in processing
 re-derive new fields with no refetch, and what lets surfaces show the raw record
