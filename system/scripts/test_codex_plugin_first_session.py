@@ -148,7 +148,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                     )
                 ]
                 assert foreign_skills == []
-                hooks =_rpc(process, 3, "hooks/list", {"cwds": [str(tmp_path)]})[
+                hooks = _rpc(process, 3, "hooks/list", {"cwds": [str(tmp_path)]})[
                     "data"
                 ][0]
                 assert not hooks["errors"]
