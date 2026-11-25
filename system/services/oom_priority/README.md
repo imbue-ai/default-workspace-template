@@ -396,8 +396,11 @@ every module here -- is stdlib-only, so the hooks (which run under a plain
 ## Memory candidates
 
 `system/services/oom_priority/bin/memory_candidates.py` lists what could be
-stopped to free memory, next to how much memory is free. It only reads: it
-never stops, kills, or re-tags anything.
+stopped to free memory, next to how much memory is free, and then everything
+else holding memory with why it is not a candidate. That second list makes it
+the answer to "how much memory is this using" as well as to "what can I stop"
+(the `workspace-memory` skill). It only reads: it never stops, kills, or
+re-tags anything.
 
 ```bash
 python3 system/services/oom_priority/bin/memory_candidates.py          # a table
@@ -449,9 +452,9 @@ It lists:
     counts the host's SSH activity;
   - is not in the workspace's main chat, the one the chat app's
     `data/.apps/chat/main_chat.json` names. The chat app starts the main chat's
-    agent again as soon as it finds it stopped, so a note names it instead.
-    A file that is there but cannot be read gets a note too, since the main
-    chat may then be listed.
+    agent again as soon as it finds it stopped, so it is listed with what else
+    holds memory instead. A file that is there but cannot be read gets a note,
+    since the main chat may then be listed.
 
   Its memory is the summed anonymous memory of its process trees (see below).
   The trees are rooted at the `pid` mngr reports and at every live pid the
@@ -474,6 +477,16 @@ It lists:
   is a `running` browser while no window of the `screen` app exists on any
   desktop, according to the same inventory document. Its memory is the summed
   anonymous memory of the Chromium processes on its profile and their children.
+
+- **Also holding memory, not candidates**: every other chat or worker whose
+  agent is `WAITING` or `RUNNING` (mid-turn, waiting on a background task,
+  active within `IDLE_AFTER_SECONDS`, or the main chat), every running program
+  that is not a candidate's (a critical or internal app, the Screen's service,
+  a workspace service no app names, one row per program), and a running
+  browser while a window shows the Screen. Each row says why it is not a
+  candidate and carries the same memory figure, so "what is using the memory"
+  is answered by the same numbers as "what can I stop". In JSON each section
+  carries these as `others`, `null` when the section is unknown.
 
 The Screen's stack never stops for emptiness and the browser is never stopped
 when its windows close, so a browser nobody is looking at keeps its memory until

@@ -399,6 +399,13 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
 
     assert report.agents.candidates == ()
     assert report.browsers.candidates == ()
+    # The chats still holding memory are listed with why they are not candidates; infrastructure,
+    # an automation, a stopped or done agent and another provider's agent are not.
+    assert report.agents.others is not None
+    assert [(e.name, e.why) for e in report.agents.others] == [
+        ("busy-chat", "mid-turn"),
+        ("just-answered", "in use: active 5m ago"),
+    ]
     table = memory_candidates.render_table(report)
     assert (
         "(waiting, not on a background task, no activity for 15m or more):\n  none"
@@ -484,10 +491,15 @@ def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again
 
     assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["trip-plan"]
-    assert (
-        "  note: main-successor is the main chat, which the chat app starts again as soon as it stops,"
-        " so it is not listed" in memory_candidates.render_table(report)
-    )
+    # Still counted, under what holds memory without being a candidate.
+    assert report.agents.others is not None
+    assert [(e.name, e.why, e.anonymous_kib) for e in report.agents.others] == [
+        (
+            "main-successor",
+            "the main chat: the chat app starts it again as soon as it stops",
+            100,
+        )
+    ]
 
 
 def test_an_unreadable_main_chat_file_is_noted_and_the_agents_are_still_listed(
@@ -602,9 +614,34 @@ def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
         }
     )
 
+    _fake_process(
+        proc,
+        300,
+        700 * 1024,
+        argv=(
+            "tilion",
+            f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1",
+        ),
+    )
+
     report = memory_candidates.collect_report(_sources(proc, _FakeMngr([]), http))
 
     assert report.browsers.candidates == ()
+    # Not a candidate, but still the answer to "how much is the browser using".
+    assert report.browsers.others == (
+        memory_candidates.HeldEntry(
+            kind="browser",
+            name="browser-1",
+            title="https://a.test/",
+            why="a window shows the Screen it runs on",
+            pids=(300,),
+            anonymous_kib=700 * 1024,
+        ),
+    )
+    assert (
+        "browser  browser-1  https://a.test/  a window shows the Screen it runs on  700 MiB"
+        in memory_candidates.render_table(report)
+    )
 
 
 def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
@@ -616,6 +653,7 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
     _fake_process(proc, 410, 512)
     _fake_process(proc, 420, 4096)
     _fake_process(proc, 430, 8192)
+    _fake_process(proc, 450, 256)
     inventory = _inventory(
         {"app": "daily-digest", "path": "/"},
         {"app": "daily-digest", "path": "/archive"},
@@ -652,6 +690,7 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
                 "chat": 420,
                 "system-monitor": 430,
                 "screen": 440,
+                "earlyoom": 450,
             },
         )
     )
@@ -665,6 +704,25 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
         ("lineup-scout", "lineup-scout", 0, 512),
     ]
     assert [a.stops_when_no_windows for a in apps] == [False, True]
+    # The running programs that are not candidates, with why: the critical and internal apps, the
+    # Screen's service, and a workspace service no app names.
+    assert report.apps.others is not None
+    assert [(e.kind, e.name, e.title, e.why) for e in report.apps.others] == [
+        ("app", "system-monitor", "system-monitor", "an internal app"),
+        (
+            "app",
+            "chat",
+            "chat",
+            "a critical app: the workspace is reached and talked to through it",
+        ),
+        ("service", "earlyoom", None, "a workspace service, not the user's to stop"),
+        (
+            "app",
+            "screen",
+            "screen",
+            "the Screen's service: its browser is listed on its own",
+        ),
+    ]
     # The table carries the auto-stop field too: an app the shell does not stop by itself may be
     # doing work between requests, which is what a reader ranks the candidates by.
     table = memory_candidates.render_table(report)
@@ -744,6 +802,8 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
     )
 
     assert report.agents.candidates is None
+    # Unknown, not "nothing else holds memory" either.
+    assert report.agents.others is None
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert report.browsers.candidates is not None
@@ -1058,6 +1118,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                 }
             ],
             "notes": [],
+            "others": [],
         },
         "apps": {
             "candidates": [
@@ -1072,6 +1133,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                 }
             ],
             "notes": [],
+            "others": [],
         },
         "browsers": {
             "candidates": [
@@ -1085,6 +1147,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                 }
             ],
             "notes": [],
+            "others": [],
         },
     }
 

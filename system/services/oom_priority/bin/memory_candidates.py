@@ -3,8 +3,10 @@
 
 A lead runs this after one of its agents reports a shed (see the README's "Memory candidates"),
 shows the user the list next to the free memory, and stops only what the user approves (a
-scheduled update may go further; see the ``update-self`` skill). This command only reads: it
-never stops, kills, or re-tags anything.
+scheduled update may go further; see the ``update-self`` skill). It is also the answer to "how much
+memory is this using": beside the candidates it lists what else holds memory and why it is not one
+(a chat mid-turn or in use, the main chat, a critical app, a browser a window shows). This command
+only reads: it never stops, kills, or re-tags anything.
 
 It joins four sources, each read independently so one failing leaves the others intact:
 
@@ -21,7 +23,7 @@ It joins four sources, each read independently so one failing leaves the others 
   marker files. Its memory is the summed anonymous memory of its process trees, rooted at the pid mngr
   reports plus every live pid the agent-pid registry holds for it. The workspace's main chat, named
   by the chat app's ``main_chat.json``, is never one: the chat app starts it again as soon as it
-  stops, so a note names it instead;
+  stops, so it is listed with what else holds memory instead;
 - apps, from the shell's ``GET /api/inventory`` joined to the programs supervisord is running: an
   app the workspace is allowed to stop (with a program of its own that no critical app shares, and
   neither critical nor internal itself), with how many windows show it, since that is what decides
@@ -87,6 +89,8 @@ from oom_priority.supervisor_rpc import supervised_pids
 # still reading its reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
+# The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
+MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset({IDLE_AGENT_STATE, "RUNNING"})
 # The label naming the chat an agent belongs to, which the chat app stamps on a chat's agents once it has handed
 # off; an agent without it is its own chat.
 CHAT_ID_LABEL: Final[str] = "chat_id"
@@ -280,25 +284,43 @@ class BrowserCandidate(NamedTuple):
     anonymous_kib: int | None
 
 
+class HeldEntry(NamedTuple):
+    """Something holding memory that is not a candidate, and why: the rest of the answer to "what is
+    using the memory"."""
+
+    kind: str
+    name: str
+    title: str | None
+    why: str
+    pids: tuple[int, ...]
+    anonymous_kib: int | None
+
+
 class AgentSection(NamedTuple):
-    """The idle agents, or None when the agent list could not be read, plus what went wrong."""
+    """The idle agents, or None when the agent list could not be read, plus what went wrong.
+    ``others`` is the chats and workers holding memory that are not candidates (None with them)."""
 
     candidates: tuple[AgentCandidate, ...] | None
     notes: tuple[str, ...]
+    others: tuple[HeldEntry, ...] | None = ()
 
 
 class AppSection(NamedTuple):
-    """The stoppable running apps, or None when they could not be determined, plus what went wrong."""
+    """The stoppable running apps, or None when they could not be determined, plus what went wrong.
+    ``others`` is the running programs of the apps the workspace may not stop (None with them)."""
 
     candidates: tuple[AppCandidate, ...] | None
     notes: tuple[str, ...]
+    others: tuple[HeldEntry, ...] | None = ()
 
 
 class BrowserSection(NamedTuple):
-    """The unviewed browsers, or None when they could not be determined, plus what went wrong."""
+    """The unviewed browsers, or None when they could not be determined, plus what went wrong.
+    ``others`` is the running browsers a window shows (None with them)."""
 
     candidates: tuple[BrowserCandidate, ...] | None
     notes: tuple[str, ...]
+    others: tuple[HeldEntry, ...] | None = ()
 
 
 class Report(NamedTuple):
@@ -516,32 +538,49 @@ def _parse_timestamp(value: str) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def idle_agent_candidates(
+def classify_agents(
     agents: Sequence[ListedAgent],
     registry_pids: Mapping[str, Sequence[int]],
     proc_dir: Path,
     now: datetime,
     is_chat_busy: IsChatBusy,
-) -> list[AgentCandidate]:
-    """The idle chats and workers, largest memory first. An agent whose chat waits on a background task is not idle:
-    the task's completion will start its next turn."""
+    main_chat_id: str | None,
+) -> tuple[list[AgentCandidate], list[HeldEntry]]:
+    """The idle chats and workers, largest memory first, and the other chats and workers holding
+    memory with why each is not a candidate. An agent whose chat waits on a background task is not
+    idle: the task's completion will start its next turn. The main chat is never a candidate: the
+    chat app starts it again as soon as it stops."""
     candidates: list[AgentCandidate] = []
+    others: list[HeldEntry] = []
     for agent in agents:
         kind = agent_kind(agent.labels)
-        if (
-            kind is None
-            or agent.state != IDLE_AGENT_STATE
-            or agent.last_activity is None
-        ):
+        if kind is None or agent.state not in MEMORY_HOLDING_AGENT_STATES:
             continue
-        idle_seconds = (now - agent.last_activity).total_seconds()
-        if idle_seconds < IDLE_AFTER_SECONDS or is_chat_busy(agent.chat_id):
-            continue
-
         # The pid mngr reports plus every pid the agent registered (codex registers two).
         root_pids = set(registry_pids.get(agent.agent_id, ()))
         if agent.pid is not None:
             root_pids.add(agent.pid)
+        idle_seconds = (
+            None
+            if agent.last_activity is None
+            else (now - agent.last_activity).total_seconds()
+        )
+        why = _why_agent_is_held(agent, idle_seconds, main_chat_id, is_chat_busy)
+        if why is not None:
+            others.append(
+                HeldEntry(
+                    kind=kind,
+                    name=agent.name,
+                    title=agent.display_name,
+                    why=why,
+                    pids=tuple(sorted(root_pids)),
+                    anonymous_kib=process_trees_anonymous_kib(root_pids, proc_dir)
+                    if root_pids
+                    else None,
+                )
+            )
+            continue
+        assert agent.last_activity is not None and idle_seconds is not None
         candidates.append(
             AgentCandidate(
                 name=agent.name,
@@ -558,13 +597,42 @@ def idle_agent_candidates(
                 else None,
             )
         )
-    return sorted(
-        candidates,
-        key=lambda c: (
-            c.anonymous_kib is None,
-            -(c.anonymous_kib or 0),
-            -c.idle_seconds,
+    return (
+        sorted(
+            candidates,
+            key=lambda c: (
+                c.anonymous_kib is None,
+                -(c.anonymous_kib or 0),
+                -c.idle_seconds,
+            ),
         ),
+        _largest_first(others),
+    )
+
+
+def _why_agent_is_held(
+    agent: ListedAgent,
+    idle_seconds: float | None,
+    main_chat_id: str | None,
+    is_chat_busy: IsChatBusy,
+) -> str | None:
+    """Why a chat or worker holding memory is not a candidate, or None when it is one."""
+    if main_chat_id is not None and agent.chat_id == main_chat_id:
+        return "the main chat: the chat app starts it again as soon as it stops"
+    if agent.state != IDLE_AGENT_STATE:
+        return "mid-turn"
+    if is_chat_busy(agent.chat_id):
+        return "waiting on a background task, which will start its next turn"
+    if idle_seconds is None:
+        return "no activity time to judge it by"
+    if idle_seconds < IDLE_AFTER_SECONDS:
+        return f"in use: active {_duration(idle_seconds)} ago"
+    return None
+
+
+def _largest_first(entries: Iterable[HeldEntry]) -> list[HeldEntry]:
+    return sorted(
+        entries, key=lambda e: (e.anonymous_kib is None, -(e.anonymous_kib or 0))
     )
 
 
@@ -590,24 +658,20 @@ def read_main_chat_id(path: Path) -> tuple[str | None, list[str]]:
 def collect_agent_section(sources: Sources) -> AgentSection:
     agents, notes = run_mngr_list(sources.run_command)
     if agents is None:
-        return AgentSection(candidates=None, notes=tuple(notes))
-    registry_pids = live_pids_by_agent_id(sources.proc_dir)
-    candidates = idle_agent_candidates(
-        agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy
-    )
+        return AgentSection(candidates=None, notes=tuple(notes), others=None)
     main_chat_id, main_chat_notes = read_main_chat_id(sources.main_chat_file)
-    notes += main_chat_notes
-    notes += [
-        f"{candidate.name} is the main chat, which the chat app starts again as soon as it stops,"
-        " so it is not listed"
-        for candidate in candidates
-        if candidate.chat_id == main_chat_id
-    ]
+    candidates, others = classify_agents(
+        agents,
+        live_pids_by_agent_id(sources.proc_dir),
+        sources.proc_dir,
+        sources.now,
+        sources.is_chat_busy,
+        main_chat_id,
+    )
     return AgentSection(
-        candidates=tuple(
-            candidate for candidate in candidates if candidate.chat_id != main_chat_id
-        ),
-        notes=tuple(notes),
+        candidates=tuple(candidates),
+        notes=tuple(notes + main_chat_notes),
+        others=tuple(others),
     )
 
 
@@ -680,13 +744,11 @@ def _browser_controller(browser: Mapping[str, Any]) -> str:
     return "human" if browser.get("controller") == "human" else "free"
 
 
-def unviewed_browser_candidates(
-    browsers: Sequence[Mapping[str, Any]], is_screen_shown: bool, proc_dir: Path
+def running_browsers(
+    browsers: Sequence[Mapping[str, Any]], proc_dir: Path
 ) -> list[BrowserCandidate]:
-    """The running browsers while no window shows the Screen, largest memory first."""
+    """The running browsers, largest memory first."""
     candidates: list[BrowserCandidate] = []
-    if is_screen_shown:
-        return candidates
     for browser in browsers:
         name = browser.get("id")
         if (
@@ -748,12 +810,14 @@ def collect_browser_section(sources: Sources, shell: ShellAnswer) -> BrowserSect
         return BrowserSection(
             None,
             (f"could not reach the Screen service at {fleet_url}: {fleet_error}",),
+            None,
         )
     browsers = fleet.get("browsers") if isinstance(fleet, dict) else None
     if not isinstance(browsers, list):
         return BrowserSection(
             None,
             (f"the Screen service at {fleet_url} answered without a browsers list",),
+            None,
         )
     browser_records = [browser for browser in browsers if isinstance(browser, dict)]
     if not any(
@@ -771,14 +835,25 @@ def collect_browser_section(sources: Sources, shell: ShellAnswer) -> BrowserSect
             (
                 f"could not read the shell's windows at {shell.url} ({reason}), so whether a window shows the Screen is unknown",
             ),
+            None,
         )
+    running = running_browsers(browser_records, sources.proc_dir)
+    if not windows.is_screen_shown:
+        return BrowserSection(tuple(running), ())
     return BrowserSection(
-        tuple(
-            unviewed_browser_candidates(
-                browser_records, windows.is_screen_shown, sources.proc_dir
-            )
-        ),
         (),
+        (),
+        tuple(
+            HeldEntry(
+                kind="browser",
+                name=browser.name,
+                title=browser.active_url,
+                why="a window shows the Screen it runs on",
+                pids=browser.pids,
+                anonymous_kib=browser.anonymous_kib,
+            )
+            for browser in running
+        ),
     )
 
 
@@ -842,6 +917,60 @@ def stoppable_app_candidates(
     )
 
 
+def held_programs(
+    apps: Sequence[Mapping[str, Any]],
+    candidates: Sequence[AppCandidate],
+    pids_by_program: Mapping[str, int],
+    proc_dir: Path,
+) -> list[HeldEntry]:
+    """Every running program that is not a candidate's, largest memory first: the apps the workspace
+    may not stop (one row per program, since apps can share one), then the workspace's own services."""
+    critical_programs = {
+        app["program"]
+        for app in apps
+        if app.get("critical") and isinstance(app.get("program"), str)
+    }
+    candidate_programs = {candidate.program for candidate in candidates}
+    titles_by_program: dict[str, list[str]] = {}
+    why_by_program: dict[str, str] = {}
+    for app in apps:
+        name = app.get("name")
+        program = app.get("program")
+        if not isinstance(name, str) or not isinstance(program, str) or not program:
+            continue
+        if program in candidate_programs:
+            continue
+        display_name = app.get("display_name")
+        titles_by_program.setdefault(program, []).append(
+            display_name if isinstance(display_name, str) and display_name else name
+        )
+        if program in critical_programs:
+            why = "a critical app: the workspace is reached and talked to through it"
+        elif name == SCREEN_APP_NAME:
+            why = "the Screen's service: its browser is listed on its own"
+        else:
+            why = "an internal app"
+        why_by_program.setdefault(program, why)
+    entries: list[HeldEntry] = []
+    for program, pid in pids_by_program.items():
+        if program in candidate_programs:
+            continue
+        is_app = program in why_by_program
+        entries.append(
+            HeldEntry(
+                kind="app" if is_app else "service",
+                name=program,
+                title=", ".join(titles_by_program[program]) if is_app else None,
+                why=why_by_program[program]
+                if is_app
+                else "a workspace service, not the user's to stop",
+                pids=(pid,),
+                anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
+            )
+        )
+    return _largest_first(entries)
+
+
 def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
     windows = shell.windows
     if windows is None:
@@ -851,11 +980,12 @@ def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
             (
                 f"could not read the shell's apps at {shell.url} ({reason}), so which apps run and which windows show them is unknown",
             ),
+            None,
         )
     apps = shell.document.get("apps") if isinstance(shell.document, dict) else None
     if not isinstance(apps, list):
         return AppSection(
-            None, (f"the shell at {shell.url} answered without an apps list",)
+            None, (f"the shell at {shell.url} answered without an apps list",), None
         )
     pids_by_program = sources.read_supervised_pids()
     if not pids_by_program:
@@ -864,17 +994,18 @@ def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
             (
                 "could not ask supervisord which programs are running, so which apps hold memory is unknown",
             ),
+            None,
         )
+    app_records = [app for app in apps if isinstance(app, dict)]
+    candidates = stoppable_app_candidates(
+        app_records, windows, pids_by_program, sources.proc_dir
+    )
     return AppSection(
-        tuple(
-            stoppable_app_candidates(
-                [app for app in apps if isinstance(app, dict)],
-                windows,
-                pids_by_program,
-                sources.proc_dir,
-            )
-        ),
+        tuple(candidates),
         (),
+        tuple(
+            held_programs(app_records, candidates, pids_by_program, sources.proc_dir)
+        ),
     )
 
 
@@ -899,6 +1030,24 @@ def collect_report(sources: Sources) -> Report:
 
 def _iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _held_to_json(
+    entries: Sequence[HeldEntry] | None,
+) -> list[dict[str, object]] | None:
+    if entries is None:
+        return None
+    return [
+        {
+            "kind": entry.kind,
+            "name": entry.name,
+            "title": entry.title,
+            "why": entry.why,
+            "pids": list(entry.pids),
+            "anonymous_kib": entry.anonymous_kib,
+        }
+        for entry in entries
+    ]
 
 
 def report_to_json(report: Report) -> dict[str, object]:
@@ -937,6 +1086,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                 for agent in agents
             ],
             "notes": list(report.agents.notes),
+            "others": _held_to_json(report.agents.others),
         },
         "apps": {
             "candidates": None
@@ -954,6 +1104,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                 for app in apps
             ],
             "notes": list(report.apps.notes),
+            "others": _held_to_json(report.apps.others),
         },
         "browsers": {
             "candidates": None
@@ -970,6 +1121,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                 for browser in browsers
             ],
             "notes": list(report.browsers.notes),
+            "others": _held_to_json(report.browsers.others),
         },
     }
 
@@ -1091,6 +1243,34 @@ def render_table(report: Report) -> str:
         )
     lines += [f"  note: {note}" for note in report.browsers.notes]
 
+    lines += ["", "Also holding memory, not candidates:"]
+    held = _largest_first(
+        entry
+        for section_others in (
+            report.agents.others,
+            report.apps.others,
+            report.browsers.others,
+        )
+        if section_others is not None
+        for entry in section_others
+    )
+    if not held:
+        lines.append("  none")
+    else:
+        lines += _table(
+            ("KIND", "NAME", "TITLE", "WHY NOT", "MEMORY"),
+            [
+                (
+                    entry.kind,
+                    entry.name,
+                    entry.title or "-",
+                    entry.why,
+                    _mib(entry.anonymous_kib),
+                )
+                for entry in held
+            ],
+        )
+
     lines += [
         "",
         "Memory is each process's own anonymous memory, summed: roughly what stopping it frees.",
@@ -1132,7 +1312,7 @@ def busy_chat_check(environ: Mapping[str, str]) -> IsChatBusy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="List idle chats and workers, the apps, and the browser while no window shows the Screen, alongside free memory. Stops nothing."
+        description="List idle chats and workers, the apps, and the browser while no window shows the Screen, alongside free memory, then what else holds memory and why it is not a candidate. Stops nothing."
     )
     parser.set_defaults(output_format=OutputFormat.TABLE)
     output_format = parser.add_mutually_exclusive_group()
