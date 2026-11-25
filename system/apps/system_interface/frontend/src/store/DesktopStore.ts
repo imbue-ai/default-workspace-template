@@ -2952,8 +2952,9 @@ export class DesktopStore {
   /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
    *  an ask of the shell's own). The one place an ask becomes the message an agent reads: the assist command and
    *  the app and window it came from go in front of ``text`` (``assistRequest``). It is sent to the chat about that
-   *  window's app, through the first launch path of the machine that takes an ask's text, whose page is put on
-   *  screen by the show rule and laid out beside the window, as "Chat about this app" lays it out. With no such
+   *  window's app, through the first launch path of the machine about an app that takes text (``appAskLaunchOf``),
+   *  whose page is put on screen by the show rule and laid out beside the window, as "Chat about this app" lays it
+   *  out. With no such
    *  window, a window of an internal app, no such launch path, or the ``main-chat`` delivery, the primary text action
    *  runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. Settles as
    *  ``startWithText`` does. */

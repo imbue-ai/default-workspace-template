@@ -14,7 +14,6 @@ import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } fr
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
   appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
@@ -685,11 +684,12 @@ describe("opening", () => {
     );
   });
 
-  /** A chat-like app that declares both launch paths about an app, a Docs app, and a hidden monitor, with the
-   *  chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs window placed. */
+  /** A chat-like app that declares the launch path about an app, taking an ask's text, a Docs app, and a hidden
+   *  monitor, with the chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs
+   *  window placed. */
   function offerAppsWithAnAskPath(): void {
     const chat = chatLikeAppRecord("chat", {
-      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
     });
     offerApps(api, socket, [
       chat,
@@ -720,7 +720,7 @@ describe("opening", () => {
 
     // The shell writes the message: the assist command, then the app and the window the ask was pressed in.
     expect(launchCalls()).toEqual([
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message: "/assist This is about the Docs app (`docs`, window `win-docs`).\n\nFix this.",
@@ -758,10 +758,13 @@ describe("opening", () => {
     expect(await store.askAgent("Fix this.", "win-docs", "main-chat")).toEqual({ isOpened: true });
     expect(launchCalls()).toEqual([primary, primary, aboutMonitor, aboutDocs]);
 
-    // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
+    // A machine whose launch path about an app takes no text has nowhere to send an ask about an app.
     offerApps(api, socket, [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
+        launch_paths: [
+          ...chatLikeAppRecord("chat").launch_paths,
+          appChatLaunchPathRecord({ params: ["app", "app_display_name"], text_param: null }),
+        ],
       }),
       appRecord("docs", { display_name: "Docs" }),
     ]);
@@ -4564,7 +4567,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
     api.apps = [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
       }),
       appRecord("docs"),
     ];

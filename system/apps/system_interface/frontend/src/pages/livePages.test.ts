@@ -46,7 +46,7 @@ import { activeFocusedWindowId, activePlacements } from "../reducers/desktopStat
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   desktopRecord,
   launchPathRecord,
@@ -1449,7 +1449,7 @@ describe("the contract", () => {
         url: "http://127.0.0.1:7003",
         launch_paths: [
           launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
-          appAskLaunchPathRecord(),
+          appChatLaunchPathRecord(),
         ],
       }),
       notes,
@@ -1463,7 +1463,7 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-1" });
     await settle();
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message: "/assist This is about the Docs app (`docs`, window `win-1`).\n\nFix this.",
@@ -1480,7 +1480,7 @@ describe("the contract", () => {
     expect(launches()[1]).toMatch(/^launch:home:chat:main:/);
     messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-3", delivery: "elsewhere" });
     await settle();
-    expect(launches()[2]).toMatch(/^launch:home:chat:app-ask:/);
+    expect(launches()[2]).toMatch(/^launch:home:chat:app-chat:/);
   });
 
   it("answers a refused ask with the failure, and toasts it only for a page that does not show the outcome", async () => {

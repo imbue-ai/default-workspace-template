@@ -614,9 +614,8 @@ viewer's. The phone layout offers no overview.
 `store/DesktopStore.ts` `openAppChat`). Every window of an app that is not
 internal carries "Chat about this app" (a speech balloon) in its focused title
 bar, the chat app's windows included. It runs the first launch path of the
-machine whose `app_params` names no `text` param (the chat app's `app-chat`,
-which names the window's app and its display name in the params the path
-declares) through the
+machine that declares `app_params` (the chat app's `app-chat`, which names the
+window's app and its display name in the params the path declares) through the
 launch route's `show` target: the shell shows the answered page as the `show` op
 would (a window already at the path raised, else the pinned window pointed at
 it, else a window opened) and lays the two windows out for this client, the chat
@@ -633,8 +632,9 @@ on the composer as its placeholder, "How do you want to change <App>?", and
 focuses. A page's ask (`shell:ask-agent`, `store/DesktopStore.ts` `askAgent`;
 a failure's "Ask an agent to fix this" sends it) reaches that same chat: for a
 page in a window of an app that is not internal, the shell runs the first
-launch path of the machine whose `app_params` names a `text` param (the chat
-app's `app-ask`) with the app's name, its display name, and the ask's text,
+launch path of the machine that declares `app_params` and a `text_param` (the
+chat app's `app-chat` again) with the app's name, its display name, and the
+ask's text in that `text_param`,
 through the same `show` target beside the page's window, and the chat app sends
 the text to the chat about the app as a message (making that chat with it when
 there is none, and sending it to the main chat when that chat cannot take it).
