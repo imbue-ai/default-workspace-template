@@ -25,6 +25,7 @@ from imbue.chat.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
 from imbue.chat.harnesses.codex.tool_labels import WAIT_TOOL_NAME
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.chat.testing import ONE_PIXEL_PNG
 
 
 def _user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
@@ -660,10 +661,7 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
 
 
-_PNG_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-)
-_PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()
+_PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode()
 
 
 def _exec_call_line(call_id: str, program: str) -> dict[str, Any]:
@@ -799,7 +797,7 @@ def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> 
     image = parse_line_image(line, "codex-result-c1", 0)
     assert image is not None
     assert image.media_type == "image/png"
-    assert image.data == _PNG_BYTES
+    assert image.data == ONE_PIXEL_PNG
     assert parse_line_image(line, "codex-result-c1", 1) is None
     assert parse_line_image(line, "codex-result-other", 0) is None
     assert parse_line_image(_exec_call_line("c1", _IMAGEGEN_PROGRAM), "codex-result-c1", 0) is None

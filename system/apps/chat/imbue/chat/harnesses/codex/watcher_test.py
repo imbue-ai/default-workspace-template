@@ -8,7 +8,6 @@ lose that race because its read paths re-read from disk on every call; these ass
 now does the same, without the thread ever running.
 """
 
-import base64
 import json
 import os
 import threading
@@ -29,6 +28,8 @@ from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 from imbue.chat.harnesses.session_watcher import StreamedReply
+from imbue.chat.testing import ONE_PIXEL_PNG
+from imbue.chat.testing import codex_image_generation_rollout_lines
 
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
@@ -572,43 +573,9 @@ def test_get_event_detail_serves_the_full_tool_payloads(tmp_path: Path) -> None:
     assert result_detail["output"] == "y" * 6000
 
 
-_PNG_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-)
-
-
 def test_get_event_image_reads_a_generated_image_back_from_the_rollout(tmp_path: Path) -> None:
     """The image stays in the rollout; the event names how many there are and the read decodes one."""
-    _write_rollout(
-        tmp_path,
-        [
-            {
-                "timestamp": "2026-08-03T00:00:01Z",
-                "type": "response_item",
-                "payload": {
-                    "type": "custom_tool_call",
-                    "call_id": "c1",
-                    "name": "exec",
-                    "input": 'generatedImage(await tools.image_gen__imagegen({prompt:"a bicycle"}));',
-                },
-            },
-            {
-                "timestamp": "2026-08-03T00:00:02Z",
-                "type": "response_item",
-                "payload": {
-                    "type": "custom_tool_call_output",
-                    "call_id": "c1",
-                    "output": [
-                        {"type": "input_text", "text": "Script completed\n"},
-                        {
-                            "type": "input_image",
-                            "image_url": "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode(),
-                        },
-                    ],
-                },
-            },
-        ],
-    )
+    _write_rollout(tmp_path, codex_image_generation_rollout_lines())
     watcher, _ = _build_watcher(tmp_path)
     result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
     assert result["image_count"] == 1
@@ -616,7 +583,7 @@ def test_get_event_image_reads_a_generated_image_back_from_the_rollout(tmp_path:
 
     image = watcher.get_event_image(result["event_id"], 0)
     assert image is not None
-    assert (image.media_type, image.data) == ("image/png", _PNG_BYTES)
+    assert (image.media_type, image.data) == ("image/png", ONE_PIXEL_PNG)
     assert watcher.get_event_image(result["event_id"], 1) is None
     assert watcher.get_event_image("codex-result-unknown", 0) is None
 

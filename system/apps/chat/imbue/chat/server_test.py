@@ -1,6 +1,5 @@
 """Tests for the Flask server."""
 
-import base64
 import fcntl
 import io
 import json
@@ -154,12 +153,14 @@ from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.testing import InlineExecutor
+from imbue.chat.testing import ONE_PIXEL_PNG
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import codex_image_generation_rollout_lines
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import drain_pushes
@@ -797,37 +798,11 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
 
 def test_event_image_route_serves_a_codex_generated_image_and_404s(client: FlaskClient, app: Flask) -> None:
     """The bytes behind a tool result's ``image_count``: inline, as a download, and 404 past the end."""
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-    )
     state_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / "agent-456"
     sessions_dir = state_dir / "plugin" / "codex" / "home" / "sessions" / "2026" / "11" / "25"
     sessions_dir.mkdir(parents=True)
     rollout = sessions_dir / "rollout-2026-11-25T00-00-00-test.jsonl"
-    lines = [
-        {
-            "timestamp": "2026-11-25T22:00:10.589Z",
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "call_id": "c1",
-                "name": "exec",
-                "input": 'generatedImage(await tools.image_gen__imagegen({prompt:"a bicycle"}));',
-            },
-        },
-        {
-            "timestamp": "2026-11-25T22:00:23.225Z",
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "c1",
-                "output": [
-                    {"type": "input_image", "image_url": "data:image/png;base64," + base64.b64encode(png).decode()}
-                ],
-            },
-        },
-    ]
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    rollout.write_text("".join(json.dumps(line) + "\n" for line in codex_image_generation_rollout_lines()))
     (state_dir / "codex_transcript_path").write_text(str(rollout))
     state_of(app).agent_manager._agents["agent-456"] = AgentStateItem(
         id="agent-456", name="codex-agent", state="RUNNING", labels={}, work_dir="/code", harness=HarnessType.CODEX
@@ -842,11 +817,11 @@ def test_event_image_route_serves_a_codex_generated_image_and_404s(client: Flask
     inline = client.get(image_url)
     assert inline.status_code == 200
     assert inline.mimetype == "image/png"
-    assert inline.data == png
+    assert inline.data == ONE_PIXEL_PNG
     assert "attachment" not in inline.headers.get("Content-Disposition", "")
 
     download = client.get(f"{image_url}?download")
-    assert download.data == png
+    assert download.data == ONE_PIXEL_PNG
     assert download.headers["Content-Disposition"].startswith("attachment")
 
     assert client.get(f"/api/chats/agent-456/events/{result_event['event_id']}/images/1").status_code == 404

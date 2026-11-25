@@ -1326,6 +1326,42 @@ def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapp
     return session_file
 
 
+ONE_PIXEL_PNG: Final[bytes] = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+
+
+def codex_image_generation_rollout_lines() -> list[dict[str, Any]]:
+    """A codex rollout's ``exec`` that generates an image, and its result carrying ONE_PIXEL_PNG."""
+    return [
+        {
+            "timestamp": "2026-11-25T22:00:10.589Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "c1",
+                "name": "exec",
+                "input": 'generatedImage(await tools.image_gen__imagegen({prompt:"a bicycle"}));',
+            },
+        },
+        {
+            "timestamp": "2026-11-25T22:00:23.225Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "c1",
+                "output": [
+                    {"type": "input_text", "text": "Script completed\n"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+                    },
+                ],
+            },
+        },
+    ]
+
+
 def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point mngr's config loader at a project settings file holding ``settings``, with a host dir under tmp_path."""
     config_dir = tmp_path / ".mngr"
