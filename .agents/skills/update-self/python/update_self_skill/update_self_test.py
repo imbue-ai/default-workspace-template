@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+from bootstrap.agent_upgrade import COVERAGE_RECORD
 from oom_priority.ledger import append_shed_record
 
 from update_self_skill import (
@@ -7426,6 +7427,275 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     assert "uv: not found" in err
 
 
+# the stopped agents' upgrade once an update lands or is rolled back
+
+_UPGRADE_STOPPED_AGENTS = ["uv", "run", "--no-sync", "upgrade-stopped-agents"]
+
+
+def _syncs_the_upgrade_command(runner: _RecordingRunner, repo_root: Path) -> None:
+    """Have each venv sync ``runner`` sees install the stopped-agent upgrade's command, as a tree whose bootstrap
+    package declares it does."""
+    observe = runner.on_command
+
+    def on_command(argv: list[str]) -> None:
+        if argv[:2] == ["uv", "sync"]:
+            environment = runner.envs[-1] or {}
+            venv = Path(
+                environment.get(
+                    "UV_PROJECT_ENVIRONMENT", repo_root / venv_links.VENV_NAME
+                )
+            )
+            (venv / "bin").mkdir(parents=True, exist_ok=True)
+            (venv / "bin" / _UPGRADE_STOPPED_AGENTS[-1]).touch()
+        if observe is not None:
+            observe(argv)
+
+    runner.on_command = on_command
+
+
+def test_update_self_runs_the_command_the_bootstrap_package_declares() -> None:
+    pyproject = tomllib.loads(
+        (_WORKSPACE_ROOT / "system/libs/bootstrap/pyproject.toml").read_text()
+    )
+
+    assert list(update_apply._UPGRADE_STOPPED_AGENTS_ARGV) == _UPGRADE_STOPPED_AGENTS
+    assert (
+        pyproject["project"]["scripts"][_UPGRADE_STOPPED_AGENTS[-1]]
+        == "bootstrap.agent_upgrade:main"
+    )
+
+
+def test_a_landed_apply_upgrades_the_stopped_agents_once_on_the_landed_venv(
+    apply_repo: Path, capsys
+) -> None:
+    # Past the last rollback point: the forward restart has settled and the marker is down.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(
+        tuple(_UPGRADE_STOPPED_AGENTS),
+        _Result(stderr="mngr upgrade: upgraded worker-a (stopped)\n"),
+    )
+    is_marker_up_at_upgrade: list[bool] = []
+    runner.on_command = lambda argv: (
+        is_marker_up_at_upgrade.append(_marker_exists(apply_repo))
+        if argv == _UPGRADE_STOPPED_AGENTS
+        else None
+    )
+    _syncs_the_upgrade_command(runner, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert runner.argvs_starting(*_UPGRADE_STOPPED_AGENTS) == [_UPGRADE_STOPPED_AGENTS]
+    assert is_marker_up_at_upgrade == [False]
+    assert runner.calls.index(list(_RESTART)) < runner.calls.index(
+        _UPGRADE_STOPPED_AGENTS
+    )
+    assert runner.cwds_of(*_UPGRADE_STOPPED_AGENTS) == [str(apply_repo)]
+    assert (
+        "agent upgrade: mngr upgrade: upgraded worker-a (stopped)\n"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    ("name_status", "is_upgraded"),
+    [
+        (_BACKEND_MANIFEST_DIFF, True),
+        (_APP_PYPROJECT_DIFF, True),
+        (_FRONTEND_DIFF, False),
+        (_DOCS_DIFF, False),
+    ],
+    ids=["backend-manifest", "app-pyproject", "frontend", "docs"],
+)
+def test_only_an_apply_that_re_synced_the_venv_upgrades_the_stopped_agents(
+    apply_repo: Path, name_status: str, is_upgraded: bool
+) -> None:
+    runner = _apply_runner(name_status, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert runner.ran(*_UPGRADE_STOPPED_AGENTS) is is_upgraded
+
+
+def test_an_apply_landing_a_tree_from_before_the_upgrade_command_runs_no_upgrade(
+    apply_repo: Path, capsys
+) -> None:
+    # A forward revert to an older release lands a venv without the command.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    err = capsys.readouterr().err
+    assert "agent upgrade:" not in err
+    assert "stopped agents" not in err
+
+
+def _seen_at_upgrade(
+    runner: _RecordingRunner, look: Callable[[], object]
+) -> list[object]:
+    """What ``look`` returns each time ``runner`` runs the stopped-agent upgrade, filled in as it runs."""
+    seen: list[object] = []
+    observe = runner.on_command
+
+    def on_command(argv: list[str]) -> None:
+        if argv == _UPGRADE_STOPPED_AGENTS:
+            seen.append(look())
+        if observe is not None:
+            observe(argv)
+
+    runner.on_command = on_command
+    return seen
+
+
+def test_a_landed_apply_upgrades_the_stopped_agents_whatever_the_agent_upgrade_record_says(
+    apply_repo: Path,
+) -> None:
+    # An older release's apply can have moved the agents and the venv since the record was written.
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    presence = _seen_at_upgrade(runner, record.exists)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert presence == [False]
+
+
+def test_an_apply_landing_a_tree_from_before_the_upgrade_command_drops_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    assert not record.exists()
+
+
+def test_an_apply_that_left_the_venv_alone_keeps_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert record.exists()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _Result(returncode=1, stderr="Traceback: boom\n"),
+        subprocess.TimeoutExpired(_UPGRADE_STOPPED_AGENTS, 180.0),
+        FileNotFoundError("uv: not found"),
+    ],
+    ids=["exit-1", "timed-out", "missing-uv"],
+)
+def test_a_stopped_agent_upgrade_that_fails_leaves_the_landed_apply_as_it_was(
+    apply_repo: Path, capsys, outcome: object
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(tuple(_UPGRADE_STOPPED_AGENTS), outcome)
+    _syncs_the_upgrade_command(runner, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert len(runner.argvs_starting(*_RESTART)) == 1
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert not _marker_exists(apply_repo)
+    assert (apply_repo / "docs/VERSION_HISTORY.md").exists()
+    assert runner.ran("uv", "run", "--no-sync", "env-converge", "upgrade")
+    err = capsys.readouterr().err
+    assert "warning:" in err and "upgrad" in err
+    assert err.rstrip().endswith(
+        "applied: the update is landed and the live workspace is confirmed healthy."
+    )
+
+
+def _apply_rolled_back_after_its_restart(
+    name_status: str, repo_root: Path
+) -> _RecordingRunner:
+    """Run an apply of ``name_status`` whose restart never settles, so its own rollback restores the workspace."""
+    runner = _apply_runner(name_status, repo_root)
+    restarts = {"seen": 0}
+
+    def responder(url: str) -> int | None:
+        if not _is_live(url):
+            return 200
+        return 200 if restarts["seen"] >= 2 else 500
+
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+
+    assert _apply(runner, _FakeHttp(responder), _FakeSpawner(), repo_root) == 2
+    return runner
+
+
+def _plant_agent_upgrade_record(repo_root: Path) -> Path:
+    record = repo_root / update_apply._AGENT_UPGRADE_COVERAGE_RECORD
+    record.parent.mkdir(parents=True)
+    record.write_text(
+        '{"mngr": {"imbue-mngr": "https://github.com/imbue-ai/mngr@0ld"}}\n'
+    )
+    return record
+
+
+def test_the_apply_drops_the_record_the_stopped_agent_pass_keeps() -> None:
+    assert update_apply._AGENT_UPGRADE_COVERAGE_RECORD == COVERAGE_RECORD
+
+
+def test_an_apply_that_rolls_back_before_landing_upgrades_no_agent(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_rolled_back_after_its_restart(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
+@pytest.mark.parametrize(
+    ("name_status", "is_record_kept"),
+    [(_BACKEND_MANIFEST_DIFF, False), (_APP_PYPROJECT_DIFF, False), (_DOCS_DIFF, True)],
+    ids=["backend-manifest", "app-pyproject", "docs"],
+)
+def test_an_apply_that_rolls_back_an_update_that_re_synced_the_venv_drops_the_agent_upgrade_record(
+    apply_repo: Path, name_status: str, is_record_kept: bool
+) -> None:
+    # The merged tree's mngr ran from its refresh until the rollback, and an agent it created has its files.
+    record = _plant_agent_upgrade_record(apply_repo)
+
+    _apply_rolled_back_after_its_restart(name_status, apply_repo)
+
+    assert record.exists() is is_record_kept
+
+
 # recover
 
 
@@ -7500,6 +7770,43 @@ def test_recover_if_stale_acts_only_on_a_marker_that_is_really_stale(
     else:
         assert runner.calls == []
         assert _marker_exists(apply_repo) is has_marker
+
+
+@pytest.mark.parametrize("no_restart", [True, False], ids=["at-boot", "live"])
+@pytest.mark.parametrize(
+    ("name_status", "is_record_kept"),
+    [(_BACKEND_MANIFEST_DIFF, False), (_FRONTEND_DIFF, True)],
+    ids=["backend-manifest", "frontend"],
+)
+def test_recover_drops_the_agent_upgrade_record_of_an_update_that_re_synced_the_venv(
+    apply_repo: Path, name_status: str, is_record_kept: bool, no_restart: bool
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    _plant_marker(apply_repo)
+    runner = _apply_runner(name_status, apply_repo)
+
+    _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=no_restart)
+
+    assert record.exists() is is_record_kept
+
+
+def test_recover_that_finds_no_stale_apply_keeps_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    _plant_marker(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    code = _recover(
+        runner,
+        _FakeHttp(_all_healthy),
+        apply_repo,
+        if_stale=True,
+        is_pid_live=lambda pid: True,
+    )
+
+    assert code == 0
+    assert record.exists()
 
 
 def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None:
@@ -9874,6 +10181,214 @@ def test_rollback_last_resyncs_the_venv_an_update_moved(apply_repo: Path) -> Non
     ]
     # Through the link, into the venv the restored tree runs.
     assert syncs == [(["uv", "sync", "--all-packages", "--frozen"], None)]
+
+
+def _venv_moving_rollback_point(
+    repo_root: Path, *, has_upgrade_command: bool = True
+) -> _RecordingRunner:
+    """A kept rollback point of an update that moved the venv, and the runner to roll it back; the venv it restores
+    holds the stopped-agent upgrade's command when ``has_upgrade_command``."""
+    _link_live_venv(repo_root)
+    update_apply_contract.write_last_good(
+        update_apply_contract.LastGoodRecord(
+            merge_sha="fedcba9876543",
+            rollback_to=_ROLLBACK,
+            applied_at=1.0,
+            driven_by="lead",
+            snapshots=[],
+            programs=[],
+            apps=[],
+            needs_system_services_restart=False,
+        ),
+        repo_root,
+    )
+    runner = _rollback_runner(repo_root)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout=_BACKEND_MANIFEST_DIFF.split("\t")[1]),
+    )
+    runner.respond(
+        ("uv", "cache", "dir"), _Result(stdout=f"{_uv_cache_dir(repo_root)}\n")
+    )
+    if has_upgrade_command:
+        _syncs_the_upgrade_command(runner, repo_root)
+    return runner
+
+
+def test_rollback_last_upgrades_the_stopped_agents_on_the_restored_venv(
+    apply_repo: Path,
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.argvs_starting(*_UPGRADE_STOPPED_AGENTS) == [_UPGRADE_STOPPED_AGENTS]
+    assert runner.calls.index(
+        ["uv", "sync", "--all-packages", "--frozen"]
+    ) < runner.calls.index(_UPGRADE_STOPPED_AGENTS)
+    assert runner.cwds_of(*_UPGRADE_STOPPED_AGENTS) == [str(apply_repo)]
+
+
+def test_rollback_last_says_on_the_notice_that_it_is_upgrading_the_stopped_agents(
+    apply_repo: Path,
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+
+    def caption() -> str | None:
+        point = _rollback_point(apply_repo)
+        assert point is not None
+        return point.progress
+
+    captions = _seen_at_upgrade(runner, caption)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert captions == [update_apply._ROLLBACK_PROGRESS_UPGRADING_AGENTS]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _Result(returncode=1, stderr="Traceback: boom\n"),
+        subprocess.TimeoutExpired(_UPGRADE_STOPPED_AGENTS, 180.0),
+        FileNotFoundError("uv: not found"),
+    ],
+    ids=["exit-1", "timed-out", "missing-uv"],
+)
+def test_a_stopped_agent_upgrade_that_fails_leaves_the_rollback_as_it_was(
+    apply_repo: Path, outcome: object
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+    runner.respond(tuple(_UPGRADE_STOPPED_AGENTS), outcome)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == "Rolled back to the previous version."
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_rollback_last_whose_venv_re_sync_failed_runs_no_upgrade(
+    apply_repo: Path,
+) -> None:
+    # The venv is not the restored tree's, so its mngr is not the one to rewrite agents with.
+    runner = _venv_moving_rollback_point(apply_repo)
+    runner.respond(
+        ("uv", "sync", "--all-packages", "--frozen"),
+        _Result(returncode=1, stderr="error: Failed to fetch"),
+    )
+
+    assert _rollback(runner, apply_repo) == 3
+
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
+def test_rollback_last_to_a_tree_from_before_the_upgrade_command_runs_no_upgrade(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo, has_upgrade_command=False)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    assert "warning:" not in capsys.readouterr().err
+
+
+def test_rollback_last_upgrades_the_stopped_agents_whatever_the_agent_upgrade_record_says(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _venv_moving_rollback_point(apply_repo)
+    presence = _seen_at_upgrade(runner, record.exists)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert presence == [False]
+
+
+def test_rollback_last_to_a_tree_from_before_the_upgrade_command_drops_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _venv_moving_rollback_point(apply_repo, has_upgrade_command=False)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not record.exists()
+
+
+def test_rollback_last_of_an_update_that_left_the_venv_alone_upgrades_no_agent(
+    apply_repo: Path,
+) -> None:
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
+def test_a_rollback_or_confirm_started_during_a_kept_points_landing_upgrade_refuses(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    rollback_runner = _rollback_runner(apply_repo)
+    exit_codes = _seen_at_upgrade(
+        runner,
+        lambda: (
+            _rollback(rollback_runner, apply_repo),
+            update_apply.confirm_last(apply_repo),
+        ),
+    )
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    assert exit_codes == [(1, 1)]
+    assert not rollback_runner.ran("git", "revert")
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.progress is None and record.outcome is None
+    assert (
+        "error: another rollback or confirm of this point is already running."
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_point_kept", "is_upgraded"),
+    [(True, False), (False, True)],
+    ids=["point-kept", "no-point"],
+)
+def test_a_landing_upgrade_runs_beside_a_rollback_or_confirm_only_without_a_kept_point(
+    apply_repo: Path, capsys, is_point_kept: bool, is_upgraded: bool
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    lock_path = update_apply_contract.rollback_lock_path(apply_repo)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = (
+            _apply_keeping_the_rollback_point(runner, apply_repo)
+            if is_point_kept
+            else _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+        )
+
+    assert code == 0
+    assert runner.ran(*_UPGRADE_STOPPED_AGENTS) is is_upgraded
+    assert not record.exists()
+    assert ("the next boot retries" in capsys.readouterr().err) is not is_upgraded
 
 
 def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:

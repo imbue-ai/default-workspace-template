@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 
+from bootstrap.agent_upgrade import WORKSPACE_VENV, upgrade_stopped_agents
 from bootstrap.claude_state_migration import (
     LEGACY_ROOT_HOME,
     migrate_legacy_claude_state,
@@ -37,8 +38,6 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
-# The workspace venv, relative to the repo root like the config above.
-WORKSPACE_VENV = Path(".venv")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -589,8 +588,8 @@ def _ensure_supervisor_log_dir() -> None:
 _UV_SYNC_TIMEOUT_SECONDS = 600.0
 
 
-def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the lockfile of the tree boot will run.
+def _sync_workspace_venv() -> bool:
+    """Converge the workspace .venv to the lockfile of the tree boot will run; whether it converged.
 
     The bootstrap window syncs ``--frozen`` before this program starts, but
     against the tree as the container came up. ``_recover_interrupted_update``
@@ -615,15 +614,16 @@ def _sync_workspace_venv() -> None:
             "uv sync --all-packages timed out after {}s; continuing boot",
             _UV_SYNC_TIMEOUT_SECONDS,
         )
-        return
+        return False
     if result.returncode != 0:
         logger.error(
             "uv sync --all-packages failed (rc={}): {}",
             result.returncode,
             (result.stderr or result.stdout).strip()[-500:],
         )
-        return
+        return False
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+    return True
 
 
 def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
@@ -970,7 +970,7 @@ def main() -> None:
     # (below) and before supervisord's services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
-        _sync_workspace_venv()
+        is_venv_converged = _sync_workspace_venv()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the
@@ -981,6 +981,17 @@ def main() -> None:
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
         _run_env_converge_fast_phase()
+
+    # Before anything starts an agent: the DRI wake below, then the chat app.
+    with _bootstrap_step("upgrade_agents", "Bringing your chats up to date"):
+        if UPDATE_APPLY_MARKER.exists():
+            logger.info(
+                "An update apply is in flight; agents are upgraded when it lands or at a later boot"
+            )
+        elif not is_venv_converged:
+            logger.warning("Not upgrading agents: the workspace venv did not converge")
+        else:
+            upgrade_stopped_agents()
 
     # Re-engage the agent whose update the boot-time rollback undid. Held until
     # here on purpose: waking it starts a live agent running `uv run`, which

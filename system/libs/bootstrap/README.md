@@ -9,6 +9,14 @@ service.
 - `bootstrap` - Run first-boot setup, then `exec` supervisord in the foreground.
   Invoked once per container boot from the `bootstrap` extra_window (see
   `.mngr/settings.toml`).
+- `upgrade-stopped-agents` - The boot's agent upgrade (below) on its own, run
+  from the workspace root with `uv run --no-sync upgrade-stopped-agents`. The
+  update-self apply runs it once an update that re-synced the workspace venv has
+  landed, and its `rollback-last` once it has put such an update's venv back, so
+  the agents stopped then get files that match the mngr just installed. The chat
+  app is running then, so an agent that it (or anything else) starts after the
+  pass's listing is restarted by `mngr upgrade`; that outcome is a warning. It
+  prints one line per outcome on stderr and exits 0 whatever the pass finds.
 
 ## What it does
 
@@ -24,7 +32,45 @@ service.
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
    may start by itself; a workspace that already existed never gets it.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **Agent upgrade** (step id `upgrade_agents`) - runs `mngr upgrade` with the
+   workspace venv's mngr on every local agent `mngr list` reports `STOPPED`, so
+   agents an older mngr created get the current mngr-generated hooks and scripts
+   and stay stopped. At a real boot nothing has started a chat or worker yet, so
+   they are all stopped; a running agent is never named, since `mngr upgrade`
+   would restart an idle one behind the chat app. Skipped while an update apply
+   is in flight (`data/.state/update-apply/marker.json`: bootstrap also reruns on
+   the apply's restarts, with chats live) and when this boot's venv sync failed.
+   A `mngr start --restart system-services` also reruns it with chats live:
+   they read running and are left out, but an agent listed `STOPPED` that one of
+   them starts before `mngr upgrade` reaches it (a message to a stopped worker,
+   say) is restarted by `mngr upgrade`; that outcome is a warning. Bounded and
+   best-effort: its outcome lines go to the boot log, and nothing it does stops
+   the boot. An agent removed between the listing and `mngr upgrade` makes that
+   pass upgrade nothing, since mngr resolves every id before it upgrades any; the
+   next pass retries. A pass stopped at its 60 s bound on `mngr upgrade` can leave
+   one agent with only some of its new files in place until the next pass.
+
+   `data/.state/agent_upgrade/coverage.json` names the mngr that last left every
+   agent current, as the commit each of its installed packages (mngr and its
+   plugins) came from, read from their `direct_url.json` in the venv. A pass
+   writes it only when the listing succeeded (exit 0, every line an `id|state`
+   row), every agent but the one running the pass (`MNGR_AGENT_ID`, the services
+   agent at boot) read `STOPPED`, and `mngr upgrade` (run with `--format jsonl`)
+   reported each of those upgraded or current, or skipped as one its harness has
+   no upgrade for (an `UNSUPPORTED` skip, which no later pass would change); a
+   failure, a timeout or any other skip (an agent whose state could not be read,
+   or that something started meanwhile) leaves no record, and any pass that
+   writes none removes it. An update apply that re-synced the venv removes it
+   too when it rolls back, or `recover` rolls it back, since the merged tree's
+   mngr may have created agents before then. update-self also removes it before
+   each of its own runs of `upgrade-stopped-agents`, so those never skip on it:
+   an apply or `rollback-last` from a release before the record moves the venv
+   and the agents without removing it. While it names the venv's mngr, the step
+   starts no mngr process at all, so only the first boot after the mngr changes
+   or an update re-syncs the venv does any work. A venv whose mngr was not
+   installed from a commit (an editable checkout) never gets a record and is
+   upgraded at every boot.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

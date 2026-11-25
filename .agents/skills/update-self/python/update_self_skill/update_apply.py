@@ -29,11 +29,11 @@ import time
 import tomllib
 import traceback
 from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
-from update_self_skill import tool_env, user_packages
+from update_self_skill import tool_env, user_packages, venv_links
 from update_self_skill.update_apply_contract import (
     ENV_DRI_AGENT,
     PHASE_BUILT,
@@ -162,6 +162,54 @@ _RESTART_TIMEOUT_SECONDS = 600.0
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 # own-process: other-tier -- update-self runs on the bare tier, and env-converge is the merged tree's venv-tier command
 _ENV_CONVERGE_UPGRADE_ARGV = ("uv", "run", "--no-sync", "env-converge", "upgrade")
+
+# own-process: other-tier -- update-self runs on the bare tier, and the stopped-agent upgrade is the venv-tier bootstrap package's command
+_UPGRADE_STOPPED_AGENTS_ARGV = ("uv", "run", "--no-sync", "upgrade-stopped-agents")
+# Past the bounds the command puts on its own `mngr list` and `mngr upgrade`.
+_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS = 180.0
+# The stopped-agent pass's record of the mngr that last left every agent current.
+_AGENT_UPGRADE_COVERAGE_RECORD = Path("data/.state/agent_upgrade/coverage.json")
+
+
+def _forget_agent_upgrade_coverage(repo_root: Path) -> None:
+    """Remove the record that would let the stopped-agent pass skip every agent."""
+    record = repo_root / _AGENT_UPGRADE_COVERAGE_RECORD
+    try:
+        record.unlink(missing_ok=True)
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not remove {record} ({exc}).\n")
+
+
+def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
+    """Drop the agent-upgrade record, then bring the stopped agents' mngr-generated files to the workspace venv's
+    mngr, relaying what the pass says on stderr; only the drop when the venv has no such command (a tree from
+    before it). Never raises: the tree it runs on is already live."""
+    # An apply or rollback-last from before the record changes the venv and the agents without dropping it.
+    _forget_agent_upgrade_coverage(repo_root)
+    if not (
+        repo_root / venv_links.VENV_NAME / "bin" / _UPGRADE_STOPPED_AGENTS_ARGV[-1]
+    ).exists():
+        return
+    try:
+        result = runner.run_process_group(
+            list(_UPGRADE_STOPPED_AGENTS_ARGV),
+            cwd=str(repo_root),
+            env=dict(os.environ),
+            timeout=_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        sys.stderr.write(
+            f"warning: could not upgrade the stopped agents ({type(exc).__name__}: {exc}).\n"
+        )
+        return
+    for line in (getattr(result, "stderr", "") or "").splitlines():
+        if line.strip():
+            sys.stderr.write(f"agent upgrade: {line}\n")
+    if result.returncode != 0:
+        sys.stderr.write(
+            f"warning: upgrading the stopped agents exited {result.returncode}.\n"
+        )
+
 
 # The services restart a moment earlier re-runs the one-shot env-converge program,
 # and an update that advances a unit's pins (a browser engine, a desktop stack) can
@@ -1571,6 +1619,9 @@ def apply_update(
             f"rolling back to {marker.rollback_to[:12]} and restoring the "
             "workspace...\n"
         )
+        # The merged tree's mngr may have created agents before this rollback.
+        if plan.resyncs_venv:
+            _forget_agent_upgrade_coverage(repo_root)
         try:
             _restore_tree(name_status, marker.rollback_to, repo_root, runner)
             _commit_rollback(
@@ -1621,6 +1672,23 @@ def apply_update(
             now,
         )
         return 3
+
+    # Only a re-synced venv can hold another mngr.
+    if plan.resyncs_venv:
+        # A rollback-last of the point just kept would move the venv and the agents' files under the pass.
+        try:
+            with (
+                _holding_rollback_point_lock(repo_root)
+                if keep_rollback_point
+                else nullcontext()
+            ):
+                _upgrade_stopped_agents(repo_root, runner)
+        except RollbackPointBusyError:
+            _forget_agent_upgrade_coverage(repo_root)
+            sys.stderr.write(
+                "warning: a rollback or confirm of the rollback point just kept is running, so the "
+                "stopped agents were not upgraded; the next boot retries.\n"
+            )
 
     # CLEANUP: remove this block with tool_env.remove_app_tool_installs.
     # Only once the merged tree is live and healthy, and before env-converge re-captures
@@ -1891,6 +1959,7 @@ def _holding_rollback_point_lock(repo_root: Path) -> Generator[None, None, None]
 # What the notice reads while a rollback runs, step by step.
 _ROLLBACK_PROGRESS_REVERTING = "Reverting the update"
 _ROLLBACK_PROGRESS_RESTORING = "Restoring the previous version"
+_ROLLBACK_PROGRESS_UPGRADING_AGENTS = "Bringing your chats up to date"
 _ROLLBACK_PROGRESS_RESTARTING = "Restarting"
 _ROLLBACK_PROGRESS_CHECKING = "Checking that everything came back"
 SERVICES_RESTART_COMMAND = "mngr start --restart system-services"
@@ -2093,11 +2162,12 @@ def _run_rollback(
     ).splitlines()
     # The venv is never copied aside (the apply swapped a fresh one in and deleted the
     # old), so an update that re-synced it is undone by syncing the restored tree.
-    if plan_apply(
+    resyncs_venv = plan_apply(
         changed,
         read_provisioner_inputs(repo_root),
         user_packages.user_packages(repo_root),
-    ).resyncs_venv:
+    ).resyncs_venv
+    if resyncs_venv:
         try:
             sync_workspace_venv(repo_root, runner, keep_protected)
         except (ApplyFailed, OSError, RuntimeError) as exc:
@@ -2112,6 +2182,11 @@ def _run_rollback(
         _settle_rollback_record(record, repo_root, reason)
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
+    if resyncs_venv:
+        _record_rollback_progress(
+            record, repo_root, _ROLLBACK_PROGRESS_UPGRADING_AGENTS
+        )
+        _upgrade_stopped_agents(repo_root, runner)
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)
         for path in changed
@@ -2345,6 +2420,9 @@ def recover(
         read_provisioner_inputs(repo_root),
         user_packages.user_packages(repo_root),
     )
+    # The merged tree's mngr may have created agents before the apply was interrupted.
+    if plan.resyncs_venv:
+        _forget_agent_upgrade_coverage(repo_root)
     try:
         # Before anything commits: an apply killed inside its merge left the
         # merge staged, and committing on top of that would land it instead of
