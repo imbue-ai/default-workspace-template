@@ -34,12 +34,15 @@ the user apps no window is showing. The main chat is not among them: the chat ap
 soon as it stops, so the candidates command lists it under "Also holding memory, not candidates"
 with that reason.
 
-**A scheduled run** may stop **any** app the candidates command's apps section lists, windows open
-or not. That section is the boundary, and it is drawn so that everything in it can be brought back:
-it holds no critical app (the shell, the chat and the terminal are what the workspace is reached and
+**A scheduled run** may stop **any** app the candidates command lists under "Apps the workspace may
+stop" (`apps.candidates` in `--json`), windows open or not. Those candidates are the boundary, and
+they are drawn so that everything among them can be brought back:
+they hold no critical app (the shell, the chat and the terminal are what the workspace is reached and
 talked to through), nothing sharing a critical app's program, nothing internal, and nothing without
 a supervisord program to start again.
-Nothing outside it is yours to stop -- not a service, not the shell, not the user's data.
+Nothing outside them is yours to stop -- not a service, not the shell, not the user's data, and not a
+row under "Also holding memory, not candidates" (`others`), which lists those to say what holds
+memory, not to offer them.
 
 Tell the two apart by who dispatched the run (before the Step 2a handoff, run the workspace's own
 `.agents/skills/update-self/scripts/update_self.py` instead of the staged copy):
