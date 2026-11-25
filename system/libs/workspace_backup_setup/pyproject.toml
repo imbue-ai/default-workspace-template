@@ -8,6 +8,7 @@ dependencies = [
     # The parser of restic.env and the restic wrapper the backup service itself uses.
     "host-backup",
     "imbue-common",
+    "loguru>=0.7",
     "pydantic>=2.0",
 ]
 

@@ -37,6 +37,7 @@ from host_backup.config import (
 from host_backup.restic import init_repo, run_restic
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from loguru import logger
 from pydantic import Field
 
 from workspace_backup_setup.errors import (
@@ -161,11 +162,17 @@ def _is_initializer_live(record: Mapping[str, object], proc_root: Path) -> bool:
 
 
 def _read_state_record(workspace_root: Path) -> dict[str, object] | None:
+    path = workspace_root / SETUP_STATE_RELATIVE_PATH
     try:
-        raw: object = json.loads(
-            (workspace_root / SETUP_STATE_RELATIVE_PATH).read_text(encoding="utf-8")
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "Could not read the backup setup's state at {}: {}; reading it as none",
+            path,
+            e,
         )
-    except (OSError, ValueError):
         return None
     return (
         {str(key): value for key, value in raw.items()}

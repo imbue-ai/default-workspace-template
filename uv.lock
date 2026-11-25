@@ -4998,6 +4998,7 @@ source = { editable = "system/libs/workspace_backup_setup" }
 dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
+    { name = "loguru" },
     { name = "pydantic" },
 ]
 
@@ -5011,6 +5012,7 @@ dev = [
 requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=65093d119f2572bd8983593546061cca320093ee" },
+    { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 

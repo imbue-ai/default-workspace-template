@@ -55,6 +55,14 @@ def test_no_credentials_ever_sent_reads_as_none(workspace_root: Path) -> None:
     assert read_setup_status(workspace_root, _PROC_ROOT) == BackupSetupStatus(state=BackupSetupState.NONE)
 
 
+def test_a_state_file_that_is_not_json_reads_as_none(workspace_root: Path) -> None:
+    state_path = workspace_root / SETUP_STATE_RELATIVE_PATH
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{ not json")
+
+    assert read_setup_status(workspace_root, _PROC_ROOT) == BackupSetupStatus(state=BackupSetupState.NONE)
+
+
 def test_credentials_initialise_the_repository_and_only_then_write_restic_env(
     workspace_root: Path, fake_restic_control: Path
 ) -> None:
