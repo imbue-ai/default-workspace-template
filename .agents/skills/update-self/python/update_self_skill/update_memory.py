@@ -29,7 +29,7 @@ MEMORY_CANDIDATES_REL = (
     Path("system") / "services" / "oom_priority" / "bin" / "memory_candidates.py"
 )
 
-# The tool lists every agent through `mngr list` (60s at most) and asks two services (10s each).
+# Longer than the tool gives its own `mngr list` and service calls, so it answers first.
 TOOL_TIMEOUT_SECONDS = 120.0
 _KIB_PER_MIB = 1024
 

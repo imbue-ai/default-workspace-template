@@ -33,7 +33,7 @@ CODE_CHECKER_MARKERS: Final[tuple[str, ...]] = (
 _AGENT_DIR: Final[re.Pattern[str]] = re.compile(r"/\.?mngr/agents/(agent-[^/\s]+)")
 
 # The final component of every Screen browser's Chromium profile dir
-# (screen.primitives.BROWSER_PROFILE_DIR_PREFIX), which the rest of names the browser.
+# (screen.primitives.BROWSER_PROFILE_DIR_PREFIX); what follows it is the browser's name.
 BROWSER_PROFILE_DIR_PREFIX: Final[str] = "browser-use-user-data-dir-"
 _USER_DATA_DIR_FLAG: Final[str] = "--user-data-dir="
 
