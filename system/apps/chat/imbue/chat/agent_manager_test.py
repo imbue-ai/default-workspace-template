@@ -8183,12 +8183,11 @@ def test_a_handoff_stuck_in_draining_off_an_agy_chat_resumes_and_switches(
         manager._resume_handoffs()
         record = _wait_until_settled(store, ChatId(first))
         assert [entry.agent_id for entry in record.agents] == [first, successor]
-        # The retiring agy agent was stopped and archived and a codex successor created, as on any harness.
-        # Stop and archive are both done before the create; which of the two comes first is the
-        # switch's own ordering, not this test's subject.
+        # The retiring agy agent was archived, then stopped while a codex successor was created, as on
+        # any harness. The stop and the create run concurrently (``_create_successor_while_stopping``),
+        # so either may finish first; only the archival rename is ordered before both.
         commands = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert commands[-1] == "create"
-        assert sorted(commands[:-1]) == ["rename", "stop"]
+        assert commands[0] == "rename" and sorted(commands[1:]) == ["create", "stop"]
         # The drain ran, and the queue it took is the composer's rather than the successor's.
         assert sent[0][1].startswith("/handoff-summary ")
         assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
