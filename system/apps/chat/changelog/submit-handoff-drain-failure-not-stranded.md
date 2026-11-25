@@ -1,0 +1,1 @@
+- A switch to another provider that fails while taking the chat's queued messages back is undone: the chat stays on the agent it was on, takes messages again, and can be switched again. Before, it stayed mid-switch, holding every message for an agent that was never made, until the chat app restarted.
