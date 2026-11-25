@@ -1,184 +1,198 @@
 ---
 name: use-ai-integration
-description: Use when writing or reasoning about code that calls Claude -- an AI-driven app or service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
+description: Use when writing or reasoning about code that calls an AI model -- an AI-driven app or service, an AI integration, or a skill's scripted [ai-script] step. Covers the library that calls any of the workspace's signed-in AI accounts (Anthropic, OpenAI, Google, Opencode Go, OpenRouter, API keys), which account a call uses, what each account type supports from code, the three scenarios (one-shot completion, one-shot agentic task, full agent), and the cost and usage-limit model.
 metadata:
   author: imbue
 ---
 
-# Calling Claude from code
+# Calling a model from code
 
-This is the shared reference for the mechanics of calling Claude from code:
-which path to use, the call surface, and the cost model. Whatever sent you here
--- building an AI-driven app or service, scripting a skill's `[ai-script]` step, or
-adding an AI integration elsewhere -- supplies the framing; this skill is the
-how.
+This is the shared reference for calling a model from code. Whatever sent you
+here -- building an AI-driven app or service, scripting a skill's `[ai-script]`
+step, or adding an AI integration elsewhere -- supplies the framing; this skill
+is the how.
 
-Code reaches Claude in one of two ways, depending on whether an
-`ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
-directly; without one, use the `claude -p` helper in this skill's
-`python/use_ai_integration_skill/claude_p.py`.
+One library does it: `use_ai_integration_skill.ai`, with `complete()` and
+`run_task()`. Each call runs on one of the workspace's signed-in accounts:
+through the vendor's own CLI (`claude -p`, `codex exec`, `agy`, `pi`) on a
+sign-in or key, and through litellm on an Anthropic or OpenAI API key. Never
+hand-roll a litellm or CLI call: the library picks the account and its
+credential, keeps the child process from being mistaken for the agent that
+started it, and reports how the call was billed.
 
-Credentials live in a provider account under `~/.minds/accounts/<id>/`, written
-by the provider chooser and pointed at by `CLAUDE_CONFIG_DIR`. NOT in the
-process environment -- services inherit a frozen env from supervisord, so an
-env-var check goes stale when the user changes auth.
+## Contents
 
-Inside an agent the variable is always set, so a skill script, a worker and the
-agent itself all use the account that chat is bound to. Outside one -- a
-supervisord service, a cron job -- nothing sets it and `claude_p.py` falls back
-to the workspace's default Claude account (the pinned default, else the most
-recently used one), for both its resolver and the `claude -p` it launches.
-Either way, use its resolver rather than reading a path yourself:
-
-```bash
-uv run --no-sync python -c "from use_ai_integration_skill.claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
-```
-
-**Keyed setups snapshot the key at setup time.** When the check says `keyed`,
-copy the API key (and the proxy base URL that goes with it) into
-`data/.secrets/anthropic.env` as part of setting up the integration, and have
-the service load its credentials from there -- `read_workspace_ai_credentials()`
-already resolves that file first, so callers using it get this for free. Run
-once while setting up:
-
-```bash
-uv run --no-sync python -c "from use_ai_integration_skill.claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
-```
-
-Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
-(a subscription token cannot authenticate direct API calls, and the writer
-refuses it). The snapshot pins the integration: if the user later switches the
-workspace's sign-in (e.g. to a subscription), built services keep billing
-against the key they were set up with. To retire an integration, delete
-`data/.secrets/anthropic.env` when the user asks; to re-key one, delete it and run
-the snapshot writer again. Never edit the file: the snapshot writer is the one
-program-mediated copy the secrets guard allows (its command names neither the
-value nor the path), and the guard refuses the direct reads and writes of
-`data/.secrets/` it recognises (see the `connect-external-service` skill).
-
-Which path applies rarely changes for a deployment, so **do not branch on it at
-call time in simple flows** -- but keyed callers must still resolve the
-key/base URL via `read_workspace_ai_credentials()` at each call (not once at
-import), so a deliberate re-snapshot takes effect without a service restart.
-
-A caller's model is set **in the code** -- expose it as a top-of-file constant
-plus a `--model` override (e.g. `WRITE_MODEL = "claude-haiku-4-5"`), so switching
-it is a one-line change. It is independent of the chat's `/model`, which changes
-only the conversation.
+- [Pick the scenario](#pick-the-scenario-weakest-that-does-the-job)
+- [Which account a call uses](#which-account-a-call-uses)
+- [What each account type supports](#what-each-account-type-supports)
+- [Adding the library](#adding-the-library)
+- [Scenario 1: one-shot completion](#scenario-1-one-shot-completion)
+- [Scenario 2: one-shot agentic task](#scenario-2-one-shot-agentic-task)
+- [Scenario 3: full agent](#scenario-3-full-agent)
+- [Pinning an Anthropic API key](#pinning-an-anthropic-api-key)
+- [Cost and usage limits](#cost-and-usage-limits)
 
 ## Pick the scenario (weakest that does the job)
 
-The call falls into one of three scenarios, by how much agency Claude
+The call falls into one of three scenarios, by how much agency the model
 needs. Pick the weakest -- it is cheaper, faster, and simpler.
 
-1. **One-shot completion** -- no agency: classify, summarize, extract, rewrite,
-   answer-from-context. One prompt, one response, no tools. The common case.
-2. **One-shot agentic task** -- a single self-contained job that needs tools or
-   file access ("read this file and act", "summarize the diff with the repo
-   open"). This is also how you **search the web** -- `claude -p` has a built-in
-   `WebSearch` tool.
+1. **One-shot completion** (`complete()`) -- no agency: classify, summarize,
+   extract, rewrite, answer-from-context. One prompt, one response, no tools.
+   The common case.
+2. **One-shot agentic task** (`run_task()`) -- a single self-contained job that
+   needs tools or file access ("read this file and act", "summarize the diff
+   with the repo open"). On an Anthropic account this is also how you **search
+   the web**.
 3. **Full agent** -- a full, possibly long-running agent that runs in its **own
    git worktree** (a `launch-task` worker). Reach for this over scenario 2 when
-   Claude edits code that must be tested and validated, or when several agents
-   work in the same repo and their changes must not collide. **User- or
+   the model edits code that must be tested and validated, or when several
+   agents work in the same repo and their changes must not collide. **User- or
    error-triggered only, never an autonomous loop**, with a tightly-scoped task.
 
-## Scenario 1 -- one-shot completion
+## Which account a call uses
 
-For a plain completion with **no tools**. If the step needs a tool at all --
-web search or otherwise -- reach for an agent (scenario 2), not a server-side
-provider tool bolted onto a completion. A server-side tool runs on the provider
-that hosts it, welding the step to one vendor, and drags a plain completion onto
-a fragile tool code path; an agent's built-in tools have neither problem.
+With no `account` argument, a call runs on the workspace's default account
+among all its accounts: the pinned default, else the most recently used, else
+the oldest. Neither the current chat's own account nor a credential in the
+calling process's environment is consulted, so a call made from inside a chat
+can run on a different account than the chat does. To use a specific account,
+pass its id: `complete(..., account="<id>")`. Accounts are read on every
+call, and with none pinned the default follows the user's latest chat. List
+them, with the default and each one's billing:
 
-**Keyed (`ANTHROPIC_API_KEY` set): call litellm directly.** It is cheaper than
-`claude -p` for non-agentic work, and it gives you structured output, tools,
-temperature, etc. with no wrapper of ours in the way. `litellm` is in the root
-`pyproject.toml`; read its docs for the call surface. Sketch:
-
-```python
-from litellm import completion, completion_cost
-
-from claude_p import read_workspace_ai_credentials  # the file you copied in
-
-# Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
-# first (see setup above), then the Claude account's settings, then the process
-# env. litellm reads differently-named vars and is picky about a trailing
-# slash, so pass both explicitly.
-creds = read_workspace_ai_credentials()
-api_base = (creds.base_url or "").rstrip("/") or None
-
-resp = completion(
-    model="claude-haiku-4-5",
-    api_key=creds.api_key,
-    api_base=api_base,
-    messages=[
-        {"role": "system", "content": "You are an email triage classifier."},
-        {"role": "user", "content": email_body},
-    ],
-)
-text = resp.choices[0].message.content
-cost = completion_cost(completion_response=resp)  # USD for this call
+```bash
+uv run --no-sync python -c "from use_ai_integration_skill.ai import list_accounts; [print(row) for row in list_accounts()]"
 ```
 
-**Keyless (no key): copy this skill's `python/use_ai_integration_skill/claude_p.py` and call `claude_p_completion`.**
-It disables tools and runs from an isolated working directory so the repo's
-`CLAUDE.md` / `.claude` hooks can't hijack the answer; `system` is required.
+**A plan sign-in is for its owner's own use.** An app or automation that other
+people use (through a sharing link, or as other people in this workspace) runs
+on an API-key account -- one whose listing shows `billing` `api_key`, and not a
+coding or token plan's key -- named with `account=`: Anthropic does not allow
+routing other people's requests through plan credentials, OpenAI recommends API
+keys for automation, and an Opencode Go key is a subscription. Google's rule is
+stricter (below).
+
+## What each account type supports
+
+| Signed in with | `complete()` | `run_task()` | Cost reported | Billed as |
+|---|---|---|---|---|
+| Anthropic: Claude plan or long-lived token | `claude -p`, no tools | `claude -p` | -- | the plan's usage limits |
+| Anthropic: API key (also through a proxy) | litellm, no tools | `claude -p` on the key | yes | per token |
+| Anthropic: Console sign-in | `claude -p`, no tools | `claude -p` | yes | per token |
+| OpenAI: ChatGPT plan | `codex exec`, an agent | `codex exec` | -- | the plan's usage limits |
+| OpenAI: API key | litellm, no tools | `codex exec` on the key | `complete()` only | per token |
+| Google sign-in | `agy`, an agent | `agy` | -- | the plan's usage limits |
+| Opencode Go | `pi`, no tools | `pi` | -- | the subscription |
+| OpenRouter, or a key added through the API key option | `pi`, no tools | `pi` | yes | per token |
+
+Caveats: a Google sign-in on a Cloud project's Pay As You Go bills per token,
+reported as `subscription`; Opencode Go spends its pay-as-you-go balance once
+Extra Usage is on, and is meant for coding-agent traffic; a coding or token plan
+key (ZAI, Kimi For Coding, Qwen, Xiaomi) spends the plan's quota, and its
+`cost_usd` is a list price.
+
+On a ChatGPT or Google sign-in a completion is an agent turn that can still
+read files (and, on Google, fetch web pages), so untrusted text (emails, web
+pages, other people's messages) goes to an account whose `complete()` has no
+tools -- Anthropic, a `pi` account or an OpenAI key -- named with `account=`.
+
+Google's [FAQ](https://antigravity.google/docs/faq) calls wrapping `agy` in any
+third-party app or coding agent unsupported on consumer plans, and its
+[Terms](https://antigravity.google/terms) (clause 6) call third-party access a
+breach that may get the Google account suspended or terminated. The library
+still runs `agy` on a Google sign-in, as chats do: keep that for the owner's own
+scripting, and have any app or automation call Gemini on a Gemini API key (the
+API key option's Google Gemini provider).
+
+Model ids, flags, and what each CLI leaves in the account folder:
+[references/providers.md](references/providers.md). An account of a type the
+library does not know raises `UnsupportedProviderError`.
+
+## Adding the library
+
+- **A skill**: add `"use-ai-integration-skill"` to the dependencies in its
+  `python/pyproject.toml`, run `uv lock` and then `uv sync --all-packages` at the
+  repo root, and import `use_ai_integration_skill.ai` inside the subcommand
+  function that calls the model: importing it loads pydantic, which an entry
+  point may not load at import (`.agents/shared/references/running-python.md`).
+- **An app or service** (its own uv project under `system/apps/<name>/` or
+  `system/services/<name>/`): from that directory run
+
+  ```bash
+  uv add --editable ../../../.agents/skills/use-ai-integration/python
+  ```
+
+  and restart it the usual way; its program syncs its own venv at start.
+
+Services that hold a copy of `claude_p.py` keep working, but new code imports
+the library instead of copying the file.
+
+## Scenario 1: one-shot completion
 
 ```python
-from claude_p import claude_p_completion  # the file you copied in
+from use_ai_integration_skill.ai import complete
 
-result = claude_p_completion(
+CLASSIFY_ACCOUNT = "<id>"  # tool-less (Anthropic, a pi account, an OpenAI key): the email is untrusted
+CLASSIFY_MODEL = None  # None runs the account's default model
+
+result = complete(
     "Classify this email's intent:\n\n" + email_body,
-    system="You are an email triage classifier.",   # required
-    model="claude-haiku-4-5",
+    system="You are an email triage classifier.",
+    model=CLASSIFY_MODEL,
+    account=CLASSIFY_ACCOUNT,
 )
-print(result.text, result.cost_usd, result.usage)
+print(result.text, result.billing, result.usage)
 ```
 
-Both `completion` and `claude_p_completion` are synchronous (no asyncio). Once
-you have confirmed the prompt + model combination works and produces good
-results on a few items, run a batch concurrently with a thread pool
-(`concurrent.futures.ThreadPoolExecutor`) rather than one at a time -- the
-throughput difference is large. Use enough workers to actually saturate the work
-(the calls are I/O-bound, so this can be well into the dozens); back off only if
-you hit provider rate limits. When you need structured output, prefer the
-provider's own JSON / structured-output mode over parsing free text and retrying
--- it is what keeps the response well-formed.
+- **Tools**: none on Anthropic, a `pi` account or an API key; an agent on a
+  ChatGPT or Google sign-in, where `system` only leads the prompt. A step that
+  needs a tool, web search included, is scenario 2.
+- **One prompt, no streaming**: put a conversation's earlier turns in the
+  prompt text; the answer arrives whole.
+- **The model is set in the code**: a top-of-file constant plus a `--model`
+  override, independent of the chat's `/model`. Code that sets a model id also
+  passes `account=`, so the provider cannot change under it. Each account
+  type's default for `None` is in providers.md.
+- **Calls are synchronous.** Once a few items give good results, run a batch on
+  a `concurrent.futures.ThreadPoolExecutor`: dozens of workers on an API key
+  through litellm, but a few on a CLI account (`claude -p`, `codex`, `agy`,
+  `pi`), where each worker is a whole agent process; measure, and back off on
+  rate limits.
+- **Structured output**: ask for JSON matching a pydantic model, validate it,
+  and on a validation error retry once with the error appended to the prompt.
+- **Errors** (`use_ai_integration_skill.errors`): `AICallError` and its
+  subclasses `NoUsableAccountError`, `UnsupportedProviderError`,
+  `EmptySystemPromptError`, `ModelRequiredError` (a `pi` provider with no
+  default model), `ProviderCallError` and `ProviderTimeoutError`. Let them fail
+  the step loudly.
 
-## Scenario 2 -- one-shot agentic task
-
-Always `claude -p` (it has tools and file access; a plain API call does not), so
-this path is the same whether or not a key is set. Copy this skill's
-`python/use_ai_integration_skill/claude_p.py` and
-call `claude_p_task`: tools stay enabled, it runs in the repo working directory,
-and it defaults `permission_mode="bypassPermissions"` (load-bearing -- a headless
-run has no human to approve tool use).
+## Scenario 2: one-shot agentic task
 
 ```python
-from claude_p import claude_p_task
+from use_ai_integration_skill.ai import run_task
 
-result = claude_p_task(
+result = run_task(
     "Read data/.apps/email-triage/latest.json and draft a reply using templates/.",
-    append_system="Only touch files under data/.apps/email-triage/.",
+    instructions="Only touch files under data/.apps/email-triage/.",
+    cwd="/home/user/workspace",
 )
 ```
 
-`append_system` layers instructions on the default agent; pass `system` to
-replace it outright. The default agent prompt is many tokens, but it is useful
-instruction for agentic work, so overwrite it only when you have a good reason.
-Cost is dominated by per-call overhead, so **batch** items into fewer, larger
-calls rather than one call per item.
+It runs `claude -p` with permission prompts bypassed, `codex exec` without
+codex's own sandbox, `agy` with permissions skipped, or `pi` (which has no
+approval step), in `cwd` (by default the current directory) with file and
+shell access, so scope `instructions` tightly and never give it untrusted
+input. `instructions` layer on the CLI's default agent rather than replace it.
+On an Anthropic account the agent can search the web; on any other account,
+fetch the pages in code and pass their text to `complete()`. Per-call overhead
+dominates, so **batch** items into fewer, larger calls rather than one call per
+item.
 
-## Scenario 3 -- full agent
+## Scenario 3: full agent
 
-Reach for this over scenario 2 when the work needs its **own git worktree**:
-Claude is editing code that has to be tested and validated, or other agents are
-working in the same repo and the changes must not collide. A `launch-task` worker
-gives the run an isolated branch and worktree; scenario 2 instead runs in the
-caller's own working directory.
-
-Launch the worker synchronously and collect its structured result -- do not wrap
+A `launch-task` worker gives the run its own branch and worktree; scenario 2
+runs in the caller's own working directory. Launch the worker synchronously and collect its structured result -- do not wrap
 it; call the script directly:
 
 ```bash
@@ -197,39 +211,56 @@ left something behind sets `destroy_failed` and exits non-zero, with the
 result still written).
 Write the task file first with `finish_report_path` frontmatter
 (see the `launch-task` skill). **User- or error-triggered, tightly scoped** -- a
-broad unattended launch is how cost and time run away. What to do with the
-returned branch (merge, review) is your concern.
+broad unattended launch is how cost and time run away.
 
-## Cost and the keyed onramp
+## Pinning an Anthropic API key
 
-A keyless caller can tell the user what each call costs and what a key would save,
-so they can decide when volume justifies setting `ANTHROPIC_API_KEY`:
+When the account an integration calls (the default, or the one it names with
+`account=`) was added under the Anthropic option and its listing shows
+`billing` `api_key`, pin its key once, while setting up, so the integration
+keeps billing that key after the user switches sign-in:
 
-- `claude_p_completion` / `claude_p_task` return the **actual** `cost_usd` that
-  `claude -p` reported, plus the token `usage`.
-- Reprice that usage at the keyed model's rate with litellm to estimate the
-  savings -- no price table to maintain, litellm carries the prices:
+```bash
+uv run --no-sync python -c "from use_ai_integration_skill.ai import pin_anthropic_key; print(pin_anthropic_key())"
+```
 
-  ```python
-  from litellm import cost_per_token
+Pass `pin_anthropic_key("<id>")` for a named account. It snapshots that
+account's key (and the proxy base URL that goes with it) into
+`data/.secrets/anthropic.env`, and refuses any other account.
 
-  prompt_cost, completion_cost = cost_per_token(
-      model="claude-haiku-4-5",
-      prompt_tokens=result.usage.input_tokens,
-      completion_tokens=result.usage.output_tokens,
-  )
-  keyed_estimate = prompt_cost + completion_cost
-  savings = result.cost_usd - keyed_estimate   # surface this to suggest a key
-  ```
+- Only the key and base URL go in the snapshot, never a subscription token
+  (`CLAUDE_CODE_OAUTH_TOKEN`; the writer refuses it).
+- The snapshot pins **every** call from code on an Anthropic-option account,
+  `complete()` and `run_task()`, to that key; `result.account_id` still names
+  the account. A key added through the API key option runs on `pi`, unpinned.
+- To retire an integration, delete `data/.secrets/anthropic.env` when the user
+  asks; to re-key it, delete the file and run the snapshot writer again.
+- Never edit the file: the snapshot writer is the one program-mediated copy the
+  secrets guard allows, and the guard refuses direct reads and writes of
+  `data/.secrets/` (see the `connect-external-service` skill).
 
-- **Measure before scaling, don't guess.** Run **one real unit** of the work,
-  read its **actual** cost and wall-clock off the response (`completion_cost(...)`
-  or `result.cost_usd`, not a token estimate), and extrapolate to the full run
-  (`N x per-unit`, plus any retries and per-tool/search fees, divided by your pool
-  size for wall-clock). Tell the user that projected cost/time before you turn on
-  a volume flow.
+## Cost and usage limits
+
+Read `result.billing`:
+
+- `"subscription"`: the call drew on the plan's usage limits, the same limits
+  the user's own chats use. `result.cost_usd` is `None`; never quote a dollar
+  figure for it. Describe its volume in calls and tokens (`result.usage`).
+- `"api_key"`: billed per token, and `result.cost_usd` is the dollars (`None`
+  when litellm has no price for the model, and for `codex exec` on a key, which
+  reports none; on a `pi` account it is pi's list price, not a coding or token
+  plan's charge).
+
+**Measure before scaling, don't guess.** Run **one real unit** of the work, read
+its usage (and its cost, on a key) and wall-clock, and extrapolate to the full
+run (`N x per-unit`, plus retries, divided by your pool size for wall-clock).
+Tell the user before turning on a volume flow: on a subscription, in calls and
+tokens, and that it draws on the same limits as their own chats; on a key, in
+dollars. Only when the user asks what a subscription flow would cost on a key,
+reprice `result.usage` with litellm's `cost_per_token` for a named model, as an
+estimate.
 
 See [references/billing-and-credentialing.md](references/billing-and-credentialing.md)
-for the billing buckets, why `claude -p` costs more than the direct API, the
-credentialing model, and the footgun (a stray `ANTHROPIC_API_KEY` switches
-`claude -p` to full-API billing).
+for the billing buckets, whose use a plan sign-in covers, how credentials are
+resolved, and the footguns (a stray provider key in the environment switches a
+CLI to that key).

@@ -530,12 +530,12 @@ sync `def`, and the starter runs on the threaded Werkzeug server
 (`run_simple(..., threaded=True)`), so concurrent requests are handled
 by separate threads -- no asyncio needed.
 
-### Calling Claude from your service
+### Calling a model from your service
 
-If your service needs to call Claude (classify/summarize content, run a one-shot
+If your service needs to call a model (classify/summarize content, run a one-shot
 agentic task, or launch a full agent), follow the `use-ai-integration` skill: it
-picks the path (a keyed `litellm` call or the keyless `claude_p.py` helper),
-covers the `claude -p` environment fix and the cost model, and saves you from
+covers the library that calls any of the workspace's signed-in AI accounts,
+how the app adds it as a dependency, and the cost model, and saves you from
 hand-rolling the call.
 
 ### Always surface the raw data and its source

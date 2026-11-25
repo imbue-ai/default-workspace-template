@@ -35,7 +35,7 @@ The outline contains:
   extrapolate to a full run (`N x per-unit`, plus expected retries and any
   per-call fees). This lets the user approve the run cost at the outline gate
   rather than discovering it after the creation is built. For a step that calls
-  Claude, the AI-specific measurement technique is in the `use-ai-integration`
+  a model, the AI-specific measurement technique is in the `use-ai-integration`
   skill.
 
 When the outline is for a change to an existing skill, it also states the

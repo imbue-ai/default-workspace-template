@@ -94,13 +94,14 @@ validator fails the publish if the two disagree.
     - `requires_permission: <latchkey scope> / <permission>` for every service
       the code reaches through `latchkey curl` (e.g. `slack-api /
       slack-read-all`), with a matching `[[requirements.permission]]` in the TOML;
-    - `requires_llm: <how it reaches Claude, and what an adopter needs>` whenever
-      any included code calls an LLM, with a `[requirements.llm]` table. How an
-      agent reaches Claude differs by environment: keyed (`ANTHROPIC_API_KEY` ->
-      litellm) or keyless (`claude -p` on the subscription), per
-      `use-ai-integration`. Name the method the code was built for. If the code
-      hardcodes one path (a key, an endpoint, a model), also list switching it as
-      an adaptation;
+    - `requires_llm: <which account type the code was built for, and whether it
+      names an account or a model>` whenever any included code calls an LLM,
+      with a `[requirements.llm]` table. Code calls a model on one of the
+      workspace's signed-in accounts (Anthropic, OpenAI, Google, a `pi` key), per
+      `use-ai-integration`; `keyed` is an account billed per token, `keyless` a
+      plan sign-in. An account id the code names exists only in this workspace,
+      so list replacing it as an adaptation, as for a hardcoded key, endpoint or
+      model;
     - `requires_secret:` lines are generated, with their
       `[[requirements.secret]]` entries, from the included apps' `app.toml`
       `[[secrets]]` and skills' `secrets:` front matter. Leave them as they are; a

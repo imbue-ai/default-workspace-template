@@ -585,18 +585,18 @@ ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_
   and where to get it) -- normally generated, see above; declare a new one in
   the app's app.toml [[secrets]] or the skill's SKILL.md secrets: rather than
   writing it here by hand
-- requires_llm: <how the code reaches Claude, and what an adopter needs>
-  (include this line whenever the app calls an LLM: name the method it was
-  built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via
-  claude -p -- so an adopter on the other method knows to switch it per the
-  use-ai-integration skill)
+- requires_llm: <which account type the code was built for, and what an adopter
+  needs> (include this line whenever the app calls an LLM: name the account type
+  -- Anthropic, OpenAI, Google or a pi key; keyed if billed per token, keyless
+  on a plan sign-in -- and any account id or model the code names, since an
+  account id exists only in this workspace; see the use-ai-integration skill)
 
 Derive the real values from the included code (e.g. every service the app
 calls through \`latchkey curl\`, and whether any code calls an LLM). Example:
 - requires_permission: slack-api / slack-read-all (user-approved; adopting
   agent initiates during setup)
-- requires_llm: calls Claude via the keyed litellm path (ANTHROPIC_API_KEY set);
-  an adopter on the keyless subscription path must switch the model calls per
+- requires_llm: keyed; complete() on an Anthropic API-key account named by
+  account=; an adopter names one of their own accounts there per
   use-ai-integration
 
 These lines are what the ADOPTING agent acts on during setup, so a vague or

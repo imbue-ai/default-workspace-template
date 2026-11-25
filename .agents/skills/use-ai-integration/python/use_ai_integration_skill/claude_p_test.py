@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -242,11 +243,48 @@ def _make_default_account(home: Path) -> Path:
     )
 
 
+def _use_accounts_under(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``home`` the HOME and its ``.minds/accounts`` the accounts root, as in a workspace."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(home / ".minds" / "accounts"))
+
+
+def test_minds_accounts_root_is_in_the_passwd_home_whatever_home_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MINDS_ACCOUNTS_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    root = Path(claude_p.minds_accounts_root())
+
+    assert root == Path(pwd.getpwuid(os.getuid()).pw_dir) / ".minds" / "accounts"
+    assert not root.is_relative_to(tmp_path)
+
+
+def test_minds_accounts_root_honours_the_override_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "elsewhere"))
+
+    assert claude_p.minds_accounts_root() == str(tmp_path / "elsewhere")
+
+
+def test_default_account_is_not_read_from_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _make_default_account(tmp_path)
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "empty-accounts"))
+
+    assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
+
+
 def test_child_env_keeps_the_agents_own_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Inside an agent, the child runs on the chat's account, not the workspace default."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     _make_default_account(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/the-chats-own")
 
@@ -275,7 +313,7 @@ def test_child_env_runs_on_the_default_claude_account(
     """Outside an agent, the child runs on the Claude account a chat created now would get:
     the pinned default when it is a Claude account, else the most recently used one when
     it is, else the oldest."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     accounts = _write_claude_accounts(
         tmp_path,
@@ -292,7 +330,7 @@ def test_child_env_leaves_config_dir_unset_without_an_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With no account to name, the child keeps claude's own default, ~/.claude."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
     assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
@@ -330,6 +368,7 @@ def _complete_from_a_service(tmp_path: Path, home: Path) -> dict[str, object]:
     stub.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
     env["HOME"] = str(home)
+    env["MINDS_ACCOUNTS_ROOT"] = str(home / ".minds" / "accounts")
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     stdin_read, stdin_write = os.pipe()
     try:
@@ -389,7 +428,7 @@ def _isolate_credential_sources_in_home(
     """Like ``_isolate_credential_sources``, but as a service sees it: no
     CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     _clear_credential_env_vars(monkeypatch)
 
 
@@ -421,6 +460,24 @@ def test_credentials_prefer_snapshot_over_settings(
 
     assert creds.api_key == "sk-pinned-key"
     assert creds.base_url == "https://pinned/"
+
+
+def test_a_snapshotted_key_never_takes_the_settings_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key pinned without a base URL stays on the direct API after the account moves to a proxy."""
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new-proxy/"}}'
+    )
+    snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\n")
+
+    creds = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
+
+    assert creds.api_key == "sk-pinned-key"
+    assert creds.base_url is None
 
 
 def test_credentials_fall_back_to_settings_without_snapshot(
@@ -526,3 +583,153 @@ def test_snapshot_path_is_the_workspace_secrets_dir_from_any_cwd() -> None:
     Code then diffs, key included, into the session transcript."""
     path = claude_p.ANTHROPIC_ENV_SNAPSHOT_PATH
     assert path == "/home/user/workspace/data/.secrets/anthropic.env"
+
+
+def test_child_env_runs_on_the_named_account_over_claude_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/chat")
+
+    env = claude_p._child_env(account_dir="/accounts/named")
+
+    assert env["CLAUDE_CONFIG_DIR"] == "/accounts/named"
+
+
+_AMBIENT_CREDENTIALS = {
+    "ANTHROPIC_API_KEY": "sk-ant-ambient",
+    "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
+    "ANTHROPIC_BASE_URL": "https://ambient/",
+    "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-ambient",
+}
+
+
+def _set_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in _AMBIENT_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_child_env_for_a_named_account_drops_the_process_envs_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_ambient_credentials(monkeypatch)
+
+    env = claude_p._child_env(account_dir="/accounts/named")
+
+    assert not set(_AMBIENT_CREDENTIALS) & set(env)
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-ambient"
+
+
+def test_child_env_without_a_named_account_keeps_the_process_envs_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _set_ambient_credentials(monkeypatch)
+
+    env = claude_p._child_env()
+
+    assert {name: env[name] for name in _AMBIENT_CREDENTIALS} == _AMBIENT_CREDENTIALS
+
+
+def test_credentials_of_a_named_account_ignore_the_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_credential_sources(tmp_path, monkeypatch)
+    _set_ambient_credentials(monkeypatch)
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+
+    named = claude_p.read_workspace_ai_credentials(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
+    )
+    unnamed = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
+
+    assert named == claude_p.WorkspaceAICredentials(
+        api_key=None, base_url=None, oauth_token=None
+    )
+    assert unnamed.api_key == "sk-ant-ambient"
+
+
+def test_write_snapshot_of_a_named_account_captures_its_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    chat_settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-chat-key"}}')
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+    (named_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-named-key"}}'
+    )
+
+    written = claude_p.write_anthropic_env_snapshot(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
+    )
+
+    assert Path(written).read_text() == "ANTHROPIC_API_KEY=sk-named-key\n"
+
+
+def test_credentials_read_the_named_account_not_claude_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    chat_settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-chat-key"}}')
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+    (named_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-named-key"}}'
+    )
+
+    creds = claude_p.read_workspace_ai_credentials(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
+    )
+
+    assert creds.api_key == "sk-named-key"
+
+
+# Stands in for claude: reports its working directory as the result text.
+_STUB_CLAUDE_REPORTING_CWD = """#!/usr/bin/env python3
+import json, os
+print(json.dumps({"subtype": "success", "result": os.getcwd(), "total_cost_usd": 0}))
+"""
+
+_HANGING_STUB_CLAUDE = """#!/usr/bin/env python3
+import signal
+signal.pause()
+"""
+
+
+def _put_stub_claude_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """Put a stub ``claude`` first on PATH, with HOME (so ~/.minds) an empty tmp dir."""
+    _use_accounts_under(tmp_path, monkeypatch)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(source)
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def test_task_runs_in_the_given_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _put_stub_claude_on_path(tmp_path, monkeypatch, _STUB_CLAUDE_REPORTING_CWD)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    result = claude_p.claude_p_task("do work", cwd=str(work_dir), timeout_seconds=8)
+
+    assert Path(result.text).resolve() == work_dir.resolve()
+
+
+def test_a_claude_that_outlives_its_timeout_raises_a_timeout_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _put_stub_claude_on_path(tmp_path, monkeypatch, _HANGING_STUB_CLAUDE)
+
+    with pytest.raises(claude_p.ClaudeCLITimeoutError, match="within 1s") as raised:
+        claude_p.claude_p_completion(
+            "hello", system="Answer briefly.", timeout_seconds=1.0
+        )
+
+    assert isinstance(raised.value, claude_p.ClaudeCLIError)
