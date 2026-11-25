@@ -34,12 +34,15 @@ folder per library. The library this workspace uses is `Default`, so the
 **data root** is `data/.skills/datalib/Default`, and the store's config file
 is `config.toml` inside it. `data/` is the workspace's own data tree on the
 persistent volume, so the store survives restarts. The binaries live in
-`~/.local/bin`, which is not on PATH for every shell, so establish all of
-this once at the top of your shell work:
+`/home/user/.local/bin`, which is not on PATH for every shell. The paths
+below are spelled out from the workspace's home, `/home/user`, not from
+`$HOME`: an agent's shell has `HOME=/root`, which is not the home the
+workspace and the Datalib app live under. Establish all of this once at the
+top of your shell work:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holding the store
+export PATH="/home/user/.local/bin:$PATH"
+DATA_ROOT="/home/user/workspace/data/.skills/datalib/Default"   # the data root holding the store
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
@@ -48,7 +51,7 @@ DATALIB_CONFIG="$DATA_ROOT/config.toml"
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
 # running, so run it every time:
-bash "$HOME/workspace/.agents/skills/datalib/scripts/install_datalib.sh"
+bash /home/user/workspace/.agents/skills/datalib/scripts/install_datalib.sh
 mkdir -p "$DATA_ROOT"
 ```
 
@@ -177,7 +180,7 @@ they always match the tools you have:
 The install script also saved the agent guide as a file beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.56.0/docs/agent_user.md"
+cat /home/user/.local/share/datalib/v0.56.0/docs/agent_user.md
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
