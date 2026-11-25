@@ -4,7 +4,7 @@ Detail that `AGENTS.md` no longer carries now lives where it is used:
 
 - `chat-rooms.md` (new): reading a chat room and answering there.
 
-- `playwright-fortress.md` (new): launching Fortress from Playwright, waiting for its first-boot install, the sandbox flag, and driving controls around its cursor glide. `apps/verify.md` and `web-frontend-testing.md` link it.
+- `playwright-fortress.md` (new): launching Fortress from Playwright, waiting for its first-boot install, the sandbox flag, and driving controls around its cursor glide. `apps/verify.md` links it.
 
 - `runtime-failures.md` (new): a command killed by memory pressure, a tool gVisor cannot run, and a `ModuleNotFoundError` from mngr.
 
