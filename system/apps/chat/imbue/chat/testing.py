@@ -83,6 +83,7 @@ from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.codex.watcher import codex_sessions_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
@@ -1360,12 +1361,20 @@ def codex_image_generation_rollout_lines() -> list[dict[str, Any]]:
     ]
 
 
+def write_codex_rollout_without_marker(
+    agent_state_dir: Path, lines: Sequence[Mapping[str, Any]], name: str = "rollout-2026-08-03T00-00-00-test.jsonl"
+) -> Path:
+    """Write a codex rollout but NOT the marker -- a web/CLI-only agent whose UserPromptSubmit hook never fired."""
+    sessions_dir = codex_sessions_dir(agent_state_dir) / "2026" / "08" / "03"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    rollout = sessions_dir / name
+    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return rollout
+
+
 def write_codex_rollout(agent_state_dir: Path, lines: Sequence[Mapping[str, Any]]) -> Path:
     """Write a codex rollout plus the ``codex_transcript_path`` marker naming it, exactly as a live agent would."""
-    sessions_dir = agent_state_dir / "plugin" / "codex" / "home" / "sessions" / "2026" / "08" / "03"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    rollout = sessions_dir / "rollout-2026-08-03T00-00-00-test.jsonl"
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    rollout = write_codex_rollout_without_marker(agent_state_dir, lines)
     (agent_state_dir / "codex_transcript_path").write_text(str(rollout), encoding="utf-8")
     return rollout
 

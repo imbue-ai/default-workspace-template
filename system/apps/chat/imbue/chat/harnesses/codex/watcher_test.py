@@ -22,6 +22,7 @@ from imbue.chat.harnesses.codex.live_user_turns import note_live_user_turn
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
+from imbue.chat.harnesses.codex.watcher import codex_sessions_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.model import read_model_identity
@@ -31,8 +32,7 @@ from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.chat.testing import ONE_PIXEL_PNG
 from imbue.chat.testing import codex_image_generation_rollout_lines
 from imbue.chat.testing import write_codex_rollout
-
-_SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
+from imbue.chat.testing import write_codex_rollout_without_marker
 
 
 def _user_line(text: str, timestamp: str) -> dict[str, Any]:
@@ -194,17 +194,6 @@ def test_a_fallback_turn_after_an_effort_change_is_still_reflected(tmp_path: Pat
     assert identity.effort == "low"
 
 
-def _write_rollout_without_marker(
-    agent_state_dir: Path, lines: list[dict[str, Any]], name: str = "rollout-2026-08-03T00-00-00-web.jsonl"
-) -> Path:
-    """Write a rollout but NOT the marker -- a web/CLI-only agent whose UserPromptSubmit hook never fired."""
-    sessions_dir = agent_state_dir / _SESSIONS_RELATIVE / "2026" / "08" / "03"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    rollout = sessions_dir / name
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
-    return rollout
-
-
 def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
     """A web-only codex agent never gets a UserPromptSubmit marker; the newest rollout is tailed anyway.
 
@@ -212,7 +201,7 @@ def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
     writes ``codex_transcript_path``) on a programmatic turn, so without the fallback the web chat
     renders empty. With one thread per daemon the newest rollout IS the live conversation.
     """
-    _write_rollout_without_marker(tmp_path, [_user_line("web-first", "2026-08-03T00:00:01Z")])
+    write_codex_rollout_without_marker(tmp_path, [_user_line("web-first", "2026-08-03T00:00:01Z")])
     assert not (tmp_path / "codex_transcript_path").exists()
     watcher, _ = _build_watcher(tmp_path)
 
@@ -224,7 +213,7 @@ def test_marker_takes_precedence_over_newest_rollout(tmp_path: Path) -> None:
     """When the marker IS present it wins -- the deterministic TUI path is preserved."""
     marked = write_codex_rollout(tmp_path, [_user_line("marked", "2026-08-03T00:00:01Z")])
     # A second, newer rollout with no bearing on the marker must NOT be picked while the marker points elsewhere.
-    other = _write_rollout_without_marker(
+    other = write_codex_rollout_without_marker(
         tmp_path,
         [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")],
         name="rollout-2026-08-03T00-00-09-other.jsonl",
@@ -382,7 +371,7 @@ def test_multibyte_char_split_across_reads_is_preserved(tmp_path: Path) -> None:
     data = (json.dumps(_user_line("hi\U0001f389", "2026-08-03T00:00:01Z"), ensure_ascii=False) + "\n").encode("utf-8")
     # Split in the middle of the four-byte emoji, straddling the read boundary.
     split = data.index("\U0001f389".encode("utf-8")) + 2
-    sessions_dir = tmp_path / _SESSIONS_RELATIVE / "2026" / "08" / "03"
+    sessions_dir = codex_sessions_dir(tmp_path) / "2026" / "08" / "03"
     sessions_dir.mkdir(parents=True, exist_ok=True)
     rollout = sessions_dir / "rollout-2026-08-03T00-00-00-test.jsonl"
     (tmp_path / "codex_transcript_path").write_text(str(rollout), encoding="utf-8")
