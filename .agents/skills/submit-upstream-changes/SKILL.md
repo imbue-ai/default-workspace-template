@@ -37,6 +37,8 @@ mngr changes are not template changes: mngr is installed here from the commit
 - **Title:** short, imperative, scoped. e.g. `forwarder: redirect HTTPS by default`.
 - **Body:** a single paragraph explaining the *why* (the motivating bug, missing capability, or constraint). Reviewers can read the diff for the *what*. Skip checklists and section headers.
 - **Co-Authored-By trailer** on the commit (the standard one used in this repo).
+- **Changelog entry per project touched.** CI's `check-changelog` gate fails a PR that touches a project without adding `<project>/changelog/<branch>.md` (slashes in the branch name as dashes): `system/apps/<name>/changelog/` for an app, `system/libs/<name>/changelog/` or `system/services/<name>/changelog/` for a package, `.agents/changelog/` for skills and other `.agents/` files, `system/changelog/` for everything else. One or two plain sentences on what changes for the user, in the same commit as the change. Check it once the commit is made (before it, HEAD is still upstream's and the check compares against the wrong base), before pushing: `GITHUB_HEAD_REF=submit/<short-name> CHANGELOG_BASE_REF=upstream/main uv run --no-sync system/scripts/workspace_scripts/check_changelog_entries.py`.
+- **Green CI before it is done.** A PR is ready for review only once every check on it has passed; see step 4.
 
 ## Recipe
 
@@ -101,7 +103,7 @@ The upstream URL and base branch are in `system/config/parent.toml`.
        --body  "<one-paragraph why>"
    ```
 
-4. Report the PR URL back to the user.
+4. Wait for CI, then report. Read the PR's checks (`gh pr checks <number> --repo imbue-ai/default-workspace-template`, or the `check-runs` of its head commit through the GitHub API). While any is still running, wait in the background for them to finish rather than reporting the PR as ready (`python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for CI on PR <number>" -- gh pr checks <number> --repo imbue-ai/default-workspace-template --watch`); its exit wakes you. Fix anything red, push, and check again. Report the PR URL with its CI state ("all checks green"), never a PR whose CI has not finished as done.
 
 ## When to push
 
