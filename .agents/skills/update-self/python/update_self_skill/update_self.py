@@ -240,7 +240,7 @@ from update_self_skill.update_history_bridge import (
     drop_history_bridge,
 )
 from update_self_skill.update_layout import FRONTEND_BUNDLES, PROVISIONER_SCRIPT
-from update_self_skill.update_memory import read_memory, render_reading
+from update_self_skill.update_memory import print_memory
 from update_self_skill.update_runtime import (
     ApplyPreconditionError,
     HttpClient,
@@ -629,8 +629,7 @@ def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
-    sys.stdout.write(render_reading(read_memory(_repo_root(args).resolve())))
-    return 0
+    return print_memory(_repo_root(args).resolve())
 
 
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:

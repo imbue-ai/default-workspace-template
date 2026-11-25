@@ -1400,9 +1400,7 @@ def _held_to_json(entries: Sequence[HeldEntry]) -> list[dict[str, object]]:
 
 
 def report_to_json(report: Report) -> dict[str, object]:
-    """The report as JSON. ``update-self`` reads the free memory and each section's candidates
-    from the workspace's own copy of this command across releases, so a key it reads keeps its
-    name and meaning (``.agents/skills/update-self/references/handoff-contract.md``)."""
+    """The report as JSON."""
     free = report.free_memory
     agents = report.agents.candidates
     apps = report.apps.candidates
@@ -1676,7 +1674,12 @@ def render_everything(report: Report) -> str:
 
 def render_stoppable(report: Report) -> str:
     """Only what could be stopped: first what takes nothing off the user's screen, then the apps a
-    window shows."""
+    window shows.
+
+    ``update-self`` runs ``list --stoppable`` from the workspace's own copy of this command, and
+    its prose, which comes from a later release, reads what that copy prints. So the arguments keep
+    working, and a row keeps its KIND and the NAME a stop takes
+    (``.agents/skills/update-self/references/handoff-contract.md``)."""
     lines = [render_free_memory(report.free_memory)]
     rows = report_rows(report)
     groups = (

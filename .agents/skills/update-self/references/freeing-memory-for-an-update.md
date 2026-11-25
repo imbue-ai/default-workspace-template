@@ -11,23 +11,28 @@ candidates to the user and stops only what they approve (the `free-workspace-mem
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py memory
 ```
 
-It asks the workspace's own memory tool, whichever one this workspace's version has, and prints
-what that lists. Its first line is the free memory **earlyoom decides on**: the headroom file the
-workspace publishes for `--host-meminfo` while it is fresh, else `/proc/meminfo`, and it names which
-it read. Under a memory cap those two disagree, and the container's own `/proc/meminfo` is the
-optimistic one -- it has read three times the real headroom on a capped workspace. `free -m` reads
-that optimistic file, so do not decide anything from it, and never tell the worker to rerun on a
-figure that came from it: the gate will be shed again and the round is wasted.
+It runs the workspace's own memory tool, whichever one this workspace's version has, and what it
+prints is that tool's own listing. Its first line is the free memory **earlyoom decides on**: the
+headroom file the workspace publishes for `--host-meminfo` while it is fresh, else `/proc/meminfo`,
+and it names which it read. Under a memory cap those two disagree, and the container's own
+`/proc/meminfo` is the optimistic one -- it has read three times the real headroom on a capped
+workspace. `free -m` reads that optimistic file, so do not decide anything from it, and never tell
+the worker to rerun on a figure that came from it: the gate will be shed again and the round is
+wasted.
 
 The same line says how much of that free memory is left before the guard starts stopping
 processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
 workspace is about 400 MiB of room. That room is what a heavy step can use, so judge by it.
 
-Below that are the idle chats and background agents, the apps the workspace may stop with how many
-windows show each, and the browsers no window shows, each with its memory: roughly what stopping it
-frees. A section that reads `unknown` could not be listed, and the last lines say why: this
-workspace's version does not list it, or the tool could not read it. Unknown is not "nothing
-there", but stop only what is listed. Read the free memory again after each round.
+Below that are two groups, each largest first: what can be stopped with nothing leaving the screen
+(idle chats and background agents, apps no window shows, browsers no window shows), then the apps a
+window shows. A row has its KIND, the NAME its stop takes, and its memory: roughly what stopping it
+frees. A line starting `unknown:` means rows of that kind may be missing, and a `note:` line says
+why. Unknown is not "nothing there", but stop only what is listed. Read the free memory again after
+each round.
+
+A workspace whose version has the earlier memory tool prints that tool's listing, laid out by kind,
+and the command adds under it how to read it.
 
 ## What this pass may stop
 
@@ -35,8 +40,8 @@ there", but stop only what is listed. Read the free memory again after each roun
 the user apps no window is showing. The main chat is not among them: the chat app starts it again as
 soon as it stops, so it is never listed.
 
-**A scheduled run** may stop **any** app in the listing's Apps section, windows open or not. That
-section is the boundary, and it is drawn so that everything in it can be brought back:
+**A scheduled run** may stop **any** `app` row of the listing, in either group. The listing is the
+boundary, and it is drawn so that every app in it can be brought back:
 it holds no critical app (the shell, the chat and the terminal are what the workspace is reached and
 talked to through), nothing sharing a critical app's program, nothing internal, and nothing without
 a supervisord program to start again.
@@ -57,7 +62,7 @@ surprise, so a windowed app is still theirs to approve.
 Stop as little as the run needs. Take the candidates largest first, re-read the free memory, and
 stop when there is room -- a scheduled licence is not a reason to clear the workspace.
 
-An app whose `AUTO-STOP` column reads `no` may be one
+An app whose row reads `keeps running when none does` may be one
 that does work between requests (a poller, a scheduled refresh, a job that outlives its window; the
 `build-app` skill sets the field that way on purpose). It is still yours to stop, but prefer the
 others first, and say in the results message that it was down for the update.
@@ -69,7 +74,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     run-status stop-apps <program> <program> ...
 ```
 
-The programs are the `PROGRAM` column of the listing's Apps section. Do **not** quit an app through the
+The programs are the NAME of the listing's `app` rows. Do **not** quit an app through the
 shell, which closes its windows.
 
 A stopped program leaves its windows where they are. The shell parks the app's port and answers that

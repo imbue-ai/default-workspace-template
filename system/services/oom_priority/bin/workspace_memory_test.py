@@ -1510,42 +1510,16 @@ def test_the_list_holds_everything_using_memory_and_adds_up_to_what_is_in_use(
     assert ["In use: 3000 MiB"] in printed
 
 
-def test_what_update_self_reads_off_the_json_is_all_there(
-    tmp_path: Path, runtime_dir: Path
-) -> None:
-    """update-self's staged copy reads this command's JSON from whatever release the workspace is
-    on, so each key it takes must keep its name: a renamed one would read as unknown there."""
-    _, sources = _whole_workspace(tmp_path, runtime_dir)
-    document = json.loads(
-        json.dumps(
-            workspace_memory.report_to_json(workspace_memory.collect_report(sources))
-        )
+def test_update_self_asks_for_the_stoppable_listing_the_way_this_command_takes_it() -> (
+    None
+):
+    """update-self's staged copy runs this command from whatever release the workspace is on, so
+    the arguments it passes must keep meaning the listing of what could be stopped."""
+    args = workspace_memory.build_parser().parse_args(
+        list(update_memory.WORKSPACE_MEMORY_ARGS)
     )
 
-    reading = update_memory.parse_listing(update_memory.WORKSPACE_MEMORY_REL, document)
-
-    assert reading.unknown == ()
-    assert not reading.is_resident_size
-    assert reading.free == update_memory.FreeMemory(
-        free_kib=1000 * 1024,
-        field="MemAvailable",
-        source=str(sources.proc_dir / "meminfo"),
-        room_kib=600 * 1024,
-    )
-    assert reading.agents == (
-        update_memory.AgentRow(
-            kind="chat",
-            name="trip-plan",
-            title="Trip plan",
-            idle_seconds=3 * 3600.0,
-            memory_kib=400 * 1024,
-        ),
-    )
-    assert reading.apps == (
-        update_memory.AppRow("notes-app", "Notes", 1, False, 150 * 1024),
-        update_memory.AppRow("digest-app", "Daily Digest", 0, False, 90 * 1024),
-    )
-    assert reading.browsers == (update_memory.BrowserRow("browser-1", 400 * 1024),)
+    assert args.list_format is workspace_memory.ListFormat.STOPPABLE
 
 
 def test_show_prints_one_row_with_its_processes_or_one_process_with_its_row(
