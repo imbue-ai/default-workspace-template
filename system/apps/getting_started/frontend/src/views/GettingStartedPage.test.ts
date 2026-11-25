@@ -18,7 +18,6 @@ afterEach(() => {
 
 const LOADED: TemplateCatalogState = {
   kind: "loaded",
-  isStale: false,
   catalog: {
     generated_at: "",
     templates: [
@@ -29,10 +28,34 @@ const LOADED: TemplateCatalogState = {
   },
 };
 
-function render(catalog: TemplateCatalogState = LOADED): { root: HTMLElement; started: string[] } {
+interface Rendered {
+  readonly root: HTMLElement;
+  readonly started: string[];
+  readonly retries: number[];
+  readonly asks: string[];
+}
+
+function render(catalog: TemplateCatalogState = LOADED): Rendered {
   const started: string[] = [];
-  const root = mountView(() => m(GettingStartedPage, { catalog, onStartWithText: (text) => started.push(text) }));
-  return { root, started };
+  const retries: number[] = [];
+  const asks: string[] = [];
+  const root = mountView(() =>
+    m(GettingStartedPage, {
+      catalog,
+      onStartWithText: (text) => started.push(text),
+      onRetryTemplates: () => retries.push(retries.length + 1),
+      connection: {
+        hasShell: () => true,
+        askAgent: (text) => {
+          asks.push(text);
+          return Promise.resolve({ isOpened: true });
+        },
+        canReportBug: () => true,
+        reportBug: () => undefined,
+      },
+    }),
+  );
+  return { root, started, retries, asks };
 }
 
 function typeQuery(root: HTMLElement, query: string): void {
@@ -122,8 +145,28 @@ describe("the Getting Started page", () => {
     const loading = render({ kind: "loading" });
     expect(loading.root.querySelector(".getting-started-templates-status")!.textContent).toContain("Loading");
     unmountViews();
-    const failed = render({ kind: "failed" });
-    expect(failed.root.querySelector(".getting-started-templates-status")!.textContent).toContain("Failed");
+    const failed = render({ kind: "failed", details: "HTTP 502" });
+    expect(failed.root.querySelector(".getting-started-templates-status")!.textContent).toBe(
+      "Templates couldn't be loaded. Try again.",
+    );
+    // The reason waits behind a collapsed "See details" under the line.
+    const seeDetails = failed.root.querySelector<HTMLDetailsElement>(".getting-started-templates-failed details")!;
+    expect(seeDetails.open).toBe(false);
+    expect(seeDetails.querySelector("summary")!.textContent).toBe("See details");
+    expect(seeDetails.querySelector("pre")!.textContent).toBe("HTTP 502");
+    // Its next step is on the line: Try again fetches again, in place.
+    failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
+    expect(failed.retries).toEqual([1]);
+    // Then an agent, asked in the chat about this page's app with the failure. Report a bug waits for an ask that
+    // was refused, though the shell can open one.
+    const remedies = [...failed.root.querySelectorAll<HTMLElement>(".getting-started-templates-remedy")];
+    expect(remedies.map((button) => button.textContent)).toEqual(["Ask an agent to fix this"]);
+    remedies[0].click();
+    expect(failed.asks).toHaveLength(1);
+    expect(failed.asks[0]).toContain(
+      "Imbue Studio showed the user this failure: Templates couldn't be loaded. Try again.",
+    );
+    expect(failed.asks[0]).toContain("HTTP 502");
     unmountViews();
     const disabled = render({ kind: "disabled" });
     expect(disabled.root.querySelector('[data-section="templates"]')).toBeNull();
