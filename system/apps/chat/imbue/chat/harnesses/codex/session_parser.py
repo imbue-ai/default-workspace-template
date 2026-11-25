@@ -191,6 +191,9 @@ class ImageGenerationCalls(MutableModel):
             self.cell_ids.add(running_cell_id)
         elif waited_cell_id is not None:
             self.cell_ids.discard(waited_cell_id)
+        else:
+            # A generating exec whose program finished within its own result leaves no cell behind.
+            pass
 
 
 def _waited_cell_id(raw_arguments: str) -> str | None:
