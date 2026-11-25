@@ -399,7 +399,11 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             "background-chat", "RUNNING_BACKGROUND", {"user_created": "true"}, old, 16
         ),
         _agent_record(
-            "unknown-type", "RUNNING_UNKNOWN_AGENT_TYPE", {"agent_created": "true"}, old, 17
+            "unknown-type",
+            "RUNNING_UNKNOWN_AGENT_TYPE",
+            {"agent_created": "true"},
+            old,
+            17,
         ),
     ]
 
