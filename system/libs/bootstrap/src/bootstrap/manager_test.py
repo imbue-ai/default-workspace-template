@@ -1434,7 +1434,8 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
         "upgrade": (
             9,
             "upgraded a (stopped)\n"
-            "skipped b: agent type 'pi-coding' has no upgrade support; "
+            "skipped b: created before mngr kept its hooks in a file of its own; "
+            "first remove the hooks mngr left in .claude/settings.local.json in its work dir; "
             "re-create it with `mngr create b --reuse --update`\n"
             "1 upgraded, 0 current, 1 not upgraded, 0 failed\n",
         ),
@@ -1447,7 +1448,8 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
     assert any("mngr upgrade: upgraded a (stopped)" in line for line in lines)
     assert any(
         line.rstrip().endswith(
-            "mngr upgrade: skipped b: agent type 'pi-coding' has no upgrade support"
+            "mngr upgrade: skipped b: created before mngr kept its hooks in a file of its own; "
+            "first remove the hooks mngr left in .claude/settings.local.json in its work dir"
         )
         for line in lines
     )
@@ -1522,3 +1524,32 @@ def test_an_upgrade_that_cannot_run_is_a_warning(
 
     (subcommand,) = raise_on
     assert any(f"mngr {subcommand} could not run" in line for line in warnings)
+
+
+def test_an_upgrade_that_times_out_still_logs_the_outcomes_it_printed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubSubprocess()
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\nagent-b|STOPPED\n")}
+    stub.raise_on = {
+        "upgrade": subprocess.TimeoutExpired(
+            str(WORKSPACE_MNGR),
+            1.0,
+            output=b"upgraded a (stopped)\nfailed b: swap (disk full); untouched\n",
+        )
+    }
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    with _captured_log_lines("INFO") as lines:
+        _upgrade_stopped_agents()
+
+    assert any(
+        "INFO" in line and "mngr upgrade: upgraded a (stopped)" in line
+        for line in lines
+    )
+    assert any(
+        "WARNING" in line
+        and "mngr upgrade: failed b: swap (disk full); untouched" in line
+        for line in lines
+    )
+    assert any("mngr upgrade could not run" in line for line in lines)

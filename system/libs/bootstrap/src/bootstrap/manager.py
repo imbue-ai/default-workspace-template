@@ -725,9 +725,32 @@ def _run_mngr(
             env={**os.environ, **_MNGR_ENV_OVERRIDES},
             timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except subprocess.TimeoutExpired as e:
+        _log_mngr_output(args[0], _decoded_output(e.stdout))
         logger.warning("mngr {} could not run ({})", args[0], e)
         return None
+    except OSError as e:
+        logger.warning("mngr {} could not run ({})", args[0], e)
+        return None
+
+
+def _decoded_output(output: bytes | str | None) -> str:
+    """Captured output as text; a timed-out run leaves it as undecoded bytes."""
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output or ""
+
+
+def _log_mngr_output(subcommand: str, stdout: str) -> None:
+    """Log each line ``mngr <subcommand>`` printed, without the re-create command it suggests; a failed agent's line is a warning."""
+    for line in stdout.splitlines():
+        if line.strip():
+            log = (
+                logger.warning
+                if line.startswith(_FAILED_OUTCOME_PREFIX)
+                else logger.info
+            )
+            log("mngr {}: {}", subcommand, _RECREATE_HINT_PATTERN.sub("", line))
 
 
 def _list_stopped_agent_ids(mngr_binary: Path) -> list[str]:
@@ -768,14 +791,7 @@ def _upgrade_stopped_agents(mngr_binary: Path = WORKSPACE_MNGR) -> None:
     )
     if result is None:
         return
-    for line in result.stdout.splitlines():
-        if line.strip():
-            log = (
-                logger.warning
-                if line.startswith(_FAILED_OUTCOME_PREFIX)
-                else logger.info
-            )
-            log("mngr upgrade: {}", _RECREATE_HINT_PATTERN.sub("", line))
+    _log_mngr_output("upgrade", result.stdout)
     if result.returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
         stderr_tail = _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:])
         logger.warning(
