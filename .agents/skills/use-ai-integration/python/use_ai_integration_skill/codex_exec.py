@@ -112,9 +112,9 @@ def _decode_event(line: str) -> tuple[dict[str, object], _CodexEvent]:
 
 def parse_codex_exec_output(stdout: str) -> CodexExecOutcome:
     """The answer and usage of a ``codex exec --json`` run; an error a completed turn recovered from is not raised."""
-    decoded_events = [
-        _decode_event(line) for line in stdout.splitlines() if line.strip()
-    ]
+    # Records end at LF only: U+2028, U+2029 and U+0085 can sit raw inside a JSON string
+    lines = (line.removesuffix("\r") for line in stdout.split("\n"))
+    decoded_events = [_decode_event(line) for line in lines if line.strip()]
     events = [event for _, event in decoded_events]
 
     # A failed turn, or a turn that never completed, is the run's failure

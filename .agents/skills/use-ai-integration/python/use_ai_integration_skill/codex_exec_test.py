@@ -100,6 +100,17 @@ def test_parse_returns_the_last_agent_message_and_its_usage() -> None:
     }
 
 
+def test_parse_keeps_unicode_line_separators_inside_an_event() -> None:
+    answer = "a b c\u0085d"
+    stdout = (
+        '{"type":"turn.started"}\r\n'
+        f'{{"type":"item.completed","item":{{"id":"item_0","type":"agent_message","text":"{answer}"}}}}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+    )
+
+    assert parse_codex_exec_output(stdout).text == answer
+
+
 def test_parse_ignores_an_error_the_turn_recovered_from() -> None:
     outcome = parse_codex_exec_output(_RECOVERED_RETRY_OUTPUT)
 

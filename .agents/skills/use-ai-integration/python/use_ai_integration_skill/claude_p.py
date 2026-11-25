@@ -133,15 +133,7 @@ def minds_accounts_root() -> str:
 
 
 def _default_account_dir() -> str:
-    """The workspace's default claude account's folder, or "" when there is none.
-
-    Among the anthropic-lane accounts under ``minds_accounts_root()``: the pinned default,
-    else the most recently used, else the oldest -- the chat app's rule for an agent
-    created without an account. Read straight from the index rather than imported from
-    the chat app's package: this script runs from whatever environment the caller has,
-    which is frequently not that venv. The format is one JSON object with an `accounts`
-    list and optional `default_account` and `mru` ids.
-    """
+    """The default anthropic-lane account's folder under ``minds_accounts_root()`` (pinned, else most recent, else oldest), or "" when there is none."""
     try:
         root = minds_accounts_root()
         with open(os.path.join(root, "index.json"), encoding="utf-8") as f:

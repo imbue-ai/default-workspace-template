@@ -87,7 +87,19 @@ def test_environment_sets_home_disables_auto_update_and_strips_other_google_cred
         "GOOGLE_APPLICATION_CREDENTIALS": "/adc.json",
         "GOOGLE_GEMINI_BASE_URL": "https://proxy",
         "GOOGLE_GENAI_USE_ENTERPRISE": "true",
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "GOOGLE_VERTEX_BASE_URL": "https://vertex-proxy",
+        "GOOGLE_CLOUD_PROJECT": "project",
+        "GOOGLE_CLOUD_LOCATION": "us-central1",
+        "GOOGLE_CLOUD_QUOTA_PROJECT": "quota-project",
+        "CLOUDSDK_CONFIG": "/gcloud",
+        "CLOUDSDK_CORE_ACCOUNT": "someone@example.com",
         "AGY_ADC_AUTH": "1",
+        "AGY_CDE_SEAMLESS_AUTH": "1",
+        "AGY_LLM_GATEWAY_URL": "https://gateway",
+        "AGY_LLM_GATEWAY_MODELS": "gemini",
+        "AGY_LLM_GATEWAY_CA_CERT": "/ca.pem",
+        "AGY_ACP_ENABLE_GATEWAY_AUTH": "1",
         "MNGR_AGENT_STATE_DIR": "/agent/state",
     }
 
@@ -143,6 +155,16 @@ def test_parse_reads_the_result_after_other_lines() -> None:
     stdout = "Using project /tmp/agy_x/cwd\n" + _envelope(response="ok") + "\n"
 
     assert parse_agy_output(stdout).text == "ok"
+
+
+def test_parse_keeps_a_next_line_character_inside_the_result() -> None:
+    response = "line1\u0085line2 line3"
+    stdout = (
+        json.dumps({**_SUCCESS_ENVELOPE, "response": response}, ensure_ascii=False)
+        + "\r\n"
+    )
+
+    assert parse_agy_output(stdout).text == response
 
 
 def test_parse_raises_on_an_error_status_with_its_message() -> None:

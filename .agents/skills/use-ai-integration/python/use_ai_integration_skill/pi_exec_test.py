@@ -170,6 +170,15 @@ def test_environment_binds_pi_to_the_account_and_strips_every_provider_credentia
         "AWS_PROFILE": "default",
         "AWS_SESSION_TOKEN": "ambient",
         "PI_CODING_AGENT_DIR": "/elsewhere",
+        "OPENAI_ORG_ID": "org-ambient",
+        "OPENAI_PROJECT_ID": "proj-ambient",
+        "OPENAI_BASE_URL": "https://openai-proxy",
+        "OPENAI_CUSTOM_HEADERS": "X-Ambient: 1",
+        "ANTHROPIC_BASE_URL": "https://anthropic-proxy",
+        "ANTHROPIC_CUSTOM_HEADERS": "X-Ambient: 1",
+        "GOOGLE_API_KEY": "ambient",
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "GOOGLE_GENAI_USE_ENTERPRISE": "true",
     }
 
     environment = pi_environment(Path("/accounts/k1"), base_environment)
@@ -224,6 +233,23 @@ def test_parse_returns_the_answer_usage_and_cost_of_a_single_message() -> None:
     assert outcome.cost_usd == pytest.approx(0.0000618)
     assert outcome.events[0] == _SESSION_HEADER
     assert len(outcome.events) == 5
+
+
+def test_parse_keeps_unicode_line_separators_inside_an_event() -> None:
+    separators = "  \u0085"
+    records = (
+        _SESSION_HEADER,
+        _message_end({"role": "user", "content": f"Summarize: a{separators}b"}),
+        _message_end(_assistant_message([{"type": "text", "text": f"x{separators}y"}])),
+    )
+    stdout = "".join(
+        json.dumps(record, ensure_ascii=False) + "\r\n" for record in records
+    )
+
+    outcome = parse_pi_json_output(stdout)
+
+    assert outcome.text == f"x{separators}y"
+    assert len(outcome.events) == 3
 
 
 def test_parse_sums_usage_and_cost_over_every_assistant_message() -> None:

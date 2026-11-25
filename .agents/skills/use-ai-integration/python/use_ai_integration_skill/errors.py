@@ -22,6 +22,10 @@ class UnsupportedProviderError(AICallError):
         )
 
 
+class EmptySystemPromptError(AICallError, ValueError):
+    """A completion was given no system prompt to frame it."""
+
+
 class ModelRequiredError(AICallError):
     """The call names no model and its provider has no default one."""
 

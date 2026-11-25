@@ -23,13 +23,15 @@ _ASSISTANT_ROLE: Final = "assistant"
 _TEXT_BLOCK: Final = "text"
 _FAILED_STOP_REASONS: Final = frozenset({"error", "aborted"})
 
-# Every credential variable pi 0.87.1 reads, so the account folder's key is the only one it can use
+# The variables pi 0.87.1 and its bundled SDKs read for a call's key, endpoint, headers or billing account
 _CREDENTIAL_ENVIRONMENT_PREFIXES: Final = ("AWS_",)
 _CREDENTIAL_ENVIRONMENT_VARIABLES: Final = frozenset(
     {
         "AI_GATEWAY_API_KEY",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_CUSTOM_HEADERS",
         "ANTHROPIC_OAUTH_TOKEN",
         "ANT_LING_API_KEY",
         "AZURE_OPENAI_API_KEY",
@@ -41,10 +43,16 @@ _CREDENTIAL_ENVIRONMENT_VARIABLES: Final = frozenset(
         "FIREWORKS_API_KEY",
         "GCLOUD_PROJECT",
         "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_CLOUD_API_KEY",
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GOOGLE_GENAI_API_KEY",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_VERTEX_BASE_URL",
         "GROQ_API_KEY",
         "HF_TOKEN",
         "KIMI_API_KEY",
@@ -54,7 +62,12 @@ _CREDENTIAL_ENVIRONMENT_VARIABLES: Final = frozenset(
         "MISTRAL_API_KEY",
         "MOONSHOT_API_KEY",
         "NVIDIA_API_KEY",
+        "OPENAI_ADMIN_KEY",
         "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_CUSTOM_HEADERS",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
         "OPENCODE_API_KEY",
         "OPENROUTER_API_KEY",
         "QWEN_TOKEN_PLAN_API_KEY",
@@ -76,12 +89,16 @@ _STRIPPED_ENVIRONMENT_VARIABLES: Final = _CREDENTIAL_ENVIRONMENT_VARIABLES | {
 
 
 class _PiCost(BaseModel):
+    """The cost block of a pi message's usage."""
+
     model_config = ConfigDict(extra="ignore")
 
     total: float = 0.0
 
 
 class _PiUsage(BaseModel):
+    """The token counts and cost of one pi message."""
+
     model_config = ConfigDict(extra="ignore")
 
     input: int = 0
@@ -92,6 +109,8 @@ class _PiUsage(BaseModel):
 
 
 class _PiContentBlock(BaseModel):
+    """One block of a pi message's content."""
+
     model_config = ConfigDict(extra="ignore")
 
     type: str
@@ -99,6 +118,8 @@ class _PiContentBlock(BaseModel):
 
 
 class _PiMessage(BaseModel):
+    """A message in pi's event stream."""
+
     model_config = ConfigDict(extra="ignore")
 
     role: str
@@ -120,7 +141,7 @@ class _PiEvent(BaseModel):
 def pi_completion_argv(
     *, provider_id: str, model: str, system_prompt_path: Path
 ) -> list[str]:
-    """A tool-less, sessionless run with ``system_prompt_path``'s text as the whole system prompt and no project context."""
+    """A tool-less, sessionless run with ``system_prompt_path``'s text in place of pi's own prompt and no project context."""
     return [
         "pi",
         "--mode",
@@ -209,9 +230,9 @@ def _message_text(message: _PiMessage) -> str:
 
 def parse_pi_json_output(stdout: str) -> PiRunOutcome:
     """The last assistant message's text, with usage and cost summed over every assistant message pi printed."""
-    decoded_events = [
-        _decode_event(line) for line in stdout.splitlines() if line.strip()
-    ]
+    # Records end at LF only: U+2028, U+2029 and U+0085 can sit raw inside a JSON string
+    lines = (line.removesuffix("\r") for line in stdout.split("\n"))
+    decoded_events = [_decode_event(line) for line in lines if line.strip()]
     assistant_messages = [
         event.message
         for _, event in decoded_events
@@ -285,7 +306,7 @@ def pi_complete(
     account_dir: Path,
     timeout_seconds: float,
 ) -> PiRunOutcome:
-    """One tool-less pi completion from an empty directory, with ``system`` as the whole system prompt."""
+    """One tool-less pi completion from an empty directory, with ``system`` in place of pi's own prompt."""
     with tempfile.TemporaryDirectory(prefix="pi_") as scratch:
         system_prompt_path = Path(scratch, _SYSTEM_PROMPT_FILENAME)
         system_prompt_path.write_text(system, encoding="utf-8")

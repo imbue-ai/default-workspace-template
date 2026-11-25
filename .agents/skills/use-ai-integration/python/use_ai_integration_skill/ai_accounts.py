@@ -43,6 +43,8 @@ _AGY_OAUTH_TOKEN_RELATIVE_PATH: Final = Path(
 )
 _PI_AUTH_FILENAME: Final = "auth.json"
 _PI_API_KEY_ENTRY_TYPE: Final = "api_key"
+_ANTHROPIC_PI_PROVIDER_ID: Final = "anthropic"
+_CLAUDE_SUBSCRIPTION_TOKEN_MARKER: Final = "sk-ant-oat"
 _NO_ACCOUNT_MESSAGE: Final = "No AI account is signed in to this workspace; sign in to one to call a model from code."
 
 
@@ -85,7 +87,7 @@ class _ClaudeGlobalConfig(BaseModel):
 
 
 class _PiAuthEntry(BaseModel):
-    """One provider's entry in pi's ``auth.json``; its key is only checked for presence."""
+    """One provider's entry in pi's ``auth.json``; its key is checked, never passed on."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -365,28 +367,38 @@ def _read_pi_credential(account: AIAccount, *, billing: AIBilling) -> AICredenti
         raise NoUsableAccountError(
             f"The account {account.label}'s key file is not valid; sign in to it again."
         ) from None
-    keyed_provider_ids = [
-        provider_id
+    keys_by_provider_id = {
+        provider_id: entry.key
         for provider_id, entry in auth.root.items()
         if entry.type == _PI_API_KEY_ENTRY_TYPE
         and entry.key is not None
         and len(entry.key) > 0
-    ]
-    if not keyed_provider_ids:
+    }
+    if not keys_by_provider_id:
         raise NoUsableAccountError(
             f"The account {account.label} has no API key; sign in to it again."
         )
-    if len(keyed_provider_ids) > 1:
+    if len(keys_by_provider_id) > 1:
         raise NoUsableAccountError(
             f"The account {account.label} holds keys for several providers "
-            f"({', '.join(keyed_provider_ids)}); sign in to it again."
+            f"({', '.join(keys_by_provider_id)}); sign in to it again."
+        )
+    provider_id, key = next(iter(keys_by_provider_id.items()))
+    # pi sends such a token as a Claude plan sign-in, not as a key billed per token
+    if (
+        provider_id == _ANTHROPIC_PI_PROVIDER_ID
+        and _CLAUDE_SUBSCRIPTION_TOKEN_MARKER in key.get_secret_value()
+    ):
+        raise NoUsableAccountError(
+            f"The account {account.label} holds a Claude subscription token, not an API key; "
+            'add it under Anthropic\'s "Get a long-lived token" option.'
         )
     return AICredential(
         kind=AICredentialKind.PI_KEY,
         billing=billing,
         api_key=None,
         api_base=None,
-        pi_provider_id=keyed_provider_ids[0],
+        pi_provider_id=provider_id,
     )
 
 

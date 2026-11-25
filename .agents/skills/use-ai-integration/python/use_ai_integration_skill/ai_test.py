@@ -29,6 +29,7 @@ from use_ai_integration_skill.data_types import (
     LiteLLMRequest,
 )
 from use_ai_integration_skill.errors import (
+    EmptySystemPromptError,
     ModelRequiredError,
     NoUsableAccountError,
     ProviderCallError,
@@ -1061,6 +1062,24 @@ def test_agy_refuses_an_empty_prompt(
 
     with pytest.raises(ProviderCallError, match="empty prompt"):
         run_task(" \n", cwd=tmp_path, timeout_seconds=8.0)
+
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("system", ["", " \n"])
+def test_complete_refuses_an_empty_system_prompt_before_running_the_cli(
+    system: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_bin_dir: Path,
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _MARKING_STUB)
+    marker = tmp_path / "pi-ran"
+    monkeypatch.setenv("STUB_MARKER", str(marker))
+    _pi_root(tmp_path, monkeypatch, lane="api-key", display="Groq", provider_id="groq")
+
+    with pytest.raises(EmptySystemPromptError, match="non-empty system prompt"):
+        complete("hello", system=system, timeout_seconds=8.0)
 
     assert not marker.exists()
 

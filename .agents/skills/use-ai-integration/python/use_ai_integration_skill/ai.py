@@ -38,6 +38,7 @@ from use_ai_integration_skill.data_types import (
     PiRunOutcome,
 )
 from use_ai_integration_skill.errors import (
+    EmptySystemPromptError,
     ModelRequiredError,
     NoUsableAccountError,
     ProviderCallError,
@@ -213,6 +214,11 @@ def complete_on_account(
     timeout_seconds: float,
     litellm_caller: LiteLLMCaller,
 ) -> AIResult:
+    # pi runs its own coding-agent prompt in place of an empty one
+    if not system.strip():
+        raise EmptySystemPromptError(
+            "complete() needs a non-empty system prompt that frames the task."
+        )
     match credential.kind:
         case AICredentialKind.ANTHROPIC_API_KEY | AICredentialKind.OPENAI_API_KEY:
             if credential.api_key is None:

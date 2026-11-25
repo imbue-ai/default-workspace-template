@@ -15,15 +15,27 @@ from use_ai_integration_skill.errors import ProviderCallError, ProviderTimeoutEr
 _HOME_ENV_VAR: Final = "HOME"
 _PWD_ENV_VAR: Final = "PWD"
 _AGY_DISABLE_AUTO_UPDATE_ENV_VAR: Final = "AGY_CLI_DISABLE_AUTO_UPDATE"
-# Every other way agy 1.5.8 can sign in, so the account folder's sign-in is the only one it can use
+# The variables agy 1.5.8 reads for another sign-in, gateway or Cloud project, so the account folder's sign-in is the only one it can use
 _CREDENTIAL_ENVIRONMENT_VARIABLES: Final = frozenset(
     {
+        "AGY_ACP_ENABLE_GATEWAY_AUTH",
         "AGY_ADC_AUTH",
+        "AGY_CDE_SEAMLESS_AUTH",
+        "AGY_LLM_GATEWAY_CA_CERT",
+        "AGY_LLM_GATEWAY_MODELS",
+        "AGY_LLM_GATEWAY_URL",
+        "CLOUDSDK_CONFIG",
+        "CLOUDSDK_CORE_ACCOUNT",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
         "GOOGLE_GEMINI_BASE_URL",
         "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_VERTEX_BASE_URL",
     }
 )
 _STRIPPED_ENVIRONMENT_VARIABLES: Final = _CREDENTIAL_ENVIRONMENT_VARIABLES | {
@@ -43,6 +55,8 @@ _LINE_DETAIL_CHARS: Final = 200
 
 
 class _AgyUsage(BaseModel):
+    """The token counts agy's result reports."""
+
     model_config = ConfigDict(extra="ignore")
 
     input_tokens: int = 0
@@ -124,7 +138,9 @@ def agy_run_dir(working_dir: Path, scratch_dir: Path) -> Path:
 
 def _find_envelope(stdout: str) -> tuple[dict[str, object], _AgyEnvelope] | None:
     """The last stdout line that is agy's JSON result, decoded and validated."""
-    for line in reversed(stdout.splitlines()):
+    # Lines end at LF only: U+0085 can sit raw inside a JSON string
+    lines = [line.removesuffix("\r") for line in stdout.split("\n")]
+    for line in reversed(lines):
         try:
             decoded = json.loads(line)
         except json.JSONDecodeError:

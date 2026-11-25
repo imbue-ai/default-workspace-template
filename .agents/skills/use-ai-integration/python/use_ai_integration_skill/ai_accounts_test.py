@@ -562,6 +562,27 @@ def test_pi_key_credential_names_its_provider_and_bills_per_token(
     assert credential.api_key is None
 
 
+def test_claude_subscription_token_added_as_an_anthropic_key_raises_without_the_token(
+    tmp_path: Path,
+) -> None:
+    secret_tail = "SECRETTAIL0987654321fedcba"
+    account = _account(tmp_path, AIProvider.API_KEY)
+    (account.account_dir / "auth.json").write_text(
+        json.dumps(
+            {"anthropic": {"type": "api_key", "key": f"sk-ant-oat01-{secret_tail}"}}
+        )
+    )
+
+    with pytest.raises(NoUsableAccountError) as raised:
+        read_ai_credential(
+            account, anthropic_snapshot_path=str(tmp_path / "unused.env")
+        )
+
+    assert "holds a Claude subscription token, not an API key" in str(raised.value)
+    assert "Get a long-lived token" in str(raised.value)
+    assert "SECRET" not in str(raised.value)
+
+
 def test_opencode_go_key_bills_as_a_subscription(tmp_path: Path) -> None:
     account = _account(tmp_path, AIProvider.OPENCODE_GO)
     write_pi_key(account.account_dir, "opencode-go")
