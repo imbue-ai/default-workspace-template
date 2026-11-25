@@ -60,11 +60,11 @@ CONFIG_FILE_NAME: Final[str] = "config.toml"
 SYSTEM_DIRECTORY_NAME: Final[str] = "system"
 
 # The files under system/ that a datalib process holds a flock(2) on while it runs: datalib-http
-# holds both for its life, and datalib-dag holds ``runner-lock`` while it syncs. The kernel
+# holds both for its life, and datalib-pipeline holds ``runner-lock`` while it syncs. The kernel
 # releases a lock when its holder exits.
 LOCK_FILE_NAMES: Final[tuple[str, ...]] = ("lock", "runner-lock")
 
-# A config's top-level ``data_root`` key, which datalib-dag uses as written in place of the
+# A config's top-level ``data_root`` key, which datalib-pipeline uses as written in place of the
 # config's own folder.
 DATA_ROOT_LINE: Final[re.Pattern[str]] = re.compile(
     r'^\s*data_root\s*=\s*"([^"]*)"\s*$'
