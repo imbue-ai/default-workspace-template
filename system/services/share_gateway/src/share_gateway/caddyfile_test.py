@@ -5,6 +5,8 @@ import shutil
 import socket
 import subprocess
 import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -442,27 +444,15 @@ def _request(
     return connection.getresponse()
 
 
-def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(tmp_path: Path) -> None:
-    """The rendered compression, run by caddy in front of an app: a plain GET is compressed, while a HEAD keeps the
-    real length, a ranged request gets a plain 206, and an event stream's headers arrive while it is still quiet,
-    before its first event. Skipped where no caddy is installed, as the adapt test is."""
-    caddy = _caddy_binary()
-    if caddy is None:
-        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
-    backend = ThreadingHTTPServer(("127.0.0.1", 0), _AppBackend)
-    threading.Thread(target=backend.serve_forever, daemon=True).start()
-    port = _free_port()
+@contextmanager
+def _caddy_running(caddy: str, caddyfile_text: str, tmp_path: Path) -> Generator[None, None, None]:
+    """Run caddy on ``caddyfile_text`` for as long as the block lasts, entered once caddy is serving it."""
     caddyfile = tmp_path / "Caddyfile"
-    caddyfile.write_text(
-        "{\n    admin off\n    auto_https off\n}\n"
-        f"http://127.0.0.1:{port} {{\n{render_compression(indent='    ')}\n"
-        f"    reverse_proxy 127.0.0.1:{backend.server_port}\n}}\n"
-    )
+    caddyfile.write_text(caddyfile_text)
     caddy_env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
-    # Caddy connects back to this listener once its config is running, so the requests below never race its start.
+    # Caddy connects back to this listener once its config is running, so no request races its start.
     ready = socket.create_server(("127.0.0.1", 0))
     ready.settimeout(15)
-    _STREAM_RELEASED.clear()
     with (tmp_path / "caddy.log").open("w") as caddy_log:
         server = subprocess.Popen(
             [
@@ -484,34 +474,55 @@ def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(
             ready.accept()[0].close()
         except TimeoutError:
             pytest.fail((tmp_path / "caddy.log").read_text())
-
-        whole = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip"})
-        assert whole.getheader("Content-Encoding") == "gzip"
-        assert len(whole.read()) < len(_APP_SCRIPT)
-
-        head = _request(port, "HEAD", "/app.js", {"Accept-Encoding": "gzip"})
-        assert head.getheader("Content-Encoding") is None
-        assert head.getheader("Content-Length") == str(len(_APP_SCRIPT))
-
-        # Well past the size caddy starts compressing at, so only the matcher keeps the range plain.
-        ranged = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip", "Range": "bytes=0-9999"})
-        assert ranged.status == 206
-        assert ranged.getheader("Content-Encoding") is None
-        assert ranged.read() == _APP_SCRIPT[:10000]
-
-        # The headers arrive while the stream has sent nothing yet: an encoder holding them would time this out,
-        # well before the app gives up waiting and sends its event anyway.
-        stream = _request(
-            port, "GET", "/events", {"Accept-Encoding": "gzip", "Accept": "text/event-stream"}, timeout_seconds=5
-        )
-        assert stream.getheader("Content-Encoding") is None
-        _STREAM_RELEASED.set()
-        assert stream.read() == b"data: hello\n\n"
+        yield
     finally:
-        _STREAM_RELEASED.set()
         ready.close()
         server.terminate()
         server.wait(timeout=10)
+
+
+def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(tmp_path: Path) -> None:
+    """The rendered compression, run by caddy in front of an app: a plain GET is compressed, while a HEAD keeps the
+    real length, a ranged request gets a plain 206, and an event stream's headers arrive while it is still quiet,
+    before its first event. Skipped where no caddy is installed, as the adapt test is."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _AppBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    caddyfile_text = (
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://127.0.0.1:{port} {{\n{render_compression(indent='    ')}\n"
+        f"    reverse_proxy 127.0.0.1:{backend.server_port}\n}}\n"
+    )
+    _STREAM_RELEASED.clear()
+    try:
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            whole = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip"})
+            assert whole.getheader("Content-Encoding") == "gzip"
+            assert len(whole.read()) < len(_APP_SCRIPT)
+
+            head = _request(port, "HEAD", "/app.js", {"Accept-Encoding": "gzip"})
+            assert head.getheader("Content-Encoding") is None
+            assert head.getheader("Content-Length") == str(len(_APP_SCRIPT))
+
+            # Well past the size caddy starts compressing at, so only the matcher keeps the range plain.
+            ranged = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip", "Range": "bytes=0-9999"})
+            assert ranged.status == 206
+            assert ranged.getheader("Content-Encoding") is None
+            assert ranged.read() == _APP_SCRIPT[:10000]
+
+            # The headers arrive while the stream has sent nothing yet: an encoder holding them would time this
+            # out, well before the app gives up waiting and sends its event anyway.
+            stream = _request(
+                port, "GET", "/events", {"Accept-Encoding": "gzip", "Accept": "text/event-stream"}, timeout_seconds=5
+            )
+            assert stream.getheader("Content-Encoding") is None
+            _STREAM_RELEASED.set()
+            assert stream.read() == b"data: hello\n\n"
+    finally:
+        _STREAM_RELEASED.set()
         backend.shutdown()
 
 
@@ -610,81 +621,58 @@ def test_caddy_answers_the_web_clients_permission_check_and_lets_it_read_answers
     access = render_web_client_access(
         _DOMAIN, parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP), _AUTH_LABEL, _CHROME_ORIGIN
     )
-    caddyfile = tmp_path / "Caddyfile"
-    caddyfile.write_text(
+    caddyfile_text = (
         "{\n    admin off\n    auto_https off\n}\n"
         f"http://:{port} {{\n{access}\n"
         f"    handle {{\n        reverse_proxy 127.0.0.1:{backend.server_port}\n    }}\n}}\n"
     )
-    caddy_env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
-    ready = socket.create_server(("127.0.0.1", 0))
-    ready.settimeout(15)
-    with (tmp_path / "caddy.log").open("w") as caddy_log:
-        server = subprocess.Popen(
-            [
-                caddy,
-                "run",
-                "--config",
-                str(caddyfile),
-                "--adapter",
-                "caddyfile",
-                "--pingback",
-                f"127.0.0.1:{ready.getsockname()[1]}",
-            ],
-            stdout=caddy_log,
-            stderr=subprocess.STDOUT,
-            env=caddy_env,
-        )
+
+    def ask(method: str, host: str, path: str, origin: str) -> http.client.HTTPResponse:
+        response = _request(port, method, path, {"Host": host, "Origin": origin})
+        response.read()
+        return response
+
     try:
-        try:
-            ready.accept()[0].close()
-        except TimeoutError:
-            pytest.fail((tmp_path / "caddy.log").read_text())
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            check = ask("OPTIONS", _INTERNAL_HOST, "/api/workspace/update/schedule", _CHROME_ORIGIN)
+            assert check.status == 204
+            assert check.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert check.getheader("Access-Control-Allow-Credentials") == "true"
+            assert check.getheader("Access-Control-Allow-Methods") == "GET, POST, PUT, PATCH, DELETE"
+            assert check.getheader("Access-Control-Allow-Headers") == "Content-Type"
+            assert _RecordingBackend.reached == []
 
-        def ask(method: str, host: str, path: str, origin: str) -> http.client.HTTPResponse:
-            response = _request(port, method, path, {"Host": host, "Origin": origin})
-            response.read()
-            return response
+            call = ask("PUT", _INTERNAL_HOST, "/api/workspace/profile", _CHROME_ORIGIN)
+            assert call.status == 200
+            assert call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert call.getheader("Access-Control-Allow-Credentials") == "true"
+            assert {value.strip() for value in (call.getheader("Vary") or "").split(",")} == {
+                "Accept-Encoding",
+                "Origin",
+            }
 
-        check = ask("OPTIONS", _INTERNAL_HOST, "/api/workspace/update/schedule", _CHROME_ORIGIN)
-        assert check.status == 204
-        assert check.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
-        assert check.getheader("Access-Control-Allow-Credentials") == "true"
-        assert check.getheader("Access-Control-Allow-Methods") == "GET, POST, PUT, PATCH, DELETE"
-        assert check.getheader("Access-Control-Allow-Headers") == "Content-Type"
-        assert _RecordingBackend.reached == []
+            agent_check = ask("OPTIONS", _AUTH_HOST, "/_agent/grants/agent-1", _CHROME_ORIGIN)
+            assert agent_check.status == 204
+            agent_call = ask("GET", _AUTH_HOST, "/_agent/grants", _CHROME_ORIGIN)
+            assert agent_call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert _RecordingBackend.reached == [("PUT", "/api/workspace/profile"), ("GET", "/_agent/grants")]
 
-        call = ask("PUT", _INTERNAL_HOST, "/api/workspace/profile", _CHROME_ORIGIN)
-        assert call.status == 200
-        assert call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
-        assert call.getheader("Access-Control-Allow-Credentials") == "true"
-        assert {value.strip() for value in (call.getheader("Vary") or "").split(",")} == {"Accept-Encoding", "Origin"}
-
-        agent_check = ask("OPTIONS", _AUTH_HOST, "/_agent/grants/agent-1", _CHROME_ORIGIN)
-        assert agent_check.status == 204
-        agent_call = ask("GET", _AUTH_HOST, "/_agent/grants", _CHROME_ORIGIN)
-        assert agent_call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
-        assert _RecordingBackend.reached == [("PUT", "/api/workspace/profile"), ("GET", "/_agent/grants")]
-
-        # Another origin, another path, and an app a per-app grant admits to: each reaches the app as it always
-        # did, permission check included, and its answer names no origin.
-        _RecordingBackend.reached = []
-        unanswered = (
-            ("OPTIONS", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
-            ("PUT", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
-            ("OPTIONS", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
-            ("PUT", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
-            ("OPTIONS", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
-            ("PUT", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
-            ("OPTIONS", _INTERNAL_HOST, "/_agent/grants", _CHROME_ORIGIN),
-        )
-        for method, host, path, origin in unanswered:
-            other = ask(method, host, path, origin)
-            assert other.status == 200, (method, host, path, origin)
-            assert other.getheader("Access-Control-Allow-Origin") is None, (method, host, path, origin)
-        assert _RecordingBackend.reached == [(method, path) for method, _host, path, _origin in unanswered]
+            # Another origin, another path, and an app a per-app grant admits to: each reaches the app as it always
+            # did, permission check included, and its answer names no origin.
+            _RecordingBackend.reached = []
+            unanswered = (
+                ("OPTIONS", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
+                ("PUT", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
+                ("OPTIONS", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+                ("PUT", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+                ("OPTIONS", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+                ("PUT", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+                ("OPTIONS", _INTERNAL_HOST, "/_agent/grants", _CHROME_ORIGIN),
+            )
+            for method, host, path, origin in unanswered:
+                other = ask(method, host, path, origin)
+                assert other.status == 200, (method, host, path, origin)
+                assert other.getheader("Access-Control-Allow-Origin") is None, (method, host, path, origin)
+            assert _RecordingBackend.reached == [(method, path) for method, _host, path, _origin in unanswered]
     finally:
-        ready.close()
-        server.terminate()
-        server.wait(timeout=10)
         backend.shutdown()
