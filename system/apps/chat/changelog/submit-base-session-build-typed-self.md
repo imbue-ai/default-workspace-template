@@ -1,0 +1,1 @@
+- Every chat harness session now inherits one constructor from its base class, so a field the base adds can no longer go missing in a subclass and strand a harness switch or a Stop.
