@@ -11,7 +11,7 @@ script yourself. The shell watches the registry and redraws; it never needs rebu
 What follows is this workspace's default look, not a law of nature: the user can have a
 different one whenever they want it, and this doc is where that change starts. Rewrite the
 rules here, redraw the icons already drawn so the set stays one set, and carry the change
-into the one-line restatements that point here (`AGENTS.md`, the `build-app` skill,
+into the one-line restatements that point here (the `build-app` and `update-app` skills,
 `forward_port.py`'s module docs).
 
 ## The rules
