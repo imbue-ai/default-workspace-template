@@ -1,0 +1,1 @@
+The Datalib app's README and launcher name the sync runner `datalib-pipeline`, the name it has from datalib v0.56.0 on, in place of `datalib-dag`. Only comments and docs change; the launcher behaves as before.

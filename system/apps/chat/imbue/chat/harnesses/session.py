@@ -262,11 +262,20 @@ class FileHarnessSession(AgentHarnessSession):
     @classmethod
     def build(cls, deps: SessionDeps) -> "FileHarnessSession":
         self = cls.__new__(cls)
+        self._init_file_session(deps)
+        return self
+
+    def _init_file_session(self, deps: SessionDeps) -> None:
+        """Set every field this class's methods read.
+
+        A subclass's own ``build`` calls this rather than copying the fields, so a field added
+        here cannot go missing there (agy's copy once lacked ``_handed_back_tokens``, and every
+        stop or harness switch of an agy chat failed with an AttributeError).
+        """
         self._deps = deps
         self._sending = SendingRegistry.build()
         self._sending_lock = threading.Lock()
         self._handed_back_tokens = set()
-        return self
 
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         # Record as Sending BEFORE delivery (contract A1): while the synchronous send is in
