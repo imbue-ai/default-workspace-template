@@ -325,8 +325,8 @@ uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on t
   and don't `detach` a session another agent may be driving** (`browser-1`, the name the attach line
   gives every agent). The fleet owns lifecycle: the browser runs until the user quits it or the Screen
   ends. Detaching a session only you use, like the uniquely named one a script attached, is how that
-  session ends; `driven_browser` does it for you. `agentic-browser-fleet close <name>` deletes the profile (every login) with it, so use it
-  only when the user asks for a fresh browser.
+  session ends; `driven_browser` does it for you. `agentic-browser-fleet close <name>` deletes the
+  profile (every login) with it, so use it only when the user asks for a fresh browser.
 - **Don't re-attach a slug whose session died** -- see "Crashes" above. It hangs rather than
   erroring, which is the one failure you cannot recover from; use a new slug.
 - **Don't interpret a `playwright-cli` failure.** Run `ls`.
