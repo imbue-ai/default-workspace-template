@@ -1676,8 +1676,8 @@ def render_stoppable(report: Report) -> str:
     """Only what could be stopped: first what takes nothing off the user's screen, then the apps a
     window shows.
 
-    ``update-self`` runs ``list --stoppable`` from the workspace's own copy of this command, and
-    its prose, which comes from a later release, reads what that copy prints. So the arguments keep
+    ``update-self``'s prose, which comes from a later release, runs ``list --stoppable`` from the
+    workspace's own copy of this command and reads what that copy prints. So the arguments keep
     working, and a row keeps its KIND and the NAME a stop takes
     (``.agents/skills/update-self/references/handoff-contract.md``)."""
     lines = [render_free_memory(report.free_memory)]

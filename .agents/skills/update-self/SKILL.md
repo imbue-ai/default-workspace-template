@@ -69,12 +69,11 @@ what this run needs, with no confirmation and no preflight script, you may:
   interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
-  (`python3 .agents/skills/update-self/scripts/update_self.py memory` lists
-  them, or the staged copy's once Step 2a has staged it; a browser stops
-  through the browser service, an app through `run-status stop-apps`, which
-  records it so `resume-apps` starts it again).
-  `references/freeing-memory-for-an-update.md` has the rule, how to tell a
-  scheduled run from a pressed one, and what the pass owes the user afterwards;
+  (a browser stops through the browser service, an app through `run-status
+  stop-apps`, which records it so `resume-apps` starts it again).
+  `references/freeing-memory-for-an-update.md` has the command that lists
+  them, the rule, how to tell a scheduled run from a pressed one, and what the
+  pass owes the user afterwards;
 - prune the worktrees of workers that are gone (`git worktree list`, then `git
   worktree remove` one whose agent `mngr list` no longer shows, never the
   `update-self` worker's), apply snapshots under
@@ -484,8 +483,8 @@ report, re-arm the poll. The last ends the pass, as below.
 3. **Its gate was shed for memory**, and it is asking for room to rerun. Free
    it yourself per `references/freeing-memory-for-an-update.md`, which says
    what this pass may stop and how much further a scheduled run may go, then
-   reply with what you stopped and the free memory its `memory` command
-   reports *after* it. Memory pressure is never a reason to narrow the gate, so
+   reply with what you stopped and the free memory its listing reports
+   *after* it. Memory pressure is never a reason to narrow the gate, so
    never answer it by telling the worker to skip or trim one. It reaches the
    user only when the licence is spent and the room is still not there: then
    ask them, recording the wait with the staged copy's `run-status hold` and

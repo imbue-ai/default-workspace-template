@@ -25,7 +25,6 @@ from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
 from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
-from update_self_skill import update_memory
 
 _SCRIPT = Path(__file__).parent / "workspace_memory.py"
 
@@ -1510,14 +1509,10 @@ def test_the_list_holds_everything_using_memory_and_adds_up_to_what_is_in_use(
     assert ["In use: 3000 MiB"] in printed
 
 
-def test_update_self_asks_for_the_stoppable_listing_the_way_this_command_takes_it() -> (
-    None
-):
-    """update-self's staged copy runs this command from whatever release the workspace is on, so
-    the arguments it passes must keep meaning the listing of what could be stopped."""
-    args = workspace_memory.build_parser().parse_args(
-        list(update_memory.WORKSPACE_MEMORY_ARGS)
-    )
+def test_the_stoppable_listing_keeps_the_arguments_update_self_runs_it_with() -> None:
+    """update-self's prose, from a later release, runs ``list --stoppable`` on whatever release
+    the workspace is on, so those arguments must keep meaning the listing of what could be stopped."""
+    args = workspace_memory.build_parser().parse_args(["list", "--stoppable"])
 
     assert args.list_format is workspace_memory.ListFormat.STOPPABLE
 

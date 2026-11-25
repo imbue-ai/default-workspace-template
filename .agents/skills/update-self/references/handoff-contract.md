@@ -89,7 +89,7 @@ across versions, held the way the launcher's is:
 - it asks only for what the oldest release with that program provides, takes
   anything newer by its presence, and reports what is absent as unknown;
 - a test holds it to those releases (`launcher_contract_test.py`,
-  `staged_runner_test.py`, `update_memory_test.py`).
+  `staged_runner_test.py`, the memory tool's own `workspace_memory_test.py`).
 
 A new call from the staged prose or code into `system/` is one of the two
 kinds; decide which before adding it.

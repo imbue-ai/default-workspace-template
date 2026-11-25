@@ -153,8 +153,7 @@ verdict and record the Imbue Studio app, bootstrap and the system interface read
 lists), ``update_apply`` (the apply and recover
 orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
 ``resume-chats``), ``update_app_pause`` (``run-status stop-apps`` /
-``resume-apps``), ``update_memory`` (``memory``: what could be stopped to free
-memory), ``update_resume_note`` (the note a resumed chat is
+``resume-apps``), ``update_resume_note`` (the note a resumed chat is
 sent) and ``update_agent_restarts`` (restarting agents onto what an update
 installed).
 """
@@ -240,7 +239,6 @@ from update_self_skill.update_history_bridge import (
     drop_history_bridge,
 )
 from update_self_skill.update_layout import FRONTEND_BUNDLES, PROVISIONER_SCRIPT
-from update_self_skill.update_memory import print_memory
 from update_self_skill.update_runtime import (
     ApplyPreconditionError,
     HttpClient,
@@ -626,10 +624,6 @@ def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(ranges, indent=2))
     return 0
-
-
-def _cmd_memory(args: argparse.Namespace) -> int:
-    return print_memory(_repo_root(args).resolve())
 
 
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
@@ -1291,14 +1285,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the listed sections' text to this file, newest first.",
     )
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
-
-    memory_parser = sub.add_parser(
-        "memory",
-        help="Print the free memory the memory guard acts on and what could be stopped "
-        "to free more, as the workspace's own memory tool lists it. Stops nothing.",
-        parents=[common],
-    )
-    memory_parser.set_defaults(func=_cmd_memory)
 
     pending_parser = sub.add_parser(
         "pending-rollbacks",

@@ -595,9 +595,24 @@ def _resolve_written_path(written: str, file_dir: Path, repo_root: Path) -> Path
     return None if "$" in path else (base / path).resolve()
 
 
+# Scripts only an earlier release ships, which update-self's prose runs in a workspace of that
+# release.
+# CLEANUP: drop memory_candidates.py, with the branch of update-self's
+# freeing-memory-for-an-update.md that runs it, once update-self's floor, the oldest release the
+# app updates from, reaches the first release that ships workspace_memory.py.
+_EARLIER_RELEASE_SCRIPTS = frozenset(
+    {"system/services/oom_priority/bin/memory_candidates.py"}
+)
+
+
 def _names_no_tree_file(written: str) -> bool:
-    """A placeholder (``<name>``) or a scratch path under /tmp names no file in the tree."""
-    return "<" in written or written.startswith("/tmp/")
+    """A placeholder (``<name>``), a scratch path under /tmp, or a script only an earlier release
+    ships names no file in the tree."""
+    return (
+        "<" in written
+        or written.startswith("/tmp/")
+        or written in _EARLIER_RELEASE_SCRIPTS
+    )
 
 
 def _named_python3_scripts(

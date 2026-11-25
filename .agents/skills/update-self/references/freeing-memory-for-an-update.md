@@ -7,18 +7,28 @@ candidates to the user and stops only what they approve (the `free-workspace-mem
 
 ## Read the memory the guard acts on, not the container's
 
+<!-- CLEANUP: once update-self's floor, the oldest release the app updates from, reaches the first
+release that ships workspace_memory.py, leave only its line below and drop the paragraph on the
+earlier tool. -->
+
 ```bash
-python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py memory
+if [ -f system/services/oom_priority/bin/workspace_memory.py ]; then
+    python3 system/services/oom_priority/bin/workspace_memory.py list --stoppable
+elif [ -f system/services/oom_priority/bin/memory_candidates.py ]; then
+    python3 system/services/oom_priority/bin/memory_candidates.py
+else
+    echo "This workspace's version has no memory listing."
+fi
 ```
 
-It runs the workspace's own memory tool, whichever one this workspace's version has, and what it
-prints is that tool's own listing. Its first line is the free memory **earlyoom decides on**: the
-headroom file the workspace publishes for `--host-meminfo` while it is fresh, else `/proc/meminfo`,
-and it names which it read. Under a memory cap those two disagree, and the container's own
-`/proc/meminfo` is the optimistic one -- it has read three times the real headroom on a capped
-workspace. `free -m` reads that optimistic file, so do not decide anything from it, and never tell
-the worker to rerun on a figure that came from it: the gate will be shed again and the round is
-wasted.
+This is the workspace's own memory tool, whichever one its version has, never the target
+release's: the tool reads what the running workspace wrote. Its first line is the free memory
+**earlyoom decides on**: the headroom file the workspace publishes for `--host-meminfo` while it is
+fresh, else `/proc/meminfo`, and it names which it read. Under a memory cap those two disagree, and
+the container's own `/proc/meminfo` is the optimistic one -- it has read three times the real
+headroom on a capped workspace. `free -m` reads that optimistic file, so do not decide anything
+from it, and never tell the worker to rerun on a figure that came from it: the gate will be shed
+again and the round is wasted.
 
 The same line says how much of that free memory is left before the guard starts stopping
 processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
@@ -31,8 +41,12 @@ frees. A line starting `unknown:` means rows of that kind may be missing, and a 
 why. Unknown is not "nothing there", but stop only what is listed. Read the free memory again after
 each round.
 
-A workspace whose version has the earlier memory tool prints that tool's listing, laid out by kind,
-and the command adds under it how to read it.
+A workspace whose version has only the earlier tool, `memory_candidates.py`, gets the same things
+laid out by kind. An app is stopped by its `PROGRAM`, and `AUTO-STOP` `no` is an app that keeps
+running with no window. What it does not print is unknown, not absent: it lists no apps before
+minds-v0.9.2, and before minds-v0.10.7 does not say how much free memory is left before the guard
+starts stopping processes. With no memory listing at all, only chats can be stopped (`run-status
+stop-chats --agent`); say so in the results message.
 
 ## What this pass may stop
 
@@ -74,8 +88,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     run-status stop-apps <program> <program> ...
 ```
 
-The programs are the NAME of the listing's `app` rows. Do **not** quit an app through the
-shell, which closes its windows.
+The programs are the NAME of the listing's `app` rows (the earlier tool's `PROGRAM`). Do **not**
+quit an app through the shell, which closes its windows.
 
 A stopped program leaves its windows where they are. The shell parks the app's port and answers that
 window "Starting <app>" if its page reloads -- and that connection wakes the app again
