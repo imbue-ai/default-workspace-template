@@ -10,8 +10,24 @@ import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
 
 const TOASTS = [
-  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false, isHelpOwed: false },
-  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false, isHelpOwed: false },
+  {
+    id: 1,
+    message: "Could not move it",
+    details: null,
+    actions: [],
+    isLasting: false,
+    isHelpOwed: false,
+    isBugReportOffered: false,
+  },
+  {
+    id: 2,
+    message: "Could not copy it",
+    details: null,
+    actions: [],
+    isLasting: false,
+    isHelpOwed: false,
+    isBugReportOffered: false,
+  },
 ];
 
 afterEach(() => {
@@ -83,7 +99,7 @@ describe("Toasts", () => {
     expect(queue.current()).toEqual([]);
   });
 
-  it("offers Report a bug on a note that owes help once the page can open one, with the note's failure, and keeps it up", () => {
+  it("offers Report a bug on a note that owes help once the page can open one, unless withheld, and keeps the note up", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     queue.show("This window couldn't be closed. Try again.", {
       isLasting: true,
@@ -91,6 +107,12 @@ describe("Toasts", () => {
       isHelpOwed: true,
     });
     queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
+    queue.show("Notes couldn't open that. Try again.", {
+      isLasting: true,
+      details: "HTTP 502",
+      isHelpOwed: true,
+      isBugReportWithheld: true,
+    });
     let reportBug: ((failure: ReportedFailure) => void) | null = null;
     const root = mountQueue(queue, () => reportBug);
     expect(root.querySelector(".report-bug")).toBeNull();
@@ -102,7 +124,7 @@ describe("Toasts", () => {
     expect(buttons.map((button) => button.textContent)).toEqual(["Report a bug"]);
     buttons[0].click();
     expect(reported).toEqual([{ message: "This window couldn't be closed. Try again.", details: "HTTP 500" }]);
-    expect(queue.current()).toHaveLength(2);
+    expect(queue.current()).toHaveLength(3);
   });
 
   it("gives a plain note with details a See details and a close control, and holds it up once they are opened", () => {

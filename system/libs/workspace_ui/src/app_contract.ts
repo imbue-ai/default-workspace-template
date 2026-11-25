@@ -41,7 +41,7 @@
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in,
- *  and whether "Report a bug" can work here. */
+ *  and whether "Report a bug" can work here (the embedder opens a bug report and the page's app is built in). */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";

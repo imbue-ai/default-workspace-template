@@ -7,8 +7,8 @@
  * what failed) gives each a close button. A plain toast with details takes presses either way, for its "See details"
  * and close button; opening the details holds it up (``onHold``). A lasting toast (one that stays until dismissed)
  * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose failure
- * owes help gets "Report a bug" while the page gives ``onReportBug``, decided as it draws: whether the
- * embedder opens a bug report can be learned after the toast went up.
+ * owes help gets "Report a bug" while the page gives ``onReportBug`` (unless its caller withheld it), decided as it
+ * draws: whether the embedder opens a bug report can be learned after the toast went up.
  */
 
 import m from "mithril";
@@ -74,7 +74,7 @@ function lastingToastBody(
   onReportBug: ((failure: ReportedFailure) => void) | null,
 ): m.Children {
   const reportBug: ToastAction | null =
-    toast.isHelpOwed && onReportBug !== null
+    toast.isBugReportOffered && onReportBug !== null
       ? { label: REPORT_A_BUG_LABEL, run: () => onReportBug({ message: toast.message, details: toast.details }) }
       : null;
   const actions = reportBug === null ? toast.actions : [...toast.actions, reportBug];

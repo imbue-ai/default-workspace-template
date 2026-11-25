@@ -54,8 +54,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the
   shell's handshake said `canReportBug` (the embedder's `opensHelp`, which
-  only the shell hears; it hands every page a fresh handshake when that
-  changes). It reads the connection as it renders, so the page redraws on a
+  only the shell hears, and only for a built-in app's page: a user's own app's
+  faults are not Imbue's bugs; the shell hands every page a fresh handshake
+  when that changes). It reads the connection as it renders, so the page redraws on a
   handshake. The shell opens the report directly (`src/report-bug.ts`), with
   the sentence and details attached as the report's `errorDetails`, capped at
   the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
@@ -66,7 +67,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   buttons ("Try again", ...), at most three on screen. A toast that says the
   same as one already up (message and details) replaces it. A lasting toast
   says whether its failure owes the person help (`isHelpOwed`), and
-  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
+  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`
+  (unless the caller passed `isBugReportWithheld`, for a failure a user's own
+  app caused),
   decided at each draw, so a toast shown before the page learned it can open
   a bug report gains the button once it does. Pressing a button dismisses
   its toast, except "Report a bug", after which the toast's other buttons
