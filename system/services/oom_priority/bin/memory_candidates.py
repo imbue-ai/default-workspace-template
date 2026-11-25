@@ -318,7 +318,7 @@ class AgentSection(NamedTuple):
 
     candidates: tuple[AgentCandidate, ...] | None
     notes: tuple[str, ...]
-    others: tuple[HeldEntry, ...] | None = ()
+    others: tuple[HeldEntry, ...] | None
 
 
 class AppSection(NamedTuple):
@@ -327,7 +327,7 @@ class AppSection(NamedTuple):
 
     candidates: tuple[AppCandidate, ...] | None
     notes: tuple[str, ...]
-    others: tuple[HeldEntry, ...] | None = ()
+    others: tuple[HeldEntry, ...] | None
 
 
 class BrowserSection(NamedTuple):
@@ -336,7 +336,7 @@ class BrowserSection(NamedTuple):
 
     candidates: tuple[BrowserCandidate, ...] | None
     notes: tuple[str, ...]
-    others: tuple[HeldEntry, ...] | None = ()
+    others: tuple[HeldEntry, ...] | None
 
 
 class Report(NamedTuple):
@@ -873,7 +873,7 @@ def collect_browser_section(sources: Sources, shell: ShellAnswer) -> BrowserSect
         browser.get("lifecycle") == BROWSER_RUNNING_LIFECYCLE
         for browser in browser_records
     ):
-        return BrowserSection((), ())
+        return BrowserSection((), (), ())
 
     # Only a running browser holds memory, and only the shell knows whether a window shows the Screen.
     windows = shell.windows
@@ -888,7 +888,7 @@ def collect_browser_section(sources: Sources, shell: ShellAnswer) -> BrowserSect
         )
     running = running_browsers(browser_records, sources.proc_dir)
     if not windows.is_screen_shown:
-        return BrowserSection(tuple(running), ())
+        return BrowserSection(tuple(running), (), ())
     return BrowserSection(
         (),
         (),
