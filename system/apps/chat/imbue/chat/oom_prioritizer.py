@@ -40,7 +40,7 @@ process exists.
 
 Re-tagging is event-driven plus a slow sweep, and once started, every pass runs
 on one background thread. The events (a presence report that changes whether a chat is
-open or visible, a send, a lifecycle change) cover everything that *raises* a
+open or visible or carries input, a send, a lifecycle change) cover everything that *raises* a
 chat's protection; each only asks the pass thread for a pass, so no request waits
 on one and a burst of them costs one pass. The sweep exists because staleness is
 the one signal that changes with no event to announce it -- a chat crosses a ramp

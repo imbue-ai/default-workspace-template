@@ -2945,8 +2945,8 @@ class AgentManager:
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
-        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
-        watch it."""
+        open or showing or carried a person's input, and marks the chat read in the Imbue Studio app when the report
+        is what made someone watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
