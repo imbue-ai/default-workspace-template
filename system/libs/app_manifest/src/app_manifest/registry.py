@@ -83,7 +83,8 @@ class RegistryLaunchPath(FrozenModel):
     )
     text_param: LaunchParamName | None = Field(
         default=None,
-        description="The param the launcher fills with typed text; absent means the path takes none",
+        description="The param the launcher fills with typed text, or, on a path with app_params, the one an ask "
+        "about the app fills with its text; absent means the path takes none",
     )
     draft_param: LaunchParamName | None = Field(
         default=None,
@@ -96,8 +97,7 @@ class RegistryLaunchPath(FrozenModel):
     app_params: AppParams | None = Field(
         default=None,
         description="The params the shell fills with an app's name and display name when its window's \"Chat about "
-        'this app" button is pressed, and, for a path that names a ``text`` param, with the text of an ask about the '
-        "app; absent means the path is about no app",
+        'this app" button is pressed, or when a page of it asks an agent; absent means the path is about no app',
     )
 
 

@@ -17,13 +17,7 @@ import {
   orderAppLaunches,
   textRowDisabledReason,
 } from "./launch";
-import {
-  appAskLaunchPathRecord,
-  appChatLaunchPathRecord,
-  appRecord,
-  launchPathRecord,
-  screenAppRecord,
-} from "../testing/records";
+import { appChatLaunchPathRecord, appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
 
 const docs = appRecord("docs", {
   launcher_rank: 20,
@@ -121,7 +115,7 @@ describe("launch paths of an app", () => {
       default_shortcuts: [],
       launch_paths: [
         launchPathRecord({ id: "m", mention_param: "m", params: ["m"] }),
-        launchPathRecord({ id: "a", params: ["x", "y"], app_params: { name: "x", display_name: "y", text: null } }),
+        launchPathRecord({ id: "a", params: ["x", "y"], app_params: { name: "x", display_name: "y" } }),
         launchPathRecord({ id: "plain", path: "/plain" }),
       ],
     });
@@ -202,18 +196,20 @@ describe("the mention rows", () => {
 
 describe("the app-chat launch", () => {
   it("keeps a launch path about an app out of every row and picks the first in launcher order for the button", () => {
-    const aboutAnApp = appChatLaunchPathRecord();
+    const aboutAnApp = launchPathRecord({
+      id: "app-chat",
+      path: "/api/chats/intake",
+      method: "POST",
+      params: ["app", "app_display_name"],
+      app_params: { name: "app", display_name: "app_display_name" },
+    });
     const chat = appRecord("chat", {
       launcher_rank: 10,
       launch_paths: [launchPathRecord({ id: "root", path: "/" }), aboutAnApp],
     });
     const notes = appRecord("notes", {
       launch_paths: [
-        launchPathRecord({
-          id: "about",
-          params: ["a", "d"],
-          app_params: { name: "a", display_name: "d", text: null },
-        }),
+        launchPathRecord({ id: "about", params: ["a", "d"], app_params: { name: "a", display_name: "d" } }),
       ],
     });
     const docs = appRecord("docs", { display_name: "Docs" });
@@ -225,38 +221,33 @@ describe("the app-chat launch", () => {
     expect(appChatParams(launchPathRecord(), docs)).toEqual({});
   });
 
-  it("picks the path that takes no text for the button and the one that takes it for an ask, with both declared", () => {
-    const named = (launch: ReturnType<typeof appAskLaunchOf>): string | null =>
-      launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`;
-    const ask = appAskLaunchPathRecord();
-    const balloon = appChatLaunchPathRecord();
-    // The ask's path is declared first, and by the app that leads the launcher: neither makes it the button's.
+  it("runs an ask through the first path about an app that also takes text, which still lists as no row", () => {
+    const chatAboutAnApp = appChatLaunchPathRecord();
     const chat = appRecord("chat", {
-      launcher_rank: 10,
-      launch_paths: [launchPathRecord({ id: "root", path: "/" }), ask, balloon],
+      launcher_rank: 20,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), chatAboutAnApp],
     });
+    // Ahead of the chat in launcher order, but its path takes no text: the button's, never an ask's.
     const notes = appRecord("notes", {
+      launcher_rank: 10,
       launch_paths: [
-        launchPathRecord({
-          id: "ask",
-          params: ["a", "d", "t"],
-          app_params: { name: "a", display_name: "d", text: "t" },
-        }),
+        launchPathRecord({ id: "about", params: ["a", "d"], app_params: { name: "a", display_name: "d" } }),
       ],
     });
     const docs = appRecord("docs", { display_name: "Docs" });
+    const named = (launch: ReturnType<typeof appAskLaunchOf>): string | null =>
+      launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`;
 
-    expect(named(appChatLaunchOf([notes, chat]))).toBe("chat:app-chat");
-    expect(named(appAskLaunchOf([notes, chat]))).toBe("chat:app-ask");
-    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
-    // A machine that declares only one of the two offers only that one.
-    expect(appChatLaunchOf([notes])).toBeNull();
-    expect(appAskLaunchOf([appRecord("chat", { launch_paths: [balloon] })])).toBeNull();
-    expect(appAskParams(ask, docs, "Fix this.")).toEqual({
+    expect(named(appChatLaunchOf([notes, chat]))).toBe("notes:about");
+    expect(named(appAskLaunchOf([notes, chat]))).toBe("chat:app-chat");
+    expect(appAskLaunchOf([notes])).toBeNull();
+    expect(appAskParams(chatAboutAnApp, docs, "Fix this.")).toEqual({
       app: "docs",
       app_display_name: "Docs",
       message: "Fix this.",
     });
-    expect(appAskParams(balloon, docs, "Fix this.")).toEqual({});
+    // Its text_param makes it neither a launcher row nor a free-text row.
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
+    expect(freeTextRowsOf([notes, chat])).toEqual([]);
   });
 });
