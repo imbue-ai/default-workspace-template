@@ -664,4 +664,5 @@ def register_workspace_routes(application: Flask) -> None:
     """Register every workspace route on ``application``."""
     application.register_error_handler(WorkspaceRouteRefusal, _answer_refusal)
     for (method, path), view in _VIEW_BY_ROUTE.items():
-        application.add_url_rule(path, view_func=view, methods=[method], endpoint=f"workspace_{view.__name__}")
+        endpoint = f"workspace_{method.lower()}{path.removeprefix(WORKSPACE_ROUTE_PREFIX).replace('/', '_')}"
+        application.add_url_rule(path, view_func=view, methods=[method], endpoint=endpoint)
