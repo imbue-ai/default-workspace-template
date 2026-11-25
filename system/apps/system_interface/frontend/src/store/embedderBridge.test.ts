@@ -34,6 +34,7 @@ beforeEach(() => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
     immersive: immersiveBridge,
   });
   connectEmbedderToStore(store);

@@ -371,7 +371,7 @@ def test_the_shells_head_poll_does_not_ask_for_staleness(git_work_dir: Path, tmp
 def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, tmp_path: Path) -> None:
     """The meta tag is the only thing the banner reads, and only the *built*
     shell carries one -- every other server test here runs against the
-    not-built placeholder, where nothing is injected at all.
+    recovery page served while it is not built, where nothing is injected at all.
     """
     repo = git_work_dir
     state = _tracking_state(repo)

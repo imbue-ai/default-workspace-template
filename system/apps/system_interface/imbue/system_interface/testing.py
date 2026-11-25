@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import socket
 import socketserver
+import subprocess
 import sys
 import tempfile
 import threading
@@ -345,6 +346,20 @@ def stand_in_app() -> Flask:
     app.add_url_rule("/", view_func=lambda: "ok", endpoint="root")
     app.add_url_rule("/<path:path>", view_func=lambda path: "ok", endpoint="page")
     return app
+
+
+def words_a_shell_splits(line: str, working_directory: Path) -> list[str]:
+    """The words a real ``sh`` builds from ``line``, run from ``working_directory``. ``set --`` keeps the line's first
+    word from being run as a command, but every word is still expanded on the way in, as a reader's shell would."""
+    printed_words = subprocess.run(
+        ["sh", "-c", f'set -- {line}\nprintf "%s\\0" "$@"'],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+        cwd=working_directory,
+    )
+    return printed_words.stdout.split("\0")[:-1]
 
 
 def find_free_port() -> int:

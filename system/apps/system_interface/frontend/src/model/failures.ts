@@ -82,7 +82,8 @@ export function couldNotStartRequest(app: AppRecord): string {
   });
 }
 
-/** What an agent asked to free up space is told to do about a failure a full disk caused. */
+/** What an agent asked to free up space is told to do about a failure a full disk caused (the shell's recovery
+ *  page asks the same, ``recovery_page.FREE_SPACE_INSTRUCTION``). */
 export const FREE_SPACE_INSTRUCTION =
   "Free up disk space in this workspace, then tell the user what was taking up the space and what you removed.";
 

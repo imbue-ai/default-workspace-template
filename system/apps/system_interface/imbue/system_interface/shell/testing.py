@@ -46,7 +46,9 @@ from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_context import state_of
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import DesktopsDocument
@@ -56,9 +58,13 @@ from imbue.system_interface.shell.desktop_document import default_shortcut_targe
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
+from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPost
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
+from imbue.system_interface.shell.state_files import state_write_error
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
@@ -387,6 +393,73 @@ def shell_application(
         launch_poster=launch_poster,
     )
     return create_application(state)
+
+
+class DesktopsReadBugError(Exception):
+    """What a read of the desktops raises in a test standing in for a bug in the shell (no error of the shell's own)."""
+
+
+class DesktopStoreWhoseReadFails(DesktopStore):
+    """Reads and writes the desktops as the real store does, except that seeding or listing them fails while
+    ``failing_errno`` (a write the disk refused) or ``failing_bug`` (an unexpected error) is set."""
+
+    failing_errno: int | None = None
+    failing_bug: str | None = None
+
+    def ensure_default(self, seed_shortcuts: Callable[[], Sequence[DesktopShortcut]]) -> list[Desktop]:
+        if self.failing_errno is not None:
+            raise state_write_error(
+                self.state_directory / DESKTOPS_FILENAME, OSError(self.failing_errno, os.strerror(self.failing_errno))
+            )
+        if self.failing_bug is not None:
+            raise DesktopsReadBugError(self.failing_bug)
+        return super().ensure_default(seed_shortcuts)
+
+
+def recovery_shell(
+    tmp_path: Path,
+    outcomes: list[LaunchPostOutcome],
+    is_preview: bool = False,
+    is_chat_registered: bool = True,
+    desktops: DesktopStore | None = None,
+) -> tuple[Flask, list[LaunchPost]]:
+    """A shell with no built interface over the two-app registry (a terminal whose ``new`` is a GET, labelled
+    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` labelled ``helper-y2`` whose ``main`` and
+    ``new`` post typed text (to its main chat, and to a new one); its posts are answered from ``outcomes`` and kept in
+    the list returned beside it. Its state is under ``tmp_path / "state"``, its desktops kept by ``desktops`` when
+    given (over that directory)."""
+    helper = registry_row_toml(
+        "helper",
+        "http://localhost:7002",
+        display_name="Helper",
+        label="helper-y2",
+        launcher_rank=10,
+        launch_paths=(
+            ("root", "Helper", "/"),
+            ("main", "Send to main chat", "/api/intake"),
+            ("new", "New chat", "/api/intake"),
+        ),
+        launch_params={"main": ["message"], "new": ["message"]},
+        launch_text_params={"main": "message", "new": "message"},
+        launch_methods={"main": "POST", "new": "POST"},
+        launch_presets={"main": {"target": "main_chat"}, "new": {"target": "new_chat"}},
+    )
+    registry_path = write_two_app_registry(tmp_path, *([helper] if is_chat_registered else []))
+    registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return outcomes.pop(0)
+
+    broadcaster = WebSocketBroadcaster()
+    application = shell_application(
+        tmp_path, build_inventory(registry_path, broadcaster), broadcaster, is_preview=is_preview, launch_poster=poster
+    )
+    if desktops is not None:
+        state = state_of(application)
+        state.shell = state.shell.model_copy_update(to_update(state.shell.field_ref().desktops, desktops))
+    return application, posts
 
 
 class FakeLivenessProber:
