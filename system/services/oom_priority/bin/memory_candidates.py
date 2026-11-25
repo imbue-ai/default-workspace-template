@@ -948,13 +948,10 @@ def stoppable_app_candidates(
         pid = pids_by_program.get(program)
         if pid is None:
             continue
-        display_name = app.get("display_name")
         candidates.append(
             AppCandidate(
                 name=name,
-                display_name=display_name
-                if isinstance(display_name, str) and display_name
-                else name,
+                display_name=_app_title(app, name),
                 program=program,
                 window_count=windows.count_by_app.get(name, 0),
                 stops_when_no_windows=bool(app.get("stop_when_no_windows")),
@@ -963,6 +960,12 @@ def stoppable_app_candidates(
             )
         )
     return sorted(candidates, key=lambda c: _memory_order(c.anonymous_kib))
+
+
+def _app_title(app: Mapping[str, Any], name: str) -> str:
+    """The app's display name, else its name."""
+    display_name = app.get("display_name")
+    return display_name if isinstance(display_name, str) and display_name else name
 
 
 def _critical_programs(apps: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -1008,10 +1011,7 @@ def held_programs(
             continue
         if program in candidate_programs:
             continue
-        display_name = app.get("display_name")
-        titles_by_program.setdefault(program, []).append(
-            display_name if isinstance(display_name, str) and display_name else name
-        )
+        titles_by_program.setdefault(program, []).append(_app_title(app, name))
         if program in critical_programs:
             why = "a critical app: the workspace is reached and talked to through it"
         elif name == SCREEN_APP_NAME:
