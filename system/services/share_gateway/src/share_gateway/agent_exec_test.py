@@ -257,7 +257,7 @@ def test_a_command_ended_by_a_signal_reports_owner_execs_code_for_it(tmp_path: P
 def test_a_command_out_of_time_is_killed_with_everything_it_started_and_says_so(tmp_path: Path) -> None:
     lifeline = ProcessLifeline(tmp_path)
     try:
-        events = start_holding(lifeline, tmp_path, timeout_seconds=0.3, running=RunningCommands())
+        events = start_holding(lifeline, tmp_path, timeout_seconds=1.0, running=RunningCommands())
         assert list(events) == [{"type": "exit", "code": None, "timed_out": True}]
         assert lifeline.is_released_within(_LIFELINE_WAIT_SECONDS)
     finally:
