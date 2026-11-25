@@ -153,18 +153,18 @@ def test_scalar_template_options_override_rather_than_stack() -> None:
 def test_worker_template_installs_no_worker_skill_and_keeps_the_venv() -> None:
     """A `-t worker` create installs nothing into the worker's skill tree.
 
-    The generic harden worker is followed in place from the checkout every
-    worker already has (`.agents/shared/worker/SKILL.md`, named outright by the
-    lead's task file), so the provisioning step that used to copy it in as a
-    `harden-worker` skill is gone -- and must not creep back, since an
-    installed copy is untracked scratch that a worker's broad `git add` would
-    carry onto its branch. What the template must still do is link and converge
-    the worker's venv and mark the agent's role. Its Claude plugins load in place
-    from the pinned local marketplaces, with nothing to install."""
+    The generic harden worker is a tracked skill (`.agents/skills/harden-worker/`,
+    invoked by name from the lead's task file), so the checkout every worker
+    already has carries it. A provisioning step that copies a worker skill in
+    must not creep back: an installed copy is scratch the checkout does not
+    track, which a worker's broad `git add` would carry onto its branch. What
+    the template must still do is link and converge the worker's venv and mark
+    the agent's role. Its Claude plugins load in place from the pinned local
+    marketplaces, with nothing to install."""
     result = _apply(("worker",))
     commands = result["extra_provision_command"]
     assert not any("install_worker_skills.sh" in cmd for cmd in commands), (
-        f"the worker template must no longer install a worker skill, got {commands!r}"
+        f"the worker template must not install a worker skill, got {commands!r}"
     )
     assert (
         "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . "

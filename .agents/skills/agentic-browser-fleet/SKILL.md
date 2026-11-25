@@ -3,6 +3,8 @@ name: agentic-browser-fleet
 description: Drive the workspace's shared Chromium browser yourself, one command at a time, from your shell. Reached from the connect-external-service skill, which decides when a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction); load that skill first rather than this one. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # Driving the browser
@@ -28,6 +30,25 @@ everything `--help` cannot know: who owns the browser, what the human can do to 
 you, and the handful of ways this goes wrong in practice.
 
 **No API key needed.** Everything here is deterministic and keyless.
+
+## Contents
+
+- First: the browser runs on the Screen, and `new` gives it to you
+- The lease is the Screen's
+- The loop
+- Fleet commands
+- Ownership rules
+- When something fails, run `ls` -- do not read the error
+- Crashes, stops, and the Screen going away
+- Long lists: "not found" is not the same as "not there"
+- Scrolling the thing you meant
+- Snapshots are cheap, screenshots are not
+- Hitting a wall a human must clear (CAPTCHA / 2FA / login)
+- Live view vs. your output
+- Tabs and sub-agents
+- Exit codes -- branch on these
+- Quick recipes
+- Don'ts
 
 ## First: the browser runs on the Screen, and `new` gives it to you
 
