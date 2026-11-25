@@ -1067,8 +1067,15 @@ def collect_browser_section(
                 f"could not read the shell's windows at {shell.url} ({reason}), so whether a window shows the Screen is unknown",
             ),
             tuple(
-                held_browsers(
-                    table, "whether a window shows the Screen it runs on is unknown"
+                _largest_first(
+                    [
+                        *unlisted,
+                        *held_browsers(
+                            table,
+                            "whether a window shows the Screen it runs on is unknown",
+                            except_names=[browser.name for browser in unlisted],
+                        ),
+                    ]
                 )
             ),
         )

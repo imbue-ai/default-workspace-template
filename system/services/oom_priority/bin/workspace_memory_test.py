@@ -1055,7 +1055,17 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
     tmp_path: Path, runtime_dir: Path
 ) -> None:
     proc = tmp_path / "proc"
-    fleet = _fleet(_browser("browser-1", "running"))
+    for pid, name in ((300, "browser-1"), (310, "browser-2")):
+        _fake_process(
+            proc,
+            pid,
+            256,
+            argv=(
+                "tilion",
+                f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-{name}",
+            ),
+        )
+    fleet = _fleet(_browser("browser-1", "running"), _browser("browser-2", "stopped"))
     for inventory_answer in (
         urllib.error.URLError("timed out"),
         {"unexpected": "shape"},
@@ -1079,6 +1089,11 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
             "so whether a window shows the Screen is unknown"
             in report.browsers.notes[0]
         )
+        # Only the running browser waits on the windows; the other was never the service's to stop.
+        assert {entry.name: entry.why for entry in report.browsers.others} == {
+            "browser-1": "whether a window shows the Screen it runs on is unknown",
+            "browser-2": "the Screen service does not list it as running",
+        }
 
 
 @pytest.mark.parametrize(
