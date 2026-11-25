@@ -70,6 +70,7 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
     REPO_ROOT / "system" / "libs" / "app_registration" / "src",
+    REPO_ROOT / "system" / "libs" / "workspace_update_control" / "src",
 )
 
 # Bare scripts outside the bare packages (standalone scripts, and stubs of stdlib-only
@@ -80,6 +81,7 @@ STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
     SYSTEM_SCRIPTS / "forward_port.py",
+    SYSTEM_SCRIPTS / "update_dispatcher_tick.py",
 )
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its

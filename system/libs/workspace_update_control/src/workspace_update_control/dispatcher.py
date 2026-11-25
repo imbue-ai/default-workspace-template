@@ -39,44 +39,43 @@ import tempfile
 import time
 import tomllib
 import uuid
-from collections.abc import Callable
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from datetime import datetime
-from datetime import timezone
-from enum import StrEnum
-from enum import auto
-from typing import Final
-from typing import TypedDict
-from typing import assert_never
+from datetime import datetime, timezone
+from enum import StrEnum, auto
+from pathlib import Path
+from typing import Final, TypedDict, assert_never
 
-from workspace_update_control.support import BACKGROUND_TASKS_CLI_PATH
-from workspace_update_control.support import as_json_object
-from workspace_update_control.support import run_command
-from workspace_update_control.protocol import LAST_DISPATCH_FILE_PATH
-from workspace_update_control.protocol import NO_BACKUP_NOTE
-from workspace_update_control.protocol import OLD_STEP_ONE_INSTRUCTION
-from workspace_update_control.protocol import OLD_STEP_TWO_INSTRUCTION_TEMPLATE
-from workspace_update_control.protocol import OUTCOME_CHAT_APP_UNREACHABLE
-from workspace_update_control.protocol import OUTCOME_CREATED
-from workspace_update_control.protocol import OUTCOME_CREATE_FAILED
-from workspace_update_control.protocol import OUTCOME_NEEDS_SIGN_IN
-from workspace_update_control.protocol import OVERRIDE_NOTE_TEMPLATE
-from workspace_update_control.protocol import PINNED_NOTE_TEMPLATE
-from workspace_update_control.protocol import RUN_RECORD_PATH
-from workspace_update_control.protocol import SCHEDULE_FILE_PATH
-from workspace_update_control.protocol import SKIP_DISPATCH_FAILED
-from workspace_update_control.protocol import SKIP_LEASE_HELD
-from workspace_update_control.protocol import SKIP_NEEDS_SIGN_IN
-from workspace_update_control.protocol import SKIP_UPDATE_IN_FLIGHT
-from workspace_update_control.protocol import SKIP_WINDOW_CLOSED
-from workspace_update_control.protocol import STARTED_BY_SCHEDULED
-from workspace_update_control.protocol import UPDATE_COMMAND
-from workspace_update_control.protocol import UPDATE_STATE_DIR
-from workspace_update_control.protocol import WATCHDOG_GONE_LEAD_DETAIL
-from workspace_update_control.protocol import WATCHDOG_REMINDER_MESSAGE
-from workspace_update_control.protocol import WATCHDOG_REVIVE_MESSAGE_TEMPLATE
+from workspace_update_control.protocol import (
+    LAST_DISPATCH_FILE_PATH,
+    NO_BACKUP_NOTE,
+    OLD_STEP_ONE_INSTRUCTION,
+    OLD_STEP_TWO_INSTRUCTION_TEMPLATE,
+    OUTCOME_CHAT_APP_UNREACHABLE,
+    OUTCOME_CREATE_FAILED,
+    OUTCOME_CREATED,
+    OUTCOME_NEEDS_SIGN_IN,
+    OVERRIDE_NOTE_TEMPLATE,
+    PINNED_NOTE_TEMPLATE,
+    RUN_RECORD_PATH,
+    SCHEDULE_FILE_PATH,
+    SKIP_DISPATCH_FAILED,
+    SKIP_LEASE_HELD,
+    SKIP_NEEDS_SIGN_IN,
+    SKIP_UPDATE_IN_FLIGHT,
+    SKIP_WINDOW_CLOSED,
+    STARTED_BY_SCHEDULED,
+    UPDATE_COMMAND,
+    UPDATE_STATE_DIR,
+    WATCHDOG_GONE_LEAD_DETAIL,
+    WATCHDOG_REMINDER_MESSAGE,
+    WATCHDOG_REVIVE_MESSAGE_TEMPLATE,
+)
+from workspace_update_control.support import (
+    BACKGROUND_TASKS_CLI_PATH,
+    as_json_object,
+    run_command,
+)
 
 DISPATCHER_LOG_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dispatcher.log"
 _WATCHDOG_STATE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/watchdog.json"
@@ -84,7 +83,9 @@ _WATCHDOG_STATE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/watchdog.json"
 _DISPATCH_ATTEMPT_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dispatch-attempt.json"
 _DISPATCH_ATTEMPT_LABEL: Final[str] = "update_dispatch_attempt"
 _SKILL_PATH: Final[str] = ".agents/skills/update-self/SKILL.md"
+# own-process: other-tree -- the shell imported its code when it started, and the run record's one writer is the update-self the tree holds now, which an update may have replaced since
 _UPDATE_SELF_SCRIPT: Final[str] = ".agents/skills/update-self/scripts/update_self.py"
+# own-process: other-tree -- the shell imported its code when it started, and a chat is created and messaged by the messenger the tree holds now, which an update may have replaced since
 _MESSAGE_CHAT_SCRIPT: Final[str] = "system/scripts/message_chat.py"
 # The template's env wrapper, the first that exists.
 # CLEANUP: drop the automations path once update-self's floor, the oldest release the app updates from,
@@ -95,7 +96,6 @@ _AGENT_ENV_WRAPPERS: Final[tuple[str, ...]] = (
 )
 _HOST_ENV_FILE: Final[str] = "/home/user/.mngr/env"
 _LOCAL_SETTINGS_PATH: Final[str] = ".mngr/settings.local.toml"
-_ACCOUNT_GATE_SCRIPT: Final[str] = "system/scripts/require_create_account.py"
 _ACCOUNT_RESOLVER_SCRIPT: Final[str] = "system/scripts/default_account_args.py"
 _TICKETS_DIR_DEFAULT: Final[str] = "data/.tickets"
 _MNGR_LIST_FIELD_SEPARATOR: Final[str] = "|"
@@ -569,6 +569,11 @@ def _do_local_settings_name_a_create_type() -> bool:
     return isinstance(agent_type, str) and bool(agent_type)
 
 
+def _is_create_gated_on_an_account() -> bool:
+    """Whether this template refuses a create while no account is signed in, which it does where it has the gate."""
+    return Path("system/scripts/require_create_account.py").is_file()
+
+
 def resolve_account(agent_environment: AgentEnvironment) -> tuple[bool, list[str]]:
     """``(is_signed_in, bare-create account args)`` for this workspace's default account.
 
@@ -579,7 +584,7 @@ def resolve_account(agent_environment: AgentEnvironment) -> tuple[bool, list[str
     """
     if os.path.isfile(_LOCAL_SETTINGS_PATH):
         return _do_local_settings_name_a_create_type(), []
-    if os.path.isfile(_ACCOUNT_GATE_SCRIPT):
+    if _is_create_gated_on_an_account():
         return False, []
     if not os.path.isfile(_ACCOUNT_RESOLVER_SCRIPT):
         return True, []

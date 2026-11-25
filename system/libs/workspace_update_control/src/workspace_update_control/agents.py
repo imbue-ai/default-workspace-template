@@ -15,9 +15,7 @@ answer is None: every caller reads that as "the agents are unknown", never as "t
 import json
 import os
 from collections.abc import Mapping
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 from workspace_update_control.support import as_json_object
@@ -84,18 +82,12 @@ def _tail_lines_back_to_snapshot(path: str) -> list[str] | None:
 
 
 def _event_time(event: Mapping[str, object]) -> datetime | None:
-    """The envelope's timestamp, which carries up to nine fractional digits of which Python reads six."""
+    """The envelope's timestamp: ISO 8601 with up to nine fractional digits, of which Python keeps six."""
     raw = event.get("timestamp")
     if not isinstance(raw, str):
         return None
-    text = raw.strip().replace("Z", "+00:00")
-    head, dot, rest = text.partition(".")
-    if dot:
-        digits = "".join(character for character in rest if character.isdigit())
-        zone = rest[len(digits) :]
-        text = "%s.%s%s" % (head, digits[:6].ljust(6, "0"), zone)
     try:
-        parsed = datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(raw.strip())
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)

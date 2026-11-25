@@ -17,50 +17,51 @@ Like the dispatcher, they act on the workspace whose root is the current directo
 import fcntl
 import os
 import uuid
-from collections.abc import Callable
-from collections.abc import Generator
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Final
 
-from workspace_update_control.dispatcher import DISPATCHER_LOG_PATH
-from workspace_update_control.dispatcher import UPDATE_PROGRAM_SCHEMA
-from workspace_update_control.dispatcher import AgentEnvironment
-from workspace_update_control.dispatcher import CreateResult
-from workspace_update_control.dispatcher import busy_chat_rows
-from workspace_update_control.dispatcher import chat_id_of
-from workspace_update_control.dispatcher import create_result
-from workspace_update_control.dispatcher import create_update_chat
-from workspace_update_control.dispatcher import find_run_lead
-from workspace_update_control.dispatcher import is_cron_available
-from workspace_update_control.dispatcher import is_run_in_flight
-from workspace_update_control.dispatcher import is_update_lease_held
-from workspace_update_control.dispatcher import is_update_skill_present
-from workspace_update_control.dispatcher import pending_dispatched_chat
-from workspace_update_control.dispatcher import read_json_object
-from workspace_update_control.dispatcher import resolve_account
-from workspace_update_control.dispatcher import run_started_at
-from workspace_update_control.dispatcher import write_file_if_changed
-from workspace_update_control.dispatcher import write_json_atomically
-from workspace_update_control.dispatcher import write_log_line
-from workspace_update_control.protocol import DISMISSALS_FILE_PATH
-from workspace_update_control.protocol import DISPATCHER_CRON_NAME
-from workspace_update_control.protocol import DURABLE_CRON_PATH
-from workspace_update_control.protocol import LAST_DISPATCH_FILE_PATH
-from workspace_update_control.protocol import LAST_START_FILE_PATH
-from workspace_update_control.protocol import OUTCOME_ALREADY_RUNNING
-from workspace_update_control.protocol import OUTCOME_ARMED
-from workspace_update_control.protocol import OUTCOME_CREATE_FAILED
-from workspace_update_control.protocol import OUTCOME_NEEDS_SIGN_IN
-from workspace_update_control.protocol import OUTCOME_NO_CRON
-from workspace_update_control.protocol import OUTCOME_STARTING
-from workspace_update_control.protocol import OUTCOME_TOO_OLD_TO_UPDATE
-from workspace_update_control.protocol import RUN_RECORD_PATH
-from workspace_update_control.protocol import SCHEDULE_FILE_PATH
-from workspace_update_control.protocol import SKIP_NEEDS_SIGN_IN
-from workspace_update_control.protocol import SKIPPED_TARGET_FILE_PATH
-from workspace_update_control.protocol import STARTED_BY_IMMEDIATE
+from workspace_update_control.dispatcher import (
+    DISPATCHER_LOG_PATH,
+    UPDATE_PROGRAM_SCHEMA,
+    AgentEnvironment,
+    CreateResult,
+    busy_chat_rows,
+    chat_id_of,
+    create_result,
+    create_update_chat,
+    find_run_lead,
+    is_cron_available,
+    is_run_in_flight,
+    is_update_lease_held,
+    is_update_skill_present,
+    pending_dispatched_chat,
+    read_json_object,
+    resolve_account,
+    run_started_at,
+    write_file_if_changed,
+    write_json_atomically,
+    write_log_line,
+)
+from workspace_update_control.protocol import (
+    DISMISSALS_FILE_PATH,
+    DISPATCHER_CRON_NAME,
+    DURABLE_CRON_PATH,
+    LAST_DISPATCH_FILE_PATH,
+    LAST_START_FILE_PATH,
+    OUTCOME_ALREADY_RUNNING,
+    OUTCOME_ARMED,
+    OUTCOME_CREATE_FAILED,
+    OUTCOME_NEEDS_SIGN_IN,
+    OUTCOME_NO_CRON,
+    OUTCOME_STARTING,
+    OUTCOME_TOO_OLD_TO_UPDATE,
+    RUN_RECORD_PATH,
+    SCHEDULE_FILE_PATH,
+    SKIP_NEEDS_SIGN_IN,
+    SKIPPED_TARGET_FILE_PATH,
+    STARTED_BY_IMMEDIATE,
+)
 
 # The workspace's agents as a caller reads them (``agents.read_observed_agents``, or the dispatcher's own
 # listing): asked only when an operation turns on them, and None when they cannot be read.
@@ -81,6 +82,9 @@ _START_LOCK_PATH: Final[str] = LAST_START_FILE_PATH + ".lock"
 _START_TIME_FIELD_INDEX: Final[int] = 19
 
 _GONE_STARTER_DETAIL: Final[str] = "The process that was starting the update is gone."
+_FAILED_CREATE_DETAIL: Final[str] = (
+    "The update's chat could not be created: the create ended with an error."
+)
 
 
 def cron_line(workspace_root: str) -> str:
@@ -345,6 +349,9 @@ def _finish_start(
     clock: Callable[[], float],
 ) -> None:
     """Create the update's chat and record how it went, unless a later attempt has replaced this one's record."""
+    # What the record says when the create raises: left with no outcome, this live process would hold every
+    # later start back as one still under way.
+    created = create_result(OUTCOME_CREATE_FAILED, _FAILED_CREATE_DETAIL)
     try:
         created = create_update_chat(
             fields,
@@ -360,13 +367,14 @@ def _finish_start(
         created = create_result(
             OUTCOME_CREATE_FAILED, "The update's chat could not be created: %s" % exc
         )
-    with _start_lock():
-        record = read_json_object(LAST_START_FILE_PATH)
-        if record is None or record.get("attempt_id") != attempt_id:
-            return
-        write_json_atomically(
-            LAST_START_FILE_PATH, {**record, **created, "finished_at": clock()}
-        )
+    finally:
+        with _start_lock():
+            record = read_json_object(LAST_START_FILE_PATH)
+            if record is not None and record.get("attempt_id") == attempt_id:
+                write_json_atomically(
+                    LAST_START_FILE_PATH,
+                    {**record, **created, "finished_at": clock()},
+                )
 
 
 def start_update(

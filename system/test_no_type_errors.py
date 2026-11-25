@@ -51,6 +51,9 @@ _CHAT_BACKGROUND_TASKS_SRC = (
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
 )
 _APP_REGISTRATION_SRC = REPO_ROOT / "system" / "libs" / "app_registration" / "src"
+_WORKSPACE_UPDATE_CONTROL_SRC = (
+    REPO_ROOT / "system" / "libs" / "workspace_update_control" / "src"
+)
 
 # The first-party modules each bare runtime context has on sys.path. update-self runs as a
 # staged copy that puts only its own python/ there (and loads oom_priority off the target
@@ -63,6 +66,7 @@ _SYSTEM_IMPORTABLE = frozenset(
         "oom_priority",
         "chat_background_tasks",
         "app_registration",
+        "workspace_update_control",
     }
 )
 
@@ -112,6 +116,7 @@ def _bare_files() -> list[Path]:
         _OOM_PRIORITY_SRC,
         _CHAT_BACKGROUND_TASKS_SRC,
         _APP_REGISTRATION_SRC,
+        _WORKSPACE_UPDATE_CONTROL_SRC,
     ]
     modules = [
         path

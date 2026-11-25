@@ -2,10 +2,12 @@
 
 import time
 
-from workspace_update_control.dispatcher import AGENT_PIDS_DIR
-from workspace_update_control.dispatcher import PROC_ROOT
-from workspace_update_control.dispatcher import AgentEnvironment
-from workspace_update_control.dispatcher import run_tick
+from workspace_update_control.dispatcher import (
+    AGENT_PIDS_DIR,
+    PROC_ROOT,
+    AgentEnvironment,
+    run_tick,
+)
 
 
 def main() -> None:
