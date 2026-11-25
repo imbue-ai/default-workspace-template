@@ -86,7 +86,7 @@ what this run needs, with no confirmation and no preflight script, you may:
 Do what the run needs and no more, and name every one of these actions in the
 results message with its undo (`references/results-message.md`). This licence
 is this pass's alone: every other flow still asks first
-(the `workspace-memory` skill).
+(the `free-workspace-memory` skill).
 
 **Take the "updating workspace" lease.** One update flow at a time (worker
 name, branch and runtime dir are fixed, and two applies must never interleave).

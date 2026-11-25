@@ -1,1 +1,1 @@
-AGENTS.md no longer names a freeing-memory reference for a shed an agent reports: the new `workspace-memory` skill's description is what loads it. The System Monitor spec names the Browser item of the Workspace row and where the ownership rule now lives.
+AGENTS.md no longer names a freeing-memory reference for a shed an agent reports: the new `free-workspace-memory` skill's description is what loads it. The System Monitor spec names the Browser item of the Workspace row and where the ownership rule now lives.

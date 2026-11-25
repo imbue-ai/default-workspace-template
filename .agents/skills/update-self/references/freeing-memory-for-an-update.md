@@ -3,7 +3,7 @@
 An update's heaviest moments -- launching the worker, its test gate, the frontend build -- are the
 ones the memory guard sheds first. When that happens, this pass frees memory itself rather than
 stopping to ask, within the licence below. It is the one flow that may: every other one offers the
-candidates to the user and stops only what they approve (the `workspace-memory` skill).
+candidates to the user and stops only what they approve (the `free-workspace-memory` skill).
 
 ## Read the memory the guard acts on, not the container's
 

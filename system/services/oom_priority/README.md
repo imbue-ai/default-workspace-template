@@ -397,7 +397,7 @@ every module here -- is stdlib-only, so the hooks (which run under a plain
 
 `system/services/oom_priority/bin/workspace_memory.py` says what holds the
 workspace's memory, measured the way the memory guard measures it, and what
-could be stopped to free some (the `workspace-memory` skill is the flow around
+could be stopped to free some (the `free-workspace-memory` skill is the flow around
 it). It only reads: it never stops, kills, or re-tags anything.
 
 ```bash

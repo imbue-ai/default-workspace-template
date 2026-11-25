@@ -81,7 +81,7 @@ first impression of you is that single message.
    - Check basic system health: disk (`uv run --no-sync disk-headroom`, which
      also sees a cloud machine's disk quota, where `df` does not), memory
      (`python3 system/services/oom_priority/bin/workspace_memory.py free`, the free
-     memory the memory guard acts on; see the `workspace-memory` skill, since `free -h` reads
+     memory the memory guard acts on; see the `free-workspace-memory` skill, since `free -h` reads
      far more free than there is under a memory cap),
      CPU load (`uptime`), and whether the OOM guard shed anything
      (`data/.state/oom_priority/events/shed.jsonl`, if present).
@@ -219,7 +219,7 @@ finds something.
        nearly full, a quick `du` for the biggest offenders), memory
        (`python3 system/services/oom_priority/bin/workspace_memory.py free`, which says
        how much room is left before the memory guard starts stopping processes; not `free -h`,
-       which reads far more free than there is under a memory cap -- the `workspace-memory` skill),
+       which reads far more free than there is under a memory cap -- the `free-workspace-memory` skill),
        CPU load (`uptime` -- load persistently above the core count means
        something is spinning), and whether the OOM guard shed any processes
        since the last run (`data/.state/oom_priority/events/shed.jsonl`, if

@@ -9,7 +9,7 @@ could be stopped to free some.
     workspace_memory.py show <pid or name>    one process, or one chat, app, service or browser
     workspace_memory.py guard-order           the processes in the order the guard would stop them
 
-The ``workspace-memory`` skill is the flow around it: a lead runs ``list --stoppable`` after one of
+The ``free-workspace-memory`` skill is the flow around it: a lead runs ``list --stoppable`` after one of
 its agents reports a shed, shows the user the list next to the free memory, and stops only what the
 user approves (a scheduled update may go further; see the ``update-self`` skill). This command only
 reads: it never stops, kills, or re-tags anything.

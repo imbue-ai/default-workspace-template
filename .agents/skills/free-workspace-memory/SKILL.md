@@ -1,11 +1,11 @@
 ---
-name: workspace-memory
+name: free-workspace-memory
 description: Use when the workspace is low on memory or slowing down, when the memory guard stopped ("shed") a command, chat or agent, whether yours or one an agent reports to you, or when the user asks what is using memory or what could be stopped. Lists what holds memory, measured the way the guard does, and frees it only with the user's approval.
 metadata:
   author: imbue
 ---
 
-# Workspace memory
+# Freeing workspace memory
 
 The workspace has a fixed amount of memory, and a memory guard (earlyoom) stops the most
 expendable processes when it runs low. When it sheds something -- a command of yours, a worker's
