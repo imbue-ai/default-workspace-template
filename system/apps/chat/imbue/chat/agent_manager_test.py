@@ -7512,7 +7512,7 @@ def test_a_retired_member_still_reported_running_after_its_stop_is_stopped_again
         (AgentLifecycleState.WAITING, True, False),
     ],
 )
-def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_first_snapshot(
+def test_the_first_snapshot_stops_a_retired_member_reading_running_from_the_live_chat_alone(
     broadcaster: WebSocketBroadcaster,
     tmp_path: Path,
     state: AgentLifecycleState,
