@@ -8,7 +8,9 @@ this, falling back to ``/proc/meminfo``. The resource sampler records memory
 through it, and the system monitor app shows the same figures.
 
 It also reads one process's anonymous memory, which the memory candidates command
-(``bin/memory_candidates.py``) sums per candidate.
+(``bin/memory_candidates.py``) sums per candidate, and, from ``smaps`` under gVisor,
+its anonymous memory beside the shared memory segments it maps, which the System
+Monitor's breakdown counts once each.
 
 Stdlib-only (see ``paths``): the sampler runs under a plain ``python3``.
 """
