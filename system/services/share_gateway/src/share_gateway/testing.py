@@ -131,6 +131,7 @@ def build_agent_test_app(
     workspace_domain: str,
     auth_label: str,
     signing_secret: str,
+    chrome_origin: str = "",
 ) -> Flask:
     """The gateway app with bearer admission and the /_agent/* routes wired to ``context``, as the runner builds it."""
     materials = ShareMaterials(
@@ -138,7 +139,7 @@ def build_agent_test_app(
         relay_token="tok",
         connector_url=f"https://connector.{workspace_domain}",
         broker_url=f"https://accounts.{workspace_domain}",
-        chrome_origin="",
+        chrome_origin=chrome_origin,
     )
     app = build_gateway_app(
         materials=materials,
@@ -160,6 +161,7 @@ def build_agent_test_app(
         signing_secret=signing_secret,
         share_grants_path=share_grants_path,
         get_registered_apps=lambda: apps,
+        chrome_origin=chrome_origin,
     )
     return app
 

@@ -346,6 +346,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         signing_secret=signing_secret,
         share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        chrome_origin=materials.chrome_origin,
     )
     stack.gateway_server = make_server(
         "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler

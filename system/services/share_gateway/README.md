@@ -343,7 +343,11 @@ the same gateway:
 - **The invite.** `POST /_agent/invites` (a session cookie of the owner or of a
   visitor with a workspace-level grant, or the bearer token of a workspace-scope
   agent) mints a one-time code: twelve Crockford base32 characters, fifteen
-  minutes, consumed by one join, burned after five failed attempts. It answers
+  minutes, consumed by one join, burned after five failed attempts. A request
+  that relies on a session cookie, here and on the grant routes below, is held
+  to the Origin policy `/_auth/verify` applies (a non-GET with a foreign
+  `Origin` is answered 403), since caddy routes `/_agent/*` to the gateway
+  without that step. It answers
   the code and the instruction block the inviter copies, rendered from
   `.agents/shared/references/visiting-agents-invite.md`. The scope is chosen at
   minting: `workspace` (every origin, exec authority) or a list of grantable

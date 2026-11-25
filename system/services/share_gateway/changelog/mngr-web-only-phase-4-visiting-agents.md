@@ -7,3 +7,6 @@ It also says why a command ended without an exit code, no longer gives up on a c
 
 A helper installed before this change keeps working: the owner-exec daemon keeps running, a workspace-scope grant still adds the agent's key to `authorized_keys`, and the join and `me` answers keep their `exec` fields.
 Such a helper prints its notice to reinstall when it joins and when a request of its fails.
+
+Minting an invite and revoking a grant with a session cookie are now refused when the request comes from a page of another origin, the rule the gateway already applies to every request for an app.
+Before, another site's page could make a signed-in owner's browser mint an invite, though it could never read the code.

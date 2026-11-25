@@ -5,7 +5,9 @@ These routes are served by the gateway's Flask app directly (caddy routes the
 auth origin's ``/_agent/*`` to it beside ``/_auth/*``), not through
 ``forward_auth``, so each does its own authentication: a session cookie
 yields a human identity (the owner or a visitor), a bearer admission token a
-visiting agent's. The join route is the one code-gated, otherwise
+visiting agent's. A session cookie is ambient, so a request that relies on one
+is held to the Origin policy ``/_auth/verify`` applies to every other request.
+The join route is the one code-gated, otherwise
 unauthenticated entry, rate limited per client address. Running a command and
 reading or writing a file answer a bearer token alone, and only one whose grant
 has workspace scope.
@@ -81,9 +83,11 @@ from share_gateway.agent_workspace import app_origins_for
 from share_gateway.agent_workspace import exec_origin_for
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.identity import RequesterIdentity
 from share_gateway.identity import bearer_token_from_headers
 from share_gateway.log import log
+from share_gateway.origin_policy import is_request_origin_allowed
 from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import verify_session_from_cookies
 
@@ -244,6 +248,8 @@ def register_agent_routes(
     signing_secret: str,
     share_grants_path: Path,
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # The hosted chrome's origin, the one origin outside the workspace's own whose requests may carry a session.
+    chrome_origin: str,
 ) -> None:
     auth_origin = f"https://{auth_label}.{workspace_domain}"
 
@@ -276,6 +282,17 @@ def register_agent_routes(
         context.last_seen.touch(grant.agent_id, context.now(), time.monotonic())
         return _AgentCaller(grant)
 
+    def _is_origin_allowed() -> bool:
+        return is_request_origin_allowed(
+            request.method,
+            request.headers.get("Origin"),
+            False,
+            workspace_domain,
+            build_label_to_name(get_registered_apps()),
+            auth_label,
+            chrome_origin,
+        )
+
     def _caller() -> "_HumanCaller | _AgentCaller | Response":
         agent = _agent_caller()
         if agent is not None:
@@ -283,6 +300,12 @@ def register_agent_routes(
         human = _human_caller()
         if human is None:
             return _error("authentication required", 401)
+        # A browser attaches the session cookie to a request another site's page makes, so the cookie alone does
+        # not show the person meant it. A bearer token is never attached that way, and is not held to this.
+        if not _is_origin_allowed():
+            client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+            log(f"Denied {client_ip} -> {request.method} on the agent routes: request Origin is not allowed")
+            return _error("this request's Origin is not allowed", 403)
         return human
 
     def _agent_only() -> "_AgentCaller | Response":

@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
 from share_grants.agent_grants import load_agent_grants
+from share_grants.agent_grants import load_agent_invites
 from werkzeug.test import TestResponse
 
 from share_gateway.agent_access import AgentAccessPaths
@@ -30,6 +31,7 @@ from share_gateway.agent_workspace import WorkspaceCoordinates
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
+from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.testing import ProcessLifeline
@@ -84,7 +86,7 @@ class _Harness:
         self.repo = repo
 
 
-def make_harness(tmp_path: Path) -> _Harness:
+def make_harness(tmp_path: Path, chrome_origin: str = "") -> _Harness:
     repo = make_workspace_repo(tmp_path, _PRIMER, _INVITE)
     share_grants_path = tmp_path / "share_grants.toml"
     share_grants_path.write_text(_SHARE_GRANTS)
@@ -110,7 +112,9 @@ def make_harness(tmp_path: Path) -> _Harness:
         skills_cache_path=tmp_path / "state" / "skills_index.json",
         now=clock,
     )
-    app = build_agent_test_app(context, _APPS, share_grants_path, _DOMAIN, _AUTH_LABEL, _SIGNING_SECRET)
+    app = build_agent_test_app(
+        context, _APPS, share_grants_path, _DOMAIN, _AUTH_LABEL, _SIGNING_SECRET, chrome_origin=chrome_origin
+    )
     return _Harness(app, app.test_client(), context, clock, repo)
 
 
@@ -387,6 +391,54 @@ def test_grant_list_and_revocation_follow_ownership(tmp_path: Path) -> None:
     assert harness.client.get("/_agent/me", headers=bearer(by_visitor)).status_code == 403
     agent_view = harness.client.get("/_agent/grants", headers=bearer(by_owner)).get_json()["agents"]
     assert agent_view == []
+
+
+# --- the Origin policy for a request that relies on a session ---
+
+_CHROME_ORIGIN = "https://studio.example.com"
+_FOREIGN_ORIGIN = {"Origin": "https://evil.example.com"}
+
+
+def test_a_session_request_from_another_sites_page_is_refused_and_changes_nothing(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path, chrome_origin=_CHROME_ORIGIN)
+    agent = join_as(harness, "workspace", granter="user:user-owner")
+    for cookie_name in (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME):
+        harness.client.set_cookie(cookie_name, session_cookie("user-owner", is_owner=True))
+        # A text/plain body is one a page may send to another origin with no preflight.
+        invite = harness.client.post(
+            "/_agent/invites", data='{"scope": "workspace"}', content_type="text/plain", headers=_FOREIGN_ORIGIN
+        )
+        assert invite.status_code == 403, cookie_name
+        assert invite.get_json() == {"error": "this request's Origin is not allowed"}
+        revoke = harness.client.delete(f"/_agent/grants/{agent['agent_id']}", headers=_FOREIGN_ORIGIN)
+        assert revoke.status_code == 403, cookie_name
+        harness.client.delete_cookie(cookie_name)
+    assert load_agent_invites(harness.context.paths.invites_path) == []
+    assert [grant.agent_id for grant in load_agent_grants(harness.context.paths.grants_path)] == [agent["agent_id"]]
+
+
+def test_a_session_request_from_the_workspaces_own_pages_or_from_no_page_is_served(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path, chrome_origin=_CHROME_ORIGIN)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, session_cookie("user-owner", is_owner=True))
+    for origin in (f"https://{_AUTH_HOST}", f"https://chat-ch111111.{_DOMAIN}", _CHROME_ORIGIN):
+        response = harness.client.post("/_agent/invites", json={}, headers={"Origin": origin})
+        assert response.status_code == 200, origin
+    assert harness.client.post("/_agent/invites", json={}, headers={}).status_code == 200
+    # A read is exempt, as it is for an app: it changes nothing, and its answer is not readable across origins.
+    assert harness.client.get("/_agent/grants", headers=_FOREIGN_ORIGIN).status_code == 200
+    assert len(load_agent_invites(harness.context.paths.invites_path)) == 4
+
+
+def test_a_request_without_a_session_is_told_to_authenticate_whatever_its_origin(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path)
+    assert harness.client.post("/_agent/invites", json={}, headers=_FOREIGN_ORIGIN).status_code == 401
+
+
+def test_a_bearer_request_is_not_held_to_the_origin_policy(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path)
+    headers = {**bearer(join_as(harness, "workspace")), **_FOREIGN_ORIGIN}
+    assert harness.client.post("/_agent/invites", json={}, headers=headers).status_code == 200
+    assert harness.client.post("/_agent/run", json={"command": ["true"]}, headers=headers).status_code == 200
 
 
 # --- admission at /_auth/verify ---
