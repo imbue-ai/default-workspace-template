@@ -10337,6 +10337,60 @@ def test_rollback_last_of_an_update_that_left_the_venv_alone_upgrades_no_agent(
     assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
 
 
+def test_a_rollback_or_confirm_started_during_a_kept_points_landing_upgrade_refuses(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    rollback_runner = _rollback_runner(apply_repo)
+    exit_codes = _seen_at_upgrade(
+        runner,
+        lambda: (
+            _rollback(rollback_runner, apply_repo),
+            update_apply.confirm_last(apply_repo),
+        ),
+    )
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    assert exit_codes == [(1, 1)]
+    assert not rollback_runner.ran("git", "revert")
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.progress is None and record.outcome is None
+    assert (
+        "error: another rollback or confirm of this point is already running."
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_point_kept", "is_upgraded"),
+    [(True, False), (False, True)],
+    ids=["point-kept", "no-point"],
+)
+def test_a_landing_upgrade_runs_beside_a_rollback_or_confirm_only_without_a_kept_point(
+    apply_repo: Path, capsys, is_point_kept: bool, is_upgraded: bool
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    lock_path = update_apply_contract.rollback_lock_path(apply_repo)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = (
+            _apply_keeping_the_rollback_point(runner, apply_repo)
+            if is_point_kept
+            else _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+        )
+
+    assert code == 0
+    assert runner.ran(*_UPGRADE_STOPPED_AGENTS) is is_upgraded
+    assert not record.exists()
+    assert ("the next boot retries" in capsys.readouterr().err) is not is_upgraded
+
+
 def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:
     commands: dict[str, str] = {}
     for conf in sorted(

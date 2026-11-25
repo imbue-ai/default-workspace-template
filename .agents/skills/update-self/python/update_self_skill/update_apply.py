@@ -29,7 +29,7 @@ import time
 import tomllib
 import traceback
 from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
@@ -1675,7 +1675,20 @@ def apply_update(
 
     # Only a re-synced venv can hold another mngr.
     if plan.resyncs_venv:
-        _upgrade_stopped_agents(repo_root, runner)
+        # A rollback-last of the point just kept would move the venv and the agents' files under the pass.
+        try:
+            with (
+                _holding_rollback_point_lock(repo_root)
+                if keep_rollback_point
+                else nullcontext()
+            ):
+                _upgrade_stopped_agents(repo_root, runner)
+        except RollbackPointBusyError:
+            _forget_agent_upgrade_coverage(repo_root)
+            sys.stderr.write(
+                "warning: a rollback or confirm of the rollback point just kept is running, so the "
+                "stopped agents were not upgraded; the next boot retries.\n"
+            )
 
     # CLEANUP: remove this block with tool_env.remove_app_tool_installs.
     # Only once the merged tree is live and healthy, and before env-converge re-captures
