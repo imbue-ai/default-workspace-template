@@ -374,7 +374,7 @@ def _chat_not_found_error(chat_id: str) -> ErrorResponse:
         f"Chat '{chat_id}' not found",
         user_facing_message="This chat is no longer here.",
         kind=CHAT_GONE_KIND,
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -394,7 +394,7 @@ def _send_to_gone_chat_error(chat_id: str) -> ErrorResponse:
         f"Chat '{chat_id}' not found",
         user_facing_message=SEND_TO_GONE_CHAT_SENTENCE,
         kind=CHAT_GONE_KIND,
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -417,26 +417,26 @@ def _agent_list_not_known_response(starting_sentence: str = WORKSPACE_STARTING_S
         503,
         user_facing_message=starting_sentence,
         kind=CHAT_STARTING_KIND,
-        is_expected=True,
+        is_routine=True,
     )
 
 
 def _converging_response(handoff: HandoffState) -> Response:
     detail = converging_detail(handoff.phase, handoff.target_label)
     return model_response(
-        ConvergingResponse(detail=detail, user_facing_message=detail, expected=True, phase=handoff.phase), 409
+        ConvergingResponse(detail=detail, user_facing_message=detail, routine=True, phase=handoff.phase), 409
     )
 
 
 def _converging_refusal(error: ChatConvergingError) -> Response:
     """A verb refused while the chat is in the middle of a switch: the chat is working as it should, and the sentence
     says what to wait for."""
-    return refusal_response(str(error), 409, user_facing_message=str(error), is_expected=True)
+    return refusal_response(str(error), 409, user_facing_message=str(error), is_routine=True)
 
 
 def _handoff_refusal(error: HandoffError) -> Response:
     return refusal_response(
-        str(error), 400, user_facing_message=error.user_facing_message, kind=error.kind, is_expected=error.is_expected
+        str(error), 400, user_facing_message=error.user_facing_message, kind=error.kind, is_routine=error.is_routine
     )
 
 
@@ -1040,7 +1040,7 @@ _SEND_FAILURE_SENTENCES: Final[dict[str, str]] = {
 
 # The refused sends that are the chat working as it should, which their sentences fully explain: a /compact the chat
 # declines, an agent waiting on an answer in its terminal, and one still starting.
-_EXPECTED_SEND_FAILURE_KINDS: Final[frozenset[str]] = _DECLINED_SEND_FAILURE_KINDS | frozenset(
+_ROUTINE_SEND_FAILURE_KINDS: Final[frozenset[str]] = _DECLINED_SEND_FAILURE_KINDS | frozenset(
     {SendFailureKind.INPUT_BLOCKED.value, SendFailureKind.NOT_READY.value}
 )
 
@@ -1106,7 +1106,7 @@ def _send_to_chat(
             detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
             return _SendRefused(
                 answer=SendFailureResponse(
-                    detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND, user_facing_message=detail, expected=True
+                    detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND, user_facing_message=detail, routine=True
                 ),
                 status=409,
             )
@@ -1139,7 +1139,7 @@ def _send_to_chat(
                     send_failure.detail,
                     user_facing_message=_send_failure_sentence(send_failure),
                     kind=send_failure.kind,
-                    is_expected=send_failure.kind in _EXPECTED_SEND_FAILURE_KINDS,
+                    is_routine=send_failure.kind in _ROUTINE_SEND_FAILURE_KINDS,
                 ),
                 status=status_code,
             )
@@ -1151,7 +1151,7 @@ def _send_to_chat(
                     f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting).",
                     user_facing_message="This chat is still waking up. Try again in a moment.",
                     kind=str(SendFailureKind.NOT_READY),
-                    is_expected=True,
+                    is_routine=True,
                 ),
                 status=503,
             )
@@ -2124,7 +2124,7 @@ def _shoulder_tap_atomic_endpoint(chat_id: str) -> Response:
             outcome.error_status_code,
             user_facing_message=_TAP_FAILURE_SENTENCES.get(outcome.status, _TAP_NOT_SENT_SENTENCE),
             kind=outcome.status,
-            is_expected=outcome.status in _EXPECTED_TAP_FAILURE_STATUSES,
+            is_routine=outcome.status in _ROUTINE_TAP_FAILURE_STATUSES,
         )
     return model_response(ShoulderTapAtomicResponse(status=outcome.status, block=outcome.block))
 
@@ -2137,7 +2137,7 @@ _TAP_FAILURE_SENTENCES: Final[Mapping[str, str]] = {
     "recovery_send_failed": "Your queued messages went through, but the agent may not have noticed them.",
 }
 # The refused taps that are the chat working as it should, which their sentences fully explain.
-_EXPECTED_TAP_FAILURE_STATUSES: Final[frozenset[str]] = frozenset({"permissions_waiting", "binding_not_active"})
+_ROUTINE_TAP_FAILURE_STATUSES: Final[frozenset[str]] = frozenset({"permissions_waiting", "binding_not_active"})
 
 
 def _drain_to_composer_endpoint(chat_id: str) -> Response:
@@ -2313,7 +2313,7 @@ def _chat_agent_not_found_response(chat_id: str, agent_id: str) -> Response:
         404,
         user_facing_message="This side conversation is no longer available.",
         kind="side_conversation_gone",
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -2406,16 +2406,16 @@ def _created_or_refusal(create: Callable[[], _CreatedT]) -> _CreatedT | Response
         return error_response(str(e), 409)
     except NoProviderAccountError as e:
         return refusal_response(
-            str(e), 400, user_facing_message=str(e), kind=NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND, is_expected=True
+            str(e), 400, user_facing_message=str(e), kind=NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND, is_routine=True
         )
     except SignedOutAccountError as e:
         return refusal_response(
-            str(e), 400, user_facing_message=str(e), kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND, is_expected=True
+            str(e), 400, user_facing_message=str(e), kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND, is_routine=True
         )
     except AgentCreationError as e:
         if e.user_facing_message is None:
             return refusal_response(str(e), 400, user_facing_message=CHAT_NOT_STARTED_SENTENCE)
-        return refusal_response(str(e), 400, user_facing_message=e.user_facing_message, is_expected=e.is_expected)
+        return refusal_response(str(e), 400, user_facing_message=e.user_facing_message, is_routine=e.is_routine)
     except (OSError, ValueError) as e:
         return refusal_response(str(e), 400, user_facing_message=CHAT_NOT_STARTED_SENTENCE)
 
@@ -2739,11 +2739,11 @@ def _can_chat_take_an_ask(agent_manager: AgentManager, chat_id: ChatId) -> bool:
 
 
 def _app_ask_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
-    """The chat an ask from a page of an app goes to: the chat about the app (``_find_chat_about_app``) when it can
-    take a message; with none, one created with the app chat's title and label on the default account, the ask its
-    first message (never auto-named). The ``main_chat`` rules apply wherever that cannot be: the chat about the app
-    cannot take a message, nothing is signed in, the text is a draft (a chat is created by its first message, which
-    a draft is not), or the create is refused."""
+    """The chat an ask from a page of an app (an ``app_chat`` intake with a text) goes to: the chat about the app
+    (``_find_chat_about_app``) when it can take a message; with none, one created with the app chat's title and label
+    on the default account, the ask its first message (never auto-named). The ``main_chat`` rules apply wherever that
+    cannot be: the chat about the app cannot take a message, nothing is signed in, the text is a draft (a chat is
+    created by its first message, which a draft is not), or the create is refused."""
     if not intake.app or not intake.app_display_name:
         return error_response("An ask about an app names the app and its display name", 400)
     agent_manager = state.agent_manager
@@ -2776,8 +2776,8 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
     ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
-    when there is none, ``app_chat`` the chat about the named app, made when there is none, and ``app_ask`` that
-    chat when it can take a message, else what ``main_chat`` answers.
+    when there is none, and ``app_chat`` the chat about the named app: with no text, made when there is none; with
+    a text (an ask), that chat when it can take a message, else what ``main_chat`` answers.
     """
     agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
@@ -2785,9 +2785,9 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
         case IntakeTarget.LOUNGE:
             return _lounge_or_refusal(state)
         case IntakeTarget.APP_CHAT:
+            if intake.message:
+                return _app_ask_chat_or_refusal(state, intake)
             return _app_chat_or_refusal(state, intake)
-        case IntakeTarget.APP_ASK:
-            return _app_ask_chat_or_refusal(state, intake)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -2796,7 +2796,7 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
                     404,
                     user_facing_message=INTAKE_CHAT_GONE_SENTENCE,
                     kind=CHAT_GONE_KIND,
-                    is_expected=True,
+                    is_routine=True,
                 )
             return _ResolvedIntakeChat(chat_id=parsed)
         case IntakeTarget.CURRENT_CHAT:
@@ -2823,7 +2823,7 @@ def _resolve_intake_account(intake: IntakeRequest) -> str | Response | None:
         return resolve_binding(intake.account_id).id
     except (AccountError, BindingError) as e:
         if intake.account_id:
-            return refusal_response(str(e), 400, user_facing_message=e.user_facing_message, is_expected=e.is_expected)
+            return refusal_response(str(e), 400, user_facing_message=e.user_facing_message, is_routine=e.is_routine)
         logger.debug("No account for a new chat's intake; the chat waits for its first send: {}", e)
         return None
 
@@ -2920,7 +2920,7 @@ def _intake_chat() -> Response:
         _note_chat_started_by_a_person(state, resolved.chat_id, ChatKind.AGENT, intake.client_id)
     if resolved.is_sent_with_create:
         return model_response(IntakeResponse(path=intake_path(resolved.chat_id, None)))
-    if intake.target is IntakeTarget.APP_CHAT:
+    if intake.target is IntakeTarget.APP_CHAT and not intake.message:
         # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
         # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
         prefilled = intake.model_copy_update(
@@ -3001,15 +3001,15 @@ def _as_intake_refusal(send_refusal: _SendRefused) -> Response:
     answer = send_refusal.answer
     if answer.kind == CHAT_GONE_KIND:
         sentence = INTAKE_CHAT_GONE_SENTENCE
-        is_expected = True
+        is_routine = True
     elif answer.kind == ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND and answer.user_facing_message:
         sentence = answer.user_facing_message
-        is_expected = True
+        is_routine = True
     else:
         sentence = "Chat couldn't take this. Try again."
-        is_expected = False
+        is_routine = False
     return refusal_response(
-        answer.detail, send_refusal.status, user_facing_message=sentence, kind=answer.kind, is_expected=is_expected
+        answer.detail, send_refusal.status, user_facing_message=sentence, kind=answer.kind, is_routine=is_routine
     )
 
 

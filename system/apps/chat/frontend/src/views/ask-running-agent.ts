@@ -46,7 +46,7 @@ function describeAskFailure(error: unknown, targetChatId: string): FailureLines 
       ? {
           body: [`${lead}.`, failure.userFacingMessage],
           details: failure.details,
-          isHelpOwed: !failure.isExpected,
+          isHelpOwed: !failure.isRoutine,
         }
       : plainFailureLinesOf(failure, lead, {
           notAnswered: `The workspace didn't answer. ${askedAtStart} may not have been asked.`,

@@ -28,7 +28,7 @@ describe("describeRequestFailure", () => {
     expect(describeRequestFailure(userFacing)).toMatchObject({
       cause: "user_facing",
       userFacingMessage: "Chat is still starting.",
-      isExpected: false,
+      isRoutine: false,
       details: "HTTP 502\nchat answered the launch with 503",
     });
     const reason = rejection(404, { detail: "Agent 'x' not found", kind: "chat_gone" }, "{}");

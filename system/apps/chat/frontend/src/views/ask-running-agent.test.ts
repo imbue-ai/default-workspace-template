@@ -118,7 +118,7 @@ describe("an ask sent to a running chat", () => {
         detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
         user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
         kind: "input_blocked",
-        expected: true,
+        routine: true,
       }),
     );
 

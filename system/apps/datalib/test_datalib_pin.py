@@ -26,7 +26,7 @@ _PINNED_VERSION: Final[re.Pattern[str]] = re.compile(
 _ANY_VERSION: Final[re.Pattern[str]] = re.compile(r"\bv\d+\.\d+\.\d+\b")
 # The skill's shell preamble names the data root under the workspace root.
 _SKILL_DATA_ROOT: Final[re.Pattern[str]] = re.compile(
-    r'^DATA_ROOT="\$HOME/workspace/([^"]+)"', re.MULTILINE
+    r'^DATA_ROOT="/home/user/workspace/([^"]+)"', re.MULTILINE
 )
 _SYNC_REQUEST_DATA_ROOT: Final[re.Pattern[str]] = re.compile(
     r'^DEFAULT_DATA_ROOT = Path\("([^"]+)"\)$', re.MULTILINE
@@ -48,6 +48,13 @@ def test_the_skill_and_its_script_name_the_data_root_the_app_serves() -> None:
     assert script_root is not None, f"{_SYNC_REQUEST} declares no DEFAULT_DATA_ROOT"
     assert Path(skill_root.group(1)) == launcher.DATA_ROOT
     assert Path(script_root.group(1)) == launcher.DATA_ROOT
+
+
+def test_the_skill_names_no_path_through_home() -> None:
+    """An agent's shell has HOME=/root; a path the skill spells through $HOME lands outside the workspace's home, where the Datalib app does not look."""
+    skill = _SKILL.read_text()
+    assert "$HOME/" not in skill
+    assert "~/." not in skill
 
 
 def test_nothing_installs_datalib_at_boot() -> None:

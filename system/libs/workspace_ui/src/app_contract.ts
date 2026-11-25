@@ -41,7 +41,7 @@
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in,
- *  and whether "Report a bug" can work here. */
+ *  and whether "Report a bug" can work here (the embedder opens a bug report and the page's app is built in). */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
@@ -797,7 +797,7 @@ export interface ShownFailure {
   readonly message: string;
   readonly details: string | null;
   /** False where trying again is the whole remedy (nothing answered), where the server refused by a rule of its own
-   *  and wrote no sentence about it (a 4xx with a reason), and where it called its refusal expected. A surface keeps
+   *  and wrote no sentence about it (a 4xx with a reason), and where it called its refusal routine. A surface keeps
    *  a failure that owes help on screen and offers an agent for it. */
   readonly isHelpOwed: boolean;
 }

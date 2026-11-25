@@ -103,7 +103,7 @@ export function describeLaunchFailure(error: unknown): FailureLines {
     return {
       body: [failure.userFacingMessage, "Your message is back in the box."],
       details: failure.details,
-      isHelpOwed: !failure.isExpected,
+      isHelpOwed: !failure.isRoutine,
     };
   }
   const told = failureSentence(failure, "This chat couldn't be started. Your message is back in the box");
@@ -126,7 +126,7 @@ export function describeSwitchFailure(error: unknown, target: string, isSendPath
     return {
       body: [`${stillThere}.`, failure.userFacingMessage],
       details: failure.details,
-      isHelpOwed: !failure.isExpected,
+      isHelpOwed: !failure.isRoutine,
     };
   }
   const told = failureSentence(failure, stillThere);
