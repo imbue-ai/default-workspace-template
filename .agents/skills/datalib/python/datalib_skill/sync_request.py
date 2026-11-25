@@ -11,7 +11,7 @@ runs inside that server, which supervisord runs independently of any chat, so st
 off the chat that asked does not stop it. ``wait`` polls until every named request has ended and
 prints how; under ``run_in_background.py`` that output is what wakes the agent.
 
-``wait`` exits the way ``datalib-dag`` does for the same outcomes: 0 when every request is done,
+``wait`` exits the way ``datalib-pipeline sync`` does for the same outcomes: 0 when every request is done,
 2 when one failed, 130 when one was stopped; 1 when the server could not be asked.
 """
 
