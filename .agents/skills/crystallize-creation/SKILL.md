@@ -61,7 +61,8 @@ Wait for the reply. If no, stop.
 
 ## Conventions
 
-Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
+Pick a short kebab-case slug `$NAME` that says what the creation does (e.g.
+`migrate-config`; the naming rule is in `.agents/shared/references/creation-principles.md`).
 If a wrapper handed you a slug (and a `source_artifacts_dir`), reuse it. Then:
 
 - Worker agent name and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`

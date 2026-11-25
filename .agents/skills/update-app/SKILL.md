@@ -235,7 +235,12 @@ every page of the app on every client, or
 Anything else about windows is the `manage-desktop` skill. A service has no
 window.
 
-Tell the user what changed, release the lease, and end the turn.
+With the change on screen, commit it and start its test gate in the
+background: run what `uv run --no-sync app-manifest select-tests --diff-base
+<the commit before the change>` prints through
+`system/scripts/workspace_bare_scripts/run_in_background.py`. Do not wait for
+it; what it finds is a follow-up fix. Then tell the user what changed, release
+the lease, and end the turn.
 
 ## Step 6: Harden the change
 

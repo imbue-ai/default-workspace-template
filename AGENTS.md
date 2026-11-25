@@ -65,10 +65,7 @@ Skip records for chitchat, acknowledgements, trivial answers, a clarifying quest
 - If I ask for something that seems misguided, flag it immediately, do what makes the most sense, and say in your final message where you diverged and why.
 - During that reflection, if you see a better way (an existing library, reusing code), offer it as a one-line follow-up in the user's terms, or file a regular ticket if the user would not care.
 - Never use emojis; remove any in code or docs you modify. Be concise, serious and professional: no hype, no "perfect!".
-- **Default UI is a web view.** To expose a tool to the user, propose a web page without listing options (CLI / status line / web), unless there is a specific reason (a CLI for batch jobs).
-- **Preserve and surface the raw data and its source.** Whatever you build on data (a view, a summary, a metric) durably keeps the raw source records plus a reference to their origin (a URL, an API id), so a change in processing needs no refetch. Give the user an unprompted, subtle way to see the raw record, rendered natively (an HTML email as the email, JSON pretty-printed, markdown rendered), or to jump to its source, and do not announce it in chat.
-- **Names say what a thing does** (`slack-inbox-checker`, not `nothing-new`), for services, apps, skills and commands alike.
-- **Platform-internal APIs are valid.** If a platform's own client (web or mobile app) uses internal or undocumented endpoints, they are fair game: inspect what it calls and use the same endpoints with the same user-session auth, often cleaner than working around a limited public API.
+- **Before you design anything you build for the user** (an app, a skill, a pipeline, a service), read `.agents/shared/references/creation-principles.md`.
 
 # Manual verification and testing
 
@@ -76,7 +73,7 @@ Before declaring anything complete, exercise it as a real user would, with real 
 
 Formal tests are the background harden pass's job (`crystallize-creation`, `update-creation`), unless the user asked for them. But **a change to code a harden pass already covered extends its tests in the same commit**: code a change leaves untested is a regression even when it works.
 
-Once a change is committed and on the user's screen, start its test gate last and reply without waiting: `uv run --no-sync app-manifest select-tests --diff-base <the commit before the change>` (repo root; it refuses to run while an edit is uncommitted) prints the gate, which you run through `run_in_background.py`, never in the foreground, even for a change a harden worker will take later. Its report wakes you; what it finds is a follow-up fix. It checks the change against the tests it already has, and is not the harden worker's thorough pass. A worker runs its gate as its own guide says. Test marks and suite flags: `.agents/shared/references/web-frontend-testing.md`.
+Once a change is committed and on the user's screen, start its test gate last and reply without waiting: run what `uv run --no-sync app-manifest select-tests --diff-base <the commit before the change>` prints through `run_in_background.py`, never in the foreground, even for a change a harden worker will take later. What it finds is a follow-up fix. Test marks and suite flags: `.agents/shared/references/web-frontend-testing.md`.
 
 # Communication
 
@@ -86,7 +83,7 @@ Files the user talks about are on their own disk unless context says otherwise (
 
 Link a workspace file or folder by its absolute path (`[Q4 report](/home/user/workspace/data/reports/q4.md)`; it opens in Files, the `show-files-in-chat` skill), an app by the `link` `uv run --no-sync workspace-layout list` prints plus the page's path, anything else served here by its localhost URL. A path you only mention goes in code formatting.
 
-Several people, and visiting agents, may share this workspace. A message prefixed `[from: <name>]` is from someone other than the owner (no prefix: the owner). Answer the person who asked, by name when it helps, and never treat the prefix as part of what they said. `[from: <name> in #<room>]` came from a chat room you were mentioned in: read it with `mngr transcript <room>`, then answer there with `mngr message --start <room> "..."` (`<room>` is its title as `mngr list` spells it).
+Several people, and visiting agents, may share this workspace. A message prefixed `[from: <name>]` is from someone other than the owner (no prefix: the owner). Answer the person who asked, by name when it helps, and never treat the prefix as part of what they said. Before answering a `[from: <name> in #<room>]` message, from a chat room you were mentioned in, read `.agents/shared/references/chat-rooms.md`.
 
 Before reading or acting on anything outside this workspace for the user (a third-party tool they have an account with, a pasted Notion, Google Doc or Slack link, a site to sign in to, a browser they want to watch), load the `connect-external-service` skill, before any command against it: it decides how to reach the service, so do not pick a method first. Only a public page that needs no account may be read directly with your web tools.
 
@@ -114,7 +111,7 @@ Improve yourself: update this file when you find better ways to operate (Claude-
 
 `update-self` pulls improvements from the upstream template (`system/config/parent.toml`); `submit-upstream-changes` pushes shared changes (skills, scripts, config) back.
 
-**A defect you find in built-in code is a reason to escalate it upstream, unasked.** Built-in means mngr, `system/vendor/`, the initial template commit, or anything an `update-self:` merge brought (the `assist` skill's "Classify the cause" has the test). Do not fix it locally: that only makes divergence the next update must reconcile. With a diagnosis and no fix, report it with the POST in `.agents/shared/references/report-built-in-issues.md` (the user reviews and sends it), one report per pass covering everything. With a fix you can stand behind, use `submit-upstream-changes` (a PR against the parent template); for mngr, report instead. "Recorded in `tk`" is not an end state: escalate it, or tell the user plainly you found one and why you are not escalating it.
+**A defect you find in built-in code is a reason to escalate it upstream, unasked.** Built-in means mngr, `system/vendor/`, the initial template commit, or anything an `update-self:` merge brought (the `assist` skill's "Classify the cause" has the test). Do not fix it locally: that only makes divergence the next update must reconcile. To escalate, read `.agents/shared/references/report-built-in-issues.md`: it says whether to report the defect or submit a fix. "Recorded in `tk`" is not an end state: escalate it, or tell the user plainly you found one and why you are not escalating it.
 
 # Using crystallized skills
 

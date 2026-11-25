@@ -71,7 +71,7 @@ existing app, use the `update-app` skill.
 
 ## Step 1: Clarify and plan
 
-Ask only the questions that block: a fork both genuinely uncertain and
+Read `.agents/shared/references/creation-principles.md` first. Ask only the questions that block: a fork both genuinely uncertain and
 expensive to reverse. Most apps have none. Default to the simplest conventional
 choice and to a **single user**. Choices that are cheap to reverse
 (persistence, auto-reload or reload-to-refresh, latest-only or history) do not
