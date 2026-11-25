@@ -45,7 +45,10 @@ service.
    them starts before `mngr upgrade` reaches it (a message to a stopped worker,
    say) is restarted by `mngr upgrade`; that outcome is a warning. Bounded and
    best-effort: its outcome lines go to the boot log, and nothing it does stops
-   the boot.
+   the boot. An agent removed between the listing and `mngr upgrade` makes that
+   pass upgrade nothing, since mngr resolves every id before it upgrades any; the
+   next pass retries. A pass stopped at its 60 s bound on `mngr upgrade` can leave
+   one agent with only some of its new files in place until the next pass.
 
    `data/.state/agent_upgrade/coverage.json` names the mngr that last left every
    agent current, as the commit each of its installed packages (mngr and its
