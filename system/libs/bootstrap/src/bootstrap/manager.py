@@ -718,6 +718,7 @@ def _run_mngr(
             [str(mngr_binary), *args],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             stdin=subprocess.DEVNULL,
             env={**os.environ, **_MNGR_ENV_OVERRIDES},

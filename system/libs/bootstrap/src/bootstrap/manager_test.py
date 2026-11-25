@@ -1365,6 +1365,37 @@ def test_the_upgrade_runs_the_workspace_venvs_mngr_from_the_repo_root(
     assert calls.read_text().splitlines() == ["venv list 1", "venv upgrade 1"]
 
 
+def test_mngr_output_that_is_not_utf_8_reaches_the_boot_log_without_stopping_the_upgrade(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # mngr can echo a path whose bytes are not UTF-8, such as an agent's file in a failure line.
+    monkeypatch.chdir(tmp_path)
+    calls = tmp_path / "calls"
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    double = bin_dir / "mngr"
+    double.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {calls}\n'
+        'if [ "$1" = list ]; then printf "warning: \\377\\nagent-a|STOPPED\\n"; exit 0; fi\n'
+        'printf "skipped agent-a: cannot read /tmp/\\377\\n"\n'
+        "exit 9\n"
+    )
+    double.chmod(0o755)
+
+    with _captured_log_lines("INFO") as lines:
+        _upgrade_stopped_agents()
+
+    assert calls.read_text().splitlines() == [
+        " ".join(MNGR_LIST_AGENT_STATES_ARGV),
+        "upgrade agent-a --on-error continue",
+    ]
+    assert any(
+        "mngr upgrade: skipped agent-a: cannot read /tmp/\ufffd" in line
+        for line in lines
+    ), lines
+
+
 def test_the_upgrade_makes_no_call_when_no_agent_is_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
