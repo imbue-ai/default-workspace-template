@@ -60,11 +60,11 @@ CONFIG_FILE_NAME: Final[str] = "config.toml"
 SYSTEM_DIRECTORY_NAME: Final[str] = "system"
 
 # The files under system/ that a datalib process holds a flock(2) on while it runs: datalib-http
-# holds both for its life, and datalib-dag holds ``runner-lock`` while it syncs. The kernel
+# holds both for its life, and datalib-pipeline holds ``runner-lock`` while it syncs. The kernel
 # releases a lock when its holder exits.
 LOCK_FILE_NAMES: Final[tuple[str, ...]] = ("lock", "runner-lock")
 
-# A config's top-level ``data_root`` key, which datalib-dag uses as written in place of the
+# A config's top-level ``data_root`` key, which datalib-pipeline uses as written in place of the
 # config's own folder.
 DATA_ROOT_LINE: Final[re.Pattern[str]] = re.compile(
     r'^\s*data_root\s*=\s*"([^"]*)"\s*$'
@@ -130,9 +130,12 @@ MINTED_TOKEN_BYTES: Final[int] = 32
 # skill reads the same file for its bearer token.
 TOKEN_FILE_RELATIVE_PATH: Final[Path] = Path("system") / "api-token"
 
-# Where the datalib skill's scripts/install_datalib.sh links the pinned binaries. An absolute path:
-# supervisord's children do not have ~/.local/bin on PATH.
-DATALIB_HTTP_RELATIVE_TO_HOME: Final[Path] = Path(".local") / "bin" / "datalib-http"
+# Where the datalib skill's scripts/install_datalib.sh links the pinned binaries: under the home
+# that holds the workspace, which the install script also derives from its own location rather than
+# from $HOME (an agent's shell has HOME=/root). An absolute path: supervised programs do not have
+# that bin directory on PATH.
+WORKSPACE_HOME: Final[Path] = Path(__file__).resolve().parents[3].parent
+DATALIB_HTTP_PATH: Final[Path] = WORKSPACE_HOME / ".local" / "bin" / "datalib-http"
 
 EXIT_NOT_READY: Final[int] = 1
 
@@ -397,7 +400,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--datalib-http",
         type=Path,
-        default=Path.home() / DATALIB_HTTP_RELATIVE_TO_HOME,
+        default=DATALIB_HTTP_PATH,
         help="The datalib-http binary to run",
     )
     parser.add_argument(
