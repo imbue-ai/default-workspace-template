@@ -139,6 +139,10 @@ def call_service(method: str, path: str, body: dict[str, Any] | None, headers: d
         raise ScreenServiceUnreachableError(
             f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?"
         ) from e
+    except TimeoutError as e:
+        raise ScreenServiceUnreachableError(
+            f"the Screen service at {service_url()} did not answer within {_REQUEST_TIMEOUT_SECONDS:.0f}s"
+        ) from e
 
 
 def request_service(method: str, path: str, body: dict[str, Any] | None, is_identity_required: bool) -> ServiceAnswer:
