@@ -43,6 +43,35 @@ def _rpc(
     pytest.fail(f"Codex exited before answering {method}")
 
 
+def _make_account_marketplace(plugins_root: Path, marketplace: Path) -> None:
+    """Stand in for a plugin on the user's ChatGPT account, which codex installs into
+    the agent's home itself: a copy of code-guardian under another name."""
+    shutil.copytree(plugins_root / "imbue-code-guardian", marketplace)
+    manifest_path = marketplace / ".agents/plugins/marketplace.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["name"] = _ACCOUNT_MARKETPLACE
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def _install_account_plugin(home: Path, marketplace: Path, env: dict[str, str]) -> None:
+    config = tomllib.loads((home / "config.toml").read_text())
+    config["marketplaces"][_ACCOUNT_MARKETPLACE] = {
+        "source_type": "local",
+        "source": str(marketplace),
+    }
+    (home / "config.toml").write_text(tomlkit.dumps(config))
+    subprocess.run(
+        ["codex", "plugin", "add", _ACCOUNT_PLUGIN],
+        env=env,
+        check=True,
+        timeout=45,
+    )
+    # An account plugin has no `enabled` in the agent's config, so `_default` decides.
+    config = tomllib.loads((home / "config.toml").read_text())
+    config["plugins"][_ACCOUNT_PLUGIN] = {}
+    (home / "config.toml").write_text(tomlkit.dumps(config))
+
+
 @pytest.mark.acceptance
 @pytest.mark.timeout(120)
 def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> None:
@@ -69,14 +98,8 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
     installer = next(
         command for command in provision_commands if "codex_update_plugin.sh" in command
     )
-    # Stands in for a plugin on the user's ChatGPT account, which codex installs
-    # into the agent's home itself: a copy of code-guardian under another name.
     account_marketplace = tmp_path / "account marketplace"
-    shutil.copytree(plugins_root / "imbue-code-guardian", account_marketplace)
-    manifest_path = account_marketplace / ".agents/plugins/marketplace.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["name"] = _ACCOUNT_MARKETPLACE
-    manifest_path.write_text(json.dumps(manifest))
+    _make_account_marketplace(plugins_root, account_marketplace)
     for _ in range(2):
         # Model mngr's rewrite from the actual agent-type settings, retaining
         # caches. An inherited account home must never be modified.
@@ -100,22 +123,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
         assert (shared / "config.toml").read_text() == "# account config\n"
         assert not (shared / "plugins").exists()
         agent_env = {**env, "CODEX_HOME": str(home)}
-        config = tomllib.loads((home / "config.toml").read_text())
-        config["marketplaces"][_ACCOUNT_MARKETPLACE] = {
-            "source_type": "local",
-            "source": str(account_marketplace),
-        }
-        (home / "config.toml").write_text(tomlkit.dumps(config))
-        subprocess.run(
-            ["codex", "plugin", "add", _ACCOUNT_PLUGIN],
-            env=agent_env,
-            check=True,
-            timeout=45,
-        )
-        # An account plugin has no `enabled` in the agent's config, so `_default` decides.
-        config = tomllib.loads((home / "config.toml").read_text())
-        config["plugins"][_ACCOUNT_PLUGIN] = {}
-        (home / "config.toml").write_text(tomlkit.dumps(config))
+        _install_account_plugin(home, account_marketplace, agent_env)
         with (
             (tmp_path / "server.log").open("w") as log,
             subprocess.Popen(
