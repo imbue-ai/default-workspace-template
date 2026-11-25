@@ -189,7 +189,7 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 
 - **Live first, ratify at turn-end.** Handle the user's immediate request *live* in the current chat to keep it interactive; at turn-end, formalize the work through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline in the main agent). Route by situation:
   - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app` for a web view).
-  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-creation` to promote it into a committed, tested skill.
+  - You just did by hand something the user will do again (they said it recurs, or the same steps would run on new inputs) -> end the reply that delivers the result with a one-line offer to make it reusable, saying what the reusable version would do each time; on a yes, `crystallize-creation` promotes it into a committed, tested skill. A step where the user chooses, or that needs judgement, does not rule it out.
   - A skill errored or gave a wrong result -> work around it live, then `heal-creation` at turn-end. Never patch the skill inline.
   - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.
 
