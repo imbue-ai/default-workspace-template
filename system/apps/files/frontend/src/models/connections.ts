@@ -4,7 +4,7 @@
  * from the computer, or read live from the computer with no copy here.
  */
 
-import { fetchOrNotAnswered, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
+import { getJson } from "@imbue/workspace-ui/src/models/http";
 import { nameOf } from "./paths";
 
 export const CONNECTIONS_API = "/__files/api/connections";
@@ -209,8 +209,6 @@ export function syncNoticeOf(connections: Connections | null, folder: string): S
   return null;
 }
 
-export async function fetchConnections(): Promise<Connections> {
-  const response = await fetchOrNotAnswered(CONNECTIONS_API, {}, "read");
-  if (!response.ok) throw await readResponseFailure(response, "read");
-  return (await response.json()) as Connections;
+export function fetchConnections(): Promise<Connections> {
+  return getJson<Connections>(CONNECTIONS_API);
 }
