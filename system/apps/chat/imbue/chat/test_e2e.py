@@ -4539,6 +4539,9 @@ def _put_an_agent_to_work(server: RunningWorkspace) -> None:
         stream.writelines(json.dumps(line) + "\n" for line in lines)
 
 
+# Flaky: in CI the tour's first card once never appeared within 10 s of the first-run tree ending, with the cause not
+# yet found; the same code passed every local run.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_the_tour_waits_for_the_first_conversation_to_leave_its_tree_and_starts_as_it_does(
     tmp_path: Path, page: Page
