@@ -426,7 +426,10 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             "background-chat",
             "waiting on a background task, which will start its next turn",
         ),
-        ("unknown-type", "mid-turn"),
+        (
+            "unknown-type",
+            "running, but of an agent type mngr does not know, so whether it is mid-turn is unknown",
+        ),
     ]
     table = memory_candidates.render_table(report)
     assert (

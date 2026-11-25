@@ -91,14 +91,19 @@ IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
 # No turn is open, but a background task the agent started is still running.
 RUNNING_BACKGROUND_AGENT_STATE: Final[str] = "RUNNING_BACKGROUND"
-MID_TURN_AGENT_STATES: Final[frozenset[str]] = frozenset(
-    {"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"}
-)
+MID_TURN_AGENT_STATE: Final[str] = "RUNNING"
+# Something runs in the agent's window, but mngr has no config for its agent type, so it cannot tell
+# whether that is the agent or whether a turn is open.
+UNKNOWN_TYPE_AGENT_STATE: Final[str] = "RUNNING_UNKNOWN_AGENT_TYPE"
 # The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
-MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = MID_TURN_AGENT_STATES | {
-    IDLE_AGENT_STATE,
-    RUNNING_BACKGROUND_AGENT_STATE,
-}
+MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset(
+    {
+        MID_TURN_AGENT_STATE,
+        UNKNOWN_TYPE_AGENT_STATE,
+        IDLE_AGENT_STATE,
+        RUNNING_BACKGROUND_AGENT_STATE,
+    }
+)
 # The label naming the chat an agent belongs to, which the chat app stamps on a chat's agents once it has handed
 # off; an agent without it is its own chat.
 CHAT_ID_LABEL: Final[str] = "chat_id"
@@ -633,8 +638,10 @@ def _why_agent_is_held(
     """Why a chat or worker holding memory is not a candidate, or None when it is one."""
     if main_chat_id is not None and agent.chat_id == main_chat_id:
         return "the main chat: the chat app starts it again as soon as it stops"
-    if agent.state in MID_TURN_AGENT_STATES:
+    if agent.state == MID_TURN_AGENT_STATE:
         return "mid-turn"
+    if agent.state == UNKNOWN_TYPE_AGENT_STATE:
+        return "running, but of an agent type mngr does not know, so whether it is mid-turn is unknown"
     if agent.state == RUNNING_BACKGROUND_AGENT_STATE or is_chat_busy(agent.chat_id):
         return "waiting on a background task, which will start its next turn"
     if idle_seconds is None:
