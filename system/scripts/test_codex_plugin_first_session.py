@@ -1,7 +1,8 @@
 """Exercise native plugin discovery before the first turn, without model/API calls.
 
-Requires Codex 0.154.0+. The test installs the pinned plugins into a temporary root
-with install_agent_plugins.sh; for development, CODE_GUARDIAN_COMMIT can select an
+Requires the Codex version `[agent_types.codex]` pins (older releases ignore
+`plugins._default`). The test installs the pinned plugins into a temporary root with
+install_agent_plugins.sh; for development, CODE_GUARDIAN_COMMIT can select an
 unreleased code-guardian commit.
 """
 
