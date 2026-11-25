@@ -79,9 +79,7 @@ def test_a_report_that_arrives_after_a_later_one_from_its_page_is_dropped() -> N
     tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
 
     assert tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, is_focused=True, sequence=1)) == (
-        PresenceTransition(
-            is_newly_visible=False, is_newly_watched=False, is_open_changed=False, is_visible_changed=False
-        )
+        PresenceTransition(is_newly_watched=False, is_open_changed=False, is_visible_changed=False)
     )
     assert tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == ["page-1"]
@@ -219,10 +217,10 @@ def test_a_report_says_when_it_makes_the_chat_watched_and_only_then() -> None:
     tracker, _ = _tracker()
 
     assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE)) == PresenceTransition(
-        is_newly_visible=True, is_newly_watched=False, is_open_changed=True, is_visible_changed=True
+        is_newly_watched=False, is_open_changed=True, is_visible_changed=True
     )
     assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)) == PresenceTransition(
-        is_newly_visible=False, is_newly_watched=True, is_open_changed=False, is_visible_changed=False
+        is_newly_watched=True, is_open_changed=False, is_visible_changed=False
     )
     # The heartbeat of a page already watching, and a second page joining it, change nothing.
     assert not tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched

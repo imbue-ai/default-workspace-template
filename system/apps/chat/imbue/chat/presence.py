@@ -77,7 +77,6 @@ class PresenceReport(FrozenModel):
 class PresenceTransition(FrozenModel):
     """What one report changed about its chat, judged under the tracker's lock."""
 
-    is_newly_visible: bool = Field(description="The chat was not visible before the report and is now")
     is_newly_watched: bool = Field(description="The chat had no watcher before the report and has one now")
     is_open_changed: bool = Field(description="The report changed whether any instance has the chat open")
     is_visible_changed: bool = Field(description="The report changed whether any instance shows the chat")
@@ -119,9 +118,7 @@ class PresenceTracker(MutableModel):
             by_instance = self._live_reports_locked(chat_id, now)
             standing = by_instance.get(report.instance_id)
             if standing is not None and report.sequence <= standing.sequence:
-                return PresenceTransition(
-                    is_newly_visible=False, is_newly_watched=False, is_open_changed=False, is_visible_changed=False
-                )
+                return PresenceTransition(is_newly_watched=False, is_open_changed=False, is_visible_changed=False)
             was_open = _is_any_open(by_instance)
             was_visible = _is_any_visible(by_instance)
             was_watched = len(self._watchers_among(by_instance, now)) > 0
@@ -131,7 +128,6 @@ class PresenceTracker(MutableModel):
             self._presence_by_instance_by_chat[chat_id] = by_instance
             is_visible = _is_any_visible(by_instance)
             return PresenceTransition(
-                is_newly_visible=not was_visible and is_visible,
                 is_newly_watched=not was_watched and len(self._watchers_among(by_instance, now)) > 0,
                 is_open_changed=was_open != _is_any_open(by_instance),
                 is_visible_changed=was_visible != is_visible,
