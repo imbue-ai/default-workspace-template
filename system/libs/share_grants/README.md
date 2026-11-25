@@ -24,7 +24,7 @@ renderers, and the file locks every writer of them holds:
 The share gateway writes these files and admits visitors by them; the shell
 reads them for the workspace's roster (who may be here) and for which apps
 are shared on their own, and its sharing routes (`/api/workspace/sharing...`)
-read and replace the grants and the identities beside them for a client
+read the grants, and replace them and the identities beside them, for a client
 outside the workspace, through `document`: `read_sharing_state`,
 `grant_shape_refusals` (the document's shape, never who an account may share
 with) and `replace_grants`, which holds the same lock every other writer
