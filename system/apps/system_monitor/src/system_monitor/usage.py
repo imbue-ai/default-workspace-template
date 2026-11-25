@@ -358,7 +358,7 @@ def scaled_usage(
 ) -> list[dict[str, Any]]:
     """The groups by resident size, shrunk to the memory in use less the scratch space's, then a
     Temporary files row (when /tmp is held in memory) and a System row for what the programs
-    do not account for: the fallback without smaps_rollup."""
+    do not account for: the fallback where no process's own memory can be read."""
     in_scratch = scratch["used"] if scratch is not None else 0
     groups = scale_to_used(
         group_usage(

@@ -78,7 +78,7 @@ def snapshot(
             cpu_usage=reading.usage if reading else None,
         ),
         # "exact": rows are anonymous memory plus Shared and System; "scaled": rows are resident
-        # sizes shrunk by one factor, then System for the rest (no smaps_rollup on this kernel).
+        # sizes shrunk by one factor, then System for the rest (no process's own memory is readable).
         # The page words its note by it.
         "usage_mode": "exact" if breakdown is usage.exact_usage else "scaled",
         "stops": stop_records,
