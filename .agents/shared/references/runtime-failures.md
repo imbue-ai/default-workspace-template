@@ -14,7 +14,7 @@ A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy proce
 
 If it was shed, do NOT blindly re-run a memory-heavy command: it will likely be shed again. Find a lower-memory approach (smaller batches, streaming, releasing data you no longer need), and retry only if you can.
 
-That is for your own ad-hoc commands. A shed command of a worker's test gate follows the gate's own shed handling (`.agents/shared/references/review-gates.md`, "A command that dies from a signal"), and memory pressure is never a reason to skip one.
+That is for your own ad-hoc commands. A shed command of a worker's test gate follows the gate's own shed handling, in the worker's guide, and memory pressure is never a reason to skip one.
 
 ## A tool that cannot run under gVisor
 
