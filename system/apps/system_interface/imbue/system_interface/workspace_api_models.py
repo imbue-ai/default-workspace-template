@@ -144,8 +144,10 @@ class SharingStateResponse(FrozenModel):
 class GrantedIdentityModel(FrozenModel):
     """What the client knows of one granted account: what the shell names it from before it first arrives."""
 
-    email: str = Field(default="", description="The account's email")
-    display_name: str = Field(default="", description="The account's display name")
+    email: str | None = Field(default=None, description="The account's email; null when the client knows none")
+    display_name: str | None = Field(
+        default=None, description="The account's display name; null when the client knows none"
+    )
 
 
 class ReplaceGrantsRequest(FrozenModel):

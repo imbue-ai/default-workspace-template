@@ -86,10 +86,10 @@ class GrantShapeRefusal(NamedTuple):
 
 
 class GrantedIdentityEntry(NamedTuple):
-    """What a client knew of one granted account when it saved the grants."""
+    """What a client knew of one granted account when it saved the grants; None for what it did not know."""
 
-    email: str
-    display_name: str
+    email: str | None
+    display_name: str | None
 
 
 class SharingState(NamedTuple):

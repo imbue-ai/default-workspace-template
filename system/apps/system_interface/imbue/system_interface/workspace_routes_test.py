@@ -170,7 +170,10 @@ def test_replacing_the_grants_stores_the_normalized_document_and_the_identities(
                 "workspace": {"users": [" user-1 "], "emails": ["Bob@Example.com"], "email_domains": ["@Example.org"]},
                 "services": {"web": {"emails": ["carol@example.com"]}},
             },
-            "identities": {"user-1": {"email": "erin@example.com", "display_name": "Erin"}},
+            "identities": {
+                "user-1": {"email": "erin@example.com", "display_name": "Erin"},
+                "user-2": {"email": None, "display_name": None},
+            },
         },
     )
 
@@ -186,7 +189,8 @@ def test_replacing_the_grants_stores_the_normalized_document_and_the_identities(
     assert stored.workspace.emails == {"bob@example.com"}
     assert stored.services["web"].emails == {"carol@example.com"}
     assert json.loads((root / SHARE_IDENTITIES_RELATIVE_PATH).read_text())["identities"] == {
-        "user-1": {"email": "erin@example.com", "display_name": "Erin"}
+        "user-1": {"email": "erin@example.com", "display_name": "Erin"},
+        "user-2": {"email": None, "display_name": None},
     }
     assert stat.S_IMODE((root / SHARE_GRANTS_RELATIVE_PATH).stat().st_mode) == 0o600
     assert client.get(SHARING_ROUTE).get_json()["grants"] == response.get_json()["grants"]

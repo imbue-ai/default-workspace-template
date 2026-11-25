@@ -199,16 +199,30 @@
         "description": "What the client knows of one granted account: what the shell names it from before it first arrives.",
         "properties": {
           "display_name": {
-            "default": "",
-            "description": "The account's display name",
-            "title": "Display Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The account's display name; null when the client knows none",
+            "title": "Display Name"
           },
           "email": {
-            "default": "",
-            "description": "The account's email",
-            "title": "Email",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The account's email; null when the client knows none",
+            "title": "Email"
           }
         },
         "title": "GrantedIdentityModel",
