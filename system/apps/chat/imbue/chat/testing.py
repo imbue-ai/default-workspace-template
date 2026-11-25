@@ -776,8 +776,9 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     return str(script), log_path
 
 
-def write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path, Path]:
-    """A stand-in ``mngr`` that logs each argv on one line, then waits for a gate file before it succeeds.
+def write_gated_mngr_binary(tmp_path: Path, exit_code: int = 0) -> tuple[str, Path, Path]:
+    """A stand-in ``mngr`` that logs each argv on one line, then waits for a gate file before it exits with
+    ``exit_code``.
 
     Returns its path, the log's, and the gate's: a test holds a call open until it creates the gate.
     """
@@ -786,6 +787,7 @@ def write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path, Path]:
     script = tmp_path / "gated-mngr"
     script.write_text(
         f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{log_path}"\nwhile [ ! -e "{gate_path}" ]; do sleep 0.05; done\n'
+        f"exit {exit_code}\n"
     )
     script.chmod(0o755)
     return str(script), log_path, gate_path
