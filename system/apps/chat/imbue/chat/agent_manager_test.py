@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -7496,11 +7497,15 @@ class _TranscriptWithUserTurn(ListTranscriptReader):
 
 
 def _handoff_capabilities(
-    sent: list[tuple[str, str, str]], is_summary_written: bool = True, has_user_turn: bool = True
+    sent: list[tuple[str, str, str]],
+    is_summary_written: bool = True,
+    has_user_turn: bool = True,
+    drain_to_composer: Callable[[AgentInfo], str] | None = None,
 ) -> HandoffCapabilities:
     """Capabilities whose send records itself and, for the summary request, writes the file at once. The
     retiring agent's transcript carries a user turn unless ``has_user_turn`` is off, which makes every
-    handoff a fresh start."""
+    handoff a fresh start. ``drain_to_composer`` defaults to a stub; a test that cares about the drain
+    binding a harness's real session passes one."""
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         sent.append((agent_info.id, text, message_id))
@@ -7513,7 +7518,7 @@ def _handoff_capabilities(
         ensure_watcher=lambda agent_info: (
             _TranscriptWithUserTurn(event_ids) if has_user_turn else ListTranscriptReader(event_ids)
         ),
-        drain_to_composer=lambda agent_info: "queued text",
+        drain_to_composer=drain_to_composer if drain_to_composer is not None else (lambda agent_info: "queued text"),
         deliver=deliver,
     )
 
@@ -7857,16 +7862,18 @@ def _converging_chat(
     phase: HandoffPhase,
     is_retiring_archived: bool,
     target_account_id: str = "acct-openai",
+    harness: HarnessType = HarnessType.CLAUDE,
 ) -> tuple[str, str]:
     """A one-agent chat whose record carries a handoff in ``phase``; returns the agent id and the successor's."""
     first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
-    entry = make_chat_agent_entry(1, first, is_archived=is_retiring_archived)
+    entry = make_chat_agent_entry(1, first, is_archived=is_retiring_archived, harness=harness)
     seed_agent_state(
         manager,
         first,
         name=entry.archived_name if is_retiring_archived and entry.archived_name is not None else "Chat-1",
         state="STOPPED" if is_retiring_archived else "RUNNING",
         labels={"display_name": "Chat 1", "account": "acct-anthropic"},
+        harness=harness,
     )
     handoff = make_chat_handoff_record(
         retiring_seq=1, next_agent_id=successor, phase=phase, target_account_id=target_account_id
@@ -8125,6 +8132,70 @@ def test_destroying_one_agent_runs_the_shared_destroy_and_reports_a_refusal(
     finally:
         manager.stop()
         refusing.stop()
+
+
+def _agy_queue_watcher(block: str) -> Any:
+    """A watcher standing in for agy's, carrying only the queue surface a no-turn stop takes.
+
+    Typed ``Any`` so the fake reaches the drain the way the endpoint tests' patched watchers do --
+    only ``take_unclaimed_queue`` is ever called on it.
+    """
+    return SimpleNamespace(take_unclaimed_queue=lambda: (block, ("q-1",)))
+
+
+def test_a_handoff_stuck_in_draining_off_an_agy_chat_resumes_and_switches(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The incident itself: a handoff off an agy chat died in draining and the chat stayed stuck there.
+
+    The drain binding here is agy's REAL session, built by the manager out of the registry (not a
+    stub), which is what a stop and a handoff off an agy chat both cross. Its build once re-listed
+    the base session's fields and went stale, so the drain crashed on the set of sends a stop hands
+    back and the record never left ``draining``. Resuming it now drains through the queue agy holds,
+    then summarizes and switches like any other harness's handoff.
+    """
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+
+    def drain(agent_info: AgentInfo) -> str:
+        # agy's real session, built by the manager out of the registry; the queue is agy's own and
+        # no turn is open, so the stop is one take-unclaimed-queue.
+        return manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            _agy_queue_watcher("queued text"),
+            lambda: (True, ""),
+            lambda: None,
+            lambda: True,
+            lambda: False,
+        )
+
+    # The handoff's draining step is wired to that real drain, as the composition root wires it.
+    manager.set_handoff_capabilities(_handoff_capabilities(sent, drain_to_composer=drain))
+    first, successor = _converging_chat(
+        manager,
+        store,
+        phase=HandoffPhase.DRAINING,
+        is_retiring_archived=False,
+        target_account_id=_openai_account(),
+        harness=HarnessType.ANTIGRAVITY,
+    )
+    try:
+        manager._resume_handoffs()
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.agent_id for entry in record.agents] == [first, successor]
+        # The retiring agy agent was stopped and archived and a codex successor created, as on any harness.
+        # The create runs on the handoff's own thread, so wait for it rather than reading the log the
+        # instant the record settles. Stop and archive are both done before the create; which of the
+        # two comes first is the switch's own ordering, not this test's subject.
+        wait_for(lambda: "create " in argv_log.read_text(), timeout=15.0)
+        commands = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert commands[-1] == "create"
+        assert sorted(commands[:-1]) == ["rename", "stop"]
+        # The drain ran, and the queue it took is the composer's rather than the successor's.
+        assert sent[0][1].startswith("/handoff-summary ")
+        assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
+    finally:
+        manager.stop()
 
 
 def test_an_unfinished_handoff_resumes_when_the_manager_starts(

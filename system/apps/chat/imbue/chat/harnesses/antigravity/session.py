@@ -25,20 +25,16 @@ from imbue.chat.harnesses.model import match_option
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
-from imbue.chat.harnesses.session import SessionDeps
 
 
 class AntigravityHarnessSession(FileHarnessSession):
-    """agy's file session, with a derived option appended for a model the catalog lacks."""
+    """agy's file session, with a derived option appended for a model the catalog lacks.
 
-    @classmethod
-    def build(cls, deps: SessionDeps) -> "AntigravityHarnessSession":
-        # Declared so the subclass is the STATIC type too; the base already constructs via
-        # ``cls``, so this only narrows the annotation (same as CodexHarnessSession). The fields
-        # come from the base's own initializer, so every one its methods read is set.
-        self = cls.__new__(cls)
-        self._init_file_session(deps)
-        return self
+    No ``build`` of its own: the base builds through ``cls`` and is typed ``Self``, so this class
+    inherits one that makes every field the base needs. It had an override that only re-listed
+    those fields for the type checker, and that list went stale when the base grew the set of
+    sends a stop hands back -- which crashed every handoff off an agy chat in its draining step.
+    """
 
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         """Hold the message. Always. This session never types into agy.

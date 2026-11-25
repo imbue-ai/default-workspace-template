@@ -29,6 +29,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from typing import Self
 from uuid import uuid4
 
 from loguru import logger
@@ -260,22 +261,21 @@ class FileHarnessSession(AgentHarnessSession):
     _handed_back_tokens: set[str]
 
     @classmethod
-    def build(cls, deps: SessionDeps) -> "FileHarnessSession":
-        self = cls.__new__(cls)
-        self._init_file_session(deps)
-        return self
+    def build(cls, deps: SessionDeps) -> Self:
+        """Construct one, with every field this class holds.
 
-    def _init_file_session(self, deps: SessionDeps) -> None:
-        """Set every field this class's methods read.
-
-        A subclass's own ``build`` calls this rather than copying the fields, so a field added
-        here cannot go missing there (agy's copy once lacked ``_handed_back_tokens``, and every
-        stop or harness switch of an agy chat failed with an AttributeError).
+        Typed ``Self`` deliberately: a subclass that needs no setup of its own inherits this and
+        still narrows to its own type, so there is no second field list to go stale when this one
+        grows. agy's override was only such a list, and it missed ``_handed_back_tokens`` -- which
+        the shared stop/handoff drain reads, so every handoff off an agy chat 500'd in draining.
+        A subclass that DOES add setup still overrides this and must delegate to ``super().build``.
         """
+        self = cls.__new__(cls)
         self._deps = deps
         self._sending = SendingRegistry.build()
         self._sending_lock = threading.Lock()
         self._handed_back_tokens = set()
+        return self
 
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         # Record as Sending BEFORE delivery (contract A1): while the synchronous send is in
