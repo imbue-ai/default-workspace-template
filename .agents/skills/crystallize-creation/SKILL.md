@@ -1,6 +1,6 @@
 ---
 name: crystallize-creation
-description: "Promote the just-finished work into a new, reusable, committed, tested skill. Use when that process would recur with new inputs -- especially something you figured out through research or debugging -- or when the user says 'crystallize this'."
+description: "Turn work you just did by hand into a new, reusable, committed, tested skill. When you finish something the user will do again -- they said it recurs, or the same steps would run on new inputs, even if one step is the user's own choice each time -- offer this in the reply that delivers the result, saying what the reusable version would do, and invoke it on a yes. Also use when the user asks for a reusable or rerunnable version, or says 'crystallize this'."
 metadata:
   author: imbue
 ---
