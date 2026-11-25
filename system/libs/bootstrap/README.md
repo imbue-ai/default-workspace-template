@@ -40,8 +40,12 @@ service.
    would restart an idle one behind the chat app. Skipped while an update apply
    is in flight (`data/.state/update-apply/marker.json`: bootstrap also reruns on
    the apply's restarts, with chats live) and when this boot's venv sync failed.
-   Bounded and best-effort: its outcome lines go to the boot log, and nothing it
-   does stops the boot.
+   A `mngr start --restart system-services` also reruns it with chats live:
+   they read running and are left out, but an agent listed `STOPPED` that one of
+   them starts before `mngr upgrade` reaches it (a message to a stopped worker,
+   say) is restarted by `mngr upgrade`; that outcome is a warning. Bounded and
+   best-effort: its outcome lines go to the boot log, and nothing it does stops
+   the boot.
 
    `data/.state/agent_upgrade/coverage.json` names the mngr that last left every
    agent current, as the commit each of its installed packages (mngr and its
