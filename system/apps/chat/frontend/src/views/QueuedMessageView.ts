@@ -25,7 +25,7 @@
 import m from "mithril";
 import { getQueuedMessagesForChat, getShoulderTapAvailableForChat } from "../models/Chats";
 import type { QueuedMessage } from "../models/Chats";
-import { shoulderTap } from "../models/Response";
+import { drainToComposer, interruptAgent, mintMessageId, sendMessage, shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import {
@@ -34,11 +34,18 @@ import {
   renderNotYetRealBubble,
   type PendingBubbleRun,
 } from "./OutgoingMessageView";
-import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  describeRequestFailure,
+} from "@imbue/workspace-ui/src/models/request-error";
+import { describeSendFailure, describeTapFailure } from "./composer-failures";
+import { plainFailureLines } from "./failure-lines";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
   NOTICE_ROW_SPACING_CLASS,
   authorOfTurn,
+  noticeOutcomeOf,
   renderNoticeRow,
   renderUserBubble,
   renderUserBubbleContent,
@@ -73,21 +80,77 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
     const { block } = await shoulderTap(chatId);
     prependToComposer(chatId, block);
   } catch (err) {
-    const detail = describeRequestError(err);
-    console.error(`Failed to send queued messages for chat ${chatId}: ${detail}`);
+    console.error(`Failed to send queued messages for chat ${chatId}: ${describeRequestError(err)}`);
     // Hand the failure to the composer's notice rather than putting up a system alert. One shape
-    // of failure gets one shape of answer, whichever button started it -- and Retry here means
-    // "flush the queue again", which is exactly what the user clicked in the first place.
-    raiseFailureNotice(chatId, {
-      title: "Couldn't send the queued messages",
-      detail,
-      kind: describeRequestErrorKind(err),
-      // The finally below has already cleared the in-flight marker by the time this can run.
-      retry: () => shoulderTapQueuedMessages(chatId),
-    });
+    // of failure gets one shape of answer, whichever button started it.
+    raiseFailureNotice(chatId, tapFailureNotice(chatId, err));
   } finally {
     inFlightChatIds.delete(chatId);
     m.redraw();
+  }
+}
+
+// What "Nudge the agent" sends when the queued messages went through but the agent may not have noticed them. Imbue
+// Studio writes it, so it speaks about the user rather than as them.
+const NUDGE_MESSAGE =
+  "Imbue Studio delivered the user's queued messages above, but you may not have seen them. Read them now.";
+
+/** The composer's notice for a refused tap, by what the refusal says happened to the queued messages. */
+function tapFailureNotice(chatId: string, error: unknown): Parameters<typeof raiseFailureNotice>[1] {
+  const kind = describeRequestFailure(error).kind;
+  if (kind === "recovery_send_failed") {
+    // The messages went through; only the follow-up that wakes the agent did not.
+    return {
+      title: "Queued messages sent",
+      describe: describeTapFailure,
+      error,
+      action: { label: "Nudge the agent", run: () => void nudgeAgent(chatId) },
+    };
+  }
+  if (kind === "binding_not_active") {
+    return {
+      title: "Couldn't send the queued messages",
+      describe: describeTapFailure,
+      error,
+      action: { label: "Restart the agent", run: () => void restartAgentKeepingQueue(chatId) },
+    };
+  }
+  return {
+    title: "Couldn't send the queued messages",
+    describe: describeTapFailure,
+    error,
+    kind: describeRequestErrorKind(error),
+    // Try again here means "flush the queue again", which is exactly what the user clicked in the first place.
+    retry: () => shoulderTapQueuedMessages(chatId),
+  };
+}
+
+async function nudgeAgent(chatId: string): Promise<void> {
+  try {
+    await sendMessage(chatId, NUDGE_MESSAGE, mintMessageId());
+  } catch (err) {
+    raiseFailureNotice(chatId, {
+      title: "Couldn't send your message",
+      describe: describeSendFailure,
+      error: err,
+      kind: describeRequestErrorKind(err),
+    });
+  }
+}
+
+/** Restart the agent so the shoulder tap's key takes effect, with whatever it has queued brought back to the
+ *  composer first: a restart drops the harness's queue, and those messages are the user's. */
+async function restartAgentKeepingQueue(chatId: string): Promise<void> {
+  try {
+    const { block } = await drainToComposer(chatId);
+    prependToComposer(chatId, block);
+    await interruptAgent(chatId);
+  } catch (err) {
+    raiseFailureNotice(chatId, {
+      title: "Couldn't restart the agent",
+      describe: (error) => plainFailureLines(error, "This chat's agent couldn't be restarted"),
+      error: err,
+    });
   }
 }
 
@@ -116,7 +179,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, run: Pend
     ]
       .filter((part) => part !== null)
       .join(" ");
-    return renderNoticeRow(`queued-${queued.queued_id}`, rowClass, cls);
+    return renderNoticeRow(`queued-${queued.queued_id}`, rowClass, cls, noticeOutcomeOf(queued));
   }
   const author = authorOfTurn(queued);
   // The group's header names the viewer's bubbles, so theirs wear no "You" in it; another person's is named as its

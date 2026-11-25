@@ -26,13 +26,18 @@ The kind set and the provider-fault split are ordinary HTTP semantics, so they
 are harness-agnostic; only the two surface-form regexes are Claude-shaped. A
 second harness that surfaces provider errors differently classifies them in its
 own parser and stamps the same event fields (``is_api_error`` /
-``api_error_kind`` / ``is_provider_fault``), which is the shared contract the
-frontend reads.
+``api_error_kind`` / ``is_provider_fault``, and ``failed_turn_text_fields``'s two), which is
+the shared contract the frontend reads.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
+from typing import Final
+
+from loguru import logger
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 
@@ -66,6 +71,13 @@ _TYPE_KINDS: dict[str, str] = {
 # earn the "not Imbue Studio's fault" note on the frontend.
 _PROVIDER_FAULT_KINDS: frozenset[str] = frozenset({"api_error", "overloaded"})
 
+# A conversation too long for the model's context. Anthropic refuses it as an ordinary 400
+# ``invalid_request_error`` ("prompt is too long: 214332 tokens > 200000 maximum"), and Claude
+# Code's own notice for it reads "Prompt is too long"; telling it apart matters because trying
+# again fails the same way, while a new chat or a compaction gets past it.
+CONTEXT_TOO_LONG_KIND: Final[str] = "context_too_long"
+_CONTEXT_TOO_LONG_RE: Final[re.Pattern[str]] = re.compile(r"\bprompt is too long\b", re.IGNORECASE)
+
 # ``API Error: <code> ...`` -- the surface form Claude Code writes for a failed request.
 _API_ERROR_STATUS_RE = re.compile(r"API Error:\s*(\d{3})\b", re.IGNORECASE)
 # pi's bare ``<status> {json}``, with no prefix at all. ANCHORED to the start of the string:
@@ -73,6 +85,14 @@ _API_ERROR_STATUS_RE = re.compile(r"API Error:\s*(\d{3})\b", re.IGNORECASE)
 _BARE_STATUS_RE = re.compile(r"^\s*(\d{3})\s*[{\s]", re.IGNORECASE)
 # ``"type": "<x>_error"`` -- the embedded raw-error form.
 _API_ERROR_TYPE_RE = re.compile(r'"type"\s*:\s*"([a-z_]+error)"', re.IGNORECASE)
+# A failure text that is a response body or a status line rather than a sentence written for people: it holds a
+# JSON brace, Claude Code's ``API Error:`` lead, a leading status code, or a status named mid-text.
+_RAW_FAILURE_TEXT_RE: Final[re.Pattern[str]] = re.compile(
+    r"[{}]|\bAPI Error:|^\s*\d{3}\b|\b(?:status|HTTP)\s*\d{3}\b", re.IGNORECASE
+)
+_WHITESPACE_RUN_RE: Final[re.Pattern[str]] = re.compile(r"\s+")
+# Where a response body begins in a failure text: a brace that opens a JSON object, not one in prose.
+_JSON_BODY_START_RE: Final[re.Pattern[str]] = re.compile(r'\{\s*"')
 
 
 def classify_api_error(text: str) -> str | None:
@@ -85,6 +105,8 @@ def classify_api_error(text: str) -> str | None:
     """
     if not text or is_auth_error_text(text):
         return None
+    if is_context_too_long_text(text):
+        return CONTEXT_TOO_LONG_KIND
     status_match = _API_ERROR_STATUS_RE.search(text) or _BARE_STATUS_RE.match(text)
     if status_match is not None:
         status_kind = _STATUS_KINDS.get(status_match.group(1))
@@ -96,6 +118,52 @@ def classify_api_error(text: str) -> str | None:
         if type_kind is not None:
             return type_kind
     return None
+
+
+def is_context_too_long_text(text: str) -> bool:
+    """True when ``text`` is a model refusing a conversation too long for its context."""
+    return _CONTEXT_TOO_LONG_RE.search(text) is not None
+
+
+def is_raw_failure_text(text: str) -> bool:
+    """True when a failed turn's ``text`` is a response body or a status line (a 401 body, ``API Error: 500 ...``)
+    rather than a sentence the provider wrote for people, so a page keeps it behind "See details"."""
+    return _RAW_FAILURE_TEXT_RE.search(text) is not None
+
+
+def provider_error_message(text: str) -> str | None:
+    """The provider's own message out of the response body a failure ``text`` carries, on one line; ``None`` when
+    the text carries no JSON body, or one that names no message.
+
+    Reads the shapes providers answer with: Anthropic's and OpenAI's ``{"error": {"message": ...}}``, and a bare
+    ``{"message": ...}``.
+    """
+    body_start = _JSON_BODY_START_RE.search(text)
+    if body_start is None:
+        return None
+    try:
+        body, _ = json.JSONDecoder().raw_decode(text, body_start.start())
+    except json.JSONDecodeError as e:
+        logger.warning("A failed turn's response body could not be read for the provider's message: {}", e)
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    message = error.get("message") if isinstance(error, dict) else body.get("message")
+    if not isinstance(message, str):
+        return None
+    return _WHITESPACE_RUN_RE.sub(" ", message).strip() or None
+
+
+def failed_turn_text_fields(text: str, *, is_api_error: bool, is_auth_error: bool) -> dict[str, Any]:
+    """What an ``assistant_message`` says about its own text when the turn failed, so no page has to read the text:
+    ``api_error_message`` is the provider's own message for a failed request (``None`` when the text carries none),
+    and ``is_error_text_raw`` whether the failed turn's text is a response body or a status line rather than a
+    sentence for people. Both are off for a turn that did not fail."""
+    return {
+        "api_error_message": provider_error_message(text) if is_api_error else None,
+        "is_error_text_raw": (is_api_error or is_auth_error) and is_raw_failure_text(text),
+    }
 
 
 def kind_for_status(status: int | None) -> str | None:

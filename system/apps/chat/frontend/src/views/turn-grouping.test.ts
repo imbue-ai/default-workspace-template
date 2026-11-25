@@ -55,6 +55,8 @@ function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessa
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -74,6 +76,8 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -115,6 +119,8 @@ function bashMsg(
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -159,6 +165,8 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 
@@ -1491,6 +1499,8 @@ describe("audit regressions", () => {
       is_api_error: false,
       api_error_kind: null,
       is_provider_fault: false,
+      api_error_message: null,
+      is_error_text_raw: false,
     };
     const events = [
       userMsg("t0", "go"),

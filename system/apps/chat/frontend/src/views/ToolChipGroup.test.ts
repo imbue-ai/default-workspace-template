@@ -285,6 +285,8 @@ describe("the call the agent is running", () => {
         is_api_error: false,
         api_error_kind: null,
         is_provider_fault: false,
+        api_error_message: null,
+        is_error_text_raw: false,
       },
       result({ tool_call_id: "c1", timestamp: new Date(NOW - 69_000).toISOString() }),
     ];

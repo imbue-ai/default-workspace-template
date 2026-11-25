@@ -421,3 +421,53 @@ describe("user-message-display sent-again line", () => {
     expect(renderRow(true).querySelector(".message-resent-note-text")).toBeNull();
   });
 });
+
+describe("user-message-display background-task notices", () => {
+  function noticeEvent(fields: Partial<UserMessageEvent>): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-notice",
+      source: "claude",
+      role: "user",
+      content: "<task-notification>...</task-notification>",
+      display: "notice",
+      ...fields,
+    } as UserMessageEvent;
+  }
+
+  function mounted(event: UserMessageEvent): HTMLElement {
+    const root = document.createElement("div");
+    m.render(root, m(StableUserMessage, { event }));
+    return root;
+  }
+
+  it("marks a failed task with a warning rather than the tick, its exit code on the line", () => {
+    const root = mounted(
+      noticeEvent({
+        display_label: "Background task failed",
+        display_body: 'Background command "build" completed (exit code 2)',
+        resolution: "failed",
+      }),
+    );
+    expect(root.querySelector(".text-warning")).not.toBeNull();
+    expect(root.querySelector(".text-accent")).toBeNull();
+    expect(root.querySelector(".message-notice")?.textContent).toBe(
+      'Background task failed: Background command "build" completed (exit code 2)',
+    );
+    expect(root.querySelector(".see-details")).toBeNull();
+  });
+
+  it("gives a notice with no summary its lead and its own text behind See details, and a finished task the tick", () => {
+    const raw = "<task-notification>\n<status>completed</status>\n</task-notification>";
+    const bare = mounted(
+      noticeEvent({ display_label: "A background task finished.", display_body: "", display_details: raw }),
+    );
+    expect(bare.querySelector(".message-notice")?.textContent).toContain("A background task finished.");
+    expect(bare.querySelector(".see-details-text")?.textContent).toBe(raw);
+
+    const finished = mounted(noticeEvent({ display_label: "Background task completed", display_body: "Built it" }));
+    expect(finished.querySelector(".text-accent")).not.toBeNull();
+    expect(finished.querySelector(".see-details")).toBeNull();
+  });
+});

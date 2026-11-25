@@ -2274,7 +2274,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_over_the_
         chat_frame = _start_new_chat(page, server)
         expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
-        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
+        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Add a provider", timeout=15000)
         # Neither the shell nor the chat's page draws a chooser of its own: the chat list's is the one that opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
         assert chat_frame.locator('[data-e2e="provider-chooser"]').count() == 0
@@ -2808,8 +2808,8 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
 # draws, however briefly, into ``window.__placeholdersSeen``.
 _RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
 (() => {
-  const texts = ["No conversation data", "Loading terminal output", "Starting the chat", "Loading events",
-    "No events yet", "Send a message to start this chat"];
+  const texts = ["This chat is no longer here", "This chat has nothing to show yet", "Loading terminal output",
+    "Starting the chat", "Loading events", "No events yet", "Send a message to start this chat"];
   const seen = new Set();
   window.__placeholdersSeen = [];
   const check = () => {
@@ -2894,6 +2894,40 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         box_once_landed = bubble.bounding_box()
         assert box_once_landed is not None
         assert box_once_landed["y"] == box_while_starting["y"]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_held_for_a_new_chat_deleted_elsewhere_comes_back_to_the_composer(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A message the chat app holds for a chat still being created goes back into the box, with the not-delivered
+    notice, when the chat is deleted from somewhere else before its agent lands: the chat app drops what it held."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        try:
+            chat = _start_new_chat(page, server)
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            chat.locator(".message-input-textbox").fill("hello")
+            chat.locator(".message-input-textbox").press("Enter")
+            expect(chat.locator(".outgoing-message")).to_be_visible(timeout=5000)
+            agent_manager = server.chat_state.agent_manager
+            (provisional,) = agent_manager.get_provisional_chats()
+            wait_for(
+                lambda: [held.text for held in agent_manager.get_provisional_chats()[0].held_sends] == ["hello"],
+                timeout=10.0,
+                error_message="the chat app never held the message",
+            )
+            _post_chat_json(server, f"/api/chats/{provisional.chat_id}/destroy", {})
+        finally:
+            release_create.touch()
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Your message wasn't delivered.", timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("hello")
+        expect(chat.locator(".outgoing-message")).to_have_count(0)
+        assert messenger.sent == []
 
 
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
@@ -3463,7 +3497,10 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         notice = chat.locator(".handoff-failed-notice")
         expect(notice).to_be_visible(timeout=30000)
         expect(notice.locator(".handoff-failed-title")).to_have_text("Could not start Codex")
-        expect(notice.locator(".handoff-failed-reason")).to_contain_text("mngr create exited with code 3")
+        expect(notice.locator(".handoff-failed-reason")).to_have_text(
+            "Imbue Studio couldn't start this chat on Codex. Try again, or start a new chat."
+        )
+        expect(notice.locator(".see-details-text")).to_contain_text("mngr create exited with code 3")
         expect(chat.locator(".held-send", has_text="Carry on in Codex")).to_be_visible()
         snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and snapshot.handoff is not None
@@ -3927,15 +3964,10 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
 ) -> None:
     """The last chat leaves the list and the selection the moment its delete is confirmed, and no new chat is asked
     for while the delete is on its way, since the chat could yet come back. A refusal puts it back on screen and says
-    why."""
-    dialogs: list[str] = []
+    so in a notice, with the chat app's reason behind See details."""
     awaiting_requests: list[str] = []
-
-    def record_and_accept(dialog: Dialog) -> None:
-        dialogs.append(dialog.message)
-        dialog.accept()
-
-    page.on("dialog", record_and_accept)
+    # The delete's confirmation is the browser's own dialog.
+    page.on("dialog", lambda dialog: dialog.accept())
     page.on(
         "request",
         lambda request: awaiting_requests.append(request.url) if request.url.endswith("/api/chats/awaiting") else None,
@@ -3957,7 +3989,9 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
     expect(rows).to_have_count(1)
     expect(page.locator(".chat-root-empty")).to_have_count(0)
     assert _selection_of(page.url) == FIXTURE_AGENT_ID
-    assert "mngr failed" in dialogs[-1]
+    notice = page.locator(".modal-card")
+    expect(notice).to_contain_text("Couldn't delete the chat")
+    expect(notice.locator(".see-details-text")).to_contain_text("mngr failed")
     assert awaiting_requests == []
 
 

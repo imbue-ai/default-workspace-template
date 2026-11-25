@@ -62,7 +62,9 @@ from imbue.chat.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.chat.harnesses.codex.tool_labels import shell_command
 from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
+from imbue.chat.harnesses.error_patterns import CONTEXT_TOO_LONG_KIND
 from imbue.chat.harnesses.error_patterns import classify_api_error
+from imbue.chat.harnesses.error_patterns import failed_turn_text_fields
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
@@ -101,7 +103,7 @@ _CODEX_ERROR_KINDS: Final[dict[str, str]] = {
     "rate_limit_exceeded": "rate_limit",
     "rate_limit": "rate_limit",
     "overloaded": "overloaded",
-    "context_window_exceeded": "request_too_large",
+    "context_window_exceeded": CONTEXT_TOO_LONG_KIND,
 }
 
 
@@ -250,6 +252,8 @@ def _assistant_event(
         "is_api_error": False,
         "api_error_kind": None,
         "is_provider_fault": False,
+        "api_error_message": None,
+        "is_error_text_raw": False,
     }
 
 
@@ -290,6 +294,7 @@ def _turn_error_event(
         "is_api_error": api_error_kind is not None,
         "api_error_kind": api_error_kind,
         "is_provider_fault": is_provider_fault(api_error_kind),
+        **failed_turn_text_fields(detail, is_api_error=api_error_kind is not None, is_auth_error=is_auth),
     }
 
 

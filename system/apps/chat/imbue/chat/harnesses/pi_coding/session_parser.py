@@ -31,6 +31,7 @@ from typing import Any
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 from imbue.chat.harnesses.error_patterns import classify_api_error
+from imbue.chat.harnesses.error_patterns import failed_turn_text_fields
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
@@ -149,6 +150,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     error_text = str(message.get("errorMessage") or "") if failed else ""
     text = _text_from_content(message.get("content")) or error_text
     api_error_kind = classify_api_error(error_text)
+    is_auth_error = is_auth_error_text(error_text)
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -166,7 +168,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         # `401 {"type":"error","error":{"type":"authentication_error", ...}}`. pi passes the
         # provider's words through rather than writing its own, so the shared vocabulary is
         # what reads them.
-        "is_auth_error": is_auth_error_text(error_text),
+        "is_auth_error": is_auth_error,
         # pi passes the provider's own body through, so the shared classifier reads it the same
         # way it reads claude's -- the status and the structured type are the parts that do not
         # change when a provider rewords its prose. `classify_api_error` yields to the auth
@@ -174,6 +176,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "is_api_error": api_error_kind is not None,
         "api_error_kind": api_error_kind,
         "is_provider_fault": is_provider_fault(api_error_kind),
+        **failed_turn_text_fields(error_text, is_api_error=api_error_kind is not None, is_auth_error=is_auth_error),
     }
     if _thinking_text(message.get("content")):
         event["has_thinking"] = True

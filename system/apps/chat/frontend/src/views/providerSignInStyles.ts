@@ -126,9 +126,9 @@ export const STEP_NUM =
 
 export const FIELD_ROW = "flex items-center gap-2";
 
-/** One right-aligned action under the body. */
+/** The screen's actions under the body, right-aligned. */
 export const FOOTER = "px-4 pb-3 pt-3";
-export const FOOTER_ROW = "flex justify-end";
+export const FOOTER_ROW = "flex flex-wrap justify-end gap-2";
 /** The browser wait's two ways forward, side by side. */
 export const RELAY_ACTIONS = "mt-4 flex flex-wrap gap-2";
 

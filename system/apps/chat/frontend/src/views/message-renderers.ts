@@ -35,6 +35,7 @@ import { STRETCH_PIECES_CLASS, STRETCH_TEXT_EDGE_CLASS, renderAgentProse } from 
 import { railNodeAttrs } from "./agent-rail";
 import { runningCallElapsed, runningToolCall } from "./ActivityIndicator";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
@@ -556,13 +557,33 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
   ]);
 }
 
-/** The grey note shown under a provider-fault API error: the failure is the model
- *  provider's, not ours. Wording nudged by kind; every harness's provider faults
- *  land here since they stamp the same is_provider_fault flag. */
-function providerFaultNote(kind: string | null): string {
-  const cause =
-    kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
-  return `This isn't Imbue Studio's fault -- ${cause}. Try again in a moment.`;
+/** What a failed turn says when the provider's servers failed or nothing named the cause, in place of text that is
+ *  not a sentence for people, and under a provider's own sentence about its servers failing. No blame either way:
+ *  the turn may have gone through Imbue's own model proxy. */
+const PROVIDER_TROUBLE_LINE = "The model provider is having trouble. Try again in a moment.";
+const CONTEXT_TOO_LONG_LINE =
+  "This conversation is too long for the model to take in. Start a new chat, or send /compact to shorten it.";
+/** A request the provider refused for a reason of ours rather than its servers', with the provider's own message
+ *  for it when the failure carried one: that message is the one part of the refusal a person can act on. */
+function requestRefusedLine(providerMessage: string | null): string {
+  if (providerMessage === null) return "The model provider refused this request.";
+  return `The model provider refused this request: ${/[.!?]$/.test(providerMessage) ? providerMessage : `${providerMessage}.`}`;
+}
+// The line for each kind (``api_error_kind``) of request the provider refused; a refused kind not named here gets
+// ``requestRefusedLine``.
+const REFUSED_REQUEST_LINES: Readonly<Record<string, string>> = {
+  context_too_long: CONTEXT_TOO_LONG_LINE,
+  permission: "The model provider says this account isn't allowed to make this request.",
+  not_found: "The model provider couldn't find the model this chat uses.",
+  request_too_large: "This message is too large for the model provider to take. Try sending less at once.",
+  rate_limit: "This account has reached the model provider's rate limit. Wait a little, then try again.",
+};
+
+/** The plain line a failed turn leads with when its text is not a sentence for people: "having trouble" only for a
+ *  provider fault or a failure nothing named, since trying again does not help a refused request. */
+function failedTurnLine(event: AssistantMessageEvent): string {
+  if (event.is_provider_fault || event.api_error_kind === null) return PROVIDER_TROUBLE_LINE;
+  return REFUSED_REQUEST_LINES[event.api_error_kind] ?? requestRefusedLine(event.api_error_message);
 }
 
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
@@ -760,29 +781,36 @@ function appendEventParts(
     if (event.is_auth_error && isSignedInSince(event, chatId)) {
       children.push(onLineAsBox(renderSignedInAgain(event, chatId, textContent), placement));
     } else if (event.is_api_error || event.is_auth_error) {
-      // A model API error: render the failure text in light red, and for a
-      // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
+      // A model API error, in light red. The provider's own sentence is shown as written; a response body or a
+      // status line (``is_error_text_raw``) gives way to a plain line of ours and goes behind "See details".
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a
       // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
       // throwing a sign-in screen over whatever the user was doing.
+      const isRaw = event.is_error_text_raw;
       children.push(
         onLineAsBox(
           m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
-            m(MarkdownContent, {
-              content: textContent,
-              requestedAt: event.timestamp,
-              expansionKeyPrefix: event.event_id,
-            }),
-            event.is_provider_fault
+            isRaw
+              ? event.is_auth_error
+                ? null
+                : m("p", { class: "message-api-error-lead" }, failedTurnLine(event))
+              : m(MarkdownContent, {
+                  content: textContent,
+                  requestedAt: event.timestamp,
+                  expansionKeyPrefix: event.event_id,
+                }),
+            // A provider's own sentence says what went wrong but not, for these, what to do about it.
+            !isRaw && (event.is_provider_fault || event.api_error_kind === "context_too_long")
               ? m(
                   "div",
                   { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
-                  providerFaultNote(event.api_error_kind),
+                  failedTurnLine(event),
                 )
               : null,
             event.is_auth_error ? renderReauthAction(chatId) : null,
+            isRaw ? m("div", { class: "mt-[0.4em] text-faint" }, m(SeeDetails, { details: textContent })) : null,
           ]),
           placement,
         ),
@@ -836,7 +864,7 @@ function appendEventParts(
       const details = parseSecretRequest(toolCall, result);
       const note = details ? (secretNotesByRequestId.get(details.requestId) ?? null) : null;
       flushChips();
-      children.push(onLineAsBox(m(SecretCard, { toolCall, toolResult: result, resolution, note }), placement));
+      children.push(onLineAsBox(m(SecretCard, { toolCall, toolResult: result, resolution, note, chatId }), placement));
       continue;
     }
     pendingChips.push({ kind: "tool", call: toolCall, eventId: event.event_id });

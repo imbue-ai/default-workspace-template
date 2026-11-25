@@ -34,6 +34,8 @@ _ASSISTANT_REQUIRED = {
     "is_api_error",
     "api_error_kind",
     "is_provider_fault",
+    "api_error_message",
+    "is_error_text_raw",
 }
 _USER_REQUIRED = {"timestamp", "type", "event_id", "source", "role", "content", "message_uuid"}
 _TOOL_RESULT_REQUIRED = {

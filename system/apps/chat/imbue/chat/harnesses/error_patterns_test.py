@@ -3,8 +3,10 @@
 import pytest
 
 from imbue.chat.harnesses.error_patterns import classify_api_error
+from imbue.chat.harnesses.error_patterns import failed_turn_text_fields
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.error_patterns import kind_for_status
+from imbue.chat.harnesses.error_patterns import provider_error_message
 
 
 def test_overloaded_is_a_provider_fault() -> None:
@@ -97,3 +99,63 @@ def test_auth_wins_so_the_two_subtexts_cannot_stack() -> None:
     is in BOTH this module's type table and the auth vocabulary. Classifying it here as well
     would put two contradictory next steps under one message."""
     assert classify_api_error('400 {"type":"invalid_request_error","message":"credit balance is too low"}') is None
+
+
+def test_an_ordinary_refused_request_is_an_invalid_request_not_a_dead_credential() -> None:
+    kind = classify_api_error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be at most 64000"}}'
+    )
+    assert kind == "invalid_request"
+
+
+def test_a_conversation_too_long_for_the_model_is_told_apart_from_other_refused_requests() -> None:
+    """Retrying cannot help a prompt too long for the model, so it gets its own kind and its own way forward."""
+    kind = classify_api_error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens"}}'
+    )
+    assert kind == "context_too_long"
+    assert is_provider_fault(kind) is False
+
+
+def test_a_refused_request_carries_the_providers_own_message_and_is_raw_text() -> None:
+    """The page shows the provider's message on the visible line and keeps the body behind See details, without
+    reading the text itself."""
+    text = 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}'
+    assert failed_turn_text_fields(text, is_api_error=True, is_auth_error=False) == {
+        "api_error_message": "max_tokens: too large",
+        "is_error_text_raw": True,
+    }
+
+
+def test_a_providers_message_is_read_from_an_openai_shaped_body_too() -> None:
+    assert provider_error_message('{"error": {"message": "The model does not exist", "type": "x"}}') == (
+        "The model does not exist"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "API Error: 529 Overloaded",
+        "API Error: 400 {not json",
+        'API Error: 400 {"error": {"message": "cut off',
+        '{"error": "a string"}',
+        '{"error": {"message": " "}}',
+    ],
+)
+def test_a_failure_with_no_message_in_a_body_carries_none(text: str) -> None:
+    assert provider_error_message(text) is None
+
+
+def test_a_sentence_the_provider_wrote_for_people_is_not_raw_text() -> None:
+    fields = failed_turn_text_fields("You've hit your monthly spend limit.", is_api_error=True, is_auth_error=False)
+    assert fields == {"api_error_message": None, "is_error_text_raw": False}
+
+
+def test_a_turn_that_did_not_fail_says_nothing_about_its_text() -> None:
+    """An agent's own reply that quotes an error body is prose, not a failure to hide."""
+    quoted = 'The server answered `{"error": {"message": "nope"}}` to that.'
+    assert failed_turn_text_fields(quoted, is_api_error=False, is_auth_error=False) == {
+        "api_error_message": None,
+        "is_error_text_raw": False,
+    }

@@ -127,11 +127,13 @@ observe`, its own supervised service) writes, and serves:
   beside them the main chat's id, and `is_first_conversation_pending`, see
   "Telling the shell the first conversation is under way")
   the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`), `accounts_updated` whenever the account
-  index changes, whichever process wrote it, `settings_updated` whenever a
-  settings route writes the workspace's chat settings, and `suggestions_updated`
-  (`{"chat_id"}`) whenever a chat's stored next-step suggestions are replaced or
-  removed.
+  `provisional_chat_completed`; a discard's carries the messages the chat held,
+  dropped with it, and is replayed for 15 minutes to a page that connects later,
+  so the page that sent them puts them back in the box), `accounts_updated`
+  whenever the account index changes, whichever process wrote it,
+  `settings_updated` whenever a settings route writes the workspace's chat
+  settings, and `suggestions_updated` (`{"chat_id"}`) whenever a chat's stored
+  next-step suggestions are replaced or removed.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
@@ -155,6 +157,11 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /_static/app_contract.js`: the shell's built app contract module, for the
+  page `/` and the chat pages answer when this app's frontend is not built. That
+  page has no frontend code of its own; it imports the module to offer "Report a
+  bug" through the shell, shown only when the shell's handshake says Imbue Studio
+  can open one. `404` when the shell's frontend is not built either.
 - `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
   (`system/libs/app_schema`), with the request and response models of the routes that
   validate with pydantic published as schemas; the manifest's `api_schema_path`, which the
@@ -442,11 +449,13 @@ seconds is retried rather than mistaken for an unknown chat. See `docs/system/bl
 A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
 page whose request got no answer sends it again under the same id, marked
 `is_repeat`, and the repeat gets the first send's answer, a refusal included
-(waiting for it while it is still under way), rather than a second delivery. A
+(waiting for it while it is still under way, and answered 503
+`submission_unconfirmed` if it still is), rather than a second delivery. A
 Retry under the same id gets a taken send's answer, but is sent afresh after a
 refusal. A page whose request still gets no answer cannot know whether the chat
 app took it, and the chat app is out of its reach, so nothing sends it again: it
-gets the "Couldn't confirm your message arrived" notice.
+gets the "Your message may not have been sent" notice, whose Send again repeats
+the id.
 
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again

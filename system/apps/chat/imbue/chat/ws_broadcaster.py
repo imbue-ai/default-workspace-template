@@ -1,12 +1,14 @@
 import json
 import queue
 import threading
+from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
@@ -33,6 +35,22 @@ def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dic
         **provisional.chat.model_dump(mode="json", exclude={"held_sends"}),
         "held_sends": [held.model_dump(mode="json") for held in provisional.held_sends],
     }
+
+
+def provisional_chat_completed_message(
+    chat_id: ChatId, success: bool, error: str | None, held_sends: Sequence[HeldSendSnapshot] | None = None
+) -> dict[str, Any]:
+    """The ``provisional_chat_completed`` message: the chat is an agent, failed, or was discarded. A discard carries
+    the messages the chat held, dropped with it, so the pages that sent them put them back."""
+    message: dict[str, Any] = {
+        "type": "provisional_chat_completed",
+        "chat_id": chat_id,
+        "success": success,
+        "error": error,
+    }
+    if held_sends is not None:
+        message["held_sends"] = [held.model_dump(mode="json") for held in held_sends]
+    return message
 
 
 def chats_updated_message(
@@ -168,16 +186,15 @@ class WebSocketBroadcaster(MutableModel):
         so a page showing the chat reads them again."""
         self.broadcast({"type": "suggestions_updated", "chat_id": chat_id})
 
-    def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
+    def broadcast_provisional_chat_completed(
+        self,
+        chat_id: ChatId,
+        success: bool,
+        error: str | None,
+        held_sends: Sequence[HeldSendSnapshot] | None = None,
+    ) -> None:
         """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""
-        self.broadcast(
-            {
-                "type": "provisional_chat_completed",
-                "chat_id": chat_id,
-                "success": success,
-                "error": error,
-            }
-        )
+        self.broadcast(provisional_chat_completed_message(chat_id, success, error, held_sends))
 
     def broadcast_held_send_failed(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
         """Broadcast a held_send_failed event: a message held while its agent came up never reached it, so the page

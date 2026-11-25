@@ -38,6 +38,7 @@ const chatState: { status: string } = { status: "idle" };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff, status: chatState.status }),
   getQueuedMessagesForChat: () => agentState.queued_messages,
+  addHeldSendFailedListener: () => undefined,
 }));
 // How many of the switching chat's delivered held sends already show in their real form.
 const landedHeldSends = vi.hoisted(() => ({ count: 0 }));
@@ -68,6 +69,8 @@ function toolUse(ts: string, toolName: string, callId: string, input: string, ca
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+    api_error_message: null,
+    is_error_text_raw: false,
   };
 }
 

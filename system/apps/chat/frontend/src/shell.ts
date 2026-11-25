@@ -27,6 +27,7 @@ import {
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellChromeAnchor, ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ShareSettingsCoachMark } from "@imbue/workspace-ui/src/embed";
+import { getShellConnection, setShellConnection } from "./shellConnection";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
@@ -39,7 +40,6 @@ export function subagentViewPath(key: string): string {
   return `/${key}`;
 }
 
-let connection: ShellConnection | null = null;
 let lastHandshake: ShellHandshake | null = null;
 
 /** The shell's last handshake to this page (or the root's, handed down), null before one. */
@@ -78,7 +78,7 @@ export function openShareSettingsWithCoachMark(coachMark: ShareSettingsCoachMark
 
 /** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the chrome. */
 export function showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void {
-  connection?.showCoachCard(text, { chromeAnchor });
+  getShellConnection()?.showCoachCard(text, { chromeAnchor });
 }
 
 // What this page last told the shell of its chat's agent. No to begin with, which is what a shell that has not heard
@@ -93,7 +93,7 @@ let isAgentWorkingReported = false;
 export function reportAgentWorking(isWorking: boolean): void {
   if (isWorking === isAgentWorkingReported) return;
   isAgentWorkingReported = isWorking;
-  connection?.agentWorking(isWorking);
+  getShellConnection()?.agentWorking(isWorking);
 }
 
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
@@ -191,13 +191,14 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   };
   // A chat page wears its desktop's theme: told by the shell when it frames the page itself, read off the chat
   // root when the root frames it (the shell never messages those).
-  connection = connectToShell({
+  const connection = connectToShell({
     onHandshake,
     onShown,
     onHidden,
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
   });
+  setShellConnection(connection);
   void refreshKeybindings();
   mirrorParentTheme();
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
@@ -264,7 +265,7 @@ function reportChatLocation(chatId: string, path: string): void {
     if (title === reportedTitle) return;
     reportedTitle = title;
     if (title !== "") document.title = title;
-    connection?.location(path, title);
+    getShellConnection()?.location(path, title);
   };
   report();
   addChatsUpdatedListener(report);
@@ -275,23 +276,22 @@ function reportChatLocation(chatId: string, path: string): void {
  * given and ``pick`` as the model it runs on (null for the harness's default). The switch
  * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
  * notice with neither. The chat is filed in no project: the desktop has none. A person pressed a button for it,
- * so the create names the client it came from, as the New chat button's does.
+ * so the create names the client it came from, as the New chat button's does. Rejects with the create's failure,
+ * for the caller to tell.
  */
 export async function startChatOnAccount(
   accountId: string,
   message: string = "",
   pick: ModelIdentity | null = null,
-): Promise<boolean> {
-  let created: CreatedChat;
-  try {
-    created = await createChat("", accountId, message, pick, getClientId());
-  } catch (e) {
-    alert(`Failed to create chat: ${(e as Error).message}`);
-    return false;
-  }
-  connection?.openPath(rootPathFor(created.chatId), "focus");
+): Promise<void> {
+  const created: CreatedChat = await createChat("", accountId, message, pick, getClientId());
+  getShellConnection()?.openPath(rootPathFor(created.chatId), "focus");
   m.redraw();
-  return true;
+}
+
+/** Bring up the chat page of ``chatId``: a subagent view's way back to the chat it came from. */
+export function openChatPage(chatId: string): void {
+  getShellConnection()?.openPath(rootPathFor(chatId), "focus");
 }
 
 /**
@@ -301,5 +301,5 @@ export async function startChatOnAccount(
  */
 export function openSubagentView(chatId: string, sessionId: string): void {
   const key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
-  connection?.openPath(subagentViewPath(key), "focus");
+  getShellConnection()?.openPath(subagentViewPath(key), "focus");
 }

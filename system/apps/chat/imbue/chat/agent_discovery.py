@@ -282,10 +282,11 @@ class SendFailedError(Exception):
     into the failure the composer shows. The other callers of ``send_message_to_agent`` check
     the returned reason instead, so this changes nothing for them.
 
-    ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
-    Unknown when mngr did not classify it. ``is_delivered`` marks a send the agent took before a dialog
-    blocked it, which carries the same kind as one refused before anything was typed but must never be sent again.
+    ``kind`` is mngr's classification of the failure, or the chat app's own for a failure it met itself, which is
+    what lets the chat decide what to offer: trying again can clear a blocked input, where only a restart is left for
+    a pane that is gone. Unknown when mngr did not classify it. ``is_delivered`` marks a send the agent took before a
+    dialog blocked it, which carries the same kind as one refused before anything was typed but must never be sent
+    again.
     """
 
     def __init__(self, detail: str, kind: str = "unknown", is_delivered: bool = False) -> None:
@@ -303,6 +304,25 @@ class SendDelivery(UpperCaseStrEnum):
     # mngr could not confirm the first send, so it was sent once more, and that one landed. The
     # first may have landed too, so the agent may hold the message twice.
     RESENT = auto()
+
+
+# The kind of a send whose agent had to be started first and would not start. The chat app's own, apart from mngr's
+# ``agent_unreachable`` (a pane that is gone): starting it again is worth trying, so the page offers Try again.
+AGENT_START_FAILED_SEND_FAILURE_KIND: Final[str] = "agent_start_failed"
+
+
+class AgentStartFailedError(SendFailedError):
+    """A send that had to start its agent first, and the start itself failed: nothing is starting, so waiting will not
+    help."""
+
+    def __init__(self, agent_name: str, error: Exception) -> None:
+        super().__init__(
+            f"Could not start agent '{agent_name}' for a send: {error}", AGENT_START_FAILED_SEND_FAILURE_KIND
+        )
+
+
+# The reason a send that reached no agent carries when mngr gave none.
+NO_REASON_SEND_FAILURE: Final[str] = "The send reached no agent, and mngr gave no reason."
 
 
 class SendFailure(FrozenModel):
@@ -332,8 +352,7 @@ def _first_failure(result: MessageResult) -> SendFailure:
 
     Each of ``result.failures`` carries the reason alone and mngr's classification of it, so
     nothing here parses prose or strips framing -- the notice supplies its own title and sits in
-    the failing agent's own chat. A send can fail with no entry at all (nothing matched the id),
-    which is its own answer.
+    the failing agent's own chat.
     """
     for failure in result.failures:
         if failure.reason:
@@ -351,9 +370,8 @@ def _first_failure(result: MessageResult) -> SendFailure:
                 kind=str(SendFailureKind.INPUT_BLOCKED),
                 is_delivered=True,
             )
-    # Nothing matched the id at all, which is its own answer -- and trying again will not change
-    # it, so it is classified the same as a pane that is gone.
-    return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
+    # mngr reported no reason, so nothing says the agent is gone: unclassified, as mngr's own default is.
+    return SendFailure(reason=NO_REASON_SEND_FAILURE, kind=str(SendFailureKind.UNKNOWN))
 
 
 def _without_send_prefix(message: str, agent_name: str) -> str:
