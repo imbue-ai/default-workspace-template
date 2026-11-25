@@ -139,5 +139,5 @@ _ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(
 
 def _summed_anonymous_kib(text: str) -> int:
     # A regex rather than a line loop: under gVisor a whole-workspace pass reads hundreds of
-    # thousands of smaps lines, and this keeps it about twice as fast.
+    # thousands of smaps lines.
     return sum(int(kib) for kib in _ANONYMOUS_LINE.findall(text))
