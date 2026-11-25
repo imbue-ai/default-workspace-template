@@ -59,7 +59,7 @@ Chromium maps a binary of about 400 MB into every one of its processes, so summi
 sizes counts it once per process: one agent added up Chromium's `ps` RSS and reported 2.7 GB for a
 browser whose own memory was well under 1 GB. The container's `/proc/meminfo` is wrong the other
 way: under a memory cap it misses what the runtime is charged and has read three times the real
-headroom. The candidates command reads the guard's own figure; use its.
+headroom. The candidates command reads the guard's own figure; use that figure.
 
 ### Telling the user
 
