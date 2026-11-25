@@ -1,9 +1,10 @@
 """Behavioural tests for this workspace's pi extensions.
 
 pi has no shell-hook surface, so the rules claude and codex get from
-``system/scripts/`` reach a pi agent as the two TypeScript extensions here:
-``policy_guards.ts`` (the command guards and rewrite) and ``tk_workflow.ts``
-(the step discipline). They run inside pi's Node process, so they are exercised the way
+``system/scripts/`` reach a pi agent as the TypeScript extensions here:
+``policy_guards.ts`` (the command guards and rewrite), ``tk_workflow.ts`` (the step
+discipline) and ``model_defaults.ts`` (replacing a deprecated startup model). They run
+inside pi's Node process, so they are exercised the way
 mngr exercises its own pi extension -- drive the real file with a synthetic
 event through Node and assert on what the handler returns -- rather than
 reimplemented in Python. Skipped automatically when Node (with TypeScript
@@ -48,6 +49,7 @@ _EXTENSIONS_DIR = Path(__file__).parent
 _REPO_ROOT = _EXTENSIONS_DIR.parents[1]
 _POLICY_GUARDS = _EXTENSIONS_DIR / "policy_guards.ts"
 _TK_WORKFLOW = _EXTENSIONS_DIR / "tk_workflow.ts"
+_MODEL_DEFAULTS = _EXTENSIONS_DIR / "model_defaults.ts"
 
 # Node driver: load one extension by absolute path, register its handlers against a
 # fake `pi`, fire a single event, and report the handler's return value and the event
@@ -57,12 +59,27 @@ import { pathToFileURL } from "node:url";
 const [, , extensionPath, specJson] = process.argv;
 const spec = JSON.parse(specJson);
 const handlers = {};
+const setModelCalls = [];
+const ctxSpec = spec.ctx ?? {};
+// The registry is described declaratively by the spec: `missing` ids the catalog no
+// longer carries, `unauthed` ones whose provider has no credential.
+const registry = ctxSpec.registry ? {
+  find: (provider, modelId) => {
+    const key = `${provider}/${modelId}`;
+    return (ctxSpec.registry.missing ?? []).includes(key) ? undefined : { provider, id: modelId };
+  },
+  hasConfiguredAuth: (model) => !(ctxSpec.registry.unauthed ?? []).includes(`${model.provider}/${model.id}`),
+} : undefined;
 const mod = await import(pathToFileURL(extensionPath).href);
-mod.default({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
+mod.default({
+  on: (name, handler) => { (handlers[name] ||= []).push(handler); },
+  setModel: async (model) => { setModelCalls.push(model); return true; },
+});
+const ctx = { model: ctxSpec.model, modelRegistry: registry };
 let result;
 const payload = spec.payload ?? {};
-for (const handler of (handlers[spec.event] || [])) { result = await handler(payload, {}); }
-process.stdout.write(JSON.stringify({ result: result ?? null, payload }));
+for (const handler of (handlers[spec.event] || [])) { result = await handler(payload, ctx); }
+process.stdout.write(JSON.stringify({ result: result ?? null, payload, setModelCalls }));
 """
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
@@ -122,11 +139,14 @@ def _run_event(
     *,
     work_dir: Path,
     env: dict[str, str] | None = None,
+    ctx: dict[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Fire one ``event`` through ``extension``, with ``work_dir`` as the agent's work dir.
 
-    Returns the completed process: parse ``.stdout`` for ``{"result": ..., "payload": ...}``
-    (see ``_event_output``) and read ``.stderr`` for anything a handler wrote there.
+    Returns the completed process: parse ``.stdout`` for
+    ``{"result": ..., "payload": ..., "setModelCalls": ...}`` (see ``_event_output``)
+    and read ``.stderr`` for anything a handler wrote there. ``ctx`` is the extension
+    context pi hands the handler: ``model`` and a declarative ``registry``.
     """
     node = _node_that_imports_typescript()
     if node is None:
@@ -146,7 +166,7 @@ def _run_event(
             node,
             str(driver),
             str(extension),
-            json.dumps({"event": event, "payload": payload}),
+            json.dumps({"event": event, "payload": payload, "ctx": ctx or {}}),
         ],
         capture_output=True,
         text=True,
@@ -550,3 +570,107 @@ def test_stop_nudge_reports_open_steps_on_stderr(
         assert expected in proc.stderr
     else:
         assert "Stopping with" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# model_defaults.ts -- the deprecated startup model over OpenCode's providers.
+# ---------------------------------------------------------------------------
+
+
+def _startup_model_calls(
+    tmp_path: Path,
+    *,
+    model: dict[str, str] | None,
+    event: dict[str, Any] | None = None,
+    registry: dict[str, list[str]] | None = None,
+) -> list[dict[str, str]]:
+    """Fire pi's ``session_start`` through model_defaults.ts, return the models it set."""
+    out = _event_output(
+        _run_event(
+            tmp_path,
+            _MODEL_DEFAULTS,
+            "session_start",
+            {"reason": "startup"} if event is None else event,
+            work_dir=_REPO_ROOT,
+            ctx={"model": model, "registry": registry or {}},
+        )
+    )
+    return out["setModelCalls"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "started_on", "expected"),
+    [
+        pytest.param(
+            "opencode-go", "kimi-k2.6", "deepseek-v4.1-flash", id="opencode-go"
+        ),
+        pytest.param("opencode", "kimi-k2.6", "deepseek-v4.1-flash", id="opencode-zen"),
+        pytest.param(
+            "openrouter",
+            "moonshotai/kimi-k2.6",
+            "deepseek/deepseek-v4.1-flash",
+            id="openrouter",
+        ),
+    ],
+)
+def test_a_deprecated_startup_model_switches_to_the_current_one(
+    tmp_path: Path, provider: str, started_on: str, expected: str
+) -> None:
+    """A chat signed into OpenCode starts on pi's compiled per-provider default, which is
+    still a deprecated Kimi. The extension corrects that, on the same provider."""
+    assert _startup_model_calls(
+        tmp_path, model={"provider": provider, "id": started_on}
+    ) == [{"provider": provider, "id": expected}]
+
+
+def test_a_resumed_session_keeps_the_model_it_was_resumed_on(tmp_path: Path) -> None:
+    """Resuming restores the session's own model; that is not a stale default to fix."""
+    assert (
+        _startup_model_calls(
+            tmp_path,
+            model={"provider": "opencode-go", "id": "kimi-k2.6"},
+            event={"reason": "resume"},
+        )
+        == []
+    )
+
+
+def test_a_model_the_user_actually_picked_is_left_alone(tmp_path: Path) -> None:
+    """Only the deprecated slugs in the table are replaced -- never a deliberate choice,
+    including a newer Kimi the user may have switched to."""
+    assert (
+        _startup_model_calls(
+            tmp_path, model={"provider": "opencode-go", "id": "kimi-k2.7-code"}
+        )
+        == []
+    )
+
+
+def test_a_replacement_the_catalog_no_longer_carries_is_skipped(tmp_path: Path) -> None:
+    """If the replacement slug is gone, pi keeps its own choice rather than failing."""
+    assert (
+        _startup_model_calls(
+            tmp_path,
+            model={"provider": "opencode-go", "id": "kimi-k2.6"},
+            registry={"missing": ["opencode-go/deepseek-v4.1-flash"]},
+        )
+        == []
+    )
+
+
+def test_an_unauthenticated_replacement_is_not_applied(tmp_path: Path) -> None:
+    """A replacement must never need a credential the user has not supplied."""
+    assert (
+        _startup_model_calls(
+            tmp_path,
+            model={"provider": "opencode-go", "id": "kimi-k2.6"},
+            registry={"unauthed": ["opencode-go/deepseek-v4.1-flash"]},
+        )
+        == []
+    )
+
+
+def test_no_model_resolved_yet_is_left_alone(tmp_path: Path) -> None:
+    """pi fires session_start before a model can resolve on an agent with no credential;
+    the handler has to be a no-op there rather than throw."""
+    assert _startup_model_calls(tmp_path, model=None) == []
