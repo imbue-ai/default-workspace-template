@@ -33,8 +33,10 @@ git ls-files -s | awk -F'\t' '$1 ~ /^120000/ { print $2 }' > /tmp/offload-symlin
 git checkout-index -f --stdin < /tmp/offload-symlinks
 rm /tmp/offload-symlinks
 
-# The Screen's stack (Fortress included), which a workspace installs on first boot rather than in the image.
+# The Screen's stack (Fortress included) and the tests' headless shell, which a workspace
+# installs on first boot rather than in the image.
 ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/2000-screen.sh"
+ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/2010-playwright-test-headless-shell.sh"
 
 # offload has no prebuilt binary, so build it with a toolchain that is removed again afterwards.
 readonly BUILD_HOME="/opt/offload-build"

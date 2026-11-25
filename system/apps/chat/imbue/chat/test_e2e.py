@@ -46,6 +46,7 @@ from playwright.sync_api import Page
 from playwright.sync_api import Route
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
@@ -81,7 +82,6 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace

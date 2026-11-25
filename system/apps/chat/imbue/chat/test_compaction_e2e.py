@@ -25,6 +25,7 @@ from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
@@ -41,7 +42,6 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import utc_iso_seconds_ago

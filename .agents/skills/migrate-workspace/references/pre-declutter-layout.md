@@ -150,10 +150,10 @@ often assumes the old substrate.
 - **The browser engine is Fortress.** In `minds-v0.3.8` and earlier, Playwright
   drove its own managed Chromium (`chromium.launch()` with no
   `executable_path`). Now the engine is Fortress, a stealth-patched Chromium fork
-  that Playwright's browser-cache lookup does **not** auto-discover: migrated
-  automation must pass
-  `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly, or the
-  launch fails.
+  that Playwright's browser-cache lookup does **not** auto-discover. The Screen's
+  env.d unit links it into Playwright's default paths, but only best-effort, so
+  migrated automation should pass
+  `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly.
 - **User packages are standalone projects.** The root `members` names only the
   built-in packages. A migrated app, service or library is not added to it, nor
   to the root `[project].dependencies` or `[tool.uv.sources]`: it becomes its own uv

@@ -85,9 +85,10 @@ so no service ever writes to a rootfs path that should persist.
 
 Heavy packages not needed by boot-time services (currently the Screen's stack
 with the neko binary, and the Fortress browser + its Chromium apt libs, all in
-`system/scripts/env.d/2000-screen.sh`) install this way on first boot. If something
-tries to use one before its unit has finished, it fails loudly -- that is
-acceptable. Check `supervisorctl status env-converge`,
+`system/scripts/env.d/2000-screen.sh`, and the test suites' headless shell, in
+`system/scripts/env.d/2010-playwright-test-headless-shell.sh`) install this way
+on first boot. If something tries to use one before its unit has finished, it
+fails loudly -- that is acceptable. Check `supervisorctl status env-converge`,
 `/var/log/supervisor/env-converge-stdout.log`, or the concrete satisfied
 condition (e.g. `test -x /opt/fortress/tilion-fortress/tilion`) before using
 browser automation in a fresh workspace. See `system/services/env_converge/README.md`

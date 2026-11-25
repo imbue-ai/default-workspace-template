@@ -24,21 +24,23 @@ overflow states -- not just that the route returned `200`. Add Playwright
 coverage wherever the value is in the rendered UI rather than the JSON, driving
 it against the isolated instance. In a suite the repo-root `conftest.py`
 reaches, use its `module_browser` fixture (and `phone_context` for a
-phone-sized touch context): it launches Fortress, the workspace's browser,
-which is installed before any agent starts, and it fails a test that asks for
-pytest-playwright's `page` / `context` / `browser` instead. A user-built app's
-suite is its own pytest root, which that conftest does not reach: `type-app.md`'s
-"On a phone" says how its browser test gets Playwright and launches Fortress.
+phone-sized touch context): it launches the test browser (Playwright's headless
+shell, or Fortress where it is missing), which is installed before any agent
+starts, and it fails a test that asks for pytest-playwright's `page` /
+`context` / `browser` instead. A user-built app's suite is its own pytest root,
+which that conftest does not reach: `type-app.md`'s "On a phone" says how its
+browser test gets Playwright and launches Fortress.
 The chat app's and the shell's suites are their own pytest roots too, and
-their own conftests point `page` / `context` / `browser` at Fortress, so use
-those there. Where a conftest provides the browser, do not write your own
-launch fixture. Never `playwright install` a managed browser, and never skip
-browser tests on browser presence -- a browser that cannot launch must fail
-the run. Give every browser test a `pytest.mark.timeout(120, func_only=False)`
-marker: under the repo-root conftest it is the only per-suite setup a browser test
-needs, since the repo-wide 10-second default does not cover a browser launch, and
-a user-built app's suite honours it through the `pytest-timeout` in its own dev
-group (`type-app.md`'s "On a phone"). Mark every browser test
+their own conftests point `page` / `context` / `browser` at the same test
+browser, so use those there. Where a conftest provides the browser, do not
+write your own launch fixture. Never `playwright install` a managed browser,
+and never skip browser tests on browser presence -- a browser that cannot
+launch must fail the run. Give every browser test a
+`pytest.mark.timeout(120, func_only=False)` marker: under the repo-root
+conftest it is the only per-suite setup a browser test needs, since the
+repo-wide 10-second default does not cover a browser launch, and a user-built
+app's suite honours it through the `pytest-timeout` in its own dev group
+(`type-app.md`'s "On a phone"). Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
 changed, the test gate runs just those two kinds of its tests (any other app

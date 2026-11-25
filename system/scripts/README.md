@@ -16,7 +16,8 @@ needs a directory put on `sys.path`, and each stub says which. See
   `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `workspace_bare_scripts/tool_env.py`
   (vendored byte-identically into `.agents/skills/update-self/python/update_self_skill/`,
   which the apply runs as a self-contained unit), and the boot-convergence units in
-  `env.d/`.
+  `env.d/`, whose browser units ask `workspace_scripts/playwright_browser_paths.py`
+  where the locked Playwright keeps its browsers.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same

@@ -139,10 +139,11 @@ config per pytest root at the repo root (`offload-modal.toml`,
 `offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
 checkpoint image is `system/Dockerfile` as shipped, plus a first boot
 (`default-workspace-template-seed`) and `system/scripts/offload_sandbox_init.sh`
-(the Screen's env.d unit, Fortress included, and the offload binary); it rebuilds only when one of
-the config's build inputs changes, and every other commit rides it as a thin
-source diff followed by `system/scripts/offload_post_patch.sh`. Inside the
-image any test that skips fails the job
+(the Screen's env.d unit, Fortress included, the test headless-shell env.d unit,
+and the offload binary); it rebuilds only when one of the config's build inputs
+changes, and every other commit rides it as a thin source diff followed by
+`system/scripts/offload_post_patch.sh`. Inside the image any test that skips
+fails the job
 (`system/libs/pytest_workspace_env`). Coverage for the two app suites is
 measured there and held to each app's floor on the runner.
 

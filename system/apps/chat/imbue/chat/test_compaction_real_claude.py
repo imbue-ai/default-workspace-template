@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
@@ -29,7 +30,6 @@ from imbue.chat.server import create_application
 from imbue.chat.testing import ServedApp
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import stand_in_real_claude_agent

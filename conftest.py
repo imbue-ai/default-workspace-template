@@ -4,16 +4,8 @@ from typing import Any, Final, NoReturn
 
 import pytest
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
+from pytest_workspace_env.browsers import pick_e2e_browser_executable
 from workspace_bare_scripts import user_packages
-
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge before any agent starts. Playwright's browser-cache
-# lookup only auto-discovers builds Playwright downloaded itself, so a launch has
-# to name this binary explicitly. Every suite collected under the repo root
-# inherits this override, so `module_browser` drives Fortress with no per-app
-# setup. The `chat` and `system_interface` apps are NOT under it: the root pytest
-# config ignores them and each runs from its own directory.
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 # A user package is a standalone project whose tests run from its own directory and
 # venv; collected here they would import packages the root venv does not have.
@@ -40,12 +32,19 @@ _PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}
 def browser_type_launch_args(
     browser_type_launch_args: dict[str, Any],
 ) -> dict[str, Any]:
-    # Without Fortress (CI, a developer laptop) leave the launch args untouched
-    # so Playwright falls through to its own managed browser. Never skip on
-    # browser absence: a browser that cannot launch must fail the run loudly.
-    if not FORTRESS_CHROMIUM_PATH.exists():
+    # Every suite collected under the repo root inherits this override, so
+    # `module_browser` needs no per-app setup. The `chat` and `system_interface`
+    # apps are NOT under it: the root pytest config ignores them and each runs
+    # from its own directory. With no workspace browser (CI, a developer laptop)
+    # leave the launch args untouched so Playwright falls through to its own
+    # managed browser. Never skip on browser absence: a browser that cannot
+    # launch must fail the run loudly.
+    executable = pick_e2e_browser_executable(
+        is_headed=browser_type_launch_args.get("headless") is False
+    )
+    if executable is None:
         return browser_type_launch_args
-    return {**browser_type_launch_args, "executable_path": str(FORTRESS_CHROMIUM_PATH)}
+    return {**browser_type_launch_args, "executable_path": str(executable)}
 
 
 @pytest.fixture(scope="session")

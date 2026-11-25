@@ -15,6 +15,7 @@ from typing import Final
 import pytest
 from playwright.sync_api import Page
 from playwright.sync_api import Route
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
 
 from imbue.mngr.utils.polling import wait_for
@@ -24,7 +25,6 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
-from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.wsgi import make_threaded_server
 
