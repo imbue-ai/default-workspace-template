@@ -17,7 +17,6 @@ from pydantic import Field
 
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
-from imbue.chat.harnesses.claude.progress_updates import progress_update_text
 from imbue.chat.harnesses.claude.tool_labels import action_note
 from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
@@ -33,6 +32,7 @@ from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_claude.resources.common_transcript_convert import is_progress_update
 
 logger = _loguru_logger
 
@@ -327,10 +327,11 @@ def _parse_assistant_message(
         elif block_type == "thinking":
             # A progress update is prose for the user that the API carries in a thinking block;
             # it reads as the assistant's own words at this point of the turn, like a text block.
-            # Reasoning blocks stay hidden.
-            update = progress_update_text(block)
-            if update:
-                text_parts.append(update)
+            # Reasoning blocks stay hidden. mngr_claude's common-transcript converter owns the rule
+            # that tells the two apart, so the chat and ``mngr transcript`` agree on it.
+            update = block.get("thinking")
+            if isinstance(update, str) and update.strip() and is_progress_update(block):
+                text_parts.append(update.strip())
         elif block_type == "tool_use":
             call_id: str = block.get("id", "")
             tool_name: str = block.get("name", "")
@@ -658,7 +659,7 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
     whole and untruncated. Claude's reasoning is deliberately NOT surfaced: its blocks are
     encrypted or hold only a summary, so no claude event ever stamps ``has_thinking`` and nothing
     loads them (a progress update, the one kind of thinking block meant for the user, is resident
-    event text, see ``progress_updates``). Returns {} for a line that yields no payload-bearing
+    event text, see ``is_progress_update`` in mngr_claude). Returns {} for a line that yields no payload-bearing
     events.
     """
     try:

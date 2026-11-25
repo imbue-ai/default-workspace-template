@@ -5,6 +5,14 @@ Credentials are managed on the outside by the Imbue Studio app: sending a permis
 request also triggers a login flow if necessary. No credential ever enters this
 workspace; the gateway attaches it to the request.
 
+## Contents
+
+- Services latchkey already knows (row 1)
+- Custom services (rows 2 to 4)
+- When the gateway is unreachable
+- Proxying requests through the user's desktop
+- Notes
+
 ## Services latchkey already knows (row 1)
 
 - **Use `latchkey curl`** instead of regular `curl` for supported services. Pass
@@ -293,11 +301,3 @@ desktop whenever possible.
 - Do not call `latchkey auth` commands yourself. The Imbue Studio app runs them on the
   user's computer as part of approving a permission request; for services with no
   browser auth, it provides the form the user pastes a credential into.
-
-## Currently supported services
-
-Latchkey offers varying levels of support for AWS, Calendly, Coolify, Discord,
-Dropbox, Figma, GitHub, GitLab, Gmail, Google Analytics, Google Calendar, Google
-Docs, Google Drive, Google Sheets, Google Slides, Linear, Mailchimp, Notion, Ramp,
-Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more. The list
-that counts is `latchkey services list`.

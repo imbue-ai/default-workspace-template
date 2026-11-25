@@ -1,5 +1,15 @@
 # The service's MCP server (row 2)
 
+## Contents
+
+- When this row applies
+- The connection is a latchkey custom service
+- Find the server's endpoints
+- The `mcp` login flow
+- A server with a key
+- Calling the server
+- What to tell the user
+
 ## When this row applies
 
 Row 2 is a hosted MCP server the service itself publishes (its docs link to

@@ -6,3 +6,6 @@
 
 [skills]
 # pdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"
+# Vendored verbatim from the mngr commit pyproject.toml pins, by
+# system/scripts/workspace_bare_scripts/vendor_mngr_skill.py; it is restructured there.
+imbue-studio = "https://github.com/imbue-ai/mngr/tree/main/apps/minds/skills_plugin/skills/imbue-studio"

@@ -79,6 +79,8 @@ from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
+from imbue.chat.testing import assistant_record
+from imbue.chat.testing import bash_call_record
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
@@ -87,6 +89,8 @@ from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import scripted_send_mngr_messenger
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import tool_result_record
+from imbue.chat.testing import user_record
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.errors import SendFailureKind
@@ -575,7 +579,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     # The reply lands, and a model's set for it waits behind the line.
     reply = [{"type": "text", "text": "Here is a plan for your week."}]
     with open(e2e_server.session_file, "a") as handle:
-        handle.write(json.dumps(_assistant_line("sugg-a-1", "2026-01-01T00:02:00Z", reply, "end_turn")) + "\n")
+        handle.write(json.dumps(assistant_record("sugg-a-1", "2026-01-01T00:02:00Z", reply, "end_turn")) + "\n")
     set_agent("WAITING", ActivityState.IDLE)
     expect(chat.locator(".message-assistant").last).to_contain_text("Here is a plan for your week.", timeout=15000)
     composer_box_before_the_set = _box(composer)
@@ -968,7 +972,7 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
 
     asked = [{"type": "text", "text": "**What do you want to use this Studio for?**\n\n<studio_category_picker/>"}]
     with open(e2e_server.session_file, "a") as handle:
-        handle.write(json.dumps(_assistant_line("picker-a-1", "2026-01-01T00:02:00Z", asked, "end_turn")) + "\n")
+        handle.write(json.dumps(assistant_record("picker-a-1", "2026-01-01T00:02:00Z", asked, "end_turn")) + "\n")
     categories = chat.locator('[data-studio-picker="category"]')
     expect(categories.locator(".studio-picker-pill")).to_have_count(24, timeout=15000)
     expect(categories.locator(".studio-picker-heading")).to_have_text(["Work", "Life", "Creative"])
@@ -1001,7 +1005,7 @@ def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points
     _append_user_turn(e2e_server.session_file, "picker-u-1", "Sales, Health, ")
     apps = [{"type": "text", "text": "**Which apps do you use most?**\n\n<studio_connector_picker/>"}]
     with open(e2e_server.session_file, "a") as handle:
-        handle.write(json.dumps(_assistant_line("picker-a-2", "2026-01-01T00:03:00Z", apps, "end_turn")) + "\n")
+        handle.write(json.dumps(assistant_record("picker-a-2", "2026-01-01T00:03:00Z", apps, "end_turn")) + "\n")
     connectors = chat.locator('[data-studio-picker="connector"]')
     expect(connectors.locator(".studio-picker-pill")).to_have_count(16, timeout=15000)
     expect(categories.get_by_role("button", name="Money", exact=True)).to_be_disabled()
@@ -1167,42 +1171,10 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
         expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
-def _assistant_line(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
-    return {
-        "type": "assistant",
-        "uuid": uuid,
-        "timestamp": timestamp,
-        "message": {
-            "role": "assistant",
-            "model": "claude-opus-4-6",
-            "content": content,
-            "stop_reason": stop_reason,
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-        },
-    }
-
-
-def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
-    return {
-        "type": "user",
-        "uuid": uuid,
-        "timestamp": timestamp,
-        "message": {
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": output}],
-        },
-    }
-
-
 # A line of intent, a tool call, a background task's report, a finished step, and the closing reply below the timeline.
 _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-st-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Install the update"},
-    },
-    _assistant_line(
+    user_record("uuid-st-1", "2026-01-01T00:00:00Z", "Install the update"),
+    assistant_record(
         "uuid-st-2",
         "2026-01-01T00:00:01Z",
         [
@@ -1211,18 +1183,14 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
         ],
         "tool_use",
     ),
-    _tool_result_line("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
-    {
-        "type": "user",
-        "uuid": "uuid-st-3b",
-        "timestamp": "2026-01-01T00:00:02.5Z",
-        "message": {
-            "role": "user",
-            "content": "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
-            "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
-        },
-    },
-    _assistant_line(
+    tool_result_record("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
+    user_record(
+        "uuid-st-3b",
+        "2026-01-01T00:00:02.5Z",
+        "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
+        "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
+    ),
+    assistant_record(
         "uuid-st-4",
         "2026-01-01T00:00:03Z",
         [
@@ -1235,7 +1203,7 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
         ],
         "tool_use",
     ),
-    _tool_result_line(
+    tool_result_record(
         "uuid-st-5",
         "2026-01-01T00:00:04Z",
         "toolu_st2",
@@ -1243,7 +1211,7 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
         "tk-step ws-step-a1b2 title: Install the update\n"
         "tk-step ws-step-a1b2 summary: Installed the update.",
     ),
-    _assistant_line(
+    assistant_record(
         "uuid-st-6",
         "2026-01-01T00:00:05Z",
         [{"type": "text", "text": "Your workspace is on the new version."}],
@@ -1297,42 +1265,28 @@ def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tm
                 )
 
 
-def _bash_line(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
-    return _assistant_line(
-        uuid,
-        timestamp,
-        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
-        "tool_use",
-    )
-
-
 def _text_line(uuid: str, timestamp: str, text: str) -> dict[str, Any]:
-    return _assistant_line(uuid, timestamp, [{"type": "text", "text": text}], "tool_use")
+    return assistant_record(uuid, timestamp, [{"type": "text", "text": text}], "tool_use")
 
 
 def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, Any]]:
     """The shape of a real Opus run: asked mid-task, the agent moves a step and looks it up before answering."""
     return [
-        {
-            "type": "user",
-            "uuid": "uuid-mt-1",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {"role": "user", "content": "Summarize each app, one at a time"},
-        },
-        _bash_line("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
-        _tool_result_line(
+        user_record("uuid-mt-1", "2026-01-01T00:00:00Z", "Summarize each app, one at a time"),
+        bash_call_record("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
+        tool_result_record(
             "uuid-mt-3",
             "2026-01-01T00:00:02Z",
             "toolu_mt1",
             "Updated ws-step-chat -> in_progress\ntk-step ws-step-chat title: Summarize the chat app",
         ),
-        _bash_line("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
-        _tool_result_line("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
+        bash_call_record("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
+        tool_result_record("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
         question_line,
-        _bash_line(
+        bash_call_record(
             "uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"
         ),
-        _tool_result_line(
+        tool_result_record(
             "uuid-mt-8",
             "2026-01-01T00:00:07Z",
             "toolu_mt3",
@@ -1340,11 +1294,11 @@ def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, 
             "tk-step ws-step-chat summary: Read it\n"
             "Updated ws-step-data -> in_progress\ntk-step ws-step-data title: Summarize the data library",
         ),
-        _bash_line("uuid-mt-9", "2026-01-01T00:00:08Z", "toolu_mt4", "du -sh system/apps/*"),
-        _tool_result_line("uuid-mt-10", "2026-01-01T00:00:09Z", "toolu_mt4", "92K chat"),
+        bash_call_record("uuid-mt-9", "2026-01-01T00:00:08Z", "toolu_mt4", "du -sh system/apps/*"),
+        tool_result_record("uuid-mt-10", "2026-01-01T00:00:09Z", "toolu_mt4", "92K chat"),
         _text_line("uuid-mt-11", "2026-01-01T00:00:10Z", "The chat folder is the biggest, at 92 KB."),
-        _bash_line("uuid-mt-12", "2026-01-01T00:00:11Z", "toolu_mt5", "cat system/apps/datalib/README.md"),
-        _tool_result_line("uuid-mt-13", "2026-01-01T00:00:12Z", "toolu_mt5", "readme"),
+        bash_call_record("uuid-mt-12", "2026-01-01T00:00:11Z", "toolu_mt5", "cat system/apps/datalib/README.md"),
+        tool_result_record("uuid-mt-13", "2026-01-01T00:00:12Z", "toolu_mt5", "readme"),
     ]
 
 
@@ -1355,12 +1309,7 @@ _QUEUED_QUESTION = {
     "attachment": {"type": "queued_command", "prompt": "Which app folder is the biggest?", "commandMode": "prompt"},
 }
 
-_NEW_TURN_QUESTION = {
-    "type": "user",
-    "uuid": "uuid-mt-6",
-    "timestamp": "2026-01-01T00:00:05Z",
-    "message": {"role": "user", "content": "Which app folder is the biggest?"},
-}
+_NEW_TURN_QUESTION = user_record("uuid-mt-6", "2026-01-01T00:00:05Z", "Which app folder is the biggest?")
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1387,25 +1336,20 @@ def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(t
 
 
 _REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-rc-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Summarize each app; tell me anything surprising"},
-    },
-    _bash_line("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
-    _tool_result_line(
+    user_record("uuid-rc-1", "2026-01-01T00:00:00Z", "Summarize each app; tell me anything surprising"),
+    bash_call_record("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
+    tool_result_record(
         "uuid-rc-3",
         "2026-01-01T00:00:02Z",
         "toolu_rc1",
         "Updated ws-step-short -> in_progress\ntk-step ws-step-short title: Read the shorter write-ups",
     ),
-    _bash_line("uuid-rc-4", "2026-01-01T00:00:03Z", "toolu_rc2", "cat system/apps/datalib/README.md"),
-    _tool_result_line("uuid-rc-5", "2026-01-01T00:00:04Z", "toolu_rc2", "readme"),
+    bash_call_record("uuid-rc-4", "2026-01-01T00:00:03Z", "toolu_rc2", "cat system/apps/datalib/README.md"),
+    tool_result_record("uuid-rc-5", "2026-01-01T00:00:04Z", "toolu_rc2", "readme"),
     _text_line(
         "uuid-rc-6", "2026-01-01T00:00:05Z", "Datalib stays off by default, and its server can run shell commands."
     ),
-    _bash_line("uuid-rc-7", "2026-01-01T00:00:06Z", "toolu_rc3", "cd /repo && tk close ws-step-short done"),
+    bash_call_record("uuid-rc-7", "2026-01-01T00:00:06Z", "toolu_rc3", "cd /repo && tk close ws-step-short done"),
     {
         "type": "user",
         "uuid": "uuid-rc-8",
@@ -1423,15 +1367,15 @@ _REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
             ],
         },
     },
-    _bash_line("uuid-rc-9", "2026-01-01T00:00:08Z", "toolu_rc4", "tk close ws-step-short done"),
-    _tool_result_line(
+    bash_call_record("uuid-rc-9", "2026-01-01T00:00:08Z", "toolu_rc4", "tk close ws-step-short done"),
+    tool_result_record(
         "uuid-rc-10",
         "2026-01-01T00:00:09Z",
         "toolu_rc4",
         "Updated ws-step-short -> closed\ntk-step ws-step-short title: Read the shorter write-ups\n"
         "tk-step ws-step-short summary: Read them",
     ),
-    _assistant_line(
+    assistant_record(
         "uuid-rc-11", "2026-01-01T00:00:10Z", [{"type": "text", "text": "I wrote a summary of each app."}], "end_turn"
     ),
 ]
@@ -2379,17 +2323,7 @@ def _allow_mngr_config_in_pytest(tmp_path: Path) -> None:
 def _append_user_turn(session_file: Path, uuid: str, text: str) -> None:
     """Write a user turn holding ``text`` to the fixture agent's transcript, as Claude records one it took."""
     with open(session_file, "a") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "type": "user",
-                    "uuid": uuid,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "message": {"role": "user", "content": text},
-                }
-            )
-            + "\n"
-        )
+        handle.write(json.dumps(user_record(uuid, datetime.now(UTC).isoformat(), text)) + "\n")
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -3489,24 +3423,8 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
 def _question_and_reply_events(uuid_prefix: str, question: str, reply: str) -> list[dict[str, Any]]:
     """A session of one user question and the assistant's finished reply to it."""
     return [
-        {
-            "type": "user",
-            "uuid": f"{uuid_prefix}-1",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {"role": "user", "content": question},
-        },
-        {
-            "type": "assistant",
-            "uuid": f"{uuid_prefix}-2",
-            "timestamp": "2026-01-01T00:00:01Z",
-            "message": {
-                "role": "assistant",
-                "model": "claude-opus-4-6",
-                "content": [{"type": "text", "text": reply}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-        },
+        user_record(f"{uuid_prefix}-1", "2026-01-01T00:00:00Z", question),
+        assistant_record(f"{uuid_prefix}-2", "2026-01-01T00:00:01Z", [{"type": "text", "text": reply}], "end_turn"),
     ]
 
 

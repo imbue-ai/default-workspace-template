@@ -228,7 +228,7 @@ def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventio
     assert scope.context == ()
     assert list(scope.conventions) == [
         "system/apps/README.md",
-        ".agents/shared/worker/references/type-app.md",
+        ".agents/skills/harden-worker/references/type-app.md",
         "docs/system/style_guide.md",
     ]
     assert scope.diff is None
@@ -385,7 +385,7 @@ def test_a_skill_scope_is_its_own_directory_plus_the_owning_apps_as_context(
     assert scope.references == ()
     assert list(scope.context) == ["system/apps/news/"]
     assert list(scope.conventions) == [
-        ".agents/shared/worker/references/type-skill.md",
+        ".agents/skills/harden-worker/references/type-skill.md",
         ".agents/shared/references/spec-summary.md",
         "docs/system/style_guide.md",
     ]
