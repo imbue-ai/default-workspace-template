@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -242,11 +243,48 @@ def _make_default_account(home: Path) -> Path:
     )
 
 
+def _use_accounts_under(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``home`` the HOME and its ``.minds/accounts`` the accounts root, as in a workspace."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(home / ".minds" / "accounts"))
+
+
+def test_minds_accounts_root_is_in_the_passwd_home_whatever_home_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MINDS_ACCOUNTS_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    root = Path(claude_p.minds_accounts_root())
+
+    assert root == Path(pwd.getpwuid(os.getuid()).pw_dir) / ".minds" / "accounts"
+    assert not root.is_relative_to(tmp_path)
+
+
+def test_minds_accounts_root_honours_the_override_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "elsewhere"))
+
+    assert claude_p.minds_accounts_root() == str(tmp_path / "elsewhere")
+
+
+def test_default_account_is_not_read_from_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _make_default_account(tmp_path)
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "empty-accounts"))
+
+    assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
+
+
 def test_child_env_keeps_the_agents_own_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Inside an agent, the child runs on the chat's account, not the workspace default."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     _make_default_account(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/the-chats-own")
 
@@ -275,7 +313,7 @@ def test_child_env_runs_on_the_default_claude_account(
     """Outside an agent, the child runs on the Claude account a chat created now would get:
     the pinned default when it is a Claude account, else the most recently used one when
     it is, else the oldest."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     accounts = _write_claude_accounts(
         tmp_path,
@@ -292,7 +330,7 @@ def test_child_env_leaves_config_dir_unset_without_an_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With no account to name, the child keeps claude's own default, ~/.claude."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
     assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
@@ -330,6 +368,7 @@ def _complete_from_a_service(tmp_path: Path, home: Path) -> dict[str, object]:
     stub.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
     env["HOME"] = str(home)
+    env["MINDS_ACCOUNTS_ROOT"] = str(home / ".minds" / "accounts")
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     stdin_read, stdin_write = os.pipe()
     try:
@@ -389,7 +428,7 @@ def _isolate_credential_sources_in_home(
     """Like ``_isolate_credential_sources``, but as a service sees it: no
     CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     _clear_credential_env_vars(monkeypatch)
 
 
@@ -662,7 +701,7 @@ def _put_stub_claude_on_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     """Put a stub ``claude`` first on PATH, with HOME (so ~/.minds) an empty tmp dir."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_accounts_under(tmp_path, monkeypatch)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "claude"

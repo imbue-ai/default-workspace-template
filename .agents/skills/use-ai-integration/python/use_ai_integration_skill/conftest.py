@@ -4,6 +4,14 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_accounts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Points the accounts root at an empty folder, so no test reads the real accounts in the passwd home."""
+    root = tmp_path / "no-accounts"
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(root))
+    return root
+
+
 @pytest.fixture
 def anthropic_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     """A key snapshot path under ``tmp_path``, with every process-env Anthropic credential cleared."""
@@ -14,7 +22,7 @@ def anthropic_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.fixture
 def stub_bin_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A directory put first on ``PATH``, for stub ``claude`` and ``codex`` executables."""
+    """A directory put first on ``PATH``, for stub CLI executables."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")

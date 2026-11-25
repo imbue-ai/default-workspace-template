@@ -61,6 +61,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import pwd
 import signal
 import subprocess
 import tempfile
@@ -81,6 +82,7 @@ _AMBIENT_CREDENTIAL_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN",
 )
 _DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+_ACCOUNTS_ROOT_ENV_VAR = "MINDS_ACCOUNTS_ROOT"
 # How long a process group has to exit after SIGTERM before it is sent SIGKILL.
 _PROCESS_GROUP_GRACE_SECONDS = 2.0
 
@@ -122,18 +124,26 @@ class WorkspaceAICredentials:
 ANTHROPIC_ENV_SNAPSHOT_PATH = "/home/user/workspace/data/.secrets/anthropic.env"
 
 
+def minds_accounts_root() -> str:
+    """The signed-in accounts' folder: ``$MINDS_ACCOUNTS_ROOT``, else ``.minds/accounts`` in the passwd home, which a chat that relocates HOME does not change."""
+    override = os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, "").strip()
+    return override or os.path.join(
+        pwd.getpwuid(os.getuid()).pw_dir, ".minds", "accounts"
+    )
+
+
 def _default_account_dir() -> str:
     """The workspace's default claude account's folder, or "" when there is none.
 
-    Among the anthropic-lane accounts: the pinned default, else the most recently used,
-    else the oldest -- the chat app's rule for an agent created without an account.
-    Read straight from the index rather than imported from the chat app's package: this
-    script runs from whatever environment the caller has, which is frequently not that
-    venv. The format is one JSON object with an `accounts` list and optional
-    `default_account` and `mru` ids.
+    Among the anthropic-lane accounts under ``minds_accounts_root()``: the pinned default,
+    else the most recently used, else the oldest -- the chat app's rule for an agent
+    created without an account. Read straight from the index rather than imported from
+    the chat app's package: this script runs from whatever environment the caller has,
+    which is frequently not that venv. The format is one JSON object with an `accounts`
+    list and optional `default_account` and `mru` ids.
     """
-    root = os.path.join(os.path.expanduser("~"), ".minds", "accounts")
     try:
+        root = minds_accounts_root()
         with open(os.path.join(root, "index.json"), encoding="utf-8") as f:
             index = json.load(f)
         rows = [a for a in index.get("accounts", []) if a.get("lane") == "anthropic"]
