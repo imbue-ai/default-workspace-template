@@ -136,6 +136,21 @@ class StubSubprocess:
         )
 
 
+def mngr_upgrade_outcome(event: str, agent_id: str, **fields: object) -> str:
+    """One line of ``mngr upgrade --format jsonl`` about agent ``agent_id``, named as its id without ``agent-``."""
+    return (
+        json.dumps(
+            {
+                "event": event,
+                "agent_id": agent_id,
+                "agent_name": agent_id.removeprefix("agent-"),
+                **fields,
+            }
+        )
+        + "\n"
+    )
+
+
 MNGR_GIT_URL = "https://github.com/imbue-ai/mngr"
 
 

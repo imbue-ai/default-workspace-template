@@ -28,6 +28,7 @@ from bootstrap.testing import (
     StubSubprocess,
     install_mngr,
     install_package,
+    mngr_upgrade_outcome,
 )
 
 _VENV_MNGR = str(WORKSPACE_VENV / "bin" / "mngr")
@@ -35,7 +36,25 @@ _LIST_ARGV = [_VENV_MNGR, *MNGR_LIST_AGENT_STATES_ARGV]
 
 
 def _upgrade_argv(*agent_ids: str) -> list[str]:
-    return [_VENV_MNGR, "upgrade", *agent_ids, "--on-error", "continue"]
+    return [
+        _VENV_MNGR,
+        "upgrade",
+        *agent_ids,
+        "--on-error",
+        "continue",
+        "--format",
+        "jsonl",
+    ]
+
+
+def _upgraded(agent_id: str) -> str:
+    return mngr_upgrade_outcome(
+        "agent_upgraded", agent_id, plan="LEAVE_STOPPED", prior_state="STOPPED"
+    )
+
+
+def _skipped(agent_id: str, kind: str, detail: str) -> str:
+    return mngr_upgrade_outcome("agent_skipped", agent_id, kind=kind, detail=detail)
 
 
 def _stub_in_workspace(
@@ -158,11 +177,21 @@ def test_mngr_output_that_is_not_utf_8_reaches_the_log_without_stopping_the_upgr
 ) -> None:
     # mngr can echo a path whose bytes are not UTF-8, such as an agent's file in a failure line.
     monkeypatch.chdir(tmp_path)
+    reply = tmp_path / "upgrade-reply"
+    reply.write_bytes(
+        mngr_upgrade_outcome(
+            "agent_failed",
+            "agent-a",
+            step="PREPARE",
+            error_message="cannot read /tmp/@",
+        )
+        .encode()
+        .replace(b"@", b"\xff")
+    )
     calls = _write_fake_venv_mngr(
         tmp_path,
         'if [ "$1" = list ]; then printf "warning: \\377\\nagent-a|STOPPED\\n"; exit 0; fi\n'
-        'printf "skipped agent-a: cannot read /tmp/\\377\\n"\n'
-        "exit 9\n",
+        f"cat {reply}\nexit 1\n",
     )
 
     with _captured_log_lines("INFO") as lines:
@@ -170,10 +199,10 @@ def test_mngr_output_that_is_not_utf_8_reaches_the_log_without_stopping_the_upgr
 
     assert calls.read_text().splitlines() == [
         " ".join(MNGR_LIST_AGENT_STATES_ARGV),
-        "upgrade agent-a --on-error continue",
+        "upgrade agent-a --on-error continue --format jsonl",
     ]
     assert any(
-        "mngr upgrade: skipped agent-a: cannot read /tmp/�" in line for line in lines
+        "mngr upgrade: failed a: prepare (cannot read /tmp/�)" in line for line in lines
     ), lines
 
 
@@ -186,11 +215,25 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
         "list": (0, "agent-a|STOPPED\nagent-b|STOPPED\n"),
         "upgrade": (
             9,
-            "upgraded a (stopped)\n"
-            "skipped b: created before mngr kept its hooks in a file of its own; "
-            "first remove the hooks mngr left in .claude/settings.local.json in its work dir; "
-            "re-create it with `mngr create b --reuse --update`\n"
-            "1 upgraded, 0 current, 1 not upgraded, 0 failed\n",
+            _upgraded("agent-a")
+            + _skipped(
+                "agent-b",
+                "UNSUPPORTED",
+                "created before mngr kept its hooks in a file of its own; "
+                "first remove the hooks mngr left in .claude/settings.local.json in its work dir; "
+                "re-create it with `mngr create b --reuse --update`",
+            )
+            + json.dumps(
+                {
+                    "event": "upgrade_result",
+                    "upgraded_count": 1,
+                    "current_count": 0,
+                    "skipped_count": 1,
+                    "failed_count": 0,
+                    "exit_code": 9,
+                }
+            )
+            + "\n",
         ),
     }
 
@@ -203,6 +246,10 @@ def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
             "mngr upgrade: skipped b: created before mngr kept its hooks in a file of its own; "
             "first remove the hooks mngr left in .claude/settings.local.json in its work dir"
         )
+        for line in lines
+    )
+    assert any(
+        "mngr upgrade: 1 upgraded, 0 current, 1 not upgraded, 0 failed" in line
         for line in lines
     )
     assert not any("--reuse" in line or "re-create" in line for line in lines)
@@ -234,17 +281,20 @@ def test_an_agent_the_upgrade_failed_is_a_warning_that_names_it(
     )
     stub.reply_on["upgrade"] = (
         1,
-        "upgraded a (stopped)\n"
-        "failed b: prepare (rsync failed: Not a directory); untouched\n"
-        "1 upgraded, 0 current, 0 not upgraded, 1 failed\n",
+        _upgraded("agent-a")
+        + mngr_upgrade_outcome(
+            "agent_failed",
+            "agent-b",
+            step="PREPARE",
+            error_message="rsync failed: Not a directory",
+        ),
     )
 
     with _captured_log_lines("WARNING") as warnings:
         upgrade_stopped_agents()
 
     assert any(
-        "mngr upgrade: failed b: prepare (rsync failed: Not a directory); untouched"
-        in line
+        "mngr upgrade: failed b: prepare (rsync failed: Not a directory)" in line
         for line in warnings
     )
     assert any(line.rstrip().endswith("mngr upgrade exited 1") for line in warnings)
@@ -285,7 +335,12 @@ def test_an_upgrade_that_times_out_still_logs_the_outcomes_it_printed(
         "upgrade": subprocess.TimeoutExpired(
             _VENV_MNGR,
             1.0,
-            output=b"upgraded a (stopped)\nfailed b: swap (disk full); untouched\n",
+            output=(
+                _upgraded("agent-a")
+                + mngr_upgrade_outcome(
+                    "agent_failed", "agent-b", step="SWAP", error_message="disk full"
+                )
+            ).encode(),
         )
     }
 
@@ -297,8 +352,7 @@ def test_an_upgrade_that_times_out_still_logs_the_outcomes_it_printed(
         for line in lines
     )
     assert any(
-        "WARNING" in line
-        and "mngr upgrade: failed b: swap (disk full); untouched" in line
+        "WARNING" in line and "mngr upgrade: failed b: swap (disk full)" in line
         for line in lines
     )
     assert any("mngr upgrade could not run" in line for line in lines)
@@ -354,11 +408,23 @@ def _record(mngr: object) -> str:
 @pytest.mark.parametrize(
     ("listing", "upgrade_reply"),
     [
-        ("agent-services|RUNNING\nagent-a|STOPPED\n", (0, "upgraded a (stopped)\n")),
-        ("agent-services|RUNNING\nagent-a|STOPPED\n", (9, "skipped a: no support\n")),
+        ("agent-services|RUNNING\nagent-a|STOPPED\n", (0, _upgraded("agent-a"))),
+        (
+            "agent-services|RUNNING\nagent-a|STOPPED\n",
+            (0, mngr_upgrade_outcome("agent_current", "agent-a")),
+        ),
+        (
+            "agent-services|RUNNING\nagent-a|STOPPED\n",
+            (
+                9,
+                _skipped(
+                    "agent-a", "UNSUPPORTED", "agent type 'pi' has no upgrade support"
+                ),
+            ),
+        ),
         ("agent-services|RUNNING\n", None),
     ],
-    ids=["upgraded", "skipped", "nothing-stopped"],
+    ids=["upgraded", "current", "unsupported", "nothing-stopped"],
 )
 def test_a_pass_that_leaves_every_agent_current_records_the_venvs_mngr(
     monkeypatch: pytest.MonkeyPatch,
@@ -383,7 +449,32 @@ def test_a_pass_that_leaves_every_agent_current_records_the_venvs_mngr(
     [
         ("agent-a|STOPPED\nagent-b|WAITING\n", (0, ""), {}),
         ("agent-a|STOPPED\nagent-b|UNKNOWN\n", (0, ""), {}),
-        ("agent-a|STOPPED\n", (1, "failed a: swap (disk full); left stopped\n"), {}),
+        (
+            "agent-a|STOPPED\n",
+            (
+                1,
+                mngr_upgrade_outcome(
+                    "agent_failed", "agent-a", step="SWAP", error_message="disk full"
+                ),
+            ),
+            {},
+        ),
+        (
+            "agent-a|STOPPED\n",
+            (9, _skipped("agent-a", "NOT_IDLE", "its state could not be read")),
+            {},
+        ),
+        (
+            "agent-a|STOPPED\n",
+            (
+                9,
+                _skipped(
+                    "agent-a", "NOT_IDLE", "it is mid-turn (--force interrupts it)"
+                ),
+            ),
+            {},
+        ),
+        ("agent-a|STOPPED\nagent-b|STOPPED\n", (0, _upgraded("agent-a")), {}),
         (
             "agent-a|STOPPED\n",
             (0, ""),
@@ -400,6 +491,9 @@ def test_a_pass_that_leaves_every_agent_current_records_the_venvs_mngr(
         "another-agent-running",
         "another-agent-unreadable",
         "an-agent-failed",
+        "skipped-as-unreadable",
+        "skipped-as-busy",
+        "an-agent-unreported",
         "upgrade-timed-out",
         "mngr-missing",
         "listing-timed-out",
@@ -503,7 +597,7 @@ def test_the_command_runs_the_pass_from_the_repo_root_and_says_each_outcome_on_s
     _write_fake_venv_mngr(
         tmp_path,
         'if [ "$1" = list ]; then echo "agent-a|STOPPED"; exit 0; fi\n'
-        'echo "upgraded agent-a (stopped)"\n',
+        f"echo '{_upgraded('agent-a').strip()}'\n",
     )
     installed = install_mngr(tmp_path / WORKSPACE_VENV, "c0ffee")
 
@@ -518,7 +612,7 @@ def test_the_command_runs_the_pass_from_the_repo_root_and_says_each_outcome_on_s
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    assert "mngr upgrade: upgraded agent-a (stopped)" in result.stderr.splitlines()
+    assert "mngr upgrade: upgraded a (stopped)" in result.stderr.splitlines()
     assert json.loads((tmp_path / COVERAGE_RECORD).read_text()) == {"mngr": installed}
 
 

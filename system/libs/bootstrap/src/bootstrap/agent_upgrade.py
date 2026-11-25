@@ -43,8 +43,9 @@ _MNGR_LIST_TIMEOUT_SECONDS = 60.0
 _MNGR_UPGRADE_TIMEOUT_SECONDS = 60.0
 # `mngr upgrade` skipped an agent and none failed.
 _MNGR_UPGRADE_EXIT_SKIPPED = 9
-# How `mngr upgrade` starts the line for an agent it failed to upgrade, such as `failed a: prepare (...); untouched`.
-_FAILED_OUTCOME_PREFIX = "failed "
+# The kind of skip that leaves nothing to retry: the agent's harness has no upgrade for it.
+_UNSUPPORTED_SKIP_KIND = "UNSUPPORTED"
+_LEAVE_STOPPED_PLAN = "LEAVE_STOPPED"
 # What `mngr upgrade` appends to an agent it cannot upgrade, such as ``; re-create it with `mngr create a --reuse --update` ``.
 _RECREATE_HINT_PATTERN = re.compile(r"; re-create it with `[^`]*`")
 # The entry point group mngr loads its plugins from.
@@ -119,10 +120,11 @@ def _write_record(record: Path, mngr: Mapping[str, str]) -> None:
 
 def _run_mngr(
     mngr_binary: Path, args: Sequence[str], timeout: float
-) -> subprocess.CompletedProcess[str] | None:
-    """Run ``mngr_binary`` with ``args``; None, with a warning, when it could not run or timed out."""
+) -> tuple[int | None, str, str]:
+    """Run ``mngr_binary`` with ``args``: its exit code, stdout and stderr. The exit code is None, with a warning,
+    when it could not run or did not finish, and stdout is then what it had printed."""
     try:
-        return subprocess.run(
+        result = subprocess.run(
             [str(mngr_binary), *args],
             capture_output=True,
             text=True,
@@ -133,12 +135,12 @@ def _run_mngr(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        _log_mngr_output(args[0], _decoded_output(e.stdout))
         logger.warning("mngr {} could not run ({})", args[0], e)
-        return None
+        return None, _decoded_output(e.stdout), ""
     except OSError as e:
         logger.warning("mngr {} could not run ({})", args[0], e)
-        return None
+        return None, "", ""
+    return result.returncode, result.stdout, result.stderr
 
 
 def _decoded_output(output: bytes | str | None) -> str:
@@ -148,57 +150,97 @@ def _decoded_output(output: bytes | str | None) -> str:
     return output or ""
 
 
-def _log_mngr_output(subcommand: str, stdout: str) -> None:
-    """Log each line ``mngr <subcommand>`` printed, without the re-create command it suggests; a failed agent's line is a warning."""
-    for line in stdout.splitlines():
-        if line.strip():
-            log = (
-                logger.warning
-                if line.startswith(_FAILED_OUTCOME_PREFIX)
-                else logger.info
-            )
-            log("mngr {}: {}", subcommand, _RECREATE_HINT_PATTERN.sub("", line))
-
-
 def _list_agent_states(mngr_binary: Path) -> tuple[dict[str, str], bool]:
     """Each local agent's state by id, from whatever ``mngr list`` listed, and whether it listed every agent."""
-    result = _run_mngr(
+    returncode, stdout, stderr = _run_mngr(
         mngr_binary, MNGR_LIST_AGENT_STATES_ARGV, _MNGR_LIST_TIMEOUT_SECONDS
     )
-    if result is None:
+    if returncode is None:
         return {}, False
-    if result.returncode != 0:
-        logger.warning(
-            "mngr list exited {}: {}", result.returncode, result.stderr.strip()[-500:]
-        )
+    if returncode != 0:
+        logger.warning("mngr list exited {}: {}", returncode, stderr.strip()[-500:])
     rows = (
         [column.strip() for column in line.split(_MNGR_LIST_FIELD_SEPARATOR)]
-        for line in result.stdout.splitlines()
+        for line in stdout.splitlines()
     )
-    return {
-        row[0]: row[1] for row in rows if len(row) == 2 and row[0]
-    }, result.returncode == 0
+    return {row[0]: row[1] for row in rows if len(row) == 2 and row[0]}, returncode == 0
+
+
+def _log_upgrade_outcomes(stdout: str) -> set[str]:
+    """Log each outcome ``mngr upgrade --format jsonl`` printed, a failure as a warning, without the re-create
+    command it suggests; the ids of the agents it left current, counting one its harness has no upgrade for."""
+    settled_ids: set[str] = set()
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict):
+            logger.warning("mngr upgrade: {}", line)
+            continue
+        agent_id = str(event.get("agent_id"))
+        agent_name = event.get("agent_name")
+        match event.get("event"):
+            case "agent_upgraded":
+                how = (
+                    "stopped"
+                    if event.get("plan") == _LEAVE_STOPPED_PLAN
+                    else "restarted"
+                )
+                logger.info("mngr upgrade: upgraded {} ({})", agent_name, how)
+                settled_ids.add(agent_id)
+            case "agent_current":
+                logger.info("mngr upgrade: current {}", agent_name)
+                settled_ids.add(agent_id)
+            case "agent_skipped":
+                detail = _RECREATE_HINT_PATTERN.sub("", str(event.get("detail")))
+                logger.info("mngr upgrade: skipped {}: {}", agent_name, detail)
+                if event.get("kind") == _UNSUPPORTED_SKIP_KIND:
+                    settled_ids.add(agent_id)
+            case "agent_failed":
+                logger.warning(
+                    "mngr upgrade: failed {}: {} ({})",
+                    agent_name,
+                    str(event.get("step")).lower(),
+                    event.get("error_message"),
+                )
+            case "upgrade_result":
+                logger.info(
+                    "mngr upgrade: {} upgraded, {} current, {} not upgraded, {} failed",
+                    event.get("upgraded_count"),
+                    event.get("current_count"),
+                    event.get("skipped_count"),
+                    event.get("failed_count"),
+                )
+            case "error":
+                logger.warning("mngr upgrade: {}", event.get("message"))
+            case _:
+                pass
+    return settled_ids
 
 
 def _upgrade(mngr_binary: Path, agent_ids: Sequence[str]) -> bool:
-    """Run ``mngr upgrade`` on ``agent_ids``; whether it finished with none failed."""
-    result = _run_mngr(
+    """Run ``mngr upgrade`` on ``agent_ids``; whether it left each of them current, counting one its harness has
+    no upgrade for."""
+    returncode, stdout, stderr = _run_mngr(
         mngr_binary,
-        ["upgrade", *agent_ids, "--on-error", "continue"],
+        ["upgrade", *agent_ids, "--on-error", "continue", "--format", "jsonl"],
         _MNGR_UPGRADE_TIMEOUT_SECONDS,
     )
-    if result is None:
+    settled_ids = _log_upgrade_outcomes(stdout)
+    if returncode is None:
         return False
-    _log_mngr_output("upgrade", result.stdout)
-    if result.returncode in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
-        return True
-    stderr_tail = _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:])
-    logger.warning(
-        "mngr upgrade exited {}{}",
-        result.returncode,
-        f": {stderr_tail}" if stderr_tail else "",
-    )
-    return False
+    if returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
+        stderr_tail = _RECREATE_HINT_PATTERN.sub("", stderr.strip()[-500:])
+        logger.warning(
+            "mngr upgrade exited {}{}",
+            returncode,
+            f": {stderr_tail}" if stderr_tail else "",
+        )
+        return False
+    return set(agent_ids) <= settled_ids
 
 
 def upgrade_stopped_agents(
@@ -208,7 +250,8 @@ def upgrade_stopped_agents(
     ``record`` names that mngr. Best-effort.
 
     ``record`` names it only after a pass that left every agent current: the listing succeeded, every agent but
-    the caller read stopped, and ``mngr upgrade`` neither failed nor timed out. Any other pass removes it.
+    the caller read stopped, and ``mngr upgrade`` left each of those current or skipped it as one its harness has
+    no upgrade for. Any other pass removes it.
     """
     mngr = installed_mngr(venv)
     if mngr is None:

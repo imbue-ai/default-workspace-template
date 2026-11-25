@@ -48,7 +48,7 @@ from bootstrap.manager import (
     _write_update_recovery_cron_entry,
     main,
 )
-from bootstrap.testing import StubSubprocess, install_mngr
+from bootstrap.testing import StubSubprocess, install_mngr, mngr_upgrade_outcome
 
 # _configure_git_global
 
@@ -1130,6 +1130,15 @@ def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
 
 
 _VENV_MNGR = str(WORKSPACE_VENV / "bin" / "mngr")
+_UPGRADE_AGENT_A = [
+    _VENV_MNGR,
+    "upgrade",
+    "agent-a",
+    "--on-error",
+    "continue",
+    "--format",
+    "jsonl",
+]
 
 
 def _mngr_calls(stub: StubSubprocess, subcommand: str) -> list[list[str]]:
@@ -1177,7 +1186,7 @@ def test_main_upgrades_stopped_agents_on_the_converged_venv_before_anything_star
             ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"]
         )
         < stub.calls.index([_VENV_MNGR, *MNGR_LIST_AGENT_STATES_ARGV])
-        < stub.calls.index([_VENV_MNGR, "upgrade", "agent-a", "--on-error", "continue"])
+        < stub.calls.index(_UPGRADE_AGENT_A)
         < stub.calls.index(["mngr", "start", "agent-omega"])
         < stub.calls.index(["uv", "run", "--no-sync", "routines", "migrate-cron"])
         < stub.calls.index(["supervisord"])
@@ -1228,9 +1237,45 @@ def test_main_leaves_agents_alone_when_the_venv_did_not_converge(
 @pytest.mark.parametrize(
     ("reply_on", "raise_on"),
     [
-        ({"upgrade": (0, "upgraded a (stopped)\n")}, {}),
-        ({"upgrade": (9, "skipped a: its state could not be read\n")}, {}),
-        ({"upgrade": (1, "failed a: swap (disk full); left stopped\n")}, {}),
+        (
+            {
+                "upgrade": (
+                    0,
+                    mngr_upgrade_outcome(
+                        "agent_upgraded", "agent-a", plan="LEAVE_STOPPED"
+                    ),
+                )
+            },
+            {},
+        ),
+        (
+            {
+                "upgrade": (
+                    9,
+                    mngr_upgrade_outcome(
+                        "agent_skipped",
+                        "agent-a",
+                        kind="NOT_IDLE",
+                        detail="its state could not be read",
+                    ),
+                )
+            },
+            {},
+        ),
+        (
+            {
+                "upgrade": (
+                    1,
+                    mngr_upgrade_outcome(
+                        "agent_failed",
+                        "agent-a",
+                        step="SWAP",
+                        error_message="disk full",
+                    ),
+                )
+            },
+            {},
+        ),
         ({}, {"list": FileNotFoundError(_VENV_MNGR)}),
         ({}, {"upgrade": subprocess.TimeoutExpired(_VENV_MNGR, 1.0)}),
     ],
@@ -1288,7 +1333,13 @@ def test_main_upgrades_and_records_the_venvs_mngr_when_the_record_does_not_name_
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, recorded: str | None
 ) -> None:
     stub = _prepare_boot(monkeypatch, tmp_path)
-    stub.reply_on = {"list": (0, "agent-a|STOPPED\n")}
+    stub.reply_on = {
+        "list": (0, "agent-a|STOPPED\n"),
+        "upgrade": (
+            0,
+            mngr_upgrade_outcome("agent_upgraded", "agent-a", plan="LEAVE_STOPPED"),
+        ),
+    }
     installed = install_mngr(WORKSPACE_VENV, "c0ffee")
     if recorded is not None:
         COVERAGE_RECORD.parent.mkdir(parents=True)
@@ -1297,7 +1348,5 @@ def test_main_upgrades_and_records_the_venvs_mngr_when_the_record_does_not_name_
 
     main()
 
-    assert _mngr_calls(stub, "upgrade") == [
-        [_VENV_MNGR, "upgrade", "agent-a", "--on-error", "continue"]
-    ]
+    assert _mngr_calls(stub, "upgrade") == [_UPGRADE_AGENT_A]
     assert json.loads(COVERAGE_RECORD.read_text()) == {"mngr": installed}
