@@ -1,0 +1,1 @@
+The secret-scan gate (`scan_secrets.sh`) now runs kingfisher with `--no-dedup`, so a credential found in several files is reported in every one of them. Before, kingfisher named a value once across all its targets, and the bug-report collector, which releases every file no finding names, could ship the other copies.

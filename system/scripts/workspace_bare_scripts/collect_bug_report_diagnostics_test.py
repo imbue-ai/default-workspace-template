@@ -12,8 +12,11 @@ import base64
 import io
 import json
 import os
+import random
 import shlex
+import shutil
 import sqlite3
+import string
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -389,13 +392,71 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     kept pointing at the old path, so every CI collection reported
     scanner_unavailable.
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    gate_dir = repo_root / Path(diagnostics.SCAN_GATE_DIR).relative_to(
-        diagnostics.WORKSPACE_DIR
-    )
+    gate_dir = _repo_scan_gate_dir()
 
     assert (gate_dir / "scan_secrets.sh").is_file(), f"no scan gate at {gate_dir}"
     assert (gate_dir / "betterleaks.toml").is_file(), f"no scanner config at {gate_dir}"
+
+
+def _repo_scan_gate_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / Path(diagnostics.SCAN_GATE_DIR).relative_to(
+        diagnostics.WORKSPACE_DIR
+    )
+
+
+def _kingfisher_only_credential() -> str:
+    """A value kingfisher's ZeroTier rule flags and betterleaks has no rule for.
+
+    Built at run time, so the test file carries nothing a scanner of this repo
+    would flag. The rule wants 32 alphanumerics with at least three digits,
+    three upper- and three lower-case letters, after ``zerotier`` or ``zt``.
+    """
+    rng = random.SystemRandom()
+    characters = [rng.choice(string.digits) for _ in range(4)]
+    characters += [rng.choice(string.ascii_uppercase) for _ in range(4)]
+    characters += [rng.choice(string.ascii_lowercase) for _ in range(4)]
+    characters += [rng.choice(string.ascii_letters + string.digits) for _ in range(20)]
+    rng.shuffle(characters)
+    return "".join(characters)
+
+
+@pytest.mark.skipif(
+    any(shutil.which(tool) is None for tool in ("betterleaks", "kingfisher")),
+    reason="needs the workspace image's secret scanners (betterleaks, kingfisher)",
+)
+@pytest.mark.timeout(120)
+def test_a_credential_in_two_chats_withholds_both_through_the_real_scan_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each file is released unless a finding line names it, so the gate has to
+    name every file a credential is in. kingfisher reports a value once across
+    all its targets by default; the same credential pasted into two chats would
+    withhold one and ship the other."""
+    credential = _kingfisher_only_credential()
+    chats = {
+        "first": _transcript_events(f"our zerotier network {credential} is down"),
+        "second": _transcript_events(
+            "earlier today", f"zerotier member {credential}", "thanks"
+        ),
+        "clean": _transcript_events("nothing to see"),
+    }
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
+        scan_gate_dir=_repo_scan_gate_dir(),
+        workspace_dir=tmp_path / "workspace",
+    )
+
+    collector.run(["--transcript", "--scan-timeout=100"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert [n for n in archive.namelist() if n.startswith("chats/")] == [
+            "chats/clean-claude.jsonl"
+        ]
+        assert sorted(_notes_lines(archive)) == [
+            "recent chats: chats/first-claude.jsonl: withheld: the secret scan reported findings",
+            "recent chats: chats/second-claude.jsonl: withheld: the secret scan reported findings",
+        ]
 
 
 def test_collector_caps_match_the_documented_limits() -> None:
