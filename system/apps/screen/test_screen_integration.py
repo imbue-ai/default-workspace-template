@@ -513,8 +513,9 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     sessions = ProcCliSessions()
+    # A chat id or agent name inherited from the shell would make the script speak as someone other than chat-itest.
     environment = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key not in ("MINDS_CHAT_ID", "MNGR_AGENT_NAME")},
         "MINDS_SCREEN_SERVICE_URL": f"http://127.0.0.1:{server.server_port}",
         "MNGR_AGENT_ID": "chat-itest",
     }
