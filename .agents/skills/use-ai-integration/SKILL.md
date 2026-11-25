@@ -54,15 +54,24 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
 
 With no `account` argument, a call runs on the workspace's default account
 among its Anthropic and OpenAI ones: the pinned default, else the most recently
-used, else the oldest. Accounts of other providers are skipped. The current
-chat's own account is not consulted, so a call made from inside a chat can run
-on a different account than the chat does. To use a specific account, pass its
-id: `complete(..., account="<id>")`. Accounts are read on every call, so a new
-sign-in takes effect without a restart. List them, with the default marked:
+used, else the oldest. Accounts of other providers are skipped. Neither the
+current chat's own account nor a credential in the calling process's
+environment is consulted, so a call made from inside a chat can run on a
+different account than the chat does. To use a specific account, pass its id:
+`complete(..., account="<id>")`. Accounts are read on every call, so a new
+sign-in takes effect without a restart, and the default moves when the user
+pins another account or, with none pinned, starts a chat on another one. List
+them, numbered as the chat shows them, with the default and each one's billing:
 
 ```bash
-uv run --no-sync python -c "from use_ai_integration_skill.ai_accounts import accounts_root, list_ai_accounts; [print(row) for row in list_ai_accounts(accounts_root())]"
+uv run --no-sync python -c "from use_ai_integration_skill.ai import list_accounts; [print(row) for row in list_accounts()]"
 ```
+
+**A plan sign-in is for its owner's own use.** An app or automation that other
+people use (through a sharing link, or as other people in this workspace) runs
+on an API-key account, named with `account=`: Anthropic does not allow routing
+other people's requests through plan credentials, and OpenAI recommends API
+keys for automation.
 
 ## What each provider supports today
 
@@ -74,14 +83,15 @@ uv run --no-sync python -c "from use_ai_integration_skill.ai_accounts import acc
 | OpenAI: ChatGPT plan | `codex exec` | `codex exec` | the plan's usage limits |
 | OpenAI: API key | litellm | `codex exec` on the key | per token |
 | Google sign-in | never | never | -- |
-| Opencode Go, OpenRouter, other API keys | not yet | not yet | -- |
+| Any key added through the API key option, Opencode Go, OpenRouter | not yet | not yet | -- |
 
-A Google sign-in can never be used from an app or a script: Google's terms for
-its consumer sign-in do not allow wrapping its CLI in apps. Calling Gemini would
-need a Gemini API key, which is not supported yet. Naming an account of an
-unsupported provider raises `UnsupportedProviderError`, which names the
-provider. When the user has no Anthropic or OpenAI account, tell them in plain
-words which sign-in the feature needs.
+Google does not support wrapping its CLI inside apps on a consumer plan, so
+the library refuses a Google sign-in on every call; calling Gemini would need a
+Gemini API key, which is not supported yet. An Anthropic or OpenAI key works
+from code only when it is added under that provider's own option.
+Naming an account of an unsupported provider raises `UnsupportedProviderError`,
+which names the provider. When the user has no Anthropic or OpenAI account,
+tell them in plain words which sign-in the feature needs.
 
 ## Adding the library
 
@@ -117,14 +127,21 @@ result = complete(
 print(result.text, result.billing, result.usage)
 ```
 
-- **No tools.** A step that needs one, web search included, is scenario 2, not
-  a provider-side tool bolted onto a completion.
+- **Tools**: on an Anthropic account or an API key, none. On a ChatGPT sign-in
+  it is a codex agent in a read-only sandbox that can still run commands that
+  read files, and `system` only leads its prompt. Send untrusted text (emails,
+  web pages, other people's messages) only on an Anthropic or API-key account,
+  named with `account=`. A step that needs a tool, web search included, is
+  scenario 2.
+- **One prompt, no streaming**: put a conversation's earlier turns in the
+  prompt text; the answer arrives whole.
 - **The model is set in the code**: a top-of-file constant plus a `--model`
-  override, independent of the chat's `/model`. Pass a model id only when you
-  know which provider the account is on; with `None`, an API key runs the small
-  `DEFAULT_ANTHROPIC_MODEL` or `DEFAULT_OPENAI_API_MODEL`, an Anthropic sign-in
-  runs `DEFAULT_ANTHROPIC_MODEL`, and a ChatGPT sign-in runs its account's
-  default model (`result.model` is then `None`).
+  override, independent of the chat's `/model`. Code that sets a model id also
+  passes `account=`, so the provider cannot change under it. With `None`, an
+  API key runs the small `DEFAULT_ANTHROPIC_MODEL` or
+  `DEFAULT_OPENAI_API_MODEL`, an Anthropic sign-in runs
+  `DEFAULT_ANTHROPIC_MODEL`, and a ChatGPT sign-in runs its account's default
+  model (`result.model` is then `None`).
 - **Calls are synchronous.** Once a few items give good results, run a batch on
   a `concurrent.futures.ThreadPoolExecutor` with enough workers to saturate the
   I/O (well into the dozens), backing off only on rate limits.
@@ -148,10 +165,12 @@ result = run_task(
 
 It runs `claude -p` with permission prompts bypassed, or `codex exec` without
 codex's own sandbox, in `cwd` (by default the current directory) with file and
-shell access, so scope `instructions` tightly. `instructions` layer on the
-CLI's default agent rather than replace it. On an Anthropic account the agent
-can search the web. Per-call overhead dominates, so **batch** items into fewer,
-larger calls rather than one call per item.
+shell access, so scope `instructions` tightly and never give it untrusted
+input. `instructions` layer on the CLI's default agent rather than replace it.
+On an Anthropic account the agent can search the web; on an OpenAI account,
+fetch the pages in code and pass their text to `complete()`. Per-call overhead
+dominates, so **batch** items into fewer, larger calls rather than one call per
+item.
 
 ## Scenario 3: full agent
 
@@ -185,26 +204,25 @@ returned branch (merge, review) is your concern.
 
 ## Pinning an Anthropic API key
 
-When the workspace's Anthropic account uses an API key, an integration pins that
-key at setup so it keeps billing the same key after the user switches sign-in.
-Check whether there is a key:
+When the account an integration calls (the default, or the one it names with
+`account=`) is an Anthropic account whose listing shows `billing` `api_key`,
+pin its key once, while setting up, so the integration keeps billing that key
+after the user switches sign-in:
 
 ```bash
-uv run --no-sync python -c "from use_ai_integration_skill.claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
+uv run --no-sync python -c "from use_ai_integration_skill.ai import pin_anthropic_key; print(pin_anthropic_key())"
 ```
 
-When it says `keyed`, snapshot the key (and the proxy base URL that goes with
-it) into `data/.secrets/anthropic.env` once, while setting up:
-
-```bash
-uv run --no-sync python -c "from use_ai_integration_skill.claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
-```
+Pass `pin_anthropic_key("<id>")` for a named account. It snapshots that
+account's key (and the proxy base URL that goes with it) into
+`data/.secrets/anthropic.env`, and refuses an account with no Anthropic key.
 
 - Only the key and base URL go in the snapshot, never
   `CLAUDE_CODE_OAUTH_TOKEN` (a subscription token cannot authenticate direct API
   calls, and the writer refuses it).
-- The snapshot pins **every** Anthropic call from code to that key, whichever
-  Anthropic account is named; `result.account_id` still names that account.
+- The snapshot pins **every** Anthropic call from code, `complete()` and
+  `run_task()`, to that key, whichever Anthropic account is named;
+  `result.account_id` still names that account.
 - To retire an integration, delete `data/.secrets/anthropic.env` when the user
   asks; to re-key it, delete the file and run the snapshot writer again.
 - Never edit the file: the snapshot writer is the one program-mediated copy the
@@ -226,11 +244,12 @@ Read `result.billing`:
 its usage (and its cost, on a key) and wall-clock, and extrapolate to the full
 run (`N x per-unit`, plus retries, divided by your pool size for wall-clock).
 Tell the user before turning on a volume flow: on a subscription, in calls and
-the share of the plan's limits it may use; on a key, in dollars. To show what a
-key would charge for a subscription flow, reprice `result.usage` with litellm's
-`cost_per_token` -- an estimate of a key's price, not a saving.
+tokens, and that it draws on the same limits as their own chats; on a key, in
+dollars. Only when the user asks what a subscription flow would cost on a key,
+reprice `result.usage` with litellm's `cost_per_token` for a named model, as an
+estimate.
 
 See [references/billing-and-credentialing.md](references/billing-and-credentialing.md)
-for the billing buckets, why `claude -p` reloads so much context, how
-credentials are resolved, and the two footguns (a stray `ANTHROPIC_API_KEY` or
+for the billing buckets, whose use a plan sign-in covers, why `claude -p`
+reloads so much context, how credentials are resolved, and the two footguns (a stray `ANTHROPIC_API_KEY` or
 `CODEX_API_KEY` switches a CLI to API billing).

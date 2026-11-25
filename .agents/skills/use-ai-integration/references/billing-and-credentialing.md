@@ -15,16 +15,30 @@ it shares with the user's own chats.
 | `codex exec` on a ChatGPT sign-in | The ChatGPT plan's usage limits | Yes |
 | Interactive Codex chat | The ChatGPT plan's usage limits | -- |
 
-Anthropic's help centre (update dated 2026-10-07): `claude -p` and the Agent SDK
-on a plan sign-in draw from the plan's usage limits, and the separate
-programmatic pool announced earlier was paused on 2026-06-15. The monthly API
-credits of Max, Ultra and Team plans apply only to calls made with an API key
-from the plan's linked Console organisation.
+Anthropic's help centre ([Use the Claude Agent SDK with your Claude
+plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan),
+update dated 2026-10-07): `claude -p` and the Agent SDK on a plan sign-in draw
+from the plan's usage limits, and the previously announced change to Agent SDK
+usage was paused on 2026-06-15. The monthly API credits of Max, Ultra and Team
+plans apply only to calls made with an API key from the plan's linked Console
+organisation.
 
 So on a subscription, calls from code and the user's chats spend the same
 limits: a heavy flow can leave the user unable to chat until the limits reset.
 Keep subscription flows small, measure before scaling, and suggest an API key
 when the volume is high.
+
+## Whose use a plan sign-in covers
+
+A Claude or ChatGPT plan sign-in is for the account owner's own use. Anthropic's
+[legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance)
+does not permit routing requests through Free, Pro, Max or Ultra plan
+credentials on behalf of other users, and says advertised plan limits assume
+ordinary, individual usage. OpenAI's [Codex authentication
+page](https://learn.chatgpt.com/docs/auth) recommends API keys for automation
+and says not to expose Codex execution in untrusted or public environments. So
+an app or automation that other people use (through a sharing link, or as other
+people in the workspace) runs on an API-key account.
 
 ## Why `claude -p` uses more than the direct API
 
@@ -53,9 +67,12 @@ one-line prompt):
 
 `complete()` on a ChatGPT sign-in runs `codex exec` the same way: from an empty
 temporary directory, with the account folder's `config.toml` and rules ignored
-(`--ignore-user-config`, `--ignore-rules`), a read-only sandbox, and nothing
-persisted (`--ephemeral`), so no `AGENTS.md`, MCP server or hook reaches the
-answer.
+(`--ignore-user-config`, `--ignore-rules`), a read-only sandbox, and no session
+saved (`--ephemeral`), so no `AGENTS.md`, MCP server or hook reaches the answer.
+It is still an agent: the read-only sandbox lets it run commands that read any
+file the user can, and `codex exec` has no system prompt option, so `system`
+only leads the prompt. Untrusted input therefore goes to an Anthropic or
+API-key account, where a completion has no tools.
 
 ## Credential resolution
 
@@ -65,14 +82,20 @@ provider. The library reads the index on every call and picks the account as
 SKILL.md says; it never takes the account from the calling process's
 `CLAUDE_CONFIG_DIR` or `CODEX_HOME`.
 
-- **Anthropic.** `read_workspace_ai_credentials()` resolves the key: the
-  `data/.secrets/anthropic.env` snapshot first, then the account's
-  `settings.json` `env` block, then the process env. With a key, `complete()`
+- **Anthropic.** `read_workspace_ai_credentials(account_dir=...)` resolves the
+  key: the `data/.secrets/anthropic.env` snapshot first (with the snapshot's
+  base URL, or none), then the account's `settings.json` `env` block; the
+  process env is never read for a named account. With a key, `complete()`
   calls litellm with it (and its `ANTHROPIC_BASE_URL`, for a proxy) and
-  `run_task()` hands it to `claude -p`. Without one, `claude -p` runs with
+  `run_task()` hands it to `claude -p` through `--settings`, which outranks the
+  account's own settings. Without one, `claude -p` runs with
   `CLAUDE_CONFIG_DIR` set to the account folder and authenticates itself from
   it (a `CLAUDE_CODE_OAUTH_TOKEN` in the settings env, or a sign-in in
-  `.credentials.json`), so every call uses current auth.
+  `.credentials.json`), so every call uses current auth. The child runs
+  without the calling process's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_OAUTH_TOKEN`: Claude Code copies its
+  settings env into the commands it runs, so a script started from a chat
+  carries the chat account's credential, which claude would otherwise prefer.
 - **Keyed integrations pin their key at setup.** `write_anthropic_env_snapshot()`
   copies `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
   `data/.secrets/anthropic.env` -- a program-mediated copy, which is why the
