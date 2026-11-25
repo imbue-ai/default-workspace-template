@@ -10,4 +10,4 @@ The shell serves the workspace routes (`/api/workspace/...`): the state a worksp
 
 - Updates: `GET /api/workspace/update`, `POST .../update/start`, `PUT`, `PATCH` and `DELETE .../update/schedule`, `POST .../update/skip`, `POST .../update/dismissals` and `GET .../update/liveness`. A start answers at once, and the read then says how creating the update's chat went.
 
-`workspace_routes_api.json` describes these routes for the clients that call them, each with the name of the operation it serves. A test keeps it current and holds it to every released copy under `workspace_routes_api_frozen/`.
+`workspace_routes_api.json` describes these routes for the clients that call them, each with the name of the operation it serves. A test keeps it current and holds it to every released copy under `workspace_routes_api_frozen/`. A release writes its copy there in the commit it tags, and the tag gate fails a tag without one.

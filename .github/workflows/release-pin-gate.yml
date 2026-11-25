@@ -4,6 +4,8 @@
 # public before tagging (apps/minds/docs/deploy/ops/app-release.md); this fires
 # if a tag slipped past that. Tags are never moved, so a failure here means the
 # next version number, not a fix to this one.
+#
+# The second job holds the tag to its frozen copy of the workspace routes.
 name: Release pin gate
 
 on:
@@ -25,3 +27,30 @@ jobs:
             exit 1
           fi
           echo "${GITHUB_REF_NAME} pins mngr from the public mirror"
+
+  # A desktop of this release calls the workspace routes the tagged shell serves, and
+  # keeps calling them in workspaces that have moved to a newer template. The copy of
+  # their description frozen under the tag's name is what holds every later template
+  # to them (test_workspace_routes_description.py); the release procedure writes it in
+  # the commit it tags (just dwt-freeze-workspace-routes in the mngr repo). A tree
+  # from before the routes has nothing to freeze.
+  frozen-workspace-routes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: The tagged tree froze its workspace routes
+        run: |
+          set -euo pipefail
+          routes_dir=system/apps/system_interface
+          if [ ! -f "$routes_dir/workspace_routes_api.json" ]; then
+            echo "${GITHUB_REF_NAME} describes no workspace routes"
+            exit 0
+          fi
+          frozen="$routes_dir/workspace_routes_api_frozen/${GITHUB_REF_NAME}.json"
+          if ! cmp --silent "$routes_dir/workspace_routes_api.json" "$frozen"; then
+            echo "::error::${GITHUB_REF_NAME} does not hold $frozen as a copy of its workspace_routes_api.json, so no later template is held to the routes this release's desktop calls; freeze them by hand on main under this tag's name (copy the tag's workspace_routes_api.json there), and cut the next version with just dwt-freeze-workspace-routes"
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} froze its workspace routes as $frozen"
