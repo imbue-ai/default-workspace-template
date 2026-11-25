@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 # Relative to the workspace root, which the shell and cron's tick both run from.
-# own-process: other-tree -- the shell imported its code when it started, and the busy chats are read by the CLI the tree holds now, which an update may have replaced since
+# own-process: other-tree -- the shell imported its code when it started, so an import would read the busy chats with the code from before an update the shell did not restart for
 BACKGROUND_TASKS_CLI_PATH: Final[str] = "system/scripts/background_tasks.py"
 
 

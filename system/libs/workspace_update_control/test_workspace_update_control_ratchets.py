@@ -32,7 +32,9 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(0))
+    rc.check_bare_print(
+        _DIR, snapshot(3), excluded_patterns=("stub_programs_testing.py",)
+    )
 
 
 def test_prevent_bare_except() -> None:

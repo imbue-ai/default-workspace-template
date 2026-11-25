@@ -1301,6 +1301,7 @@ def test_reading_after_a_start_names_the_release_the_run_aimed_at(
         # The last dispatch names the run's chat already, so the agents are not read.
         ("update-self-1330f8", ("update-self-1330f8",), True, None, False),
     ),
+    ids=("listed", "deleted", "unreadable", "named-by-the-dispatch"),
 )
 def test_reading_names_the_chat_of_a_run_the_last_dispatch_does_not(
     staged: StagedUpdateWorkspace,

@@ -1,0 +1,1 @@
+New entry file `system/scripts/update_dispatcher_tick.py`: one minute of the update dispatcher, which the `update-self-dispatch` cron line runs from the workspace root with the system `python3` and no venv. Its library, `system/libs/workspace_update_control`, joins the bare search paths and the bare type check, and `system/libs/README.md` lists it.

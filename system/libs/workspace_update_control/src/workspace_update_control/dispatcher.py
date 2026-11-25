@@ -83,9 +83,9 @@ _WATCHDOG_STATE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/watchdog.json"
 _DISPATCH_ATTEMPT_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dispatch-attempt.json"
 _DISPATCH_ATTEMPT_LABEL: Final[str] = "update_dispatch_attempt"
 _SKILL_PATH: Final[str] = ".agents/skills/update-self/SKILL.md"
-# own-process: other-tree -- the shell imported its code when it started, and the run record's one writer is the update-self the tree holds now, which an update may have replaced since
+# own-process: other-tree -- the watchdog runs while an update replaces the tree, and the verdict is recorded by the update-self the tree holds then, where an import would run the copy the tick started with
 _UPDATE_SELF_SCRIPT: Final[str] = ".agents/skills/update-self/scripts/update_self.py"
-# own-process: other-tree -- the shell imported its code when it started, and a chat is created and messaged by the messenger the tree holds now, which an update may have replaced since
+# own-process: other-tree -- the shell imported its code when it started, so an import would create and message chats with the messenger from before an update the shell did not restart for
 _MESSAGE_CHAT_SCRIPT: Final[str] = "system/scripts/message_chat.py"
 # The template's env wrapper, the first that exists.
 # CLEANUP: drop the automations path once update-self's floor, the oldest release the app updates from,
