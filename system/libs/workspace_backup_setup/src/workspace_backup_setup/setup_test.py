@@ -2,28 +2,33 @@ import json
 import os
 import stat
 from collections.abc import Callable
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from host_backup.config import RESTIC_ENV_PATH
 
-from workspace_backup_setup.errors import BackupSetupRunningError
-from workspace_backup_setup.errors import InvalidBackupCredentialsError
-from workspace_backup_setup.setup import PENDING_ENV_RELATIVE_PATH
-from workspace_backup_setup.setup import SETUP_STATE_RELATIVE_PATH
-from workspace_backup_setup.setup import BackupSetupState
-from workspace_backup_setup.setup import BackupSetupStatus
-from workspace_backup_setup.setup import begin_setup
-from workspace_backup_setup.setup import read_setup_status
-from workspace_backup_setup.setup import remove_credentials
-from workspace_backup_setup.testing import FAKE_RESTIC_FAILS
-from workspace_backup_setup.testing import FAKE_RESTIC_FINDS_A_REPOSITORY
-from workspace_backup_setup.testing import FAKE_RESTIC_FINDS_ANOTHER_PASSWORDS_REPOSITORY
-from workspace_backup_setup.testing import fake_restic_calls
-from workspace_backup_setup.testing import restic_env_text
-from workspace_backup_setup.testing import set_fake_restic_mode
+from workspace_backup_setup.errors import (
+    BackupSetupRunningError,
+    InvalidBackupCredentialsError,
+)
+from workspace_backup_setup.setup import (
+    PENDING_ENV_RELATIVE_PATH,
+    SETUP_STATE_RELATIVE_PATH,
+    BackupSetupState,
+    BackupSetupStatus,
+    begin_setup,
+    read_setup_status,
+    remove_credentials,
+)
+from workspace_backup_setup.testing import (
+    FAKE_RESTIC_FAILS,
+    FAKE_RESTIC_FINDS_A_REPOSITORY,
+    FAKE_RESTIC_FINDS_ANOTHER_PASSWORDS_REPOSITORY,
+    fake_restic_calls,
+    restic_env_text,
+    set_fake_restic_mode,
+)
 
 _PROC_ROOT = Path("/proc")
 _REPOSITORY = "rest:https://backups.example/workspace-5f3c"

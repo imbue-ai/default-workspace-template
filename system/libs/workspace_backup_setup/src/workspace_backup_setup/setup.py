@@ -22,27 +22,27 @@ import json
 import os
 import subprocess
 import tempfile
-from collections.abc import Callable
-from collections.abc import Generator
-from collections.abc import Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
 
-from host_backup.config import RESTIC_ENV_PATH
-from host_backup.config import missing_required_restic_keys
-from host_backup.config import parse_restic_env_file
-from host_backup.restic import init_repo
-from host_backup.restic import run_restic
+from host_backup.config import (
+    RESTIC_ENV_PATH,
+    missing_required_restic_keys,
+    parse_restic_env_file,
+)
+from host_backup.restic import init_repo, run_restic
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
 
-from workspace_backup_setup.errors import BackupSetupRunningError
-from workspace_backup_setup.errors import InvalidBackupCredentialsError
+from workspace_backup_setup.errors import (
+    BackupSetupRunningError,
+    InvalidBackupCredentialsError,
+)
 
 PENDING_ENV_RELATIVE_PATH: Final[Path] = RESTIC_ENV_PATH.with_name(
     RESTIC_ENV_PATH.name + ".pending"

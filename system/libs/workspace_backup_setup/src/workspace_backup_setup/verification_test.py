@@ -1,9 +1,11 @@
 from pathlib import Path
 
-from workspace_backup_setup.verification import BACKUP_TOML_RELATIVE_PATH
-from workspace_backup_setup.verification import read_verification_disabled
-from workspace_backup_setup.verification import render_backup_toml_with_flag
-from workspace_backup_setup.verification import write_verification_disabled
+from workspace_backup_setup.verification import (
+    BACKUP_TOML_RELATIVE_PATH,
+    read_verification_disabled,
+    render_backup_toml_with_flag,
+    write_verification_disabled,
+)
 
 
 def test_a_workspace_with_no_backup_config_reads_verification_as_on(tmp_path: Path) -> None:

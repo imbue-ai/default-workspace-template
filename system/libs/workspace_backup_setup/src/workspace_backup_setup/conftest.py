@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from workspace_backup_setup.testing import FAKE_RESTIC_CONTROL_DIR_ENV
-from workspace_backup_setup.testing import install_fake_restic
-from workspace_backup_setup.testing import path_with_fake_restic_first
+from workspace_backup_setup.testing import (
+    FAKE_RESTIC_CONTROL_DIR_ENV,
+    install_fake_restic,
+    path_with_fake_restic_first,
+)
 
 
 @pytest.fixture
