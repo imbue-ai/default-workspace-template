@@ -639,4 +639,4 @@ def test_an_unreadable_index_is_told_apart_from_a_missing_account(tmp_path: Path
 
     assert unreadable.value.user_facing_message == "Imbue Studio couldn't read this workspace's accounts. Try again."
     # An index that cannot be read is a fault, where a signed-out account is ordinary.
-    assert unreadable.value.is_expected is False
+    assert unreadable.value.is_routine is False

@@ -38,7 +38,7 @@ describe("postJson", () => {
       cause: "user_facing",
       userFacingMessage: "Chat couldn't read its agent list.",
       reason: "chat answered the launch with 500: boom",
-      isExpected: false,
+      isRoutine: false,
       requestKind: "change",
       status: 502,
       details: "HTTP 502\nchat answered the launch with 500: boom",

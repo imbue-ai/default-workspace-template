@@ -70,10 +70,11 @@ class ErrorResponse(FrozenModel):
         exclude_if=lambda value: value is None,
         description="A sentence written for the person using the workspace, shown as written in place of detail",
     )
-    expected: bool | None = Field(
+    routine: bool | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
-        description="Whether the refusal is ordinary operation that user_facing_message fully explains",
+        description="Whether the refusal is ordinary operation that user_facing_message fully explains, so nothing is "
+        "broken and the person is owed no help beyond that sentence",
     )
     kind: str | None = Field(
         default=None,

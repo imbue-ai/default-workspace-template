@@ -31,15 +31,15 @@ def json_response(content: Any, status_code: int = 200) -> Response:
 
 
 def refusal_answer(
-    detail: str, user_facing_message: str | None = None, kind: str | None = None, is_expected: bool = False
+    detail: str, user_facing_message: str | None = None, kind: str | None = None, is_routine: bool = False
 ) -> ErrorResponse:
     """A refusal's answer. ``detail`` is the developer's reason, which scripts and logs read; ``user_facing_message``,
     when given, is the sentence a page shows in its place (the details keep ``detail``); ``kind`` names the case for a
     page that offers different controls per case. A sentence owes the person help (an agent to ask, a bug report)
-    unless ``is_expected`` says the refusal is ordinary operation the sentence fully explains: a chat still starting,
+    unless ``is_routine`` says the refusal is ordinary operation the sentence fully explains: a chat still starting,
     an account to sign in to first, a chat that is gone."""
     return ErrorResponse(
-        detail=detail, user_facing_message=user_facing_message, expected=True if is_expected else None, kind=kind
+        detail=detail, user_facing_message=user_facing_message, routine=True if is_routine else None, kind=kind
     )
 
 
@@ -48,10 +48,10 @@ def refusal_response(
     status_code: int,
     user_facing_message: str | None = None,
     kind: str | None = None,
-    is_expected: bool = False,
+    is_routine: bool = False,
 ) -> Response:
     """``refusal_answer`` as the response under ``status_code``."""
-    return model_response(refusal_answer(detail, user_facing_message, kind, is_expected), status_code)
+    return model_response(refusal_answer(detail, user_facing_message, kind, is_routine), status_code)
 
 
 def require_loopback() -> Response | None:

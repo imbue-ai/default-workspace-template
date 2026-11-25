@@ -253,9 +253,6 @@ _LAUNCH_PATH_OPTIONAL_STRING_KEYS = (
     "draft_param",
     "mention_param",
 )
-# The members of a launch path's ``app_params`` table: the two every one names, and the one an ask's path adds.
-_APP_PARAMS_REQUIRED_KEYS = frozenset({"name", "display_name"})
-_APP_PARAMS_KEYS = _APP_PARAMS_REQUIRED_KEYS | {"text"}
 
 # The TOML basic-string escapes for the characters that have a short form;
 # every other control character is written as ``\uXXXX``.
@@ -751,7 +748,7 @@ def _copied_launch_path(
     """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, ``method`` when
     given, ``params`` (the param names) when it declares any, ``presets`` when it declares any,
     ``text_param``, ``draft_param``, and ``mention_param`` when it names them, and ``app_params`` (the ``name``
-    and ``display_name`` pair, with ``text`` when given) when it declares one. Returns ``(copied, None)``, or ``(None, error)``
+    and ``display_name`` pair) when it declares one. Returns ``(copied, None)``, or ``(None, error)``
     when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
@@ -800,13 +797,13 @@ def _copied_launch_path(
     if app_params is not None:
         if not (
             isinstance(app_params, dict)
-            and _APP_PARAMS_REQUIRED_KEYS <= set(app_params) <= _APP_PARAMS_KEYS
+            and set(app_params) == {"name", "display_name"}
             and all(isinstance(value, str) for value in app_params.values())
         ):
             return (
                 None,
                 f"manifest {str(path)!r}: a launch path's app_params is a table of the strings 'name' and "
-                "'display_name', and optionally 'text'",
+                "'display_name'",
             )
         copied["app_params"] = dict(app_params)
     return copied, None

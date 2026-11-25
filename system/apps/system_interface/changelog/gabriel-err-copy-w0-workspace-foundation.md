@@ -6,4 +6,4 @@ Failure toasts on the workspace desktop say what failed in plain words, keep the
 
 - Failures no longer read "Could not close the window: <the shell's reason>": the reason goes behind "See details", and a request that got no answer says so on its own.
 
-- A preview shell's refusal ("This is a preview of a proposed change; it cannot change the live workspace.") is sent as a sentence for people and marked expected, so a screen that words failures shows it as written and offers no help with it.
+- A preview shell's refusal ("This is a preview of a proposed change; it cannot change the live workspace.") is sent as a sentence for people and marked routine (ordinary operation the sentence fully explains), so a screen that words failures shows it as written and offers no help with it.

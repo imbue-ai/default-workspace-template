@@ -1063,7 +1063,7 @@ export class LivePagesLayer implements PageDriver {
       desktopId,
       app: page.app,
       path,
-      canReportBug: this.store.getCanReportBug(),
+      canReportBug: this.store.canReportBugFor(page.app),
       opensLocalFiles: this.store.getOpensLocalFiles(),
       opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
       showsCoachMarks: this.store.getShowsCoachMarks(),
@@ -1273,13 +1273,15 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** ``shell:report-bug {message, details}`` from a page: the bug report about that failure opens, where the
-   *  embedder opens one; the frame has to be one the shell created. A payload that holds no failure (an older page,
-   *  a malformed one) still opens the report, with nothing attached. */
+   *  embedder opens one and the page's app is built in (a user's own app's handshake says ``canReportBug: false``,
+   *  and its report is dropped here too); the frame has to be one the shell created. A payload that holds no failure
+   *  (an older page, a malformed one) still opens the report, with nothing attached. */
   private takeReportBug(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    if (this.pageOfFrame(frame) === undefined) return;
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
     const failure = reportedFailureOf(payload);
     if (failure === null) console.warn(`[si] shell:report-bug carried no failure (${JSON.stringify(payload)})`);
-    this.store.reportBugFromPage(failure);
+    this.store.reportBugFromPage(page.app, failure);
   }
 
   /** ``shell:show-coach-card {text, chromeAnchor}`` or ``{text, target}`` from a page: the page's words as a

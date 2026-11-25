@@ -101,7 +101,7 @@ def _refusal_on_a_secondary_chat() -> Response | None:
         "This is a preview of the chat, which cannot answer secret requests; answer it in the live chat.",
         409,
         user_facing_message="This request can't be answered from here. Open the chat itself and answer it there.",
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -111,7 +111,7 @@ def _unknown_request_response(e: UnknownSecretRequestError) -> Response:
         404,
         user_facing_message="This request can't be answered any more.",
         kind="request_gone",
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -123,14 +123,14 @@ def _not_pending_response(e: SecretRequestNotPendingError) -> Response:
             409,
             user_facing_message="The agent asked again in a newer request. Answer that one instead.",
             kind="superseded",
-            is_expected=True,
+            is_routine=True,
         )
     return refusal_response(
         str(e),
         409,
         user_facing_message="This request was already answered.",
         kind=f"already_{e.status.value}",
-        is_expected=True,
+        is_routine=True,
     )
 
 
@@ -237,7 +237,7 @@ def decline(request_id: str) -> Response:
             str(e),
             400,
             user_facing_message=f"Shorten the note to {MAX_NOTE_LENGTH} characters or fewer.",
-            is_expected=True,
+            is_routine=True,
         )
     return _request_response(declined, _deliver(declined, SecretResolutionVerdict.DECLINED))
 
