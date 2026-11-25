@@ -242,7 +242,7 @@ class ScreenService(MutableModel):
         self,
         fleet: BrowserFleet,
         band_sweeper: BandSweeper | None,
-        cli_session_reaper: CliSessionReaper | None = None,
+        cli_session_reaper: CliSessionReaper | None,
     ) -> None:
         self._fleet = fleet
         self._band_sweeper = band_sweeper

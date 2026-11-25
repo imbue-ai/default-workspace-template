@@ -185,7 +185,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         on_chromium_processes_expected=lambda: None,
         on_browser_running=service.on_browser_running,
     )
-    service.attach_fleet(fleet, band_sweeper=None)
+    service.attach_fleet(fleet, band_sweeper=None, cli_session_reaper=None)
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,

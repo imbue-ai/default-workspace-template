@@ -169,7 +169,7 @@ def service(
         on_chromium_processes_expected=lambda: None,
         on_browser_running=built.on_browser_running,
     )
-    built.attach_fleet(fleet, band_sweeper=None)
+    built.attach_fleet(fleet, band_sweeper=None, cli_session_reaper=None)
     stack = ScreenStack(
         supervisor=fake_supervisor,
         neko=fake_neko,

@@ -105,7 +105,9 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_chromium_processes_expected=band_sweeper.kick,
         on_browser_running=service.on_browser_running,
     )
-    service.attach_fleet(fleet, band_sweeper, CliSessionReaper(fleet=fleet, sessions=ProcCliSessions()))
+    service.attach_fleet(
+        fleet, band_sweeper=band_sweeper, cli_session_reaper=CliSessionReaper(fleet=fleet, sessions=ProcCliSessions())
+    )
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,
