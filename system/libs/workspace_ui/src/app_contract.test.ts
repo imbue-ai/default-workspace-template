@@ -18,6 +18,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_SHOW_COACH_CARD,
   SHELL_AGENT_WORKING,
@@ -25,9 +26,11 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
+  bugReportText,
   coachCardPlaceOf,
   connectToShell,
   followShellTheme,
+  reportedFailureOf,
 } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
 
@@ -97,6 +100,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "chat",
       path: "/?chat=agent-1",
+      canReportBug: false,
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
@@ -127,6 +131,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "",
       path: "",
+      canReportBug: false,
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
@@ -276,6 +281,26 @@ describe("connectToShell", () => {
     connection = connectToShell({});
     deliver(HANDSHAKE, window);
     expect(connection.hasShell()).toBe(false);
+  });
+
+  it("can report a bug while the shell's latest handshake says so, and asks the shell to open the report", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(connection.canReportBug()).toBe(false);
+    deliver(HANDSHAKE, parent);
+    expect(connection.canReportBug()).toBe(false);
+    // The shell hands every page a fresh handshake once Imbue Studio says it opens its bug report.
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    expect(connection.canReportBug()).toBe(true);
+    deliver({ ...HANDSHAKE, canReportBug: false }, {});
+    expect(connection.canReportBug()).toBe(true);
+    connection.reportBug({ message: "Docs couldn't save.", details: "HTTP 500\nboom" });
+    expect(parent.postMessage).toHaveBeenLastCalledWith(
+      { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: "HTTP 500\nboom" },
+      "*",
+    );
+    deliver({ ...HANDSHAKE, canReportBug: "yes" }, parent);
+    expect(connection.canReportBug()).toBe(false);
   });
 
   it("is inert on a top-level page", () => {
@@ -618,6 +643,29 @@ describe("a framed page's scripted popups", () => {
     connection.disconnect();
     connection = null;
     expect(window.open).toBe(nativeOpen);
+  });
+});
+
+describe("the failure a bug report carries", () => {
+  it("reads a shell:report-bug payload's failure, and none from a payload not in that shape", () => {
+    expect(reportedFailureOf({ message: "Docs couldn't save.", details: "HTTP 500" })).toEqual({
+      message: "Docs couldn't save.",
+      details: "HTTP 500",
+    });
+    expect(reportedFailureOf({ message: "Docs couldn't save." })).toEqual({
+      message: "Docs couldn't save.",
+      details: null,
+    });
+    expect(reportedFailureOf({})).toBeNull();
+    expect(reportedFailureOf({ message: " ", details: "HTTP 500" })).toBeNull();
+    expect(reportedFailureOf({ message: "Docs couldn't save.", details: { status: 500 } })).toBeNull();
+  });
+
+  it("is the sentence the user saw, then everything under it", () => {
+    expect(bugReportText({ message: "Docs couldn't save.", details: "HTTP 500\nboom" })).toBe(
+      "Docs couldn't save.\n\nHTTP 500\nboom",
+    );
+    expect(bugReportText({ message: "Docs couldn't save.", details: null })).toBe("Docs couldn't save.");
   });
 });
 

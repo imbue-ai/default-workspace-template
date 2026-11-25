@@ -46,15 +46,17 @@ afterEach(() => {
 });
 
 describe("connectEmbedderToStore", () => {
-  it("takes the chrome's capabilities, immersive included, and ignores a chrome that names none", () => {
+  it("takes the chrome's capabilities, immersive and Report a bug included, and ignores a chrome that names none", () => {
     expect(store.getIsEmbedderPresent()).toBe(false);
-    embedderSays({ type: "minds:embedder-capabilities", canPopOut: true, immersive: true });
+    embedderSays({ type: "minds:embedder-capabilities", canPopOut: true, immersive: true, opensHelp: true });
     expect(store.getCanPopOut()).toBe(true);
     expect(store.getCanImmerse()).toBe(true);
+    expect(store.getCanReportBug()).toBe(true);
     expect(store.getIsEmbedderPresent()).toBe(true);
     embedderSays({ type: "minds:embedder-capabilities", canPopOut: false });
     expect(store.getCanPopOut()).toBe(false);
     expect(store.getCanImmerse()).toBe(false);
+    expect(store.getCanReportBug()).toBe(false);
     // The announcement itself is what says a chrome is there, whatever it can do.
     expect(store.getIsEmbedderPresent()).toBe(true);
   });

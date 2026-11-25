@@ -14,15 +14,16 @@
  * reaches the shell, so the shell raises that window when the document's focus lands in its frame
  * (``raiseWindowOfActiveFrame``).
  *
- * The shell side of the app contract lives here too: the handshake after every load and on a
- * desktop change, ``shell:theme`` after every handshake and on every change of the theme the shell
- * wears, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
+ * The shell side of the app contract lives here too: the handshake after every load, in answer to
+ * a page's ``shell:capabilities``, on a desktop change, and to every page when the embedder's word
+ * on Report a bug changes, ``shell:theme`` after every handshake and on every change of the theme the
+ * shell wears, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, ``shell:open-link``, ``shell:show-coach-card``, and ``shell:agent-working``. Messages cross
- * through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, ``shell:show-coach-card``, ``shell:agent-working``, and
+ * ``shell:report-bug``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -51,12 +52,14 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_SHOW_COACH_CARD,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
   coachCardPlaceOf,
+  reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellCoachCardPlace } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
@@ -297,6 +300,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_REPORT_BUG, (frame, payload) => this.takeReportBug(frame, payload));
     setChildFrameMessageHandler(SHELL_SHOW_COACH_CARD, (frame, payload) => this.takeShowCoachCard(frame, payload));
     setChildFrameMessageHandler(SHELL_AGENT_WORKING, (frame, payload) => this.takeAgentWorking(frame, payload));
     setChildFrameMessageHandler(SHELL_FIRST_CONVERSATION_STEP, (frame, payload) =>
@@ -442,6 +446,12 @@ export class LivePagesLayer implements PageDriver {
   private pointPageAt(page: LivePage, app: AppRecord, path: string): void {
     page.lastReportedPath = path;
     page.frame.setAttribute("src", windowPageUrl(app, path, this.options.host, this.options.protocol));
+  }
+
+  greetAll(): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) this.greet(page);
+    }
   }
 
   requestClose(windowId: string): void {
@@ -1043,6 +1053,7 @@ export class LivePagesLayer implements PageDriver {
       desktopId,
       app: page.app,
       path,
+      canReportBug: this.store.canReportBugFor(page.app),
       opensLocalFiles: this.store.getOpensLocalFiles(),
       opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
       showsCoachMarks: this.store.getShowsCoachMarks(),
@@ -1199,6 +1210,18 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void this.store.openLink(url, window.location.host, page.app);
+  }
+
+  /** ``shell:report-bug {message, details}`` from a page: the bug report about that failure opens, where the
+   *  embedder opens one and the page's app is built in (a user's own app's handshake says ``canReportBug: false``,
+   *  and its report is dropped here too); the frame has to be one the shell created. A payload that holds no failure
+   *  (an older page, a malformed one) still opens the report, with nothing attached. */
+  private takeReportBug(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
+    const failure = reportedFailureOf(payload);
+    if (failure === null) console.warn(`[si] shell:report-bug carried no failure (${JSON.stringify(payload)})`);
+    this.store.reportBugFromPage(page.app, failure);
   }
 
   /** ``shell:show-coach-card {text, chromeAnchor}`` or ``{text, target}`` from a page: the page's words as a

@@ -293,6 +293,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
               : "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
             onDismiss: (id) => store.toasts.dismiss(id),
             onHold: (id) => store.toasts.hold(id),
+            onReportBug: store.reportBugAction(),
           }),
           sheetView(store),
           menuRows === null ? null : menu.view(menuRows),

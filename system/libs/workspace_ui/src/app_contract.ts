@@ -40,7 +40,8 @@
  * shell.
  */
 
-/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
+/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in,
+ *  and whether "Report a bug" can work here (the embedder opens a bug report and the page's app is built in). */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
@@ -84,6 +85,10 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
+/** App to shell: open Imbue Studio's bug report about a failure (``{message, details}``, a ``ReportedFailure``), as
+ *  the shell's own "Report a bug" does. The shell acts on it only where its handshake said ``canReportBug``, since
+ *  only the shell can reach the embedder that opens one. */
+export const SHELL_REPORT_BUG = "shell:report-bug";
 
 /** App to shell: whether the first run's provider page is still owed (the chat app's word for it); while it is, the
  *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
@@ -205,12 +210,11 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
- * shell opens its settings for the files shared from the user's computer and its workspace settings and draws coach
- * marks on its own controls (desktop-interface contracts.md section 7), and whether the window is being viewed on
- * somebody else's desktop. The
- * client id is required; a text field the shell does not send, a page reads as "", and a flag it
- * does not send, as false.
+ * the window belongs to, the path the window is at, whether the shell can open Imbue Studio's bug report, whether
+ * the Imbue Studio chrome around the shell opens its settings for the files shared from the user's computer and its
+ * workspace settings and draws coach marks on its own controls (desktop-interface contracts.md section 7), and
+ * whether the window is being viewed on somebody else's desktop. The client id is required; a text field the shell
+ * does not send, a page reads as "", and a flag it does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -218,6 +222,7 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
+  canReportBug: boolean;
   opensLocalFiles: boolean;
   opensWorkspaceSettings: boolean;
   showsCoachMarks: boolean;
@@ -267,6 +272,10 @@ export interface ShellConnection {
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
   startWithText(text: string): void;
+  /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
+  canReportBug(): boolean;
+  /** Ask the shell to open Imbue Studio's bug report about ``failure``, which the report carries. */
+  reportBug(failure: ReportedFailure): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
   /** Ask the shell to show ``text`` as a one-button card at ``place``: under a control of the Imbue Studio chrome,
@@ -305,6 +314,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId,
     app,
     path,
+    canReportBug,
     opensLocalFiles,
     opensWorkspaceSettings,
     showsCoachMarks,
@@ -317,6 +327,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    canReportBug: canReportBug === true,
     opensLocalFiles: opensLocalFiles === true,
     opensWorkspaceSettings: opensWorkspaceSettings === true,
     showsCoachMarks: showsCoachMarks === true,
@@ -488,6 +499,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
   let hasShell = false;
+  let canReportBug = false;
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -499,6 +511,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         const handshake = readHandshake(message);
         if (handshake === null) return;
         hasShell = true;
+        canReportBug = handshake.canReportBug;
         handlers.onHandshake?.(handshake);
         return;
       }
@@ -575,6 +588,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
+    canReportBug: () => canReportBug,
+    reportBug: (failure: ReportedFailure) =>
+      send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     showCoachCard: (text: string, place: ShellCoachCardPlace) => send(SHELL_SHOW_COACH_CARD, { text, ...place }),
     agentWorking: (isWorking: boolean) => send(SHELL_AGENT_WORKING, { isWorking }),
@@ -593,4 +609,25 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };
+}
+
+/** The failure a "Report a bug" is about: the sentence the user saw, and what was behind its "See details" (null when
+ *  nothing was). */
+export interface ReportedFailure {
+  readonly message: string;
+  readonly details: string | null;
+}
+
+/** The failure a page's ``shell:report-bug`` carries, or null when its payload holds none in that shape. */
+export function reportedFailureOf(payload: Readonly<Record<string, unknown>>): ReportedFailure | null {
+  const { message, details } = payload;
+  if (typeof message !== "string" || message.trim() === "") return null;
+  if (details !== null && details !== undefined && typeof details !== "string") return null;
+  return { message, details: details ?? null };
+}
+
+/** The text a bug report carries for ``failure``: the sentence the user saw, then everything under it (the shape
+ *  Imbue Studio's own reports carry). */
+export function bugReportText({ message, details }: ReportedFailure): string {
+  return details === null || details.trim() === "" ? message : `${message}\n\n${details}`;
 }

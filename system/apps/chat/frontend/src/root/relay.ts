@@ -10,9 +10,10 @@
  * activity, which the shell's heartbeat reports), ``shell:open`` of a sub-agent view, ``shell:draft-text``
  * from a sub-agent view (which has no composer of its own to draft into), ``shell:show-coach-card`` (a
  * card under a control of the minds chrome, which only the shell can draw), ``shell:message`` (for
- * whichever app registered its type), and ``shell:open-link`` (a clicked link or script popup the
+ * whichever app registered its type), ``shell:open-link`` (a clicked link or script popup the
  * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
- * ``mailto:`` or ``tel:`` link -- which the shell opens where it belongs).
+ * ``mailto:`` or ``tel:`` link -- which the shell opens where it belongs), and a failure's
+ * ``shell:report-bug``.
  * One ``shell:open`` is the root's own business: a page asking for a sibling chat names the
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
@@ -51,6 +52,7 @@ import {
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOW_COACH_CARD,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -67,6 +69,7 @@ const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_SHOW_COACH_CARD,
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
 ]);
 const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
   PROVIDER_SIGN_IN_ACK,

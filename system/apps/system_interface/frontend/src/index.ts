@@ -40,6 +40,7 @@ import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour
 import { initEmbedderRelay, setChildFrameMessageHandler, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
+import { openBugReport } from "@imbue/workspace-ui/src/report-bug";
 import { runTourAction } from "./store/tourActions";
 import { ShellSocket } from "./store/socket";
 import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
@@ -125,6 +126,7 @@ function bootstrap(): void {
           reloadInterface,
           popOut: popOutBridge,
           outsideLinks,
+          reportBug: openBugReport,
           immersive: immersiveBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,

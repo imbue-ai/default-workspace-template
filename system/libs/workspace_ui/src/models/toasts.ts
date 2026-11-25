@@ -23,6 +23,13 @@ export type ToastOptions =
       readonly details?: string | null;
       /** Buttons after the message (Try again, ...), in order. */
       readonly actions?: readonly ToastAction[];
+      /** The failure owes the person help: the toast offers "Report a bug" after its buttons wherever the page can
+       *  open one when the toast is drawn (``components/toasts.ts``'s ``onReportBug``), which may be only after the
+       *  toast went up. */
+      readonly isHelpOwed?: boolean;
+      /** No bug report is offered for this failure, even where the page can open one: a user's own app caused it,
+       *  and its faults are not Imbue's bugs. */
+      readonly isBugReportWithheld?: boolean;
     };
 
 export interface Toast {
@@ -31,6 +38,10 @@ export interface Toast {
   readonly details: string | null;
   readonly actions: readonly ToastAction[];
   readonly isLasting: boolean;
+  /** A lasting toast whose failure owes the person help; never a plain one. */
+  readonly isHelpOwed: boolean;
+  /** A toast owing help that offers "Report a bug" where the page can open one (``isBugReportWithheld`` unset). */
+  readonly isBugReportOffered: boolean;
 }
 
 /** How long a plain toast stays up. */
@@ -54,7 +65,17 @@ export class ToastQueue {
   show(message: string, options: ToastOptions = { isLasting: false }): void {
     const details = options.details ?? null;
     const actions = options.isLasting ? (options.actions ?? []) : [];
-    const toast: Toast = { id: this.nextId, message, details, actions, isLasting: options.isLasting };
+    const isHelpOwed = options.isLasting && options.isHelpOwed === true;
+    const isBugReportOffered = isHelpOwed && options.isBugReportWithheld !== true;
+    const toast: Toast = {
+      id: this.nextId,
+      message,
+      details,
+      actions,
+      isLasting: options.isLasting,
+      isHelpOwed,
+      isBugReportOffered,
+    };
     this.nextId += 1;
     let kept = this.toasts.filter((other) => other.message !== message || other.details !== details);
     if (toast.isLasting) {

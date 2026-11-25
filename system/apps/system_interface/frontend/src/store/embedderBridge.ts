@@ -44,6 +44,7 @@ export function connectEmbedderToStore(store: DesktopStore): void {
     store.setOpensWorkspaceSettings(message.opensWorkspaceSettings === true);
     store.setShowsCoachMarks(message.showsCoachMarks === true);
     store.setCanImmerse(message.immersive === true);
+    store.setCanReportBug(message.opensHelp === true);
     store.setEmbedderPresent(true);
     noteChromeWashesExit(message.washesFirstRunExit === true, firstRunChrome);
   });

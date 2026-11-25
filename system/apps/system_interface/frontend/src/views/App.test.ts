@@ -32,6 +32,9 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import { readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { THEME_DESIGN_PROMPT } from "./ThemeChooserDialog";
 import { App } from "./App";
@@ -75,7 +78,14 @@ function backdropMenuRow(key: string): HTMLElement | null {
  *  stacked in front of it, a store started over it (opened to show ``soloWindowId`` alone when given), and the
  *  App mounted over the store. */
 async function mountApp(
-  options: { isDetached?: boolean; soloWindowId?: string; laterWindowIds?: readonly string[] } = {},
+  options: {
+    isDetached?: boolean;
+    soloWindowId?: string;
+    laterWindowIds?: readonly string[];
+    /** What every route raises while the store starts (cleared once it has). */
+    startRefusal?: Error;
+    reportBug?: (failure: ReportedFailure | null) => void;
+  } = {},
 ): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
@@ -111,8 +121,11 @@ async function mountApp(
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
       launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
+    reportBug: options.reportBug,
   });
+  api.refusal = options.startRefusal ?? null;
   await store.start(NO_LINK);
+  api.refusal = null;
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   tour = new TourController({
     api: new FakeTourApi({ isSeen: true }),
@@ -130,8 +143,42 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
+  vi.unstubAllGlobals();
   resetPresenceForTesting();
   gestureListener = null;
+});
+
+describe("a failure toast's Report a bug", () => {
+  it("appears on a toast shown before the embedder said it opens a bug report, and files that toast's failure", async () => {
+    unmountViews();
+    // A failed start leaves the default avatar, the animated character, which reads the reduced-motion setting.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    );
+    const reportBug = vi.fn();
+    const startRefusal = new HttpError(
+      readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
+    );
+    await mountApp({ startRefusal, reportBug });
+    m.redraw.sync();
+    const toast = (): HTMLElement => document.querySelector("[data-toast]") as HTMLElement;
+    expect(toast().querySelector(".toast-message")?.textContent).toBe(
+      "Could not read the desktops and apps. Try again.",
+    );
+    expect(toast().querySelector(".report-bug")).toBeNull();
+
+    store.setCanReportBug(true);
+    m.redraw.sync();
+    const button = toast().querySelector<HTMLButtonElement>(".report-bug");
+    expect(button?.textContent).toBe("Report a bug");
+    button?.click();
+    expect(reportBug).toHaveBeenCalledWith({
+      message: "Could not read the desktops and apps. Try again.",
+      details: "HTTP 500\ninventory unreadable",
+    });
+    expect(document.querySelector("[data-toast]")).not.toBeNull();
+  });
 });
 
 describe("a floating entry drag", () => {
