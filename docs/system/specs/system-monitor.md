@@ -14,7 +14,7 @@ This spec covers two pieces:
 Facts this design builds on, as of `main` at `2cf9763de7` (2026-10-20).
 
 - The app (`system/apps/system_monitor`) is one plain HTML page with no build step, polling `/api/stats` every 5 s; every open window shares one snapshot taken at most every 4 s (`stats.SharedSnapshot`).
-  The snapshot reads every process's `/proc/<pid>/status`, `cmdline` and `smaps_rollup`, supervisord's control socket, the app registry, the chat records, the memory guard's agent-pid registry, its shed ledger and the guard's log.
+  The snapshot reads every process's `/proc/<pid>/status`, `cmdline` and `smaps_rollup` (`smaps` under gVisor, which has no rollup), supervisord's control socket, the app registry, the chat records, the memory guard's agent-pid registry, its shed ledger and the guard's log.
   The app writes nothing to disk and keeps only the memory graph's last 10 minutes, sampled by a thread of its own, so the graph starts over whenever the app restarts, and the shell stops the app a minute after its last window closes (`stop_when_no_windows = true`).
 - Measured in a local gVisor container (`runsc`, `--cpus=2`) on 2026-10-20: `/sys/fs/cgroup/cpu.max` and `cpu.stat` do not exist, `/proc/stat` reports every CPU counter as 0, `/proc/loadavg` reports `0.00 0.00 0.00`, and `os.cpu_count()` reports the quota (2).
   Per-process counters are real: `/proc/<pid>/stat` fields 14 to 17 (`utime`, `stime`, `cutime`, `cstime`) moved by the expected amounts for a 1 s own burn (93 ticks) and a reaped 2 s child (187 child ticks), at `CLK_TCK` 100.
@@ -196,11 +196,12 @@ Moving between views is a real navigation (`location.href`), so the shell's hand
   A reaped child's time sits in its parent's counters, so it lands with the parent's group without any extra work.
 - The Workspace row lists the workspace's own programs as items: each supervised program that is not one of the user's apps, named by its registry row (an app) or by a short table in `programs.PROGRAM_NAMES` (a service: "Memory guard", "Backups", "Agent manager", "Web access"); what no program started is "SSH access" (sshd and its sessions), "Internal system" (tini, the bootstrap and its uv wrapper, supervisord, the services agent's tmux and shell) or "Other", by its command (`usage.UNOWNED_ITEMS`).
 - Where the kernel reports `smaps_rollup`, a group's memory is its programs' anonymous memory (what they made for themselves, which stopping them frees; the file pages they map are cache the kernel drops under pressure and the guard's own figure of what is in use leaves out), the Shared row is the shared memory segments programs map (the sum of `Pss_Shmem`), and the System row is the rest, so the rows add up to the memory in use.
-  Under gVisor (resident sizes shrunk by one factor) a System row holds whatever the programs do not account for, so both modes have the same rows.
+  Under gVisor, which has no `smaps_rollup` and reports every page as private (`Pss` equals `Rss`), the same figures come from `smaps`: each process's `Anonymous` lines, and each shared memory segment (a memfd, a `/dev/shm` file, a System V segment) counted once at its resident size. A whole-workspace pass reads about 260 processes' `smaps` in about 0.6 s there (measured 2026-11-25 on a loaded production workspace).
+  Where neither file can be read (resident sizes shrunk by one factor) a System row holds whatever the programs do not account for, so both modes have the same rows.
 - Every `UsageItem` carries `stop`, the target of its Stop button (section 4.6): the chat's id, the agent id whose code checkers, or the app's program; null for the workspace's own programs, which cannot be stopped from here.
 - `events`: stops (as today's `stops`, kept for the memory view) and the stretches of the last 24 hours from the sampler's events file, each with `at`, `kind` (`stop` or `busy`), `what` in plain words, and for a stretch its `duration_seconds` and `top` with agent ids resolved to chat names.
 
-The approximate-usage mode under gVisor (`usage_mode`) is unchanged and applies to memory only; CPU shares are exact where the sampler's file is fresh.
+The approximate-usage mode (`usage_mode`), used only where no process's own memory can be read, applies to memory only; CPU shares are exact where the sampler's file is fresh.
 
 ### 4.3 The views
 

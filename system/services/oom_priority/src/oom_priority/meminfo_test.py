@@ -64,3 +64,34 @@ def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(
     assert meminfo.read_process_anonymous_kib(10, tmp_path) == 340
 
     assert meminfo.read_process_anonymous_kib(11, tmp_path) is None
+
+
+def test_smaps_names_each_shared_memory_segment_once_beside_the_anonymous_memory(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "10"
+    entry.mkdir()
+    # gVisor's smaps, abridged: the binary (file-backed, not counted), a heap, a memfd mapped twice
+    # (counted once, at its larger resident size), a /dev/shm file and a System V segment.
+    (entry / "smaps").write_text(
+        "00400000-00500000 r-xp 00000000 00:2a 1234 /opt/fortress/chrome\n"
+        "Size:   1024 kB\nRss:   900 kB\nPss:   900 kB\nAnonymous:   0 kB\nVmFlags: rd ex\n"
+        "00600000-00700000 rw-p 00000000 00:00 0 [heap]\n"
+        "Size:   1024 kB\nRss:   300 kB\nAnonymous:   300 kB\n"
+        "7f000000-7f100000 rw-s 00000000 00:05 77 /memfd:shared-memory-region (deleted)\n"
+        "Size:   1024 kB\nRss:   40 kB\nAnonymous:   0 kB\n"
+        "7f100000-7f200000 r--s 00000000 00:05 77 /memfd:shared-memory-region (deleted)\n"
+        "Size:   1024 kB\nRss:   64 kB\nAnonymous:   0 kB\n"
+        "7f200000-7f300000 rw-s 00000000 00:1b 12 /dev/shm/.org.chromium.Chromium.x\n"
+        "Size:   1024 kB\nRss:   8 kB\nAnonymous:   0 kB\n"
+        "7f300000-7f400000 rw-s 00000000 00:06 5 /SYSV00000000 (deleted)\n"
+        "Size:   1024 kB\nRss:   16 kB\nAnonymous:   0 kB\n"
+    )
+
+    memory = meminfo.read_smaps_memory(10, tmp_path)
+
+    assert memory == meminfo.SmapsMemory(
+        anonymous_kib=300,
+        shared_segment_kib={"00:05 77": 64, "00:1b 12": 8, "00:06 5": 16},
+    )
+    assert meminfo.read_smaps_memory(11, tmp_path) is None

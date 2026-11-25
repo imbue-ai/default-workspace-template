@@ -13,10 +13,11 @@ It also reads one process's anonymous memory, which the memory candidates comman
 Stdlib-only (see ``paths``): the sampler runs under a plain ``python3``.
 """
 
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 from oom_priority.cgroup_meminfo import HOST_MEMINFO_PATH
 
@@ -72,6 +73,36 @@ def read_meminfo(
     return {"total": total, "available": available, "used": total - available}
 
 
+class SmapsMemory(NamedTuple):
+    """What one read of a process's ``/proc/<pid>/smaps`` says about the memory it holds, in KiB."""
+
+    anonymous_kib: int
+    # The resident size of each shared memory segment the process maps (a memfd, a /dev/shm file,
+    # a System V segment), keyed by the mapping's "<device> <inode>", so a reader summing several
+    # processes can count each segment once.
+    shared_segment_kib: Mapping[str, int]
+
+
+def read_smaps_memory(pid: int, proc: Path = PROC) -> SmapsMemory | None:
+    """A process's anonymous memory and shared memory segments from ``/proc/<pid>/smaps``, or None
+    when it is gone or unreadable.
+
+    This is the reading under gVisor, which has no ``smaps_rollup`` and reports every page as
+    private (``Pss`` equals ``Rss`` there), so ``Anonymous`` is the one figure that tells the
+    memory a process made for itself from the files it maps.
+    """
+    try:
+        text = (proc / str(pid) / "smaps").read_text(errors="replace")
+    except OSError:
+        return None
+    segments: dict[str, int] = {}
+    for mapping in _SHARED_MAPPING.finditer(text):
+        rss = _RSS_LINE.search(mapping.group("fields"))
+        key = f"{mapping.group('device')} {mapping.group('inode')}"
+        segments[key] = max(segments.get(key, 0), int(rss.group(1)) if rss else 0)
+    return SmapsMemory(anonymous_kib=_summed_anonymous_kib(text), shared_segment_kib=segments)
+
+
 def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
     """A process's anonymous memory in KiB: the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup``,
     or of ``smaps`` under gVisor, which has no rollup, summed. None when it is gone or unreadable.
@@ -80,16 +111,27 @@ def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
     mapping the process has touched, so it reads up to ten times higher for an agent's harness,
     which maps a large binary.
     """
-    for name in ("smaps_rollup", "smaps"):
-        try:
-            text = (proc / str(pid) / name).read_text(errors="replace")
-        except OSError:
-            continue
-        total = 0
-        for line in text.splitlines():
-            key, _, rest = line.partition(":")
-            fields = rest.split()
-            if key == "Anonymous" and fields and fields[0].isdigit():
-                total += int(fields[0])
-        return total
-    return None
+    try:
+        return _summed_anonymous_kib((proc / str(pid) / "smaps_rollup").read_text(errors="replace"))
+    except OSError:
+        pass
+    memory = read_smaps_memory(pid, proc)
+    return None if memory is None else memory.anonymous_kib
+
+
+# A mapping's header line is "<start>-<end> <perms> <offset> <device> <inode> [<path>]"; a shared
+# memory segment's path is a memfd, a /dev/shm file, or a System V segment. Its field lines run up
+# to the next header.
+_SHARED_MAPPING: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-f]+-[0-9a-f]+ \S+ \S+ (?P<device>\S+) (?P<inode>\d+) +(?:/memfd:|/dev/shm/|/SYSV)[^\n]*\n"
+    r"(?P<fields>(?:(?![0-9a-f]+-[0-9a-f]+ )[^\n]*\n)*)",
+    re.MULTILINE,
+)
+_RSS_LINE: Final[re.Pattern[str]] = re.compile(r"^Rss:\s+(\d+)", re.MULTILINE)
+_ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(r"^Anonymous:\s+(\d+)", re.MULTILINE)
+
+
+def _summed_anonymous_kib(text: str) -> int:
+    # A regex rather than a line loop: under gVisor a whole-workspace pass reads hundreds of
+    # thousands of smaps lines, and this keeps it about twice as fast.
+    return sum(int(kib) for kib in _ANONYMOUS_LINE.findall(text))

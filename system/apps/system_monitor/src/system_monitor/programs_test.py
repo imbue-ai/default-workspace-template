@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
-from system_monitor import programs
+from system_monitor import programs, usage
 
 
 def _write_proc_entry(
@@ -262,3 +262,59 @@ def test_program_names_come_from_the_name_table_then_the_registry_then_the_progr
 def test_agent_records_are_read_from_the_host_dir_the_environment_names() -> None:
     assert programs.mngr_agents_dir({"MNGR_HOST_DIR": "/mngr"}) == Path("/mngr/agents")
     assert programs.mngr_agents_dir({}) == Path("/home/user/.mngr/agents")
+
+
+def _write_gvisor_smaps(
+    proc: Path, pid: int, own_anonymous_kib: int, mapped: list[tuple[str, str, int]]
+) -> None:
+    """A gVisor-style smaps: Chromium's binary resident in full, the process's own heap, and the
+    shared segments (``(device, inode, resident KiB)``) it maps. No smaps_rollup."""
+    lines = [
+        "00400000-1d000000 r-xp 00000000 00:2a 1234 /opt/fortress/chrome",
+        "Rss:   409600 kB",
+        "Pss:   409600 kB",
+        "Anonymous:   0 kB",
+        "1d000000-1e000000 rw-p 00000000 00:00 0 [heap]",
+        f"Rss:   {own_anonymous_kib} kB",
+        f"Pss:   {own_anonymous_kib} kB",
+        f"Anonymous:   {own_anonymous_kib} kB",
+    ]
+    for index, (device, inode, rss_kib) in enumerate(mapped):
+        lines += [
+            f"7f0{index}0000-7f0{index}f000 rw-s 00000000 {device} {inode} /memfd:shared-memory-region (deleted)",
+            f"Rss:   {rss_kib} kB",
+            f"Pss:   {rss_kib} kB",
+            "Anonymous:   0 kB",
+        ]
+    (proc / str(pid) / "smaps").write_text("\n".join(lines) + "\n")
+
+
+def test_under_gvisor_each_process_holds_its_anonymous_memory_and_a_shared_segment_counts_once(
+    tmp_path: Path,
+) -> None:
+    # Three Chromium processes under gVisor: each one's resident size counts the 400 MiB binary it
+    # maps, and gVisor's Pss equals its Rss, so only Anonymous says what each made for itself.
+    for pid, anonymous_kib in ((100, 51200), (101, 30720), (102, 20480)):
+        _write_proc_entry(
+            tmp_path, pid, 1, 409600 + anonymous_kib, ["/opt/fortress/chrome"]
+        )
+    _write_gvisor_smaps(tmp_path, 100, 51200, [("00:05", "77", 20480)])
+    _write_gvisor_smaps(
+        tmp_path, 101, 30720, [("00:05", "77", 20480), ("00:05", "78", 4096)]
+    )
+    _write_gvisor_smaps(tmp_path, 102, 20480, [("00:05", "77", 16384)])
+
+    procs = programs.read_processes(tmp_path)
+    groups = usage.exact_usage(procs, {}, {}, {}, 2048 * 1024 * 1024)
+
+    assert programs.has_breakdown(procs)
+    assert [procs[pid].anonymous for pid in (100, 101, 102)] == [
+        51200 * 1024,
+        30720 * 1024,
+        20480 * 1024,
+    ]
+    by_id = {group["id"]: group["bytes"] for group in groups}
+    # 100 MiB of Chromium's own memory, not the 1.2 GiB its resident sizes add up to.
+    assert by_id["workspace"] == 100 * 1024 * 1024
+    # The memfd every process maps is held once (20 MiB), beside the one only 101 maps (4 MiB).
+    assert by_id["shared"] == 24 * 1024 * 1024

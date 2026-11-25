@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from oom_priority.meminfo import KIB, PROC, parse_kib_fields
+from oom_priority.meminfo import KIB, PROC, parse_kib_fields, read_smaps_memory
 from oom_priority.registry import live_pids_by_agent_id
 
 # mngr's host dir is not the same path on every host (a container keeps it at /home/user/.mngr, a
@@ -77,7 +77,8 @@ class Process:
         # ours to read: the memory only this process maps, its proportional share (each shared
         # page divided evenly among the processes that map it), the anonymous memory it made for
         # itself (what stopping it frees: its file pages are cache the kernel can drop), and its
-        # proportional share of shared memory segments.
+        # proportional share of shared memory segments. Under gVisor, from smaps (``read_smaps``):
+        # the anonymous memory and the shared segments only.
         self.private = private
         self.pss = pss
         self.anonymous = anonymous
@@ -98,11 +99,41 @@ def read_rollup(entry: Path) -> Rollup | None:
     )
 
 
+def read_smaps(pid: int, proc: Path, counted_segments: set[str]) -> Rollup | None:
+    """The figures gVisor allows, from ``/proc/<pid>/smaps`` where there is no smaps_rollup, or None
+    when it cannot be read either.
+
+    gVisor reports every page as private (``Pss`` equals ``Rss``), so only the anonymous memory and
+    the shared memory segments are read: no private or proportional figure. A segment several
+    processes map is counted on the first of them to be read and recorded in ``counted_segments``,
+    so the Shared row holds it once.
+    """
+    memory = read_smaps_memory(pid, proc)
+    if memory is None:
+        return None
+    new_segments = {
+        key: kib
+        for key, kib in memory.shared_segment_kib.items()
+        if key not in counted_segments
+    }
+    counted_segments.update(new_segments)
+    return Rollup(
+        private=None,
+        pss=None,
+        anonymous=memory.anonymous_kib * KIB,
+        shmem=sum(new_segments.values()) * KIB,
+    )
+
+
 def read_processes(proc: Path = PROC) -> dict[int, Process]:
     out: dict[int, Process] = {}
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
+    counted_segments: set[str] = set()
+    # In pid order, so a shared segment lands on the same process on every read.
+    entries = sorted(
+        (entry for entry in proc.iterdir() if entry.name.isdigit()),
+        key=lambda entry: int(entry.name),
+    )
+    for entry in entries:
         try:
             status = (entry / "status").read_text()
             argv = [a for a in (entry / "cmdline").read_bytes().split(b"\0") if a]
@@ -114,7 +145,11 @@ def read_processes(proc: Path = PROC) -> dict[int, Process]:
                 ppid = int(line.split()[1])
             elif line.startswith("VmRSS:"):
                 rss = int(line.split()[1]) * KIB
-        rollup = read_rollup(entry) if rss else None
+        rollup = (
+            (read_rollup(entry) or read_smaps(int(entry.name), proc, counted_segments))
+            if rss
+            else None
+        )
         out[int(entry.name)] = Process(
             int(entry.name),
             ppid,
@@ -129,8 +164,9 @@ def read_processes(proc: Path = PROC) -> dict[int, Process]:
 
 
 def has_breakdown(procs: dict[int, Process]) -> bool:
-    """Whether the kernel reported private and proportional memory (smaps_rollup) for any process."""
-    return any(p.pss is not None for p in procs.values())
+    """Whether any process's own memory could be read: smaps_rollup's private and proportional
+    figures, or, under gVisor, the anonymous memory in its smaps."""
+    return any(p.pss is not None or p.anonymous is not None for p in procs.values())
 
 
 def is_code_checker(command: str) -> bool:
