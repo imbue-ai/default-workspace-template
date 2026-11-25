@@ -41,8 +41,11 @@ import {
 import {
   FREE_SPACE_INSTRUCTION,
   appNotFoundSentence,
+  couldNotStartRequest,
   isRetryable,
   refusalKindOf,
+  stoppedRequest,
+  stoppedSentence,
   tookLaunchLead,
 } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
@@ -799,6 +802,8 @@ export class DesktopStore {
   readonly toasts: ToastQueue;
   /** The requests of the agents asked from the shell's own buttons whose launch has not settled. */
   private readonly agentAsks = new Set<string>();
+  /** The stopped apps' notes up, by toast id, with whether the app list has shown the app stopped since. */
+  private readonly toastsUntilRunning = new Map<number, { readonly app: string; isSeenStopped: boolean }>();
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
   private bubbles: BubbleStack = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -964,6 +969,29 @@ export class DesktopStore {
       actions: notice.actions,
       isHelpOwed: notice.isBugReportOffered,
     });
+    const toasts = this.toasts.current();
+    const shown = toasts[toasts.length - 1];
+    if (notice.untilRunning !== undefined && shown !== undefined) {
+      const app = appByName(this.state, notice.untilRunning);
+      this.toastsUntilRunning.set(shown.id, { app: notice.untilRunning, isSeenStopped: app?.is_running === false });
+    }
+  }
+
+  /** Take down each stopped app's note once its app runs again. The app list may still say an app runs when its
+   *  launch found it stopped, so only a reading of it running after one of it stopped counts. */
+  private dismissNotesOfRunningApps(): void {
+    const current = new Set(this.toasts.current().map((toast) => toast.id));
+    for (const [id, watch] of this.toastsUntilRunning) {
+      const app = appByName(this.state, watch.app);
+      if (!current.has(id) || app === undefined) {
+        this.toastsUntilRunning.delete(id);
+      } else if (!app.is_running) {
+        watch.isSeenStopped = true;
+      } else if (watch.isSeenStopped) {
+        this.toastsUntilRunning.delete(id);
+        this.toasts.dismiss(id);
+      }
+    }
   }
 
   /** What users call the app, or "This app" for one this window no longer knows. */
@@ -1017,6 +1045,17 @@ export class DesktopStore {
         return this.noticeOf(told, tryAgain, { agent: "shell", task: freeSpaceTask(told) });
       case "not_saved":
         return this.noticeOf(told, tryAgain, { agent: "shell" });
+      case "app_stopped":
+        if (app === undefined) break;
+        return { ...this.stoppedNotice(app, null), details: failure.details, untilRunning: app.name };
+      case "app_could_not_start":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
+      case "app_start_budget_spent":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, told.message, failure.details, []);
+      case "app_still_starting":
+        return this.noticeOf(told, tryAgain, { agent: "withheld" });
       case "launched_not_opened_out_of_space":
         return this.noticeOf(told, [], { agent: "shell", task: freeSpaceTask(told) });
       case "launched_not_opened":
@@ -1125,6 +1164,20 @@ export class DesktopStore {
   private draftAsk(ask: ShellAsk): void {
     if (this.refuseWhileViewing("ask an agent")) return;
     void this.askAgentAbout(ask.task, ask.about, ask.windowId, "draft");
+  }
+
+  /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
+   *  asked to look at it, unless the app is the one agents are asked through, which can only be reported. */
+  private couldNotStartNotice(
+    app: AppRecord,
+    sentence: string,
+    details: string | null,
+    actions: readonly ToastAction[],
+  ): FailureNotice {
+    return this.noticeOf({ message: sentence, details, isHelpOwed: true }, actions, {
+      agent: { about: app, windowId: null },
+      task: { label: "Ask an agent to look at it", request: couldNotStartRequest(app) },
+    });
   }
 
   /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``tellFailure`` and
@@ -1439,6 +1492,17 @@ export class DesktopStore {
 
   gridDimensions(): GridDimensions {
     return gridDimensions(this.frameBackdrop(), this.metrics);
+  }
+
+  /** What a window of ``app`` (``windowId``; null for a toast about the app), stopped and not started by the
+   *  workspace on a request, says: that it isn't running, and the next step the workspace has. That is an agent
+   *  asked to start it, in the chat about the app, unless the app is the one agents are asked through, which can
+   *  only be reported. */
+  stoppedNotice(app: AppRecord, windowId: string | null): FailureNotice {
+    return this.noticeOf({ message: stoppedSentence(app), details: null, isHelpOwed: true }, [], {
+      agent: { about: app, windowId },
+      task: { label: "Ask an agent to start it", request: stoppedRequest(app) },
+    });
   }
 
   /** What a window of ``appName``, an app the app list no longer has, says in place of its page: that the app
@@ -2028,6 +2092,7 @@ export class DesktopStore {
     const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+    this.dismissNotesOfRunningApps();
     for (const app of apps) {
       const before = themingBefore.get(app.name);
       if (before !== undefined && before !== app.theming) this.pageDriver?.resendTheme(app.name);

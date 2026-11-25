@@ -39,6 +39,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
+from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
@@ -53,11 +54,14 @@ from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import VISITOR_DESKTOPS_ADOPTED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchUnreachableError
 from imbue.system_interface.shell.errors import LaunchedNotOpenedError
 from imbue.system_interface.shell.errors import RefusalKind
+from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
+from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.primitives import LaunchTargetKind
@@ -285,13 +289,18 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     (post,) = posts
     assert post.url == f"http://127.0.0.1:{docs_port}/api/intake"
 
-    # An app that never binds: the wait (over a clock that steps past it on each read) ends in a 502, unposted.
+    # An app that never binds: the wait (over a clock that steps past it on each read) ends in a 502, unposted,
+    # that says the app is still starting.
     ticks = itertools.count(start=0.0, step=WAKE_WAIT_SECONDS)
     never_up = built.model_copy_update(
         to_update(built.field_ref().lifecycle, _launch_waking_manager(built, started.append, lambda: next(ticks)))
     )
-    with pytest.raises(LaunchUnavailableError, match="could not be brought up"):
+    with pytest.raises(LaunchUnavailableError) as still_starting:
         never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert still_starting.value.kind is RefusalKind.APP_STILL_STARTING
+    assert still_starting.value.user_facing_message == "Docs is still starting. Try again in a moment."
+    # Ordinary operation the sentence fully explains, so it owes no help.
+    assert still_starting.value.is_routine is True
     assert started == ["docs", "docs"] and len(posts) == 1
 
     # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
@@ -305,6 +314,109 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     with pytest.raises(LaunchUnavailableError, match="refused"):
         preview.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
     assert started == ["docs", "docs"]
+
+
+def test_a_post_launch_whose_wake_brings_nothing_up_says_why_in_the_could_not_start_pages_words(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A start supervisord refuses, and a wake the budget refuses, end the launch at once, unposted, each with the
+    sentence the app's could-not-start page shows and a kind the desktop words its toast from."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{find_free_port()}",
+            program="docs",
+            display_name="Docs",
+            launch_paths=(("new", "New doc", "/api/intake"),),
+            launch_methods={"new": "POST"},
+        ),
+    )
+    prober = FakeLivenessProber()
+    prober.is_running_by_name["docs"] = False
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return LaunchPostOutcome(status_code=200, body={"path": "/"})
+
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster, prober=prober),
+        launch_poster=poster,
+    )
+    entry = built.inventory.entry("docs")
+    assert entry is not None
+    (launch_path,) = entry.row.launch_paths
+
+    def refuse(program: str) -> None:
+        raise SupervisorProgramActionError(f"supervisord refused to start {program!r}")
+
+    refusing = built.model_copy_update(
+        to_update(built.field_ref().lifecycle, _launch_waking_manager(built, refuse, time.monotonic))
+    )
+    with pytest.raises(LaunchUnavailableError) as could_not_start:
+        refusing.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert could_not_start.value.kind is RefusalKind.APP_COULD_NOT_START
+    assert could_not_start.value.user_facing_message == "Docs couldn't start."
+
+    budget = _launch_waking_manager(built, lambda program: None, time.monotonic)
+    for _ in range(WAKE_BUDGET_COUNT):
+        budget.wake("docs")
+    spent = built.model_copy_update(to_update(built.field_ref().lifecycle, budget))
+    with pytest.raises(LaunchUnavailableError) as budget_spent:
+        spent.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert budget_spent.value.kind is RefusalKind.APP_START_BUDGET_SPENT
+    assert budget_spent.value.user_facing_message == (
+        "Docs failed to start several times in the last few minutes, so it wasn't started again. "
+        "Try again in a few minutes."
+    )
+    assert posts == []
+
+
+def test_a_post_launch_nothing_listens_for_is_refused_as_one_to_a_stopped_app(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An app the workspace does not start on a request (a critical one, stopped by hand) still reads as running
+    until the next liveness sweep; the refused connection makes the shell read it again, and an app now read as
+    stopped gets the stopped app's kind. One that still reads as running fails as any unreachable app does."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{find_free_port()}",
+            program="docs",
+            display_name="Docs",
+            is_critical=True,
+            launch_paths=(("new", "New doc", "/api/intake"),),
+            launch_methods={"new": "POST"},
+        ),
+    )
+    prober = FakeLivenessProber()
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster, prober=prober),
+        launch_poster=post_launch,
+    )
+    entry = shell.inventory.entry("docs")
+    assert entry is not None and entry.is_running is True
+    (launch_path,) = entry.row.launch_paths
+
+    with pytest.raises(LaunchUnreachableError) as still_running:
+        shell.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert still_running.value.kind is None and still_running.value.user_facing_message is None
+
+    prober.is_running_by_name["docs"] = False
+    with pytest.raises(LaunchUnavailableError) as stopped:
+        shell.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert stopped.value.kind is RefusalKind.APP_STOPPED
+    assert stopped.value.user_facing_message == "Docs isn't running right now, so it couldn't open that."
+    refreshed = shell.inventory.entry("docs")
+    assert refreshed is not None and refreshed.is_running is False
 
 
 class _DesktopStoreWhoseWindowWriteFails(DesktopStore):

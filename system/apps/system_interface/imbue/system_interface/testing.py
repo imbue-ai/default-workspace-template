@@ -95,9 +95,10 @@ class FakeSupervisorServer:
     """A supervisord-shaped XML-RPC server over a unix socket.
 
     Implements exactly the slice of the supervisor RPC namespace the liveness
-    module uses -- ``getAllProcessInfo`` / ``startProcess`` / ``stopProcess``
-    -- over ``statename_by_program``, with the same fault codes supervisord
-    answers, so both the probes and the stop/start actions are tested against
+    module uses -- ``getAllProcessInfo`` / ``startProcess`` / ``stopProcess`` /
+    ``tailProcessStderrLog`` -- over ``statename_by_program`` and
+    ``stderr_by_program``, with the same answers and fault codes supervisord
+    gives, so both the probes and the stop/start actions are tested against
     the real transport rather than a faked-out client.
     """
 
@@ -105,6 +106,8 @@ class FakeSupervisorServer:
         self.socket_path = socket_path
         self.statename_by_program: dict[str, str] = {}
         self.pid_by_program: dict[str, int] = {}
+        # Each program's stderr log, as the file supervisord keeps it.
+        self.stderr_by_program: dict[str, str] = {}
         # Lets tests assert on the sweep's RPC economy (e.g. that a registry
         # with no supervised rows makes no supervisord call at all).
         self.get_all_process_info_call_count = 0
@@ -112,6 +115,7 @@ class FakeSupervisorServer:
         self._server.register_function(self._get_all_process_info, "supervisor.getAllProcessInfo")
         self._server.register_function(self._start_process, "supervisor.startProcess")
         self._server.register_function(self._stop_process, "supervisor.stopProcess")
+        self._server.register_function(self._tail_process_stderr_log, "supervisor.tailProcessStderrLog")
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def start(self) -> None:
@@ -149,6 +153,25 @@ class FakeSupervisorServer:
             raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
         self.statename_by_program[program] = "STOPPED"
         return True
+
+    def _tail_process_stderr_log(self, name: object, offset: object, length: object) -> list[str | int | bool]:
+        """``[bytes, offset, overflow]`` as supervisord's ``tailFile`` answers: at most ``length`` bytes ending at the
+        end of the log once the log is longer than ``offset + length`` (overflow set), the log's size as the offset."""
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        log = self.stderr_by_program.get(program, "")
+        start = int(str(offset))
+        count = int(str(length))
+        is_overflow = len(log) > start + count
+        if is_overflow:
+            start = len(log) - 1
+        if start + count > len(log):
+            if start > len(log) - 1:
+                count = 0
+            start = len(log) - count
+        start = max(start, 0)
+        return [log[start : start + max(count, 0)], len(log), is_overflow]
 
 
 def is_e2e_browser_installed() -> bool:

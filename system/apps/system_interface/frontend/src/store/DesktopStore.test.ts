@@ -31,7 +31,7 @@ import {
 } from "../testing/records";
 import { refusedWith } from "../testing/failures";
 import type { FailureNotice } from "../model/failures";
-import type { AppRecord, BubbleWire, GridCell } from "../model/records";
+import type { AppRecord, BubbleWire, GridCell, LaunchPath } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
@@ -1435,13 +1435,268 @@ function chatWithAskPathRecord(name: string): AppRecord {
   });
 }
 
-describe("a launch the app took that the shell could not open", () => {
+const START_INSTRUCTION = "Find out why it stopped and start it again, then tell the user what was wrong.";
+const START_TERMINAL_REQUEST = `Imbue Studio showed the user this failure: Terminal isn't running.\n\n${START_INSTRUCTION}`;
+/** What the ask launch path is run with for the stopped Terminal, asked in ``windowId`` (null for a toast). */
+function startTerminalAsk(windowId: string | null): string {
+  return JSON.stringify({
+    app: "terminal",
+    app_display_name: "Terminal",
+    message: askLead("terminal", "Terminal", windowId) + START_TERMINAL_REQUEST,
+  });
+}
+
+describe("a stopped app's window", () => {
+  const terminal = appRecord("terminal", { display_name: "Terminal", is_running: false, program: "" });
+
+  function launchCalls(): string[] {
+    return api.calls.filter((call) => call.startsWith("launch"));
+  }
+
+  it("offers an agent to start an app the workspace does not start itself, in the chat about that app beside its window", async () => {
+    const chat = chatWithAskPathRecord("chat");
+    api.apps = [chat, terminal];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-chat", "chat", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-terminal", "terminal", "/"),
+        ],
+      }),
+    ];
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-terminal")] });
+    api.postLaunchAnswer = "/?chat=agent-terminal";
+    const store = await startedStore();
+
+    const stopped = store.stoppedNotice(terminal, "win-terminal");
+    expect(stopped.message).toBe("Terminal isn't running.");
+    expect(stopped.actions.map((action) => action.label)).toEqual(["Ask an agent to start it"]);
+    stopped.actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([
+      `launch:home:chat:app-chat:${startTerminalAsk("win-terminal")}:show:beside:win-terminal`,
+    ]);
+    // The agent is the remedy, so the window draws no Report a bug beside it.
+    expect(stopped.isBugReportOffered).toBe(false);
+    // The chat about the app is laid out beside the stopped window, as "Chat about this app" lays it out.
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-terminal", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+    expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-terminal");
+
+    // Chat itself, stopped, has no agent to ask: it can only be reported (the window offers Report a bug as it
+    // draws, where the embedder opens one).
+    expect(store.stoppedNotice({ ...chat, is_running: false }, "win-chat")).toMatchObject({
+      message: "Chat is not running right now.",
+      actions: [],
+      isBugReportOffered: true,
+    });
+  });
+
+  it("asks in the main chat on a machine where no app takes an ask about an app", async () => {
+    const chat = chatLikeAppRecord("chat");
+    api.apps = [chat, terminal];
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-terminal", "terminal", "/")] })];
+    const store = await startedStore();
+
+    store.stoppedNotice(terminal, "win-terminal").actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([
+      `launch:home:chat:new:${JSON.stringify({
+        message: askLead("terminal", "Terminal", "win-terminal") + START_TERMINAL_REQUEST,
+      })}:new`,
+    ]);
+
+    // The app the main chat is in, stopped, would be asked about through itself, so it can only be reported.
+    expect(store.stoppedNotice({ ...chat, is_running: false }, null)).toMatchObject({
+      actions: [],
+      isBugReportOffered: true,
+    });
+  });
+
+  it("judges which app agents are asked through by the launch the ask would run, not the primary text row", async () => {
+    const textApp = (name: string, rank: number, extra: LaunchPath[] = []) =>
+      appRecord(name, {
+        display_name: name.toUpperCase(),
+        launcher_rank: rank,
+        launch_paths: [
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          ...extra,
+        ],
+      });
+    const primary = textApp("alpha", 1);
+    const asked = textApp("beta", 2, [appChatLaunchPathRecord()]);
+    api.apps = [primary, asked];
+    const store = await startedStore();
+
+    // The app an ask about an app goes through, stopped, can only be reported.
+    expect(store.stoppedNotice({ ...asked, is_running: false }, null)).toMatchObject({
+      actions: [],
+      isBugReportOffered: true,
+    });
+    // The app the main chat is in, stopped, is asked about through the other.
+    const stopped = store.stoppedNotice({ ...primary, is_running: false }, null);
+    expect(stopped.actions.map((action) => action.label)).toEqual(["Ask an agent to start it"]);
+    stopped.actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([
+      `launch:home:beta:app-chat:${JSON.stringify({
+        app: "alpha",
+        app_display_name: "ALPHA",
+        message:
+          askLead("alpha", "ALPHA", null) +
+          `Imbue Studio showed the user this failure: ${stopped.message}\n\n${START_INSTRUCTION}`,
+      })}:show`,
+    ]);
+  });
+
+  it("asks about an internal app in the main chat", async () => {
+    const chat = chatWithAskPathRecord("chat");
+    const monitor = appRecord("monitor", { display_name: "Monitor", internal: true, is_running: false });
+    api.apps = [chat, monitor];
+    const store = await startedStore();
+
+    const stopped = store.stoppedNotice(monitor, null);
+    stopped.actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([
+      `launch:home:chat:new:${JSON.stringify({
+        message:
+          askLead("monitor", "Monitor", null) +
+          `Imbue Studio showed the user this failure: ${stopped.message}\n\n${START_INSTRUCTION}`,
+      })}:new`,
+    ]);
+  });
+});
+
+describe("a launch into an app that is not running", () => {
   const chat = chatWithAskPathRecord("chat");
+  const terminal = appRecord("terminal", {
+    display_name: "Terminal",
+    program: "",
+    launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })],
+  });
   const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })] });
 
   function toastsShown(store: DesktopStore): [string, string | null, string[]][] {
     return store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions.map((a) => a.label)]);
   }
+
+  const TERMINAL_STOPPED_DETAIL = "terminal is not running, so it could not take the launch: refused";
+
+  /** A store whose launch into the terminal the shell refused as one to a stopped app, leaving its note up. */
+  async function storeWithTerminalStoppedNote(): Promise<DesktopStore> {
+    api.apps = [chat, terminal];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      TERMINAL_STOPPED_DETAIL,
+      "Terminal isn't running right now, so it couldn't open that.",
+      "app_stopped",
+    );
+    await store.runLaunch("terminal", "new", "new");
+    api.refusal = null;
+    return store;
+  }
+
+  it("says what the app's stopped window says, with the agent asked to start it in the chat about the app", async () => {
+    const store = await storeWithTerminalStoppedNote();
+
+    expect(toastsShown(store)).toEqual([
+      ["Terminal isn't running.", `HTTP 502\n${TERMINAL_STOPPED_DETAIL}`, ["Ask an agent to start it"]],
+    ]);
+    store.toasts.current()[0].actions[0].run();
+    await settle();
+    // The toast stands for no window, so the chat about the app goes wherever the show rule puts it.
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:chat:app-chat:${startTerminalAsk(null)}:show`,
+    );
+  });
+
+  it("shows an agent asked for as pending until its launch settles, and a failed one in a toast of its own", async () => {
+    const store = await storeWithTerminalStoppedNote();
+    const [ask] = store.toasts.current()[0].actions;
+    expect(ask.pending?.label).toBe("Asking an agent…");
+    expect(ask.pending?.isPending()).toBe(false);
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    // A second press while it is out asks nothing more.
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(api.calls.filter((call) => call.startsWith("launch:home:chat"))).toHaveLength(1);
+
+    api.refusal = refusedWith(400, { detail: "chat refused the launch: no account is signed in" });
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toContainEqual([
+      "Chat couldn't open that.",
+      "HTTP 400\nchat refused the launch: no account is signed in",
+    ]);
+  });
+
+  it("takes the stopped app's note down once the app list says the app is running again", async () => {
+    await storeWithTerminalStoppedNote();
+    expect(notices()).toEqual(["Terminal isn't running."]);
+
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: false }]);
+    expect(notices()).toEqual(["Terminal isn't running."]);
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: true }]);
+    expect(notices()).toEqual([]);
+  });
+
+  it("words a wake that brought nothing up as the app's could-not-start page does", async () => {
+    api.apps = [chat, docs];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      "docs is stopped and could not be started",
+      "Docs couldn't start.",
+      "app_could_not_start",
+    );
+    await store.runLaunch("docs", "new", "new");
+    const spent =
+      "Docs failed to start several times in the last few minutes, so it wasn't started again. Try again in a few minutes.";
+    api.refusal = shellRefusal(502, "docs wake budget is spent", spent, "app_start_budget_spent");
+    await store.runLaunch("docs", "new", "new");
+    api.refusal = shellRefusal(
+      502,
+      "docs did not answer in time",
+      "Docs is still starting. Try again in a moment.",
+      "app_still_starting",
+      true,
+    );
+    await store.runLaunch("docs", "new", "new");
+
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      ["Docs couldn't start.", ["Try again", "Ask an agent to look at it"]],
+      [spent, ["Ask an agent to look at it"]],
+      ["Docs is still starting. Try again in a moment.", ["Try again"]],
+    ]);
+    api.refusal = null;
+    store.toasts.current()[0].actions[1].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:chat:app-chat:${JSON.stringify({
+        app: "docs",
+        app_display_name: "Docs",
+        message:
+          askLead("docs", "Docs", null) +
+          "Imbue Studio showed the user this failure: Docs couldn't start.\n\nIts program's log may say why " +
+          "(supervisorctl tail docs stderr). Find out why and get it running again, then tell the user what was " +
+          "wrong and what you changed.",
+      })}:show`,
+    );
+    // Each of the two that could not start has its agent, and the app still starting owes no help: no toast draws
+    // Report a bug.
+    expect(store.toasts.current().map((toast) => toast.isHelpOwed)).toEqual([false, false, false]);
+    store.toasts.current()[2].actions[0].run();
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("launch:home:docs:new"))).toHaveLength(4);
+  });
 
   it("offers an agent to free up space, and no Try again, for a launch the app took that a full disk left unopened", async () => {
     api.apps = [chat, docs];
@@ -1486,6 +1741,24 @@ describe("a launch the app took that the shell could not open", () => {
           "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
       })}:new`,
     );
+  });
+
+  it("offers only a bug report when the app that could not start is the one agents are asked through", async () => {
+    api.apps = [chat];
+    const store = await startedStore();
+    store.setCanReportBug(true);
+    api.refusal = shellRefusal(
+      502,
+      "chat is stopped and could not be started",
+      "Chat couldn't start.",
+      "app_could_not_start",
+    );
+    await store.launchAt("chat", "new", { message: "hi" }, { kind: "new" });
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      ["Chat couldn't start.", ["Try again"]],
+    ]);
+    // The toast draws Report a bug: no agent can be asked through the app that could not start.
+    expect(store.toasts.current()[0].isHelpOwed).toBe(true);
   });
 });
 

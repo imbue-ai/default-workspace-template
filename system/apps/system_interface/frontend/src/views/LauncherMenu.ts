@@ -155,7 +155,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         {
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
-          ...hoverTooltipAttrs(row.disabledReason),
+          ...hoverTooltipAttrs(row.disabledReason ?? row.stoppedReason),
           oncontextmenu:
             onAppShortcutContextMenu !== null &&
             appShortcutsOf(row.app).some((shortcut) => shortcut.launch === row.launchPath.id)
