@@ -481,7 +481,8 @@ It lists:
 - **Also holding memory, not candidates**: every other chat or worker whose
   agent is alive (`WAITING`, `RUNNING`, `RUNNING_BACKGROUND` or
   `RUNNING_UNKNOWN_AGENT_TYPE`: mid-turn, waiting on a background task,
-  active within `IDLE_AFTER_SECONDS`, or the main chat), every running program
+  active within `IDLE_AFTER_SECONDS`, with no activity time to judge it by, or
+  the main chat), every running program
   that is not a candidate's (a critical or internal app, the Screen's service
   less the browser processes it launches, a workspace service no app names,
   one row per program), and a running
