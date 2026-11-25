@@ -28,6 +28,7 @@ from screen.cli_sessions import PLAYWRIGHT_CLI_COMMAND
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
 from screen.errors import ScreenServiceUnreachableError
+from screen.fleet_cli import refusal_reason
 from screen.identity import AGENT_ID_HEADER
 
 DEFAULT_BROWSER_NAME: Final[str] = "browser-1"
@@ -108,12 +109,8 @@ def _release(browser_name: str, headers: dict[str, str]) -> None:
 
 def _unavailable(answer: ServiceAnswer, browser_name: str, verb: str) -> BrowserUnavailableError:
     status = str(answer.body.get("status") or answer.status)
-    detail = str(
-        answer.body.get("hint")
-        or answer.body.get("detail")
-        or answer.body.get("error")
-        or f"browser {browser_name} could not be reserved ({verb}: {status})"
-    )
+    fallback = f"browser {browser_name} could not be reserved ({verb}: {status})"
+    detail = str(answer.body.get("hint") or refusal_reason(answer.body, fallback))
     return BrowserUnavailableError(status, detail)
 
 
