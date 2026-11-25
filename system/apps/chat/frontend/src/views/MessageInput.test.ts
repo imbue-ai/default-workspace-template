@@ -1416,6 +1416,7 @@ describe("MessageInput send to a chat still being created", () => {
       kind: "agent",
       phase: "creating",
       error: null,
+      failure_kind: null,
       is_seeded: false,
       message: "",
       held_sends: [],

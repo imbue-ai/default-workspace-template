@@ -61,6 +61,7 @@ function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | 
     phase,
     message: "",
     error,
+    failure_kind: null,
     is_seeded: false,
     held_sends: [],
     model_pick: null,
@@ -214,6 +215,37 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getProvisionalChat("agent-1")).toMatchObject({
       phase: "failed",
       error: "mngr create exited with code 3",
+    });
+  });
+
+  it("keeps the kind a failed create was told with on its record, until a retry fails another way", () => {
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: "mngr create exited with code 1",
+      failure_kind: "codex_plugin_install_refused",
+    });
+
+    expect(manager.getProvisionalChat("agent-1")).toMatchObject({
+      phase: "failed",
+      failure_kind: "codex_plugin_install_refused",
+    });
+
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: "mngr create exited with code 3",
+    });
+
+    expect(manager.getProvisionalChat("agent-1")).toMatchObject({
+      phase: "failed",
+      error: "mngr create exited with code 3",
+      failure_kind: null,
     });
   });
 

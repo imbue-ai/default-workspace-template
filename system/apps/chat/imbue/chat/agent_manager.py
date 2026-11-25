@@ -87,6 +87,7 @@ from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import create_command_env
+from imbue.chat.chat_handoffs import create_failure_kind
 from imbue.chat.chat_handoffs import created_chat_agent_labels
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
@@ -198,6 +199,7 @@ from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ConnectReplay
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import DiscardedChat
 from imbue.chat.models import DisplayDecisionFields
@@ -5604,6 +5606,7 @@ class AgentManager:
         """
         success = False
         error: str | None = None
+        failure_kind: CreateFailureKind | None = None
         held_sends: tuple[HeldSend, ...] = ()
         output_tail = CreationOutputTail()
         # A seeded chat's agent that mngr provisioned before its create failed: destroyed below,
@@ -5650,7 +5653,11 @@ class AgentManager:
                             )
                         )
                 else:
-                    self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
+                    self._mark_creation_failed_locked(
+                        chat_id,
+                        failure_notice(error, output_tail.text()),
+                        create_failure_kind(harness, output_tail.text()),
+                    )
                     if record_entry is not None:
                         half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
         except Exception as e:
@@ -5668,7 +5675,7 @@ class AgentManager:
             try:
                 with self._lock:
                     is_abandoned = chat_id in self._abandoned_creates
-                    self._mark_creation_failed_locked(chat_id, error)
+                    self._mark_creation_failed_locked(chat_id, error, None)
                     if record_entry is not None:
                         half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
             except (OSError, RuntimeError) as cleanup_exc:
@@ -5698,12 +5705,15 @@ class AgentManager:
                 failed = self.get_provisional_chat(chat_id)
                 if failed is not None and failed.error is not None:
                     error = failed.error
+                    failure_kind = failed.failure_kind
         finally:
             with self._lock:
                 settled = self._creation_settled_by_chat.get(chat_id)
             if settled is not None:
                 settled.set()
-            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+            self._broadcaster.broadcast_provisional_chat_completed(
+                chat_id=chat_id, success=success, error=error, failure_kind=failure_kind
+            )
 
     def _move_created_chat(
         self,
@@ -5909,15 +5919,18 @@ class AgentManager:
         for held in held_sends:
             deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
-    def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
-        """Keep the provisional chat, in the failed phase: its page shows the reason and can
-        try again on the same account. Must be called with the lock held."""
+    def _mark_creation_failed_locked(
+        self, chat_id: ChatId, error: str, failure_kind: CreateFailureKind | None
+    ) -> None:
+        """Keep the provisional chat, in the failed phase: its page shows the reason, worded by
+        ``failure_kind``, and can try again on the same account. Must be called with the lock held."""
         provisional = self._provisional_chats.get(chat_id)
         if provisional is None:
             return
         self._provisional_chats[chat_id] = provisional.model_copy_update(
             to_update(provisional.field_ref().phase, ProvisionalChatPhase.FAILED),
             to_update(provisional.field_ref().error, error),
+            to_update(provisional.field_ref().failure_kind, failure_kind),
         )
 
     def _forget_chat(self, chat_id: ChatId) -> None:

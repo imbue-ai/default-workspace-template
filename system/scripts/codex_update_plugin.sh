@@ -7,6 +7,9 @@ set -euo pipefail
 # the launched Codex process, not on extra provisioning commands.
 # Like the Claude installer, outages warn without preventing agent creation;
 # --strict is available for verification. No cache is deleted.
+# Both refusals carry REFUSED_MARKER, which callers match to tell this refusal
+# from any other provisioning failure.
+REFUSED_MARKER="codex-plugin-install-refused"
 STRICT=0
 if [[ $# -eq 1 && "$1" == "--strict" ]]; then
     STRICT=1
@@ -16,12 +19,12 @@ elif [[ $# -ne 0 ]]; then
 fi
 
 if [[ -z "${MNGR_AGENT_STATE_DIR:-}" ]]; then
-    echo "error: MNGR_AGENT_STATE_DIR is required; refusing a shared-home install" >&2
+    echo "error: $REFUSED_MARKER: MNGR_AGENT_STATE_DIR is required; refusing a shared-home install" >&2
     exit 1
 fi
 export CODEX_HOME="$MNGR_AGENT_STATE_DIR/plugin/codex/home"
 if [[ ! -f "$CODEX_HOME/config.toml" ]]; then
-    echo "error: Codex must be provisioned before installing its plugins" >&2
+    echo "error: $REFUSED_MARKER: Codex must be provisioned before installing its plugins" >&2
     exit 1
 fi
 

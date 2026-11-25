@@ -129,9 +129,10 @@ observe`, its own supervised service) writes, and serves:
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`; a discard's carries the messages the chat held,
   dropped with it, and is replayed for 15 minutes to a page that connects later,
-  so the page that sent them puts them back in the box), `accounts_updated`
-  whenever the account index changes, whichever process wrote it,
-  `settings_updated` whenever a settings route writes the workspace's chat
+  so the page that sent them puts them back in the box; a failed create's
+  carries its `failure_kind` when it is one the page words itself),
+  `accounts_updated` whenever the account index changes, whichever process wrote
+  it, `settings_updated` whenever a settings route writes the workspace's chat
   settings, and `suggestions_updated` (`{"chat_id"}`) whenever a chat's stored
   next-step suggestions are replaced or removed.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
@@ -1427,11 +1428,25 @@ in a chat", which leaves the same request unsent in a chat's message box (the
 shell makes the draft, and writes `/assist` in front of it), and "Report a
 bug", which files both; one refused for a reason that owes none (the chat
 that was asked is waiting on its terminal, nothing answered) is only there to
-ask again. On the
-failed-create page the shared remedies (`FailureRemedies` in `workspace_ui`)
-draw the refused ask under the button, with a "See details" of its own, the
-draft and the bug report, so the button is the last in its row and the
-refused ask ends the page.
+ask again. On the failed-create page the shared button (`AskAgentToFixButton`
+in `workspace_ui`) draws the refused ask under itself, on a line of its own
+with a "See details" of its own, the draft and the bug report.
+
+**The failed-create page.** Its sentence is picked by the failure's kind
+(`failure_kind` on the provisional chat, `CreateFailureKind` in `models.py`),
+which the chat app reads from what `mngr create` printed (`create_failure_kind`
+in `chat_handoffs.py`). A Codex create whose plugin installer
+(`system/scripts/codex_update_plugin.sh`) refused prints the installer's
+`codex-plugin-install-refused` marker, and its page reads "This chat's agent
+couldn't be set up."; any other failure reads "The agent for this chat
+couldn't be started." Its "Report a bug" (where the shell opens one) files the
+page's sentence and what mngr printed. It stands in the ask's place, last in
+its row, where the page has no agent to ask (no other agent chat exists), and
+sits under an ask refused with a failure that owes help, filing that refusal's
+sentence and details with them. A failed chat that names no account offers
+neither. A switch's failed create
+(`frontend/src/views/HandoffFailedNotice.ts`) names the harness it could not
+start and is not worded by kind.
 
 While one of the notice's actions runs (the ask, a retry, a restart), every
 button on the notice is disabled, and a retry or a restart drops what an

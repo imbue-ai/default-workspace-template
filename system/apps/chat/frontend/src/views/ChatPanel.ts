@@ -101,7 +101,12 @@ import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveComp
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import {
+  AskAgentToFixButton,
+  FailureRemedies,
+  ReportBugButton,
+} from "@imbue/workspace-ui/src/components/FailureButtons";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
@@ -124,6 +129,15 @@ const FAILED_CREATE_BUTTONS_CLASS =
   "flex flex-wrap items-center justify-center gap-2 " +
   "[&_.ask-agent-failure]:flex [&_.ask-agent-failure]:flex-col [&_.ask-agent-failure]:items-center " +
   "[&_.ask-agent-failure-message]:text-center";
+
+/** What the failed-create page says under its heading: a sign-in for a chat that names no account, else what failed,
+ *  worded by the failure's kind, and the page's ways out. */
+function failedCreateSentence(provisional: ProvisionalChat): string {
+  if (provisional.account_id === "") return "Sign in to a provider to start this chat.";
+  return provisional.failure_kind === "codex_plugin_install_refused"
+    ? "This chat's agent couldn't be set up. Try again, or switch to another provider."
+    : "The agent for this chat couldn't be started. Try again, or switch to another provider.";
+}
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -645,19 +659,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
     const hasAccount = provisional.account_id !== "";
     const chatToAskId = chatToAskAboutFailedCreate(provisional);
+    const sentence = failedCreateSentence(provisional);
+    // What the page holds behind its "See details": the create's output, and a Try again's that failed again.
+    const failedCreateDetails = joinDetailLines([provisional.error, launchError?.details ?? null]);
+    // The failure as the page's Report a bug files it.
+    const failedCreate: ReportedFailure = { message: sentence, details: failedCreateDetails };
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         ...renderFailedCreateHeldSends(chatId),
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
-        m(
-          "p",
-          { class: "message-list-create-failed-text text-secondary text-center" },
-          hasAccount
-            ? "The agent for this chat couldn't be started. Try again, or switch to another provider."
-            : "Sign in to a provider to start this chat.",
-        ),
+        m("p", { class: "message-list-create-failed-text text-secondary text-center" }, sentence),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
         // A Try again that failed again is the page's own failure, which the page's remedies below are about.
         renderFailureLines(launchError, "message-list-create-retry-failed", true),
@@ -709,21 +722,26 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          // Last in the row: the ask says under itself what a refused one came to, which then ends the page, with
-          // its bug report, rather than sitting between the page's buttons. It goes to a chat that is already
-          // running; with none, a new chat would meet what stopped this one, so the bug report stands in for it. A
-          // chat that names no account needs a sign-in, which neither can make.
-          hasAccount
-            ? m(FailureRemedies, {
-                connection: chatToAskId === null ? getShellConnection() : pageAskConnection(chatToAskId),
+          // The ask goes to a chat that is already running, and says under itself what a refused one came to,
+          // where its bug report files the refusal with the create's failure. With no such chat, a new one would
+          // meet what stopped this one, so Report a bug stands in the ask's place. A chat that names no account
+          // needs a sign-in, which neither can make.
+          chatToAskId !== null
+            ? m(AskAgentToFixButton, {
+                connection: pageAskConnection(chatToAskId),
                 failure: {
-                  message: `The chat "${provisional.name}" couldn't be started`,
-                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
-                  isHelpOwed: true,
+                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
+                  details: failedCreateDetails,
                 },
-                isAgentWithheld: chatToAskId === null,
+                reported: failedCreate,
               })
-            : null,
+            : hasAccount
+              ? m(ReportBugButton, {
+                  connection: getShellConnection(),
+                  failure: failedCreate,
+                  extra: "message-list-create-report-bug",
+                })
+              : null,
         ]),
       ],
     );
