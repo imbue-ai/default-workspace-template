@@ -228,16 +228,32 @@ class RunningCommands:
             _kill_command(process)
 
 
-def _kill_command(process: subprocess.Popen[bytes]) -> None:
-    """SIGKILL the command's process group, and the command itself in case it left that group."""
-    # A reaped command's id may already name another process, so the group is signalled only before the reap.
-    if process.returncode is not None:
-        return
+def _signal_process_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
-    process.kill()
+
+
+def _kill_command(process: subprocess.Popen[bytes]) -> None:
+    """SIGKILL the command and everything in its process group. The command is left for its stream to reap."""
+    # A reaped command's id may already name another process, so nothing is signalled after the reap.
+    if process.returncode is not None:
+        return
+    _signal_process_group(process)
+    # The command itself too, in case it left the group.
+    try:
+        os.kill(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    # gVisor, which a workspace runs under, can miss a child that a member of the group was starting as the signal
+    # went out. Once the command is dead, and while it is unreaped so that its id still names the group, a second
+    # signal ends what the first one missed.
+    try:
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+    except ChildProcessError:
+        return
+    _signal_process_group(process)
 
 
 class _LineSplitter:
