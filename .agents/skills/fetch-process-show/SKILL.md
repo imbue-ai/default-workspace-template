@@ -154,7 +154,7 @@ Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the
 can ask to see it and so it can **seed the first surface**. Include in each
 sampled record its **raw payload and a source reference**, not only the processed
 fields -- the first surface renders this sample, and per the preserve-and-surface
-principle that surface must be able to show the raw record and link
+principle, that surface must be able to show the raw record and link
 to its source. If the sample carries only extracted fields, the raw/source
 affordance has nothing to point at. Default presentation is a brief
 natural-language summary; pick a table / inline JSON / structured prose if the
