@@ -115,8 +115,7 @@ MNGR_LIST_AGENT_STATES_ARGV = (
 )
 _STOPPED_STATE = "STOPPED"
 _MNGR_LIST_TIMEOUT_SECONDS = 60.0
-# The most a `mngr upgrade` that hangs (say, on another mngr's host lock) holds up the boot;
-# fifty stopped agents take about five seconds.
+# The most a `mngr upgrade` that hangs (say, on another mngr's host lock) holds up the boot.
 _UPGRADE_AGENTS_TIMEOUT_SECONDS = 120.0
 # `mngr upgrade` skipped an agent and none failed.
 _MNGR_UPGRADE_EXIT_SKIPPED = 9
