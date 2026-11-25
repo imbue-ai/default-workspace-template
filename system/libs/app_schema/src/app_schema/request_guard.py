@@ -65,7 +65,7 @@ def install_request_guard_with_web_client_routes(
 
     ``web_client_rules`` are the Flask rules of those routes. A request to one of them from another origin is
     admitted when the share gateway vouches that the web client's page sent it; every other request from another
-    origin is refused as before, the web client's own to any other route included.
+    origin is refused, the web client's own to any other route included.
     """
 
     @app.before_request

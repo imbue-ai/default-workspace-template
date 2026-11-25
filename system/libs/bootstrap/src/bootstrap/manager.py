@@ -564,9 +564,9 @@ def _write_update_dispatcher_cron_entry(target_dir: Path = Path("/etc/cron.d")) 
     """Have the update library write its dispatcher's cron line, at every boot.
 
     The dispatcher's minute is what arms a workspace's own updates and starts a scheduled one. The
-    shell's update routes write the line when a client arms or starts an update, so until this ran
-    at boot a workspace no client had asked anything of never ran the dispatcher. It is the same
-    line under the same name, written by the same code, so there is one of it either way.
+    shell's update routes write the line only when a client arms or starts an update, and the boot
+    writes it for a workspace no client has asked anything of. It is the same line under the same
+    name, written by the same code, so there is one of it either way.
 
     Best-effort like every entry here: the boot must reach supervisord.
     """
