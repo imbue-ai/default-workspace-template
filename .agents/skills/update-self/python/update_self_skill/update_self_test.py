@@ -10152,6 +10152,22 @@ def test_a_stopped_agent_upgrade_that_fails_leaves_the_rollback_as_it_was(
     assert not update_apply_contract.emergency_path(apply_repo).exists()
 
 
+def test_rollback_last_whose_venv_re_sync_failed_runs_no_upgrade(
+    apply_repo: Path,
+) -> None:
+    # The venv is not the restored tree's, so its mngr is not the one to rewrite agents with.
+    runner = _venv_moving_rollback_point(apply_repo)
+    runner.respond(
+        ("uv", "sync", "--all-packages", "--frozen"),
+        _Result(returncode=1, stderr="error: Failed to fetch"),
+    )
+
+    assert _rollback(runner, apply_repo) == 3
+
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
 def test_rollback_last_to_a_tree_from_before_the_upgrade_command_runs_no_upgrade(
     apply_repo: Path, capsys
 ) -> None:
