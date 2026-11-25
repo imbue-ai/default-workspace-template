@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use to read and write files and directories on the user's local filesystem. Also useful for importing Apple Notes, Photos, and other similar locally stored data.
+description: Read and write files and directories on the user's own computer. Use when the user talks about files or folders on disk -- unless context says otherwise, they mean the disk of their own computer, not this workspace's. To run something there instead, use run-on-users-computer.
 metadata:
   author: imbue
 ---

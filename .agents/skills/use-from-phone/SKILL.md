@@ -1,6 +1,6 @@
 ---
 name: use-from-phone
-description: Use whenever the user asks about reaching this workspace, its chats, or one of its apps from a phone, a tablet, another computer, or a web browser instead of the Imbue Studio desktop app, or about putting it on their phone's home screen. Walks them through turning on sharing, getting the link onto the phone, and adding it to the home screen on iPhone/iPad and Android.
+description: Use whenever the user asks about reaching this workspace, its chats, or one of its apps from a phone, a tablet, another computer, or a web browser instead of the Imbue Studio desktop app, or about putting it on their phone's home screen. Walks them through turning on sharing and getting the link onto the phone.
 metadata:
   author: imbue
 ---

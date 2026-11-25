@@ -1,6 +1,6 @@
 ---
 name: launch-task
-description: Create a sub-agent to perform a larger task. Use when work is large enough to warrant a separate context, involves multi-file changes, or benefits from isolation.
+description: Create a sub-agent to perform a larger task. Use when work is large enough to warrant a separate context, involves multi-file changes that benefit from verification before merging, runs long enough that the chat should not block on it, or benefits from isolation.
 metadata:
   author: imbue
   exempt-checks: contents

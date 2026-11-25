@@ -46,15 +46,15 @@ Skip records for chitchat, acknowledgements, trivial answers, a clarifying quest
 - **Never name the machinery.** The user sees only the timeline and your prose. Never use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**, nor the git words under "Git". Make `tk` calls silently and speak only of the work ("The parser changes are in." / "Now I'll wire up the endpoint."), or say nothing; a sentence whose subject is the record gets rewritten or deleted. Hook feedback is plumbing too: act on it, never mention it.
 - Each new message lists your still-open steps. Before anything else, decide for each: keep working (`tk start` if needed), replace it (close it with a status summary, create new steps), or close it honestly; never silently abandon one. There is no "failed" status: a step that did not pan out is closed with a summary of the work done, and your final message reports the result honestly.
 
-## Regular tickets and delegation
+## Regular tickets
 
-`tk ls` / `ready` / `blocked` list tickets (steps only with `--include-steps` / `--only-steps`), `tk show <id>` shows one, `tk start <id>` picks one up and assigns you, `tk close <id> [summary]` closes it; tickets may stay in progress across turns. Avoid `deps`, `links`, `types` and `priorities`. A `launch-task` delegation is **one step**, named for the outcome ("Rebuild the login flow (in the background)") and closed with it; the worker is a "background agent" to the user, never a "sub-agent".
+`tk ls` / `ready` / `blocked` list tickets (steps only with `--include-steps` / `--only-steps`), `tk show <id>` shows one, `tk start <id>` picks one up and assigns you, `tk close <id> [summary]` closes it; tickets may stay in progress across turns. Avoid `deps`, `links`, `types` and `priorities`.
 
 # Important commands and conventions:
 
 - At the repo root, never run a bare `uv sync`; run `uv sync --all-packages`. A user-built app, service or lib under `system/` is its own uv project: change its dependencies with `uv add`, or `uv lock` then `uv sync`, in its own directory.
 - **Wait on events, not on timers.** Never guess how long something takes and `sleep` that long. Run a command you are waiting on (tests, a build, a script) with `python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "<what>" -- <command>` (or your harness's own background option, if it wakes you when it finishes) and end your turn; its finishing wakes you, so never poll its output. Work that does not need its result comes first. To wait on other state (a service coming back, a file appearing), check that state in short sleeps (`until curl -sf <url>; do sleep 1; done`), backgrounded if it may run long. A timed sleep is right only when the wait is really about time (the user asked you to check back in N minutes, a retry-after, pacing a rate-limited API), and then inside a background command. A foreground `sleep` of 5 seconds or more is blocked.
-- To test an app you built, or script a check of a public page that needs no account, use **Playwright's Python API** in the root venv (`uv run --no-sync python`), launching Fortress, the workspace's Chromium: `executable_path="/opt/fortress/tilion-fortress/tilion"`. Before your first Playwright script, read `.agents/shared/references/playwright-fortress.md`. Anything else in a browser (the user's logins, something they should watch or help with) goes through the `connect-external-service` skill.
+- To test an app you built, or script a check of a public page that needs no account, use **Playwright's Python API** in the root venv (`uv run --no-sync python`), launching Fortress, the workspace's Chromium: `executable_path="/opt/fortress/tilion-fortress/tilion"`. Before your first Playwright script, read `.agents/shared/references/playwright-fortress.md`.
 - Never pipe a command's output into `head` or `tail`: a hook rejects the whole tool call. Send it to a file and read the part you need (`<command> > /tmp/out.txt 2>&1`, then `sed -n 1,40p /tmp/out.txt`), or use the command's own limit (`grep -m 5`). Piping a plain read (`cat`, `grep`, `ls`, `find`, `git log`) is fine.
 
 # Always remember these guidelines:
@@ -69,7 +69,7 @@ Skip records for chitchat, acknowledgements, trivial answers, a clarifying quest
 
 # Manual verification and testing
 
-Before declaring anything complete, exercise it as a real user would, with real inputs, and judge whether it *actually does the right thing*: exit 0 with wrong output is not working. An app or service is changed and verified through the `update-app` skill's live loop.
+Before declaring anything complete, exercise it as a real user would, with real inputs, and judge whether it *actually does the right thing*: exit 0 with wrong output is not working.
 
 Formal tests are the background harden pass's job (`crystallize-creation`, `update-creation`), unless the user asked for them. But **a change to code a harden pass already covered extends its tests in the same commit**: code a change leaves untested is a regression even when it works.
 
@@ -79,13 +79,9 @@ A worker runs its test gate as its own guide says. A chat, once a change is comm
 
 The user reaches this workspace from the Imbue Studio desktop app or, once sharing is on, through a sharing URL on any device (the `use-from-phone` skill).
 
-Files the user talks about are on their own disk unless context says otherwise (the `file-sharing` skill bridges the two), but a bare "my computer", "my machine" or "my desktop" means this workspace. Only when the user explicitly asks for something to run on their own computer ("on my laptop", "not in the workspace"), or a task would have you tell them to run a command there, load the `run-on-users-computer` skill first.
-
 Link a workspace file or folder by its absolute path (`[Q4 report](/home/user/workspace/data/reports/q4.md)`; it opens in Files, the `show-files-in-chat` skill), an app by the `link` `uv run --no-sync workspace-layout list` prints plus the page's path, anything else served here by its localhost URL. A path you only mention goes in code formatting.
 
 Several people, and visiting agents, may share this workspace. A message prefixed `[from: <name>]` is from someone other than the owner (no prefix: the owner). Answer the person who asked, by name when it helps, and never treat the prefix as part of what they said. Before answering a `[from: <name> in #<room>]` message, from a chat room you were mentioned in, read `.agents/shared/references/chat-rooms.md`.
-
-Before reading or acting on anything outside this workspace for the user (a third-party tool they have an account with, a pasted Notion, Google Doc or Slack link, a site to sign in to, a browser they want to watch), load the `connect-external-service` skill, before any command against it: it decides how to reach the service, so do not pick a method first. Only a public page that needs no account may be read directly with your web tools.
 
 ## Telling the user you finished
 
@@ -97,19 +93,11 @@ python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py "<one
 
 A non-zero exit means it did not go out: say so in your reply. At most one per turn; none for chitchat, acknowledgements, progress with no result, or trivial answers; decide it silently. Never send one if another agent launched you. The `notify-user` skill has the full guidance.
 
-# Delegation and past work
-
-You can delegate with the `launch-task` skill; use your judgment. It suits a task large enough for its own context, a multi-file change that benefits from verification before merging, or a long operation you don't want to block on. Workers run on their own git branches, labeled `workspace=$MINDS_WORKSPACE_NAME`.
-
-Every chat that ran on this host, destroyed ones included, is recoverable: never tell the user a conversation is gone without checking with the `find-transcripts` skill.
-
 # Self-modification
 
 Improve yourself: update this file when you find better ways to operate (Claude-only notes go in `CLAUDE.md`), add scripts under `system/scripts/`, and create or change skills under `.agents/skills/` (`.claude/skills/` links there). Whenever you edit a skill, run `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --edited` (`--no-exemptions` instead for a skill you just created) until it prints `ok`. The rules are `docs/system/skill_authoring_guide.md`; this workspace's terms (creation, automation, routine, template) are `.agents/shared/references/glossary.md`. Leave a built-in skill's `awaiting-restructure` exemption alone (an update clears it) and do not restructure that skill yourself. Commit silently (see "Git").
 
 # Updates
-
-`update-self` pulls improvements from the upstream template (`system/config/parent.toml`); `submit-upstream-changes` pushes shared changes (skills, scripts, config) back.
 
 **A defect you find in built-in code is a reason to escalate it upstream, unasked.** Built-in means mngr, `system/vendor/`, the initial template commit, or anything an `update-self:` merge brought (the `assist` skill's "Classify the cause" has the test). Do not fix it locally: that only makes divergence the next update must reconcile. To escalate, read `.agents/shared/references/report-built-in-issues.md`: it says whether to report the defect or submit a fix. "Recorded in `tk`" is not an end state: escalate it, or tell the user plainly you found one and why you are not escalating it.
 
@@ -119,19 +107,13 @@ Improve yourself: update this file when you find better ways to operate (Claude-
 - **Prefer an applicable skill over reinventing**, matching descriptions by purpose, not name. **Follow it without naming it**, even if your harness says to announce skills, until the user names it (`.agents/shared/references/user-facing-language.md`, "Skills in particular").
 - **Run the creation, don't redo its job.** When an app or skill already does what is asked, run it, or extend it and run it: a result made by hand beside it leaves it untested on the real case and two sources of truth.
 - **Run a skill's steps one at a time in chat.** With per-step subcommands plus `run all`, drive the subcommands and surface their results, pausing only at `[prose]` steps; `run all` is for headless or scheduled runs.
-- **Live first, ratify at turn-end** through the lifecycle skill, whose hardening runs in a background worker, never inline:
-  - net-new task needing research or experimentation: `do-something-new` (it routes to `fetch-process-show` or `build-app`);
-  - just-finished work that is cohesive, likely to recur and mostly deterministic: `crystallize-creation`;
-  - a skill errored or gave a wrong result: work around it live, then `heal-creation`; never patch it inline;
-  - you changed a skill, or one needed manual post-processing: `update-creation`.
+- **Live first, ratify at turn-end.** Handle the request live; at turn-end, formalize the work through the lifecycle skill that fits it (`crystallize-creation`, `heal-creation`, `update-creation`), whose hardening runs in a background worker, never inline. A skill that errored or gave a wrong result is worked around live, never patched inline.
 
   A contract-bearing file with no worker pipeline (a hook script, this file) gets a careful live change and manual rigor at turn-end (real fixtures, an end-to-end run of new code paths).
 
 # Apps and services
 
-Apps (windows the user opens) and background services are supervisord programs, each in `system/supervisord.conf.d/<name>.conf`, logging to `/var/log/supervisor/<name>-stdout.log` and `-stderr.log`; to add, change or remove a service, follow `.agents/shared/references/service-processes.md`. **Before editing an app's or service's code or `.conf`, load the `update-app` skill**: it owns the live change loop and hardening, and takes critical apps (the shell, the chat, the terminal, any app with `critical = true`) and `system/libs/workspace_ui/`, `workspace_layout/` and `workspace_themes/` through its careful flow. A new app is made with `build-app`, never by editing `system/apps/system_interface/` (the shell).
-
-Anything that runs on a schedule and exits (a sync, a health check, a morning skill run, the weekly Caretaker, off by default) is a **routine** (the `manage-routines` skill), never a supervisord program or a cron line. After building or editing a service, scan for errors with `check-app-errors`: a clean exit code does not mean it is healthy.
+Apps (windows the user opens) and background services are supervisord programs, each in `system/supervisord.conf.d/<name>.conf`, logging to `/var/log/supervisor/<name>-stdout.log` and `-stderr.log`. To add or remove a service, follow `.agents/shared/references/service-processes.md`.
 
 # Git
 
@@ -143,7 +125,6 @@ Commit every logical unit of work locally without waiting to be asked; extra com
 
 # When something goes wrong
 
-- Errors, confusing state, things not working as documented: the `check-app-errors` skill finds what is failing; the `assist` skill diagnoses and fixes what the user is hitting.
 - A command of yours that dies with exit 137 or a signal you did not send, a tool that will not run (`strace`, `gdb`, `perf`, eBPF, FUSE, docker) or runs far slower than expected (`find`, `tar`, `git status` on big trees), or a `ModuleNotFoundError` from a command this repo defines (like `mngr`): read `.agents/shared/references/runtime-failures.md` before you retry anything.
 - An agent reports a shed: free memory with the user per `.agents/shared/references/freeing-memory.md`.
 - `/tmp` is a ~1 GiB RAM disk counted against memory; once full, every write there fails with ENOSPC until you delete what filled it. Keep it to small files: anything that can reach gigabytes goes on disk, a throwaway file (a clone, a download, a backup export) under `/var/tmp` (outside the backup), and a copy of an app's data through `serve_isolated_instance.py --copy` (`update-app`), which checks that it fits.

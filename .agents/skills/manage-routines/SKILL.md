@@ -1,6 +1,6 @@
 ---
 name: manage-routines
-description: See, add, change, run, pause, or remove the routines of this workspace -- everything that runs on a schedule (a command, or a skill run in a chat of its own). Use when the user asks for anything periodic ("every morning", "once a week", "every 15 minutes", "remind me at 3pm"), asks what runs on its own, or wants a scheduled thing turned off, retimed, run now, or fixed. Also covers the built-in weekly Caretaker, which is a routine like any other.
+description: "See, add, change, run, pause, or remove the routines of this workspace -- everything that runs on a schedule and then exits (a command, or a skill run in a chat of its own). Use when the user asks for anything periodic (\"every morning\", \"once a week\", \"every 15 minutes\", \"remind me at 3pm\"), asks what runs on its own, or wants a scheduled thing turned off, retimed, run now, or fixed, and whenever something being built needs a scheduled job (a sync, a health check) -- that is a routine, never a supervisord program or a cron line. Also covers the built-in weekly Caretaker, which is a routine like any other."
 metadata:
   author: imbue
 ---

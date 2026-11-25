@@ -1,6 +1,6 @@
 ---
 name: devices
-description: List the user's devices (desktops) and route Studio requests to specific ones.
+description: List the user's devices (desktops) and route Studio requests to specific ones. Use when it matters which devices the user has, or which device a request to the Studio goes to.
 metadata:
   author: imbue
 ---
