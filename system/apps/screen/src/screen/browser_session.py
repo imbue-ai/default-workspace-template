@@ -17,7 +17,7 @@ service's reaper (``screen.cli_sessions``); the block ends it at once.
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Final
 from uuid import uuid4
@@ -57,7 +57,7 @@ class DrivenBrowser(FrozenModel):
 @contextmanager
 def driven_browser(
     browser_name: str = DEFAULT_BROWSER_NAME, purpose: str = "script", is_reclaim: bool = False
-) -> Iterator[DrivenBrowser]:
+) -> Generator[DrivenBrowser]:
     """Reserve ``browser_name``, attach a session named after ``purpose`` for the block, then detach and release.
 
     Raises ``BrowserUnavailableError`` (with the service's ``status``: ``busy_human``, ``busy_agent``, ``starting``,

@@ -489,19 +489,7 @@ def test_the_browser_command_opens_a_page_in_the_fleets_chromium(
         serving.join()
 
 
-_SESSION_SCRIPT = """
-import sys
-import threading
-from screen.browser_session import driven_browser
-
-with driven_browser(purpose="itest") as browser:
-    print(browser.session_name, flush=True)
-    assert browser.run("eval", "() => 1 + 1", "--raw").split()[-1] == "2"
-    if sys.argv[1] == "raise":
-        raise RuntimeError("the script failed")
-    if sys.argv[1] == "hang":
-        threading.Event().wait(600)
-"""
+_DRIVEN_BROWSER_SCRIPT = Path(__file__).parent / "driven_browser_script.py"
 
 
 @pytest.mark.browser
@@ -536,8 +524,9 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
 
     try:
         for mode, expected_exit in (("finish", 0), ("raise", 1)):
+            name_file = tmp_path / f"{mode}.name"
             completed = subprocess.run(
-                [sys.executable, "-c", _SESSION_SCRIPT, mode],
+                [sys.executable, str(_DRIVEN_BROWSER_SCRIPT), mode, str(name_file)],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -545,15 +534,15 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
                 check=False,
             )
             assert completed.returncode == expected_exit, (mode, completed.stdout, completed.stderr)
-            session_name = completed.stdout.split()[0]
+            session_name = name_file.read_text()
             assert session_name.startswith("itest-")
             assert session_name not in live_session_names(), mode
+        orphan_file = tmp_path / "hang.name"
         killed = subprocess.Popen(
-            [sys.executable, "-c", _SESSION_SCRIPT, "hang"], env=environment, stdout=subprocess.PIPE, text=True
+            [sys.executable, str(_DRIVEN_BROWSER_SCRIPT), "hang", str(orphan_file)], env=environment
         )
-        assert killed.stdout is not None
-        orphan_name = killed.stdout.readline().strip()
-        assert wait_until(lambda: orphan_name in live_session_names(), 60.0), orphan_name
+        assert wait_until(lambda: orphan_file.exists() and orphan_file.read_text() in live_session_names(), 60.0)
+        orphan_name = orphan_file.read_text()
         killed.send_signal(signal.SIGKILL)
         killed.wait(timeout=30)
         assert orphan_name in live_session_names()
