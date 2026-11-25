@@ -49,8 +49,7 @@ grep -nE 'Traceback|ERROR|Exception|CRITICAL|Fatal' /var/log/supervisor/*.log
 Then search for **soft failures**: lines that report a step failing in
 lowercase prose, exit 0, and carry on. A pipeline that keeps its last good
 copy when a fetch fails is correct on its own, but it makes a dead integration
-look exactly like "nothing changed" -- one workspace served eight-day-old data
-through a quarter of a million such lines, none of which matched the words
+look exactly like "nothing changed", in lines that match none of the words
 above:
 
 ```bash
@@ -118,6 +117,6 @@ rather than a re-scan.
   them as transient: capture anything you need to keep elsewhere.
 - Logs rotate (`<name>-stderr.log.1`, `.2`, ...). If a recent error is not in the
   live file, check the rotated backups.
-- To restart a crashed service after a fix, see step 2 of the `update-app` skill:
+- To restart a crashed app or service after a fix, see the `update-app` skill:
   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart ...` for an app,
-  `supervisorctl restart <name>` for a daemon with no port.
+  `supervisorctl restart <name>` for a service with no port.

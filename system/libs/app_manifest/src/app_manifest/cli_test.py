@@ -149,7 +149,7 @@ def test_footprint_for_a_path_describes_a_skill_and_names_the_app_that_owns_it(
     assert scope["wiring"] == []
     assert scope["references"] == []
     assert scope["context"] == ["system/apps/news/"]
-    assert scope["conventions"][0] == ".agents/shared/worker/references/type-skill.md"
+    assert scope["conventions"][0] == ".agents/skills/harden-worker/references/type-skill.md"
 
 
 def test_footprint_refuses_both_a_manifest_and_a_path(tmp_path: Path) -> None:
