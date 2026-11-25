@@ -384,6 +384,11 @@ export function appByName(state: DesktopState, name: string): AppRecord | undefi
   return state.apps.find((app) => app.name === name);
 }
 
+/** What users call the app: its display name, else its name. */
+export function appDisplayName(state: DesktopState, name: string): string {
+  return appByName(state, name)?.display_name ?? name;
+}
+
 /** The apps a user can open from: every non-internal row, in registry order. */
 export function openableApps(state: DesktopState): AppRecord[] {
   return state.apps.filter((app) => !app.internal);
