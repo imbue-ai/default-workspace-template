@@ -183,9 +183,10 @@ attach replaced (the proxy refuses it for good), one whose browser stopped or is
 has sent no frame for 30 minutes while its agent does not hold the lease. It runs the same `detach`
 with the daemon's own working directory and environment, so the CLI finds the daemon's session
 entry and the daemon exits with Chromium left running; a daemon still there afterwards is sent
-SIGTERM. A script gets a session that cannot outlive it from `browser_session.driven_browser`, a
-`with` block that reserves the browser, attaches under a name only it uses, and detaches and
-releases on the way out.
+SIGTERM. A script gets a session that ends with its block from `browser_session.driven_browser`,
+a `with` block that reserves the browser, attaches under a name only it uses, and detaches and
+releases however its body ends; a script killed inside the block never runs that, and leaves its
+session to the reap loop.
 
 The held-URL rule: a page the human asked to open (`open:url`, or the launch path's
 `url`) while an agent drives the Screen is held rather than opened over the agent's
