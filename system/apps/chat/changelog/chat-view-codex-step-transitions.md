@@ -1,0 +1,1 @@
+- A Codex chat's progress view no longer leaves a finished step unchecked (and listed as still to do in later turns) when the agent changed steps in the same program as other work: an `apply_patch`, a settled-promise list, plain printed text, or a step change inside `Promise.all` / `Promise.allSettled`. Chats that already show stale steps are corrected once the chat app restarts.

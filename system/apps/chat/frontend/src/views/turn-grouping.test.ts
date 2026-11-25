@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   TranscriptEvent,
@@ -469,6 +471,43 @@ describe("task output provenance", () => {
     expect(steps.map((step) => step.title)).toEqual(["Inspect messages"]);
     expect(steps[0].events).toContainEqual(call);
   });
+});
+
+interface CodeModeStepTransitionCase {
+  name: string;
+  tk_command: string;
+  tk_stamp: string;
+  transitions: [string, "in_progress" | "closed"][];
+}
+
+/** Real Codex code-mode results of a step change batched with other work, with the stamp the
+ *  backend parser makes of each (its own test pins that stamp against the same file). */
+const CODE_MODE_STEP_TRANSITIONS = JSON.parse(
+  readFileSync(
+    join(__dirname, "../../../imbue/chat/harnesses/codex/testdata/code_mode_step_transitions.json"),
+    "utf8",
+  ),
+) as CodeModeStepTransitionCase[];
+
+describe("codex code-mode step changes", () => {
+  it.each(CODE_MODE_STEP_TRANSITIONS.map((testCase) => [testCase.name, testCase]))(
+    "moves the steps of %s",
+    (_name, testCase) => {
+      const sections = run(
+        [
+          userMsg("t0", "go"),
+          codexTkMsg("t1", testCase.tk_command, "batch"),
+          result("t1", "batch", testCase.tk_stamp),
+        ],
+        false,
+      );
+      const statusById = new Map(stepItems(sections[0].items).map((step) => [step.ticket_id, step.status]));
+      const expected = new Map(
+        testCase.transitions.map(([id, status]) => [id, status === "closed" ? "done" : "active"] as const),
+      );
+      expect(statusById).toEqual(expected);
+    },
+  );
 });
 
 describe("historical input fallback", () => {
