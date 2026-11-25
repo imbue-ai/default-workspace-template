@@ -1746,8 +1746,9 @@ class AgentManager:
         document the successor's first message is filled in from. ``chat_settings`` holds the
         workspace's fast-mode turn limit; the default keeps it in memory only.
         ``is_secondary`` marks a second chat instance beside the live one (a preview): it
-        withholds the chat memory scores, the automatic context compaction, and the
-        resumption of unfinished switches, all of which belong to the live chat alone, and
+        withholds the chat memory scores, the automatic context compaction, the
+        resumption of unfinished switches, and the stop of a retired member found running,
+        all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``imbue_studio_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
         starts watching it; the default reaches nobody. ``background_tasks`` reads each chat's
@@ -6149,8 +6150,10 @@ class AgentManager:
         # A retired member found running (a handoff's stop that never landed, or one revived since) holds memory for
         # a chat that has moved on. Checked on every agent a full snapshot lists, so a leak from before a restart is
         # found, and otherwise on the agent the event reports, so a stop that failed is tried again. UNKNOWN is no
-        # evidence of running.
+        # evidence of running. A secondary leaves it to the live chat.
         match event:
+            case _ if self._is_secondary:
+                checked_ids = set()
             case FullAgentStateEvent():
                 checked_ids = after_ids
             case AgentStateEvent():

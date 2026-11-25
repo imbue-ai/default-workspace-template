@@ -6285,11 +6285,15 @@ def _recorded_chat(
     mngr_binary: str | None = None,
     store: InMemoryChatRecordStore | None = None,
     archived_state: str = "STOPPED",
+    is_secondary: bool = False,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
     """A manager tracking a chat that moved from ``first`` (archived, ``archived_state``) to ``second`` (running)."""
     store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
-        broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary if mngr_binary is not None else "mngr",
+        is_secondary=is_secondary,
     )
     first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
     seed_agent_state(
@@ -7501,14 +7505,24 @@ def test_a_retired_member_still_reported_running_after_its_stop_is_stopped_again
 
 
 @pytest.mark.parametrize(
-    ("state", "is_stopped"), [(AgentLifecycleState.WAITING, True), (AgentLifecycleState.UNKNOWN, False)]
+    ("state", "is_secondary", "is_stopped"),
+    [
+        (AgentLifecycleState.WAITING, False, True),
+        (AgentLifecycleState.UNKNOWN, False, False),
+        (AgentLifecycleState.WAITING, True, False),
+    ],
 )
 def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_first_snapshot(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, state: AgentLifecycleState, is_stopped: bool
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    state: AgentLifecycleState,
+    is_secondary: bool,
+    is_stopped: bool,
 ) -> None:
-    """A member that reads UNKNOWN could not be observed, which says nothing of it running, so it is left alone."""
+    """A member that reads UNKNOWN could not be observed, which says nothing of it running, so it is left alone; a
+    preview leaves the stop to the live chat."""
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary, is_secondary=is_secondary)
     archived_name = f"archived-1-Chat-1-{first}"
     try:
         manager._handle_observe_event(
