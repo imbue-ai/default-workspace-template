@@ -7420,11 +7420,14 @@ def test_letting_go_a_chats_never_reported_active_agent_drops_the_whole_chat(
         state.shutdown()
 
 
-def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
+def test_an_archived_member_stopping_evicts_only_its_own_transcript(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
     """A retiring agent that is still running when it is archived stops a moment later; that
     death is the member's, not the chat's, so the active agent's watcher (which a user may be
     viewing) stays resident."""
-    manager, _store, first, second = _recorded_chat(broadcaster)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
     evicted: list[str] = []
     manager.set_watcher_eviction_callback(evicted.append)
     try:
@@ -7445,6 +7448,8 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
         assert evicted == [first]
     finally:
         manager.stop()
+    # Reported running after its chat moved on, the member is stopped by the manager too.
+    assert _stop_lines(argv_log) == [f"stop archived-1-Chat-1-{first}"]
 
 
 def _stop_lines(argv_log: Path) -> list[str]:
@@ -7547,7 +7552,9 @@ def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
     try:
         manager.record_presence(ChatId(first), _visible_report())
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
-        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        first_details = _agent_details(
+            f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+        )
         manager._handle_observe_event(make_agent_state_event(first_details))
         manager._handle_observe_event(
             make_agent_removed_event(first_details.id, first_details.name, first_details.host.id)
