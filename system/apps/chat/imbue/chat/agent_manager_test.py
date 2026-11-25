@@ -7473,6 +7473,33 @@ def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_no
     assert _stop_lines(argv_log) == [f"stop {archived_name}"]
 
 
+def test_a_retired_member_still_reported_running_after_its_stop_is_stopped_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A stop that did not take leaves the member's reading unchanged, so the next report of it running, with no
+    change of state, tries again."""
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    running = _agent_details(archived_name, agent_id=MngrAgentId(first))
+    try:
+        manager._handle_observe_event(
+            make_full_agent_state_event([_agent_details("Chat-1", agent_id=MngrAgentId(second)), running])
+        )
+        assert manager._retired_stops_in_flight == {first}
+        gate.touch()
+        wait_for(lambda: manager._retired_stops_in_flight == set(), timeout=15.0)
+
+        relabeled = running.model_copy_update(
+            to_update(running.field_ref().labels, {**running.labels, "display_name": "Chat 1 (archived 1)"})
+        )
+        manager._handle_observe_event(make_agent_state_event(relabeled))
+    finally:
+        gate.touch()
+        manager.stop()
+    assert _stop_lines(argv_log) == [f"stop {archived_name}", f"stop {archived_name}"]
+
+
 @pytest.mark.parametrize(
     ("state", "is_stopped"), [(AgentLifecycleState.WAITING, True), (AgentLifecycleState.UNKNOWN, False)]
 )

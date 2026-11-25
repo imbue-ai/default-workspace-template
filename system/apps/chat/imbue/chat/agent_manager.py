@@ -6148,8 +6148,15 @@ class AgentManager:
 
         # A retired member found running (a handoff's stop that never landed, or one revived since) holds memory for
         # a chat that has moved on. Checked on every agent a full snapshot lists, so a leak from before a restart is
-        # found, and otherwise on the agents this event changed. UNKNOWN is no evidence of running.
-        checked_ids = after_ids if is_full_snapshot else state_changed_ids | added_agent_ids
+        # found, and otherwise on the agent the event reports, so a stop that failed is tried again. UNKNOWN is no
+        # evidence of running.
+        match event:
+            case FullAgentStateEvent():
+                checked_ids = after_ids
+            case AgentStateEvent():
+                checked_ids = {str(event.agent.id)}
+            case AgentRemovedEvent():
+                checked_ids = set()
         with self._lock:
             running_retired_ids = [
                 agent_id
