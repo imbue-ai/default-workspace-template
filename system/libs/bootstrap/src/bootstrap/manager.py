@@ -98,9 +98,9 @@ _UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
 # takes longer than this is one that is already failing.
 _DRI_WAKE_TIMEOUT_SECONDS = 120.0
 
-# The workspace venv's mngr, which the boot converges to the tree's pin before the agent upgrade runs it.
+# The workspace venv's mngr, which the boot converges to the tree's pin.
 WORKSPACE_MNGR = WORKSPACE_VENV / "bin" / "mngr"
-# As supervisord's programs run mngr (system/supervisord.conf).
+# Without it mngr refuses a settings key it does not know.
 _MNGR_ENV_OVERRIDES = {"MNGR_ALLOW_UNKNOWN_CONFIG": "1"}
 _MNGR_LIST_FIELD_SEPARATOR = "|"
 # The local agents as `id|state` rows; inside a workspace a template answers where `--format json` can fail.
