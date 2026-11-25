@@ -405,6 +405,7 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             old,
             17,
         ),
+        _agent_record("replaced-chat", "REPLACED", {"user_created": "true"}, old, 18),
     ]
 
     report = memory_candidates.collect_report(
@@ -430,6 +431,7 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
             "unknown-type",
             "running, but of an agent type mngr does not know, so whether it is mid-turn is unknown",
         ),
+        ("replaced-chat", "another program runs in its window"),
     ]
     table = memory_candidates.render_table(report)
     assert (

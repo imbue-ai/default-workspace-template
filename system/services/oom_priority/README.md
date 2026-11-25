@@ -479,11 +479,11 @@ It lists:
   anonymous memory of the Chromium processes on its profile and their children.
 
 - **Also holding memory, not candidates**: every other chat or worker whose
-  agent is alive (`WAITING`, `RUNNING`, `RUNNING_BACKGROUND` or
-  `RUNNING_UNKNOWN_AGENT_TYPE`: mid-turn, waiting on a background task,
-  active within `IDLE_AFTER_SECONDS`, with no activity time to judge it by,
-  of an agent type mngr cannot tell the turn of, or the main chat), every
-  running program
+  agent is alive (`WAITING`, `RUNNING`, `RUNNING_BACKGROUND`,
+  `RUNNING_UNKNOWN_AGENT_TYPE` or `REPLACED`: mid-turn, waiting on a
+  background task, active within `IDLE_AFTER_SECONDS`, with no activity time
+  to judge it by, of an agent type mngr cannot tell the turn of, with another
+  program in its window, or the main chat), every running program
   that is not a candidate's (a critical or internal app, the Screen's service
   less the browser processes it launches, a workspace service no app names,
   one row per program), and a running

@@ -95,11 +95,14 @@ MID_TURN_AGENT_STATE: Final[str] = "RUNNING"
 # Something runs in the agent's window, but mngr has no config for its agent type, so it cannot tell
 # whether that is the agent or whether a turn is open.
 UNKNOWN_TYPE_AGENT_STATE: Final[str] = "RUNNING_UNKNOWN_AGENT_TYPE"
+# Another program holds the agent's window.
+REPLACED_AGENT_STATE: Final[str] = "REPLACED"
 # The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
 MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset(
     {
         MID_TURN_AGENT_STATE,
         UNKNOWN_TYPE_AGENT_STATE,
+        REPLACED_AGENT_STATE,
         IDLE_AGENT_STATE,
         RUNNING_BACKGROUND_AGENT_STATE,
     }
@@ -640,6 +643,8 @@ def _why_agent_is_held(
         return "the main chat: the chat app starts it again as soon as it stops"
     if agent.state == MID_TURN_AGENT_STATE:
         return "mid-turn"
+    if agent.state == REPLACED_AGENT_STATE:
+        return "another program runs in its window"
     if agent.state == UNKNOWN_TYPE_AGENT_STATE:
         return "running, but of an agent type mngr does not know, so whether it is mid-turn is unknown"
     if agent.state == RUNNING_BACKGROUND_AGENT_STATE or is_chat_busy(agent.chat_id):
