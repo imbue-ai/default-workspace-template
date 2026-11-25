@@ -1,11 +1,20 @@
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    SecretStr,
+    ValidationError,
+)
 
-from use_ai_integration_skill.claude_p import read_workspace_ai_credentials
+from use_ai_integration_skill.claude_p import (
+    minds_accounts_root,
+    read_workspace_ai_credentials,
+)
 from use_ai_integration_skill.data_types import (
     AIAccount,
     AIAccountListing,
@@ -15,27 +24,26 @@ from use_ai_integration_skill.data_types import (
     AIProvider,
 )
 from use_ai_integration_skill.errors import (
-    API_KEY_LANE,
-    GOOGLE_LANE,
-    PROVIDERS_CODE_CAN_CALL,
     SIGN_IN_ADVICE,
     NoUsableAccountError,
     UnsupportedProviderError,
-    unsupported_provider_message,
 )
 
 SUPPORTED_PROVIDER_BY_LANE: Final[Mapping[str, AIProvider]] = {
-    "anthropic": AIProvider.ANTHROPIC,
-    "openai": AIProvider.OPENAI,
+    provider.value: provider for provider in AIProvider
 }
 
-_ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
 _INDEX_FILENAME: Final = "index.json"
 _CODEX_AUTH_FILENAME: Final = "auth.json"
 _CLAUDE_GLOBAL_CONFIG_FILENAME: Final = ".claude.json"
 _CODEX_API_KEY_AUTH_MODE: Final = "apikey"
 _CODEX_SIGN_IN_AUTH_MODE: Final = "chatgpt"
-_NO_ACCOUNT_MESSAGE: Final = "No AI account is signed in to this workspace; sign in to Anthropic or OpenAI to call a model from code."
+_AGY_OAUTH_TOKEN_RELATIVE_PATH: Final = Path(
+    ".gemini", "antigravity-cli", "antigravity-oauth-token"
+)
+_PI_AUTH_FILENAME: Final = "auth.json"
+_PI_API_KEY_ENTRY_TYPE: Final = "api_key"
+_NO_ACCOUNT_MESSAGE: Final = "No AI account is signed in to this workspace; sign in to one to call a model from code."
 
 
 class _IndexRow(BaseModel):
@@ -76,9 +84,21 @@ class _ClaudeGlobalConfig(BaseModel):
     primary_api_key: SecretStr | None = Field(default=None, alias="primaryApiKey")
 
 
+class _PiAuthEntry(BaseModel):
+    """One provider's entry in pi's ``auth.json``; its key is only checked for presence."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    key: SecretStr | None = None
+
+
+class _PiAuthFile(RootModel[dict[str, _PiAuthEntry]]):
+    """pi's ``auth.json``: each provider's credential, keyed by pi's provider id."""
+
+
 def accounts_root() -> Path:
-    override = os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, "").strip()
-    return Path(override) if override else Path.home() / ".minds" / "accounts"
+    return Path(minds_accounts_root())
 
 
 def _read_index(root: Path) -> _AccountIndex | None:
@@ -117,7 +137,7 @@ def _numbered_labels(rows: Sequence[_IndexRow]) -> dict[str, str]:
 
 
 def _choose_default_row(index: _AccountIndex) -> _IndexRow | None:
-    """The pinned default, else the most recently used, else the oldest, among supported accounts."""
+    """The pinned default, else the most recently used, else the oldest, among accounts of a known type."""
     supported = [
         row for row in index.accounts if row.lane in SUPPORTED_PROVIDER_BY_LANE
     ]
@@ -129,28 +149,9 @@ def _choose_default_row(index: _AccountIndex) -> _IndexRow | None:
     return next((row for row in supported if row.id == index.mru), supported[0])
 
 
-def _unsupported_account_description(row: _IndexRow) -> str:
-    name = _provider_name(row)
-    return f"{name} through the API key option" if row.lane == API_KEY_LANE else name
-
-
-def _has_specific_advice(row: _IndexRow) -> bool:
-    return row.lane == GOOGLE_LANE or (
-        row.lane == API_KEY_LANE and _provider_name(row) in PROVIDERS_CODE_CAN_CALL
-    )
-
-
 def _only_unsupported_accounts_message(rows: Sequence[_IndexRow]) -> str:
-    descriptions = list(
-        dict.fromkeys(_unsupported_account_description(row) for row in rows)
-    )
-    notes = dict.fromkeys(
-        unsupported_provider_message(row.lane, _provider_name(row))
-        for row in rows
-        if _has_specific_advice(row)
-    )
-    message = f"None of this workspace's AI accounts can call a model from code ({', '.join(descriptions)}); {SIGN_IN_ADVICE}"
-    return " ".join([message, *notes])
+    names = ", ".join(dict.fromkeys(_provider_name(row) for row in rows))
+    return f"None of this workspace's AI accounts can call a model from code ({names}); {SIGN_IN_ADVICE}"
 
 
 def _named_row(index: _AccountIndex, account_id: str) -> _IndexRow:
@@ -178,7 +179,7 @@ def _account_from_row(root: Path, row: _IndexRow, label: str) -> AIAccount:
 
 
 def resolve_ai_account(account_id: str | None, root: Path) -> AIAccount:
-    """The named account, or the workspace's default among the accounts code can call."""
+    """The named account, or the workspace's default among the accounts of a known type."""
     index = _read_index(root)
     if index is None or not index.accounts:
         raise NoUsableAccountError(_NO_ACCOUNT_MESSAGE)
@@ -263,6 +264,7 @@ def _read_anthropic_credential(
             billing=AIBilling.API_KEY,
             api_key=SecretStr(credentials.api_key),
             api_base=(credentials.base_url or "").rstrip("/") or None,
+            pi_provider_id=None,
         )
     is_console = _is_console_sign_in(
         account.account_dir, has_oauth_token=credentials.oauth_token is not None
@@ -272,6 +274,7 @@ def _read_anthropic_credential(
         billing=AIBilling.API_KEY if is_console else AIBilling.SUBSCRIPTION,
         api_key=None,
         api_base=None,
+        pi_provider_id=None,
     )
 
 
@@ -308,6 +311,7 @@ def _read_openai_credential(account: AIAccount) -> AICredential:
             billing=AIBilling.SUBSCRIPTION,
             api_key=None,
             api_base=None,
+            pi_provider_id=None,
         )
     if auth_mode != _CODEX_API_KEY_AUTH_MODE:
         raise NoUsableAccountError(
@@ -323,6 +327,66 @@ def _read_openai_credential(account: AIAccount) -> AICredential:
         billing=AIBilling.API_KEY,
         api_key=api_key,
         api_base=None,
+        pi_provider_id=None,
+    )
+
+
+def _read_google_credential(account: AIAccount) -> AICredential:
+    if not (account.account_dir / _AGY_OAUTH_TOKEN_RELATIVE_PATH).is_file():
+        raise NoUsableAccountError(
+            f"The Google account {account.label} is signed out; sign in to it again."
+        )
+    return AICredential(
+        kind=AICredentialKind.GOOGLE_SIGN_IN,
+        billing=AIBilling.SUBSCRIPTION,
+        api_key=None,
+        api_base=None,
+        pi_provider_id=None,
+    )
+
+
+def _read_pi_credential(account: AIAccount, *, billing: AIBilling) -> AICredential:
+    """The one provider whose key the account's pi ``auth.json`` holds; the key itself stays in the file."""
+    auth_path = account.account_dir / _PI_AUTH_FILENAME
+    try:
+        text = auth_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise NoUsableAccountError(
+            f"The account {account.label} is signed out; sign in to it again."
+        ) from None
+    except OSError as e:
+        raise NoUsableAccountError(
+            f"The account {account.label}'s sign-in cannot be read: {e}"
+        ) from e
+    try:
+        auth = _PiAuthFile.model_validate_json(text)
+    except ValidationError:
+        # The validation error quotes the file, key included.
+        raise NoUsableAccountError(
+            f"The account {account.label}'s key file is not valid; sign in to it again."
+        ) from None
+    keyed_provider_ids = [
+        provider_id
+        for provider_id, entry in auth.root.items()
+        if entry.type == _PI_API_KEY_ENTRY_TYPE
+        and entry.key is not None
+        and len(entry.key) > 0
+    ]
+    if not keyed_provider_ids:
+        raise NoUsableAccountError(
+            f"The account {account.label} has no API key; sign in to it again."
+        )
+    if len(keyed_provider_ids) > 1:
+        raise NoUsableAccountError(
+            f"The account {account.label} holds keys for several providers "
+            f"({', '.join(keyed_provider_ids)}); sign in to it again."
+        )
+    return AICredential(
+        kind=AICredentialKind.PI_KEY,
+        billing=billing,
+        api_key=None,
+        api_base=None,
+        pi_provider_id=keyed_provider_ids[0],
     )
 
 
@@ -337,5 +401,11 @@ def read_ai_credential(
             )
         case AIProvider.OPENAI:
             return _read_openai_credential(account)
+        case AIProvider.GOOGLE:
+            return _read_google_credential(account)
+        case AIProvider.OPENCODE_GO:
+            return _read_pi_credential(account, billing=AIBilling.SUBSCRIPTION)
+        case AIProvider.OPENROUTER | AIProvider.API_KEY:
+            return _read_pi_credential(account, billing=AIBilling.API_KEY)
         case _ as unreachable:
             assert_never(unreachable)

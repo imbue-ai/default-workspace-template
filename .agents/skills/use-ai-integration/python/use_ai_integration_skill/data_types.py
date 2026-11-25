@@ -8,10 +8,14 @@ from use_ai_integration_skill.claude_p import Usage
 
 
 class AIProvider(StrEnum):
-    """A provider that code can call; the value is the chat app's lane id."""
+    """The kind of account a call runs on; the value is the chat app's lane id."""
 
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    GOOGLE = "google"
+    OPENCODE_GO = "opencode-go"
+    OPENROUTER = "openrouter"
+    API_KEY = "api-key"
 
 
 class AIBilling(StrEnum):
@@ -28,6 +32,8 @@ class AICredentialKind(StrEnum):
     ANTHROPIC_SIGN_IN = "anthropic_sign_in"
     OPENAI_API_KEY = "openai_api_key"
     OPENAI_SIGN_IN = "openai_sign_in"
+    GOOGLE_SIGN_IN = "google_sign_in"
+    PI_KEY = "pi_key"
 
 
 class CodexSandboxMode(StrEnum):
@@ -46,7 +52,9 @@ class AIAccount(BaseModel):
     account_id: str = Field(
         description="The account's id, which is also its folder's name"
     )
-    provider: AIProvider = Field(description="The provider the account signs in to")
+    provider: AIProvider = Field(
+        description="The kind of account, named by the chat lane it was added through"
+    )
     account_dir: Path = Field(description="The account's folder")
     label: str = Field(
         description="The user's name for the account, else its provider's, numbered like the chat's picker, e.g. Anthropic 2"
@@ -66,7 +74,7 @@ class AIAccountListing(BaseModel):
         description="The user's name for the account, else its provider's, numbered like the chat's picker, e.g. Anthropic 2"
     )
     is_supported: bool = Field(
-        description="Whether code can call a model on this account's provider"
+        description="Whether the library knows how to call this account's type"
     )
     is_default: bool = Field(
         description="Whether a call that names no account runs on this one"
@@ -89,6 +97,9 @@ class AICredential(BaseModel):
     api_base: str | None = Field(
         description="The base URL an Anthropic key is sent to, for a proxy"
     )
+    pi_provider_id: str | None = Field(
+        description="pi's id of the provider the account's key is for, e.g. groq; for a pi key only"
+    )
 
     @model_validator(mode="after")
     def _check_fields_match_kind(self) -> Self:
@@ -107,6 +118,10 @@ class AICredential(BaseModel):
             raise ValueError(f"a {self.kind} credential has no API base URL")
         if is_api_key_kind and self.billing is not AIBilling.API_KEY:
             raise ValueError(f"a {self.kind} credential is billed per token")
+        if (self.kind is AICredentialKind.PI_KEY) != (self.pi_provider_id is not None):
+            raise ValueError(
+                f"a {self.kind} credential names a pi provider exactly when it is a pi key"
+            )
         return self
 
 
@@ -116,7 +131,7 @@ class AIResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: str = Field(description="The model's answer")
-    provider: AIProvider = Field(description="The provider the call ran on")
+    provider: AIProvider = Field(description="The kind of account the call ran on")
     account_id: str = Field(description="The account the call ran on")
     model: str | None = Field(
         description="The model that ran; None when the account's default ran unreported"
@@ -147,6 +162,33 @@ class CodexExecOutcome(BaseModel):
     text: str = Field(description="The last agent message")
     usage: Usage = Field(description="Token counts from the completed turn")
     events: list[dict[str, object]] = Field(description="Every JSONL event, in order")
+
+
+class PiRunOutcome(BaseModel):
+    """What one ``pi --mode json`` run answered."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text: str = Field(description="The last assistant message's text")
+    usage: Usage = Field(description="Token counts summed over every assistant message")
+    cost_usd: float = Field(
+        description="Dollars pi priced the run at, summed over every assistant message"
+    )
+    events: list[dict[str, object]] = Field(description="Every JSONL event, in order")
+
+
+class AgyRunOutcome(BaseModel):
+    """What one ``agy --output-format json`` run answered."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text: str = Field(description="The response")
+    usage: Usage = Field(
+        description="Token counts; output_tokens includes thinking tokens"
+    )
+    envelope: dict[str, object] = Field(
+        description="The JSON result agy printed, verbatim"
+    )
 
 
 class LiteLLMRequest(BaseModel):

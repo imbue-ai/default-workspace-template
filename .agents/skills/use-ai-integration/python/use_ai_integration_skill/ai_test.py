@@ -29,11 +29,17 @@ from use_ai_integration_skill.data_types import (
     LiteLLMRequest,
 )
 from use_ai_integration_skill.errors import (
+    ModelRequiredError,
     NoUsableAccountError,
     ProviderCallError,
     ProviderTimeoutError,
 )
-from use_ai_integration_skill.testing import write_ai_accounts, write_stub_executable
+from use_ai_integration_skill.testing import (
+    write_agy_sign_in,
+    write_ai_accounts,
+    write_pi_key,
+    write_stub_executable,
+)
 
 # Stands in for claude: reports what it was run with as the result text of a success payload.
 _STUB_CLAUDE = """
@@ -95,6 +101,101 @@ print('{"type":"thread.started","thread_id":"t1"}')
 print('{"type":"turn.started"}')
 print('{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}')
 sys.exit(1)
+"""
+
+# Stands in for pi --mode json: reports what it was run with as its answer.
+_STUB_PI = """
+import json, os, sys
+argv = sys.argv[1:]
+def flag_file(flag):
+    if flag not in argv:
+        return None
+    with open(argv[argv.index(flag) + 1], encoding="utf-8") as f:
+        return f.read()
+key_names = {"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY"}
+observed = {
+    "argv": argv,
+    "cwd": os.getcwd(),
+    "stdin": sys.stdin.read(),
+    "agent_dir": os.environ.get("PI_CODING_AGENT_DIR"),
+    "leaked": sorted(
+        name for name in os.environ
+        if name in key_names or name.startswith("AWS_") or name == "MNGR_AGENT_STATE_DIR"
+    ),
+    "system_prompt": flag_file("--system-prompt"),
+    "appended": flag_file("--append-system-prompt"),
+}
+usage = {"input": 11, "output": 4, "cacheRead": 2, "cacheWrite": 0, "cost": {"total": 0.0042}}
+for record in (
+    {"type": "session", "version": 3, "id": "s1", "cwd": os.getcwd()},
+    {"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "x"}]}},
+    {"type": "message_end", "message": {
+        "role": "assistant",
+        "content": [{"type": "text", "text": json.dumps(observed)}],
+        "usage": usage,
+        "stopReason": "stop",
+    }},
+    {"type": "agent_settled"},
+):
+    print(json.dumps(record))
+"""
+
+_FAILING_STUB_PI = """
+import json
+print(json.dumps({"type": "session", "version": 3, "id": "s1"}))
+print(json.dumps({"type": "message_end", "message": {
+    "role": "assistant", "content": [], "stopReason": "error", "errorMessage": "401 invalid key",
+}}))
+"""
+
+_STUB_PI_EXITING = """
+import sys
+sys.stderr.write("No API key found for groq.\\n")
+sys.exit(1)
+"""
+
+# Stands in for agy --output-format json: reports what it was run with as its response.
+_STUB_AGY = """
+import json, os, sys
+pwd_env = os.environ.get("PWD", "")
+observed = {
+    "argv": sys.argv[1:],
+    "cwd": os.getcwd(),
+    "pwd_env": pwd_env,
+    "pwd_is_link": os.path.islink(pwd_env),
+    "pwd_target": os.path.realpath(pwd_env),
+    "home": os.environ.get("HOME"),
+    "auto_update": os.environ.get("AGY_CLI_DISABLE_AUTO_UPDATE"),
+    "leaked": sorted(
+        name for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_ADC_AUTH", "MNGR_AGENT_STATE_DIR")
+        if name in os.environ
+    ),
+    "stdin": sys.stdin.read(),
+}
+print(json.dumps({
+    "conversation_id": "c1",
+    "status": "SUCCESS",
+    "response": json.dumps(observed),
+    "usage": {"input_tokens": 20, "output_tokens": 5, "thinking_tokens": 3, "cache_read_tokens": 8},
+}))
+"""
+
+_FAILING_STUB_AGY = """
+import json, sys
+print(json.dumps({"status": "ERROR", "response": "", "error": "invalid model selection", "finished_reason": "error"}))
+sys.exit(1)
+"""
+
+_PRINT_TIMEOUT_STUB_AGY = """
+import json, sys
+print(json.dumps({"status": "SUCCESS", "response": "half an ans", "finished_reason": "print_timeout"}))
+sys.exit(3)
+"""
+
+_MARKING_STUB = """
+import os
+with open(os.environ["STUB_MARKER"], "w") as f:
+    f.write("ran")
 """
 
 _HANGING_STUB = """
@@ -160,6 +261,29 @@ def _openai_sign_in_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     """An accounts root holding one ChatGPT sign-in, ``o1``, that the public functions read."""
     root = write_ai_accounts(tmp_path / "accounts", [("o1", "openai", "OpenAI")])
     (root / "o1" / "auth.json").write_text(json.dumps(_CHATGPT_AUTH))
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(root))
+    return root
+
+
+def _pi_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    lane: str,
+    display: str,
+    provider_id: str,
+) -> Path:
+    """An accounts root holding one pi key account, ``p1``, that the public functions read."""
+    root = write_ai_accounts(tmp_path / "accounts", [("p1", lane, display)])
+    write_pi_key(root / "p1", provider_id)
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(root))
+    return root
+
+
+def _google_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An accounts root holding one Google sign-in, ``g1``, that the public functions read."""
+    root = write_ai_accounts(tmp_path / "accounts", [("g1", "google", "Google")])
+    write_agy_sign_in(root / "g1")
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(root))
     return root
 
@@ -544,9 +668,25 @@ def _complete_through(
     *,
     timeout_seconds: float,
 ) -> AIResult:
-    """One completion on a sign-in whose provider runs ``cli``."""
+    """One completion on an account whose provider runs ``cli``."""
     if cli == "codex":
         _openai_sign_in_root(tmp_path, monkeypatch)
+        return complete(
+            "hello", system="Answer briefly.", timeout_seconds=timeout_seconds
+        )
+    elif cli == "pi":
+        _pi_root(
+            tmp_path,
+            monkeypatch,
+            lane="opencode-go",
+            display="Opencode Go",
+            provider_id="opencode-go",
+        )
+        return complete(
+            "hello", system="Answer briefly.", timeout_seconds=timeout_seconds
+        )
+    elif cli == "agy":
+        _google_root(tmp_path, monkeypatch)
         return complete(
             "hello", system="Answer briefly.", timeout_seconds=timeout_seconds
         )
@@ -572,7 +712,7 @@ def _read_until_closed(fd: int, *, timeout_seconds: float) -> tuple[bytes, bool]
         received += chunk
 
 
-@pytest.mark.parametrize("cli", ["claude", "codex"])
+@pytest.mark.parametrize("cli", ["claude", "codex", "pi", "agy"])
 def test_a_call_that_times_out_ends_every_process_its_cli_started(
     cli: str,
     tmp_path: Path,
@@ -600,7 +740,7 @@ def test_a_call_that_times_out_ends_every_process_its_cli_started(
     assert is_closed
 
 
-@pytest.mark.parametrize("cli", ["claude", "codex"])
+@pytest.mark.parametrize("cli", ["claude", "codex", "pi", "agy"])
 def test_a_cli_printing_bytes_that_are_not_utf8_raises_provider_call_error(
     cli: str,
     tmp_path: Path,
@@ -616,7 +756,7 @@ def test_a_cli_printing_bytes_that_are_not_utf8_raises_provider_call_error(
         )
 
 
-@pytest.mark.parametrize("cli", ["claude", "codex"])
+@pytest.mark.parametrize("cli", ["claude", "codex", "pi", "agy"])
 def test_a_cli_that_cannot_be_run_raises_provider_call_error(
     cli: str,
     tmp_path: Path,
@@ -631,6 +771,298 @@ def test_a_cli_that_cannot_be_run_raises_provider_call_error(
         _complete_through(
             cli, tmp_path, monkeypatch, anthropic_snapshot_path, timeout_seconds=8.0
         )
+
+
+def test_complete_runs_pi_on_a_key_account_with_its_provider_and_default_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    root = _pi_root(
+        tmp_path, monkeypatch, lane="api-key", display="Groq", provider_id="groq"
+    )
+    for name in ("GROQ_API_KEY", "ANTHROPIC_API_KEY", "AWS_PROFILE"):
+        monkeypatch.setenv(name, "ambient")
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path / "agent-state"))
+
+    result = complete(
+        "Classify: invoice overdue",
+        system="You are a classifier.",
+        timeout_seconds=8.0,
+    )
+
+    observed = json.loads(result.text)
+    argv = observed["argv"]
+    assert argv[argv.index("--provider") + 1] == "groq"
+    assert argv[argv.index("--model") + 1] == "openai/gpt-oss-120b"
+    assert "--no-tools" in argv
+    assert "Classify: invoice overdue" not in argv
+    assert observed["system_prompt"] == "You are a classifier."
+    assert observed["stdin"] == "Classify: invoice overdue"
+    assert observed["agent_dir"] == str(root / "p1")
+    assert observed["leaked"] == []
+    assert Path(observed["cwd"]).resolve() != Path.cwd().resolve()
+    assert result.provider is AIProvider.API_KEY
+    assert result.account_id == "p1"
+    assert result.billing is AIBilling.API_KEY
+    assert result.cost_usd == 0.0042
+    assert result.model == "openai/gpt-oss-120b"
+    assert result.usage == Usage(
+        input_tokens=11, output_tokens=4, cache_read_tokens=2, cache_write_tokens=0
+    )
+
+
+def test_complete_on_an_anthropic_key_added_through_the_api_key_option_runs_pi_on_the_small_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    _pi_root(
+        tmp_path,
+        monkeypatch,
+        lane="api-key",
+        display="Anthropic",
+        provider_id="anthropic",
+    )
+
+    result = complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+    argv = json.loads(result.text)["argv"]
+    assert argv[argv.index("--provider") + 1] == "anthropic"
+    assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
+    assert result.model == "claude-haiku-4-5"
+
+
+def test_complete_passes_the_callers_model_to_pi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    _pi_root(
+        tmp_path,
+        monkeypatch,
+        lane="openrouter",
+        display="OpenRouter",
+        provider_id="openrouter",
+    )
+
+    result = complete(
+        "hello",
+        system="Answer briefly.",
+        model="anthropic/claude-sonnet-4.5",
+        timeout_seconds=8.0,
+    )
+
+    argv = json.loads(result.text)["argv"]
+    assert argv[argv.index("--provider") + 1] == "openrouter"
+    assert argv[argv.index("--model") + 1] == "anthropic/claude-sonnet-4.5"
+    assert result.model == "anthropic/claude-sonnet-4.5"
+    assert result.provider is AIProvider.OPENROUTER
+
+
+def test_complete_on_opencode_go_is_billed_to_the_subscription(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    _pi_root(
+        tmp_path,
+        monkeypatch,
+        lane="opencode-go",
+        display="Opencode Go",
+        provider_id="opencode-go",
+    )
+
+    result = complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+    assert result.provider is AIProvider.OPENCODE_GO
+    assert result.billing is AIBilling.SUBSCRIPTION
+    assert result.cost_usd is None
+    assert result.model == "kimi-k2.6"
+    assert result.usage is not None and result.usage.input_tokens == 11
+
+
+def test_complete_on_a_pi_provider_without_a_default_requires_a_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    _pi_root(
+        tmp_path,
+        monkeypatch,
+        lane="api-key",
+        display="Some New Provider",
+        provider_id="some-new-provider",
+    )
+
+    with pytest.raises(ModelRequiredError, match="'some-new-provider'.*model="):
+        complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+    result = complete(
+        "hello", system="Answer briefly.", model="m1", timeout_seconds=8.0
+    )
+
+    argv = json.loads(result.text)["argv"]
+    assert argv[argv.index("--provider") + 1] == "some-new-provider"
+    assert argv[argv.index("--model") + 1] == "m1"
+
+
+def test_run_task_runs_pi_with_tools_in_the_given_directory_and_instructions_appended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI)
+    _pi_root(
+        tmp_path,
+        monkeypatch,
+        lane="openrouter",
+        display="OpenRouter",
+        provider_id="openrouter",
+    )
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    result = run_task(
+        "Tidy the notes.",
+        instructions="Only touch notes/.",
+        cwd=work_dir,
+        timeout_seconds=8.0,
+    )
+
+    observed = json.loads(result.text)
+    assert Path(observed["cwd"]).resolve() == work_dir.resolve()
+    assert "--no-tools" not in observed["argv"]
+    assert observed["appended"] == "Only touch notes/."
+    assert observed["system_prompt"] is None
+    assert observed["stdin"] == "Tidy the notes."
+    assert result.billing is AIBilling.API_KEY
+    assert result.cost_usd == 0.0042
+
+
+def test_pi_whose_model_call_fails_raises_provider_call_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _FAILING_STUB_PI)
+    _pi_root(tmp_path, monkeypatch, lane="api-key", display="Groq", provider_id="groq")
+
+    with pytest.raises(
+        ProviderCallError, match="pi's model call failed: 401 invalid key"
+    ):
+        complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+
+def test_pi_that_exits_non_zero_raises_with_its_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "pi", _STUB_PI_EXITING)
+    _pi_root(tmp_path, monkeypatch, lane="api-key", display="Groq", provider_id="groq")
+
+    with pytest.raises(
+        ProviderCallError, match="pi exited 1: No API key found for groq."
+    ):
+        complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+
+def test_complete_runs_agy_on_the_google_accounts_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _STUB_AGY)
+    root = _google_root(tmp_path, monkeypatch)
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_ADC_AUTH"):
+        monkeypatch.setenv(name, "ambient")
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path / "agent-state"))
+
+    result = complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+    observed = json.loads(result.text)
+    assert observed["home"] == str(root / "g1")
+    assert observed["auto_update"] == "true"
+    assert observed["leaked"] == []
+    assert observed["stdin"] == "Answer briefly.\n\nhello"
+    argv = observed["argv"]
+    assert '--settings={"agentMode":"","toolPermission":"strict"}' in argv
+    assert "--output-format=json" in argv
+    assert "--disable-slash-commands" in argv
+    assert "--dangerously-skip-permissions" not in argv
+    assert not any(arg.startswith("--model") for arg in argv)
+    run_dir = Path(observed["cwd"]).resolve()
+    assert not run_dir.is_relative_to(Path.cwd().resolve())
+    assert Path(observed["pwd_target"]) == run_dir
+    assert result.provider is AIProvider.GOOGLE
+    assert result.billing is AIBilling.SUBSCRIPTION
+    assert result.cost_usd is None
+    assert result.model is None
+    assert result.usage == Usage(
+        input_tokens=12, output_tokens=8, cache_read_tokens=8, cache_write_tokens=0
+    )
+    assert result.raw["conversation_id"] == "c1"
+
+
+def test_run_task_runs_agy_with_every_tool_approved_in_the_given_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _STUB_AGY)
+    _google_root(tmp_path, monkeypatch)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    result = run_task(
+        "Tidy the notes.",
+        instructions="Only touch notes/.",
+        cwd=work_dir,
+        timeout_seconds=8.0,
+    )
+
+    observed = json.loads(result.text)
+    assert Path(observed["cwd"]).resolve() == work_dir.resolve()
+    assert "--dangerously-skip-permissions" in observed["argv"]
+    assert observed["stdin"] == "Only touch notes/.\n\nTidy the notes."
+
+
+def test_run_task_runs_agy_through_a_link_for_a_hidden_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _STUB_AGY)
+    _google_root(tmp_path, monkeypatch)
+    work_dir = tmp_path / ".hidden" / "work"
+    work_dir.mkdir(parents=True)
+
+    result = run_task("Tidy the notes.", cwd=work_dir, timeout_seconds=8.0)
+
+    observed = json.loads(result.text)
+    assert observed["pwd_is_link"] is True
+    assert not any(part.startswith(".") for part in Path(observed["pwd_env"]).parts)
+    assert Path(observed["pwd_target"]) == work_dir.resolve()
+    assert Path(observed["cwd"]).resolve() == work_dir.resolve()
+
+
+def test_agy_reporting_an_error_status_raises_provider_call_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _FAILING_STUB_AGY)
+    _google_root(tmp_path, monkeypatch)
+
+    with pytest.raises(
+        ProviderCallError, match="agy exited 1: invalid model selection"
+    ):
+        complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+
+def test_agy_exiting_on_its_print_timeout_raises_provider_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _PRINT_TIMEOUT_STUB_AGY)
+    _google_root(tmp_path, monkeypatch)
+
+    with pytest.raises(ProviderTimeoutError, match="agy hit its print timeout"):
+        complete("hello", system="Answer briefly.", timeout_seconds=8.0)
+
+
+def test_agy_refuses_an_empty_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_bin_dir: Path
+) -> None:
+    write_stub_executable(stub_bin_dir, "agy", _MARKING_STUB)
+    marker = tmp_path / "agy-ran"
+    monkeypatch.setenv("STUB_MARKER", str(marker))
+    _google_root(tmp_path, monkeypatch)
+
+    with pytest.raises(ProviderCallError, match="empty prompt"):
+        run_task(" \n", cwd=tmp_path, timeout_seconds=8.0)
+
+    assert not marker.exists()
 
 
 def test_pin_anthropic_key_snapshots_the_accounts_key_and_proxy(

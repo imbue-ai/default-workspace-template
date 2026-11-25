@@ -34,3 +34,21 @@ def write_stub_executable(bin_dir: Path, name: str, python_source: str) -> Path:
     path.write_text("#!/usr/bin/env python3\n" + python_source)
     path.chmod(0o755)
     return path
+
+
+def write_pi_key(account_dir: Path, provider_id: str) -> Path:
+    """Write a pi ``auth.json`` holding a placeholder key for ``provider_id``, as the chat's sign-in writes it."""
+    path = account_dir / "auth.json"
+    path.write_text(
+        json.dumps({provider_id: {"type": "api_key", "key": f"fake-{provider_id}-key"}})
+    )
+    path.chmod(0o600)
+    return path
+
+
+def write_agy_sign_in(account_dir: Path) -> Path:
+    """Write a placeholder Antigravity sign-in token into ``account_dir``, agy's home."""
+    path = account_dir / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("placeholder-token")
+    return path
