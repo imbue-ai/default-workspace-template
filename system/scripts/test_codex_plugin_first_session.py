@@ -137,7 +137,18 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                         "verify-conversation",
                     )
                 } <= {skill["name"] for skill in guardian_skills}
-                hooks = _rpc(process, 3, "hooks/list", {"cwds": [str(tmp_path)]})[
+                # Codex's built-in skills and other plugins compete with ours.
+                foreign_skills = [
+                    skill["name"]
+                    for skill in skills["skills"]
+                    if skill["enabled"]
+                    and (
+                        skill["scope"] == "system"
+                        or skill.get("pluginId") not in (None, _PLUGIN)
+                    )
+                ]
+                assert foreign_skills == []
+                hooks =_rpc(process, 3, "hooks/list", {"cwds": [str(tmp_path)]})[
                     "data"
                 ][0]
                 assert not hooks["errors"]

@@ -379,6 +379,13 @@ config_overrides.tools = { update_plan = { enabled = false }, experimental_reque
 # the image, so an agent's install needs no network.
 config_overrides.marketplaces.imbue-code-guardian = { source_type = "local", source = "/opt/agent-plugins/imbue-code-guardian" }
 config_overrides.plugins."imbue-code-guardian@imbue-code-guardian" = { enabled = true }
+# Load no plugin or skill OpenAI ships that we did not choose. Codex downloads every plugin
+# on the signed-in ChatGPT account into the agent's home and loads it as the account enables
+# it, which a per-plugin `enabled = false` does not override; only `_default` does. Those
+# skills compete with ours, and some (`visualize`) emit markup only Codex's own clients render.
+# `skills.bundled` is the set built into the binary (imagegen, skill-installer, ...).
+config_overrides.plugins._default = { enabled = false }
+config_overrides.skills = { bundled = { enabled = false } }
 # Codex-only instructions, appended to every codex agent's system prompt.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
