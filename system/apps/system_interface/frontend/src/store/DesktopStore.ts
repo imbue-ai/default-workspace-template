@@ -142,6 +142,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  appDisplayName,
   avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
@@ -2304,7 +2305,7 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`Could not open ${appDisplayName(this.state, app)}`, error, {
         isLasting: false,
       });
       return;
@@ -3045,7 +3046,7 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`Could not open ${appDisplayName(this.state, app)}`, error, {
         isLasting: false,
       });
       return null;
@@ -3101,7 +3102,7 @@ export class DesktopStore {
     } catch (error) {
       const told = failureSentence(
         describeRequestFailure(error),
-        `${appByName(this.state, app)?.display_name ?? app} couldn't open that`,
+        `${appDisplayName(this.state, app)} couldn't open that`,
       );
       // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
       // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
@@ -3366,7 +3367,7 @@ export class DesktopStore {
       await this.deps.api.quitApp(appName);
     } catch (error) {
       // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
-      this.toastFailure(`Failed to quit ${appName}`, error, { isLasting: true });
+      this.toastFailure(`Failed to quit ${appDisplayName(this.state, appName)}`, error, { isLasting: true });
     }
   }
 

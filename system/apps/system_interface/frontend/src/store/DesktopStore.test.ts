@@ -2033,7 +2033,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices()).toEqual(["Failed to quit docs."]);
+    expect(notices()).toEqual(["Failed to quit Docs."]);
   });
 });
 
