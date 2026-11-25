@@ -803,3 +803,26 @@ def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> 
     assert parse_line_image(line, "codex-result-c1", 1) is None
     assert parse_line_image(line, "codex-result-other", 0) is None
     assert parse_line_image(_exec_call_line("c1", _IMAGEGEN_PROGRAM), "codex-result-c1", 0) is None
+
+
+def test_a_finished_generation_cell_does_not_mark_a_later_program_that_reuses_its_number() -> None:
+    """codex numbers cells afresh after a restart, so cell 3 can return for a program that only views an image."""
+    yielded = [{"type": "input_text", "text": "Script running with cell ID 3\n"}]
+    viewed = [{"type": "input_image", "image_url": _PNG_DATA_URL}]
+    results = _tool_results(
+        _parse_all(
+            [
+                _exec_call_line("c1", _IMAGEGEN_PROGRAM),
+                _result_line("c1", yielded),
+                _wait_call_line("w1", "3"),
+                _result_line("w1", _generated_image_output(), payload_type="function_call_output"),
+                _exec_call_line("c2", _VIEW_IMAGE_PROGRAM),
+                _result_line("c2", yielded),
+                _wait_call_line("w2", "3"),
+                _result_line("w2", viewed, payload_type="function_call_output"),
+            ]
+        )
+    )
+    assert results["w1"]["is_generated_image"] is True
+    assert results["w2"]["image_count"] == 1
+    assert "is_generated_image" not in results["w2"]

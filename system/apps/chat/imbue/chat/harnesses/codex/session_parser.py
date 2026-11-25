@@ -164,21 +164,32 @@ class ImageGenerationCalls(MutableModel):
     A code-mode program that calls image generation usually returns the image on its own
     ``exec`` result, but a program that outlives its yield window returns it on a later
     ``wait`` for the cell it kept running in, so a ``wait`` counts when its cell came from
-    such a program.
+    such a program. A cell is forgotten once its program ends: codex numbers cells afresh
+    after a restart, so a remembered number would mark an unrelated later program.
     """
 
     call_ids: set[str] = Field(default_factory=set, description="Calls whose output carries generated images")
     cell_ids: set[str] = Field(default_factory=set, description="Running cells of programs that generate images")
+    waited_cell_by_call_id: dict[str, str] = Field(
+        default_factory=dict, description="The generating cell each such wait call resumes, until its output lands"
+    )
 
     def note_call(self, call_id: str, tool_name: str, raw_input: str) -> None:
-        is_waiting_on_a_generation = tool_name == WAIT_TOOL_NAME and _waited_cell_id(raw_input) in self.cell_ids
-        if generates_images(tool_name, raw_input) or is_waiting_on_a_generation:
+        waited_cell_id = _waited_cell_id(raw_input) if tool_name == WAIT_TOOL_NAME else None
+        if waited_cell_id is not None and waited_cell_id in self.cell_ids:
+            self.call_ids.add(call_id)
+            self.waited_cell_by_call_id[call_id] = waited_cell_id
+        if generates_images(tool_name, raw_input):
             self.call_ids.add(call_id)
 
     def note_output(self, call_id: str, output_text: str) -> None:
-        cell_id = yielded_cell_id(output_text)
-        if cell_id is not None and call_id in self.call_ids:
-            self.cell_ids.add(cell_id)
+        if call_id not in self.call_ids:
+            return
+        running_cell_id = yielded_cell_id(output_text)
+        if running_cell_id is not None:
+            self.cell_ids.add(running_cell_id)
+        else:
+            self.cell_ids.discard(self.waited_cell_by_call_id.pop(call_id, ""))
 
 
 def _waited_cell_id(raw_arguments: str) -> str | None:
@@ -233,6 +244,11 @@ def _unwrap_command_result_envelopes(output: str) -> str:
             remaining = remaining[end:].lstrip()
         lines.append("\n".join(outputs) if outputs and not remaining else line)
     return "\n".join(lines)
+
+
+def _result_event_id(call_id: str, timestamp: str, payload: dict[str, Any]) -> str:
+    """The event id of a tool result line: its codex ``call_id`` (shared by re-serialised copies)."""
+    return f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
 
 
 def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, Any]:
@@ -721,7 +737,7 @@ def parse_lines(
 
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
+        event_id = _result_event_id(call_id, timestamp, payload)
         raw_output = _output_text(payload.get("output"))
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the request objects the permission and
@@ -801,7 +817,7 @@ def parse_line_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
+        event_id = _result_event_id(call_id, timestamp, payload)
         return {
             event_id: {"inputs_by_tool_call_id": {}, "output": _output_text(payload.get("output")), "thinking": None}
         }
@@ -818,8 +834,7 @@ def parse_line_image(record: dict[str, Any], event_id: str, index: int) -> Event
     if payload.get("type") not in ("function_call_output", "custom_tool_call_output"):
         return None
     call_id = str(payload.get("call_id", ""))
-    line_event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
-    if line_event_id != event_id:
+    if _result_event_id(call_id, timestamp, payload) != event_id:
         return None
     image_urls = _output_image_urls(payload.get("output"))
     if not 0 <= index < len(image_urls):

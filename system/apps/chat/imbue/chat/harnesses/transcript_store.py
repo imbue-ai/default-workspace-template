@@ -546,7 +546,8 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
             self._refresh_locked()
             event = self._store.get_event(event_id)
             source = self._store.source_of(event_id)
-        if event is None:
+        # Past the count the event carries there is no image to find, so no line is scanned for one.
+        if event is None or not 0 <= index < event.get("image_count", 0):
             return None
         source_line = read_source_line(source) if source is not None else None
         image = self._parse_image(event, source_line, index) if source_line is not None else None
