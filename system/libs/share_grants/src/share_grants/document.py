@@ -305,3 +305,15 @@ def grant_entries(
     return GrantEntries(
         users=tuple(users), emails=tuple(emails), email_domains=tuple(email_domains)
     )
+
+
+def grants_entries(
+    workspace: GrantEntries, entries_by_app: Mapping[str, GrantEntries]
+) -> GrantsEntries:
+    """A whole document from its workspace-level lists and each app's own."""
+    return GrantsEntries(workspace=workspace, services=dict(entries_by_app))
+
+
+def grant_lists_by_app(grants: Grants) -> dict[str, GrantList]:
+    """Each app's own allow-list, in the order of the apps' names."""
+    return {name: grants.services[name] for name in sorted(grants.services)}

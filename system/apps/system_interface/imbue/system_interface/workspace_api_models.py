@@ -71,6 +71,8 @@ CODE_WRITE_FAILED: Final[str] = "WRITE_FAILED"
 CODE_NOT_AT_WORKSPACE_ROOT: Final[str] = "NOT_AT_WORKSPACE_ROOT"
 
 GRANTS_ERROR_UNREADABLE: Final[str] = "UNREADABLE"
+# The key a grants document holds its per-app lists under, on the wire as in the grants file.
+GRANTS_PER_APP_KEY: Final[str] = "services"
 
 
 class WorkspaceRouteError(ErrorResponse):
@@ -120,11 +122,16 @@ class GrantListModel(FrozenModel):
 class GrantsDocumentModel(FrozenModel):
     """The whole grants document, in the shape of ``share_grants.toml``."""
 
+    model_config = ConfigDict(serialize_by_alias=True)
+
     workspace: GrantListModel = Field(
         default_factory=GrantListModel, description="Who is admitted to the whole workspace"
     )
-    services: dict[str, GrantListModel] = Field(
-        default_factory=dict, description="Who is admitted to one app alone, by the app's name"
+    # Named for the grants file's own word for its per-app tables on the wire.
+    apps: dict[str, GrantListModel] = Field(
+        default_factory=dict,
+        alias=GRANTS_PER_APP_KEY,
+        description="Who is admitted to one app alone, by the app's name",
     )
 
 

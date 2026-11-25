@@ -5129,13 +5129,17 @@ source = { editable = "system/libs/workspace_update_control" }
 
 [package.dev-dependencies]
 dev = [
+    { name = "pytest-executable-tmp" },
     { name = "ty" },
 ]
 
 [package.metadata]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = "==0.0.87" }]
+dev = [
+    { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "ty", specifier = "==0.0.87" },
+]
 
 [[package]]
 name = "wsproto"

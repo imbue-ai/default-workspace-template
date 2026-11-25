@@ -35,9 +35,10 @@ from loguru import logger
 from pydantic import BaseModel
 from share_grants.document import GrantEntries
 from share_grants.document import GrantedIdentityEntry
-from share_grants.document import GrantsEntries
 from share_grants.document import grant_entries
+from share_grants.document import grant_lists_by_app
 from share_grants.document import grant_shape_refusals
+from share_grants.document import grants_entries
 from share_grants.document import normalized_grants
 from share_grants.document import read_sharing_state
 from share_grants.document import replace_grants
@@ -96,6 +97,7 @@ from imbue.system_interface.workspace_api_models import CODE_PREVIEW
 from imbue.system_interface.workspace_api_models import CODE_SETUP_RUNNING
 from imbue.system_interface.workspace_api_models import CODE_WRITE_FAILED
 from imbue.system_interface.workspace_api_models import GRANTS_ERROR_UNREADABLE
+from imbue.system_interface.workspace_api_models import GRANTS_PER_APP_KEY
 from imbue.system_interface.workspace_api_models import GrantListModel
 from imbue.system_interface.workspace_api_models import GrantRefusalEntry
 from imbue.system_interface.workspace_api_models import GrantsDocumentModel
@@ -223,9 +225,13 @@ def _grant_list_model(grant_list: GrantList) -> GrantListModel:
 
 
 def _grants_document_model(grants: Grants) -> GrantsDocumentModel:
-    return GrantsDocumentModel(
-        workspace=_grant_list_model(grants.workspace),
-        services={name: _grant_list_model(grants.services[name]) for name in sorted(grants.services)},
+    return GrantsDocumentModel.model_validate(
+        {
+            "workspace": _grant_list_model(grants.workspace),
+            GRANTS_PER_APP_KEY: {
+                name: _grant_list_model(grant_list) for name, grant_list in grant_lists_by_app(grants).items()
+            },
+        }
     )
 
 
@@ -264,9 +270,9 @@ def replace_sharing_grants() -> ResponseReturnValue:
             CODE_GRANTS_UNREADABLE,
             HTTP_INTERNAL_ERROR,
         )
-    entries = GrantsEntries(
-        workspace=_grant_entries(body.grants.workspace),
-        services={name: _grant_entries(grant_list) for name, grant_list in body.grants.services.items()},
+    entries = grants_entries(
+        _grant_entries(body.grants.workspace),
+        {name: _grant_entries(grant_list) for name, grant_list in body.grants.apps.items()},
     )
     refusals = grant_shape_refusals(entries, state.grants)
     if refusals:
@@ -295,7 +301,7 @@ def replace_sharing_grants() -> ResponseReturnValue:
         raise WorkspaceRouteRefusal(
             f"The grants could not be written: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
         ) from e
-    logger.info("Replaced the workspace's grants ({} app scopes)", len(grants.services))
+    logger.info("Replaced the workspace's grants ({} app scopes)", len(body.grants.apps))
     return model_response(GrantsStoredResponse(grants=_grants_document_model(grants)))
 
 
