@@ -6,6 +6,7 @@
 import m from "mithril";
 
 import { alertDotIcon, icon } from "@imbue/workspace-ui/src/components/icons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 
 import { shareBadgeOf, shareRootAt, syncNoticeOf } from "../models/connections";
 import type { Entry } from "../models/server";
@@ -15,6 +16,7 @@ import type { FolderState } from "../models/FilesModel";
 import type { SortKey } from "../models/preferences";
 import { isWithin, parentOf } from "../models/paths";
 import { DROP_FOLDER_ATTR, EntryMenuButton, FOLDER_SURFACE_ATTR, RenameField, entryAttrs } from "./entries";
+import { FailureActions } from "./FailureActions";
 import { FileIcon, type IconBadge } from "./FileIcon";
 import type { FilesController } from "./FilesController";
 import { PreviewPane } from "./PreviewPane";
@@ -219,7 +221,12 @@ function columnBody(
     return m("div", { class: "flex justify-center py-6" }, m("div.spinner"));
   }
   if (state.status === "error" && entries.length === 0) {
-    return m("div", { class: "px-3 py-4 type-helper text-danger" }, state.error);
+    const failure = state.error;
+    return m("div.files-column-failure", { class: "px-3 py-4 type-helper text-danger" }, [
+      failure?.message,
+      m(SeeDetails, { details: failure?.details ?? null }),
+      failure === null ? null : m(FailureActions, { host: app.failureHost, failure, isCentred: false, extra: "mt-2" }),
+    ]);
   }
   if (entries.length === 0) {
     const notice = syncNoticeOf(app.model.connections, folder);

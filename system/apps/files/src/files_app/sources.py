@@ -4,20 +4,40 @@ the page data a folder or a file's page carries (and ``?json`` returns), and the
 from collections.abc import Iterator
 from typing import Literal
 from typing import Protocol
+from typing import Self
 
 from flask import Response
 from werkzeug.datastructures import Headers
 
+from files_app.os_refusals import FailureKind
+from files_app.os_refusals import OsRefusal
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
 class FilesError(Exception):
-    """A request the source could not carry out, with the status and plain words to answer it with."""
+    """A request the source could not carry out, with the status and plain words to answer it with, the kind of
+    refusal it was when the frontend reads that kind, the text behind the words (what a computer's file server
+    answered) when there is more to say than they do, and whether it is ordinary operation the words fully explain."""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        kind: FailureKind | None = None,
+        detail: str | None = None,
+        is_routine: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.kind = kind
+        self.detail = detail
+        self.is_routine = is_routine
+
+    @classmethod
+    def from_refusal(cls, refusal: OsRefusal, detail: str | None = None) -> Self:
+        """``refusal`` as the error to answer with, its sentence for people and ``detail`` behind it."""
+        return cls(refusal.status, refusal.sentence, refusal.kind, detail=detail, is_routine=refusal.is_routine)
 
 
 class EntryRecord(FrozenModel):

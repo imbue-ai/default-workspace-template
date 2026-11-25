@@ -51,6 +51,10 @@ from files_app.keybindings import FILES_APP_NAME
 from files_app.keybindings import files_keybinding_actions
 from files_app.local_files import LocalFiles
 from files_app.local_files import content_disposition
+from files_app.os_refusals import FailureKind
+from files_app.os_refusals import MOVE_REFUSAL_BY_SIDE
+from files_app.os_refusals import WRITE_REFUSAL_KINDS
+from files_app.os_refusals import refusal_for_os_error
 from files_app.sources import FileSource
 from files_app.sources import FilesError
 from files_app.sources import FolderStamps
@@ -68,8 +72,10 @@ _METHODS: Final[list[str]] = ["GET", "HEAD", "PUT", "DELETE", "MKCOL", "MOVE"]
 _CHUNK: Final[int] = 64 * 1024
 _NO_MOVE_TO_COMPUTER: Final[str] = "Moving isn't supported on files shared from your computer."
 _NO_GATEWAY: Final[str] = "This workspace isn't connected to Imbue Studio, so it can't reach your computers."
-# Queries that ask for data or a download rather than a page, so a failure is answered in plain words.
+# Queries that ask for data or a download rather than a page, so a failure is never answered with Files' own pages.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
+# Queries that load in the hidden frame a download goes through, which can read only a plain-text refusal.
+_DOWNLOAD_QUERIES: Final[frozenset[str]] = frozenset({"zip", "download"})
 
 # What every route exchanges, which the API document publishes. The connections listing is the one JSON route; a
 # path's routes serve files of any kind (its page, its bytes, a zip, and ``?json`` the page data its view describes),
@@ -107,11 +113,48 @@ def _text(message: str, status: int) -> Response:
     return Response(message, status=status, mimetype="text/plain")
 
 
+def _is_page_asked() -> bool:
+    """Whether the browser is loading a page (a window opening on a path), not the frontend asking for data."""
+    return "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+
+
+def _is_plain_text_asked() -> bool:
+    """Whether a refusal is read as plain text: a download, of a file or a folder's zip, loads in a hidden frame that
+    can read only that (workspace_ui's ``startDownload``), and a page load shows the body as the whole window."""
+    return bool(_DOWNLOAD_QUERIES & request.args.keys()) or _is_page_asked()
+
+
+def _refusal(
+    sentence: str, status: int, kind: FailureKind | None = None, detail: str | None = None, is_routine: bool = False
+) -> Response:
+    """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
+    page's own words name what failed), ``kind`` for a page that reads the case, ``detail`` for a script (the
+    sentence when there is nothing more to say), and ``is_routine`` for a refusal that is ordinary operation the
+    sentence fully explains. A download or a page load is answered with the sentence in plain text instead."""
+    if _is_plain_text_asked():
+        return _text(sentence, status)
+    return error_response(
+        detail or sentence, status, user_facing_message=sentence, routine=True if is_routine else None, kind=kind
+    )
+
+
+def _unexplained_failure(detail: str) -> Response:
+    """A failure no sentence explains, which the page can only say to try again: ``detail`` only."""
+    if _is_plain_text_asked():
+        return _text(detail, 500)
+    return error_response(detail, 500)
+
+
 def _request_body() -> Iterator[bytes]:
     if request.content_length in (None, 0) and "chunked" not in request.headers.get("Transfer-Encoding", ""):
         return iter(())
     stream = request.stream
     return iter(lambda: stream.read(_CHUNK), b"")
+
+
+def _destination_path() -> str:
+    """A MOVE's ``Destination`` as a path, decoded."""
+    return urllib.parse.unquote(urllib.parse.urlsplit(request.headers.get("Destination", "")).path)
 
 
 def _requested_path() -> str:
@@ -123,7 +166,7 @@ def create_app(
     gateway: Gateway | None,
     static_directory: Path,
     agent_id: str,
-    root: Path = Path("/"),
+    local: LocalFiles,
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
@@ -134,7 +177,6 @@ def create_app(
     )
     # Absolute, as Flask would read a relative one from its own package rather than the working directory.
     static_directory = static_directory.resolve()
-    local = LocalFiles(root)
     # Whether each device's file server is reached under its id, as the last listing of the shares found.
     device_paths: dict[str, bool] = {}
     cache = ConnectionsCache(gateway, agent_id, synced_root)
@@ -148,20 +190,19 @@ def create_app(
 
     def failure(error: FilesError) -> Response:
         """The error in plain words; a page asked for that isn't there is Files' own "not found" page."""
-        is_page_asked = (
-            "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
-        )
-        if error.status == 404 and is_page_asked:
+        if error.status == 404 and _is_page_asked():
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _text(error.message, error.status)
+        return _refusal(error.message, error.status, kind=error.kind, detail=error.detail, is_routine=error.is_routine)
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
         # own API; nothing is reached that way in the workspace either.
         if any(segment in (".", "..") for segment in path.split("/")):
-            return _text(f"{path} isn't a path to a file or folder.", 400)
+            return _refusal(
+                "That isn't a path to a file or folder.", 400, detail=f"{path} isn't a path to a file or folder."
+            )
         query = request.args
         try:
             if request.method in ("GET", "HEAD"):
@@ -188,18 +229,27 @@ def create_app(
             if request.method == "DELETE":
                 source.delete(path)
                 return _text("", 204)
-            destination = urllib.parse.unquote(urllib.parse.urlsplit(request.headers.get("Destination", "")).path)
+            destination = _destination_path()
             if prefix == "" and destination.startswith(f"{REMOTE_PREFIX}/"):
-                return _text(_NO_MOVE_TO_COMPUTER, 501)
+                return _refusal(_NO_MOVE_TO_COMPUTER, 501)
             source.move(path, destination[len(prefix) :])
             return _text("", 201)
         except FilesError as error:
             return failure(error)
-        except PermissionError:
-            return _text(f"You don't have permission to change or read {path}.", 403)
         except OSError as error:
-            logger.warning("{} {} failed: {}", request.method, path, error)
-            return _text(f"Couldn't do that with {path}: {error.strerror or error}", 500)
+            detail = f"{request.method} {path}: {error}"
+            refusal = refusal_for_os_error(error, is_read=request.method in ("GET", "HEAD"))
+            if refusal is None:
+                logger.warning("{} {} failed: {}", request.method, path, error)
+                return _unexplained_failure(detail)
+            if request.method == "MOVE" and isinstance(source, LocalFiles) and refusal.kind in WRITE_REFUSAL_KINDS:
+                side = source.unwritable_side(path, _destination_path()[len(prefix) :])
+                if side is not None:
+                    refusal = MOVE_REFUSAL_BY_SIDE[side]
+            logger.debug("{} {} refused as {}: {}", request.method, path, refusal.kind, error)
+            return _refusal(
+                refusal.sentence, refusal.status, kind=refusal.kind, detail=detail, is_routine=refusal.is_routine
+            )
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:
@@ -254,7 +304,7 @@ def create_app(
         workspace is not connected to Imbue Studio, and moving onto or off a computer is not supported.
         """
         if gateway is None:
-            return _text(_NO_GATEWAY, 503)
+            return _refusal(_NO_GATEWAY, 503)
         prefix = f"{REMOTE_PREFIX}/{device}"
         source = DeviceFiles(gateway, device, device_paths.get(device))
         try:
@@ -272,7 +322,10 @@ def create_app(
         with ``name``, ``is_folder``, ``is_symlink``, ``size`` and ``mtime``), a file's bytes (``?view`` or ``?edit``
         its page, ``?json`` ``{"kind": "file", "is_text": ...}``), or ``?zip`` a folder as a zip. PUT writes a file
         from the body, MKCOL makes a folder, MOVE (to the ``Destination`` header) renames, DELETE removes. A refusal
-        is plain words under its status.
+        is an ``ErrorResponse`` under its status: ``detail``, with ``user_facing_message`` when the cause is one a
+        person can act on, a ``kind`` (``os_refusals.FailureKind``) for the cases the page tells apart, and ``routine``
+        when it is ordinary operation the sentence fully explains. A refused ``?download`` or ``?zip``, or a page the
+        browser loads, is answered with the sentence as plain text instead.
         """
         return answer(local, "", _requested_path())
 

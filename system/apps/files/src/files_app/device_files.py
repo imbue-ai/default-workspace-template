@@ -20,6 +20,7 @@ from files_app.connections import list_on_device
 from files_app.gateway import Gateway
 from files_app.gateway import device_files_path
 from files_app.local_files import EDITABLE_LIMIT
+from files_app.os_refusals import GONE
 from files_app.sources import EntryRecord
 from files_app.sources import FileData
 from files_app.sources import FilesError
@@ -101,15 +102,17 @@ class DeviceFiles:
                 granted = device_permissions(self._gateway, self._device)
             except (httpx.HTTPError, ValueError) as error:
                 logger.debug("{} did not say how its files are reached: {}", self._device, error)
-                raise FilesError(502, UNREACHABLE) from error
+                raise FilesError(502, UNREACHABLE, is_routine=True) from error
             self._has_device_paths = self._device in devices_with_device_paths([granted])
         return self._has_device_paths
 
     def describe(self, path: str) -> PageData:
         # Depth 1, so a folder's page carries its listing, which the frontend shows without asking again.
         described = list_on_device(self._gateway, self._device, self.has_device_paths, path, depth=1)
-        if described is None or len(described) == 0:
-            raise FilesError(502, UNREACHABLE)
+        if described is None:
+            raise FilesError(502, UNREACHABLE, is_routine=True)
+        if len(described) == 0:
+            raise FilesError.from_refusal(GONE)
         entry = described[0]
         if entry.is_folder:
             return FolderData(entries=tuple(_record(child) for child in described[1:]))
@@ -124,25 +127,34 @@ class DeviceFiles:
             upstream = self._gateway.send(outgoing)
         except httpx.HTTPError as error:
             logger.debug("{} did not answer {} {}: {}", self._device, method, path, error)
-            raise FilesError(502, UNREACHABLE) from error
+            raise FilesError(502, UNREACHABLE, is_routine=True) from error
         if upstream.status_code == 403:
             upstream.close()
-            raise FilesError(403, "Your computer only shares this to read.")
+            raise FilesError(403, "Your computer only shares this to read.", "shared_read_only")
         return upstream
 
     def _change(self, method: str, path: str, headers: Mapping[str, str], body: Iterator[bytes] | None) -> None:
         upstream = self._send(method, path, headers, body)
         try:
             if upstream.status_code >= 400:
-                detail = upstream.read().decode("utf-8", "replace").strip()
-                raise FilesError(upstream.status_code, detail or f"Your computer answered {upstream.status_code}.")
+                # The file server's own text goes behind the page's "See details", never on its visible line.
+                answered = upstream.read().decode("utf-8", "replace").strip()
+                detail = f"{method} {path}: {answered}" if answered else None
+                if upstream.status_code == 404:
+                    raise FilesError.from_refusal(GONE, detail=detail)
+                # The status goes behind "See details" with the rest; the page names what failed.
+                raise FilesError(upstream.status_code, "Your computer couldn't do this.", detail=detail)
         finally:
             upstream.close()
 
     def read(self, path: str, headers: Headers) -> Response | None:
         # A HEAD stays one, so asking whether a file is there doesn't fetch it from the computer.
         ranged = {"Range": headers["Range"]} if "Range" in headers else {}
-        return _relayed(self._send(request.method, path, ranged, None))
+        upstream = self._send(request.method, path, ranged, None)
+        if upstream.status_code == 404:
+            upstream.close()
+            raise FilesError.from_refusal(GONE)
+        return _relayed(upstream)
 
     def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:
         headers = {} if length is None else {"Content-Length": str(length)}

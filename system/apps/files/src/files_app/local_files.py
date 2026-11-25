@@ -17,6 +17,11 @@ from flask import send_file
 from loguru import logger
 from werkzeug.datastructures import Headers
 
+from files_app.os_refusals import ALREADY_EXISTS
+from files_app.os_refusals import FOLDER_IN_THE_WAY
+from files_app.os_refusals import GONE
+from files_app.os_refusals import MoveSide
+from files_app.os_refusals import NOT_REPLACED
 from files_app.sources import EntryRecord
 from files_app.sources import FileData
 from files_app.sources import FilesError
@@ -40,7 +45,7 @@ class LocalFiles:
     def _existing(self, path: str) -> Path:
         target = self._on_disk(path)
         if not os.path.lexists(target):
-            raise FilesError(404, f"There's nothing at {path}.")
+            raise FilesError.from_refusal(GONE)
         return target
 
     def stamps(self, paths: list[str]) -> FolderStamps:
@@ -71,7 +76,7 @@ class LocalFiles:
         if target.is_dir():
             return None
         if not target.is_file():
-            raise FilesError(404, f"{path} isn't a file that can be read.")
+            raise FilesError(404, "It isn't a file that can be read.")
         # Conditional, so a Range is honoured and an unchanged file is answered 304; always revalidated, so a file
         # changed on disk is never shown from the browser's cache.
         response = send_file(target, conditional=True, max_age=None)
@@ -81,7 +86,7 @@ class LocalFiles:
     def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:
         target = self._on_disk(path)
         if target.is_dir():
-            raise FilesError(409, f"There's already a folder at {path}.")
+            raise FilesError.from_refusal(FOLDER_IN_THE_WAY)
         # Through a symlink to the file it names, so saving a linked file keeps the link.
         final = Path(os.path.realpath(target))
         final.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +105,7 @@ class LocalFiles:
                     out.write(chunk)
                     written += len(chunk)
             if length is not None and written != length:
-                raise FilesError(400, f"The upload of {path} was cut short.")
+                raise FilesError(400, "The upload was cut short.")
             os.replace(partial, final)
             is_done = True
         finally:
@@ -110,7 +115,7 @@ class LocalFiles:
     def make_folder(self, path: str) -> None:
         target = self._on_disk(path)
         if os.path.lexists(target):
-            raise FilesError(409, f"There's already something at {path}.")
+            raise FilesError.from_refusal(ALREADY_EXISTS)
         target.mkdir(parents=True)
 
     def delete(self, path: str) -> None:
@@ -124,20 +129,40 @@ class LocalFiles:
         source = self._existing(path)
         target = self._on_disk(destination)
         if os.path.lexists(target):
-            raise FilesError(412, f"There's already something at {destination}.")
+            raise FilesError.from_refusal(NOT_REPLACED)
         if source.is_dir() and target.is_relative_to(source):
             raise FilesError(409, "A folder can't be moved into itself.")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(source, target)
 
+    def unwritable_side(self, path: str, destination: str) -> MoveSide | None:
+        """Which end of moving ``path`` to ``destination`` cannot be written: the folder it would go into, else the
+        folder it is in; None when both can."""
+        if not self.is_folder_writable(_nearest_existing(self._on_disk(destination).parent)):
+            return "destination"
+        if not self.is_folder_writable(_nearest_existing(self._on_disk(path.rstrip("/")).parent)):
+            return "source"
+        return None
+
+    def is_folder_writable(self, folder: Path) -> bool:
+        """Whether this process may add to or remove from ``folder``."""
+        return os.access(folder, os.W_OK)
+
     def zip(self, path: str) -> Response:
         folder = self._existing(path)
         if not folder.is_dir():
-            raise FilesError(400, f"{path} isn't a folder.")
+            raise FilesError(400, "It isn't a folder.")
         name = f"{folder.name or 'Computer'}.zip"
         response = Response(zip_folder(folder), mimetype="application/zip")
         response.headers["Content-Disposition"] = content_disposition("attachment", name)
         return response
+
+
+def _nearest_existing(folder: Path) -> Path:
+    # The nearest folder that is there decides, as a move makes the folders above its destination.
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    return folder
 
 
 def content_disposition(disposition: str, name: str) -> str:
