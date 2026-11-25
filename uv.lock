@@ -72,10 +72,12 @@ members = [
     "update-app-skill",
     "update-self-skill",
     "use-ai-integration-skill",
+    "workspace-backup-setup",
     "workspace-layout",
     "workspace-profile",
     "workspace-scripts",
     "workspace-themes",
+    "workspace-update-control",
 ]
 overrides = [{ name = "paramiko", specifier = "==5.0.1" }]
 
@@ -4356,9 +4358,11 @@ dependencies = [
     { name = "simple-websocket" },
     { name = "watchdog" },
     { name = "werkzeug" },
+    { name = "workspace-backup-setup" },
     { name = "workspace-layout" },
     { name = "workspace-profile" },
     { name = "workspace-themes" },
+    { name = "workspace-update-control" },
 ]
 
 [package.dev-dependencies]
@@ -4402,9 +4406,11 @@ requires-dist = [
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-backup-setup", editable = "system/libs/workspace_backup_setup" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
+    { name = "workspace-update-control", editable = "system/libs/workspace_update_control" },
 ]
 
 [package.metadata.requires-dev]
@@ -4986,6 +4992,35 @@ wheels = [
 ]
 
 [[package]]
+name = "workspace-backup-setup"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_backup_setup" }
+dependencies = [
+    { name = "host-backup" },
+    { name = "imbue-common" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-executable-tmp" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "host-backup", editable = "system/services/host_backup" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f1cd33c318ade8e4c7e607947aa15fc44ef2f88d" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "ty", specifier = "==0.0.87" },
+]
+
+[[package]]
 name = "workspace-layout"
 version = "0.1.0"
 source = { editable = "system/libs/workspace_layout" }
@@ -5086,6 +5121,21 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tinycss2", specifier = ">=1.2" },
 ]
+
+[[package]]
+name = "workspace-update-control"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_update_control" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.87" }]
 
 [[package]]
 name = "wsproto"
