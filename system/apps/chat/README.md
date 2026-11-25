@@ -1587,8 +1587,8 @@ refuses the update when it cannot come up.
 `--secondary` is a second chat beside the live one, the preview of a proposed
 change: it follows the same observer, reads the live accounts, and tracks every
 agent the live chat tracks, but reconciles no accounts, writes no memory scores,
-runs no automatic compaction, resumes no unfinished switch, opens no windows,
-reports no client activity to the shell, marks no chat read in the Imbue Studio
+runs no automatic compaction, resumes no unfinished switch, stops no archived
+agent it finds running, opens no windows, reports no client activity to the shell, marks no chat read in the Imbue Studio
 app, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
 record into the scratch copy only, and so is an answer to a secret card, since the
