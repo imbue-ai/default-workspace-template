@@ -22,11 +22,14 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from screen.browser_names import MAX_NAME_LENGTH
+from screen.browser_names import NAME_PATTERN
 from screen.cli import ServiceAnswer
 from screen.cli import call_service
 from screen.cli import identity_headers
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
+from screen.errors import InvalidSessionPurposeError
 from screen.errors import ScreenServiceUnreachableError
 from screen.fleet_cli import refusal_reason
 from screen.identity import AGENT_ID_HEADER
@@ -63,8 +66,14 @@ def driven_browser(
     is handed the Screen and messaged once it frees. A Screen service that does not answer raises
     ``ScreenServiceUnreachableError``. ``is_reclaim`` takes the Screen back from the human, only for a run the user
     started themselves. A detach that fails after the body succeeded raises ``BrowserSessionError``; after a body that
-    raised, it is logged and the body's error goes on.
+    raised, it is logged and the body's error goes on. ``purpose`` is lowercase letters and digits in words joined by
+    single dashes, at most 40 characters; any other raises ``InvalidSessionPurposeError`` before anything is reserved.
     """
+    # The reaper cannot recognize a daemon whose session name starts with a dash, so it would never end one.
+    if len(purpose) > MAX_NAME_LENGTH or NAME_PATTERN.fullmatch(purpose) is None:
+        raise InvalidSessionPurposeError(
+            f"invalid purpose {purpose!r}: lowercase letters, digits and single dashes, at most {MAX_NAME_LENGTH}"
+        )
     playwright_cli = shutil.which(PLAYWRIGHT_CLI_COMMAND)
     if playwright_cli is None:
         raise BrowserSessionError(f"{PLAYWRIGHT_CLI_COMMAND} is not installed")

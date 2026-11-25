@@ -74,6 +74,10 @@ class InvalidBrowserNameError(ScreenError, ValueError):
     """A string is not a browser name (see ``browser_names.is_valid_browser_name``)."""
 
 
+class InvalidSessionPurposeError(ScreenError, ValueError):
+    """A ``driven_browser`` purpose is not lowercase alphanumeric words joined by single dashes."""
+
+
 class InvalidStartUrlError(ScreenError, ValueError):
     """A start page is not an absolute http(s) URL with a host, or not one on this machine where that is required."""
 

@@ -13,6 +13,7 @@ from screen.cli import ENV_SERVICE_URL
 from screen.data_types import Controller
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
+from screen.errors import InvalidSessionPurposeError
 from screen.errors import ScreenServiceUnreachableError
 from screen.primitives import AgentId
 from screen.primitives import BrowserName
@@ -78,6 +79,22 @@ def test_a_browser_another_agent_holds_is_refused_with_nothing_attached(
         with driven_browser(browser_name=name, purpose="sync"):
             pytest.fail("the body ran on a browser another agent holds")
     assert refused.value.status == "busy_agent"
+    assert _calls(fake_playwright_cli) == []
+
+
+def test_a_purpose_the_reaper_could_not_recognize_is_refused_before_the_browser_is_reserved(
+    service: ScreenService,
+    client: FlaskClient,
+    served_screen: str,
+    fake_playwright_cli: Path,
+    script_agent: AgentId,
+) -> None:
+    name = start_browser(client, service)
+    for purpose in ("", "-sync", "plaud sync", "plaud/sync"):
+        with pytest.raises(InvalidSessionPurposeError):
+            with driven_browser(browser_name=name, purpose=purpose):
+                pytest.fail(f"the body ran with purpose {purpose!r}")
+        assert not _is_leased(service, script_agent), purpose
     assert _calls(fake_playwright_cli) == []
 
 
