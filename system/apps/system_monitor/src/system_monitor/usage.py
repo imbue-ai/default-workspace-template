@@ -3,12 +3,13 @@
 Programs share memory: those that load the same files (the Python and Node runtimes, Chromium,
 system libraries) map the same pages, and each one's resident size (RSS) counts those pages in
 full. Where the kernel reports each program's own memory (``/proc/<pid>/smaps_rollup``, or
-``smaps`` under gVisor, which has no rollup; see ``programs.read_smaps``), ``exact_usage`` splits the memory in use without estimating: each group holds its programs'
-anonymous memory (what they made for themselves, which is what stopping them frees; the file
-pages they map are cache the kernel drops under pressure, and the memory guard's figure of what
-is in use leaves them out too), the shared memory segments programs map are counted once in a
-Shared row, the files in the /tmp scratch space are a Temporary files row, and what no program
-holds (the kernel, programs this app cannot inspect) is the System row.
+``smaps`` under gVisor, which has no rollup; see ``programs.read_smaps``), ``exact_usage``
+splits the memory in use without estimating: each group holds its programs' anonymous memory
+(what they made for themselves, which is what stopping them frees; the file pages they map are
+cache the kernel drops under pressure, and the memory guard's figure of what is in use leaves
+them out too), the shared memory segments programs map are counted once in a Shared row, the
+files in the /tmp scratch space are a Temporary files row, and what no program holds (the
+kernel, programs this app cannot inspect) is the System row.
 
 Where no process's own memory can be read, only RSS is available, and ``scaled_usage``
 shrinks every group by one factor until they add up to what is in use. Checked against real
