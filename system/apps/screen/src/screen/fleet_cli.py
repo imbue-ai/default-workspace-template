@@ -9,7 +9,6 @@ Exit codes, which an agent branches on: 0 ok, 1 error, 2 preempted (a human has 
 """
 
 import json
-import os
 import threading
 import urllib.error
 import urllib.request
@@ -27,11 +26,11 @@ from screen.cli import EXIT_OK
 from screen.cli import EXIT_PREEMPTED
 from screen.cli import EXIT_TIMEOUT
 from screen.cli import EXIT_USAGE
+from screen.cli import identity_headers
 from screen.cli import open_screen_window
 from screen.cli import own_chat_id
 from screen.cli import service_url
 from screen.identity import AGENT_ID_HEADER
-from screen.identity import AGENT_NAME_HEADER
 
 _REQUEST_TIMEOUT_SECONDS: Final[float] = 90.0
 # ``new`` answers as soon as the browser is registered; the stack and Chromium come up behind it, so the attach
@@ -54,14 +53,10 @@ def _err(message: str) -> None:
 
 def agent_headers() -> dict[str, str]:
     """The identity headers; a hard failure with no chat id to send (no null owner)."""
-    chat_id = own_chat_id()
-    if not chat_id:
+    headers = identity_headers()
+    if AGENT_ID_HEADER not in headers:
         _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync agentic-browser-fleet` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
-    headers = {AGENT_ID_HEADER: chat_id, "Content-Type": "application/json"}
-    name = os.environ.get("MNGR_AGENT_NAME")
-    if name:
-        headers[AGENT_NAME_HEADER] = name
     return headers
 
 
