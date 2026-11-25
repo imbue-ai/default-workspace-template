@@ -420,7 +420,9 @@ figure. A process belongs to the nearest of its ancestors that is an agent's
 main process (the pid mngr reports, every live pid the agent-pid registry holds
 for it, and failing those claude found by its command line), a program
 supervisord runs, or a browser on the Screen (the Chromium profile on its
-command line).
+command line). The pid mngr reports is the one input the System Monitor does
+not have, since it never runs `mngr list`: an agent that is missing from the
+registry and is not claude is a chat here and "Other" there.
 
 `list` prints:
 
