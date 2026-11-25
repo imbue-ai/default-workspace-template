@@ -100,7 +100,9 @@ def read_smaps_memory(pid: int, proc: Path = PROC) -> SmapsMemory | None:
         rss = _RSS_LINE.search(mapping.group("fields"))
         key = f"{mapping.group('device')} {mapping.group('inode')}"
         segments[key] = max(segments.get(key, 0), int(rss.group(1)) if rss else 0)
-    return SmapsMemory(anonymous_kib=_summed_anonymous_kib(text), shared_segment_kib=segments)
+    return SmapsMemory(
+        anonymous_kib=_summed_anonymous_kib(text), shared_segment_kib=segments
+    )
 
 
 def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
@@ -112,7 +114,9 @@ def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
     which maps a large binary.
     """
     try:
-        return _summed_anonymous_kib((proc / str(pid) / "smaps_rollup").read_text(errors="replace"))
+        return _summed_anonymous_kib(
+            (proc / str(pid) / "smaps_rollup").read_text(errors="replace")
+        )
     except OSError:
         pass
     memory = read_smaps_memory(pid, proc)
@@ -128,7 +132,9 @@ _SHARED_MAPPING: Final[re.Pattern[str]] = re.compile(
     re.MULTILINE,
 )
 _RSS_LINE: Final[re.Pattern[str]] = re.compile(r"^Rss:\s+(\d+)", re.MULTILINE)
-_ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(r"^Anonymous:\s+(\d+)", re.MULTILINE)
+_ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^Anonymous:\s+(\d+)", re.MULTILINE
+)
 
 
 def _summed_anonymous_kib(text: str) -> int:

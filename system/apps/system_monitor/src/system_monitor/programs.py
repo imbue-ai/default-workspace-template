@@ -49,10 +49,11 @@ PROGRAM_NAMES = {
 
 
 class Rollup(NamedTuple):
-    """What smaps_rollup reports for one process, in bytes."""
+    """What smaps_rollup reports for one process, in bytes; under gVisor, what its smaps allows
+    (no private or proportional figure: gVisor reports every page as private)."""
 
-    private: int
-    pss: int
+    private: int | None
+    pss: int | None
     anonymous: int | None
     shmem: int | None
 

@@ -90,7 +90,9 @@ from oom_priority.supervisor_rpc import supervised_pids
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
 # The states in which an agent's processes are alive: a ``STOPPED`` or ``DONE`` agent holds no memory.
-MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset({IDLE_AGENT_STATE, "RUNNING"})
+MEMORY_HOLDING_AGENT_STATES: Final[frozenset[str]] = frozenset(
+    {IDLE_AGENT_STATE, "RUNNING"}
+)
 # The label naming the chat an agent belongs to, which the chat app stamps on a chat's agents once it has handed
 # off; an agent without it is its own chat.
 CHAT_ID_LABEL: Final[str] = "chat_id"
