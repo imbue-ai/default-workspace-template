@@ -2,8 +2,8 @@
 
 When the memory daemon (earlyoom) sheds something and an agent reports it to
 you -- a worker's `question` gate about a shed test command, a worker you find
-shed (`lead-proxy.md`, `dead-worker-recovery.md`), or anything else an agent or
-the user brings you -- the workspace ran short of memory, and the next heavy
+shed, or anything else an agent or the user brings you -- the workspace ran
+short of memory, and the next heavy
 command is likely to be shed too. Memory is the user's to spend, so you find
 what could be freed and let them choose; you never stop anything on your own.
 
@@ -52,6 +52,5 @@ Run this once per shed report, not on a schedule: listing is cheap, but every
 offer is a question the user has to stop and answer.
 
 One flow does not ask: a workspace update frees memory on its own judgment, and
-a scheduled one may go further than this page allows. Its rule is
-`.agents/skills/update-self/references/freeing-memory-for-an-update.md`, and it
-is that flow's alone.
+a scheduled one may go further than this page allows. Its rule is the
+`update-self` skill's, and it is that flow's alone.

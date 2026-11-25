@@ -41,6 +41,14 @@ target release's own copy (or the local one, when the ref predates the skill).
   staged copy exits 75 on every subcommand there, so the command it prints for
   that verdict runs the local copy, and is skipped when the local copy
   predates `run-status`.
+- **Every prose path outside this skill's own directory uses the staged copy**
+  from Step 3 on, in SKILL.md and in every reference (a test holds the prose to
+  this, and to naming only paths `stage-shared-prose` stages:
+  `STAGED_PROSE_PATHS` in `update_self.py`). A bare `.agents/shared/...` path
+  resolves to the workspace's own tree, which may predate the file, or hold an
+  older one that contradicts this flow. Steps 1-2 run before anything is staged
+  and name the workspace's copies. Scripts are not staged this way: the ones
+  this skill needs from outside are mirrored into its package.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
   test holds this too): an older workspace's lead follows the staged prose but
   launches with its own `launch-task/create_worker.py`, which may predate
