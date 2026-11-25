@@ -39,6 +39,23 @@ running one of this package's entry points from the workspace venv
   `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`), recreates the
   remembered sessions, registers `app.toml` and 7681 through
   `system/scripts/forward_port.py`, and waits for `SIGTERM`.
+- A load of a terminal window's page (`GET /`) that fails is answered with a page of
+  the wrapper's own rather than the JSON the APIs answer (`page_failure`): a name no
+  terminal can have, tmux not answering (with Try again, and no agent: every agent
+  runs in that same tmux server), saved terminals that cannot be read or were written
+  by a newer version (with "Ask an agent to fix this", the contract's `askAgentToFix`,
+  handed the failure and its reason), and any other failure (with Try again and "Ask
+  an agent to fix this"), the raw reason behind "See details". `PageFailure` says for
+  each whether it owes the person help (`is_help_owed`), and the page offers what
+  workspace_ui's `FailureRemedies` does for a Mithril page: the agent for a failure
+  that owes help, and "Report a bug" (the contract's `reportBug`) only in the agent's
+  place where the page names nothing to ask one, or once an ask was refused. A
+  refused ask shows its reason under the page's own, with "Draft it in a chat" (the
+  same request through `askAgentToFix`'s `draft` delivery, left unsent in a chat's
+  message box) where that reason owes help, and the one "Report a bug", which files
+  both failures. Each button through the shell shows only once the shell's handshake
+  says it can work: the agent with any shell, the bug report where Imbue Studio opens
+  one.
 - `terminal-pty` (`pty_main.py`) is ttyd itself, on its own internal origin
   (`system/apps/terminal_pty/app.toml`, port 7683), framed by the wrapper. It writes
   the ttyd dispatch scripts into `data/.state/terminal/commands/` (`dispatch.py`):
@@ -49,7 +66,22 @@ running one of this package's entry points from the workspace venv
   directory; `agent.sh <name> [view]` attaches to an mngr agent's tmux window for
   the chat UI's terminal back face, read-only and size-ignored when the chat's
   window is viewed. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
-  `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
+  `commands/<key>.sh` with the remaining arguments. A terminal that ends for a reason
+  the person should be told -- tmux would not attach or create the session (or
+  failed in its first seconds), tmux ended it with an error, or `workdir.sh`'s folder
+  is gone -- prints a private OSC sequence (`pty_page.TERMINAL_ENDED_OSC`: the kind
+  and the base64 of tmux's text or the folder) and holds the pane; the script added
+  to ttyd's page posts it to the wrapper as `{type: "terminal:ended", kind, detail}`,
+  and the wrapper shows the reason in place of ttyd's "Connection Closed", with Try
+  again and "Ask an agent to fix this" (the contract's `askAgentToFix`, with tmux's
+  text) for a terminal that could not start, Start a new terminal (a `POST /new`
+  from the page, then the window moves to it, with "Ask an agent to fix this" if that
+  fails) and "Ask an agent to fix this" for one tmux ended with an error (and for a
+  kind the wrapper does not know), Start a new terminal alone for one whose folder
+  is gone, and tmux's text behind "See details"; a refused ask
+  brings "Draft it in a chat" and "Report a bug" as on the failure page above. The user's
+  own exit prints nothing, so ttyd's overlay, which reconnects, stays its answer.
+  `terminal-pty` decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
   the stock client (with a warning) when the asset is missing or will not decompress,

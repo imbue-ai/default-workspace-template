@@ -1,3 +1,4 @@
+import html
 import json
 import re
 from pathlib import Path
@@ -12,10 +13,20 @@ from app_schema.testing import (
 from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
+from terminal_app.data_types import TerminalPaths
+from terminal_app.errors import (
+    TerminalAppError,
+    TerminalStoreError,
+    TerminalStoreVersionError,
+    TmuxCommandError,
+    UnknownSessionPageError,
+)
 from terminal_app.pages import (
     NEW_PATH,
+    AgentFix,
     PageConfig,
     SessionPage,
+    page_failure,
     render_page,
 )
 from terminal_app.primitives import VIEWER_ARGUMENT, TerminalTitle, TmuxSessionName
@@ -26,12 +37,14 @@ from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     TEST_APP_CONTRACT_SOURCE,
     TEST_PTY_LABEL,
+    TEST_SESSION_COMMAND,
     FakeTmux,
     build_pages_test_client,
     make_terminal_record,
     make_tmux_session,
     write_registry_labels,
 )
+from terminal_app.tmux import SubprocessTmux
 
 
 def _config_of(page_html: str) -> dict[str, object]:
@@ -108,13 +121,116 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     assert session.json == config["page"]
 
 
-def test_a_name_that_cannot_be_a_session_is_not_found(
-    pages_client: FlaskClient,
-) -> None:
-    response = pages_client.get("/?session=not%20a%20name")
+def _failure_page_parts(page_html: str) -> tuple[str, str, bool, dict[str, object]]:
+    """The failure page's sentence, its "See details" text, whether it offers Try again, and what its buttons through
+    the shell read (``agent_fix``, ``is_help_owed``)."""
+    message = html.unescape(page_html.split('<p class="failure-message">', 1)[1].split("</p>", 1)[0])
+    details = html.unescape(page_html.split("<pre>", 1)[1].split("</pre>", 1)[0])
+    is_retryable = '<button type="button" data-action="retry">' in page_html
+    start = page_html.index('id="terminal-failure">') + len('id="terminal-failure">')
+    shell_buttons = json.loads(page_html[start : page_html.index("</script>", start)])
+    return message, details, is_retryable, shell_buttons
+
+
+def test_a_window_on_a_name_that_cannot_be_a_session_gets_a_page_saying_so(pages_client: FlaskClient) -> None:
+    response = pages_client.get("/?session=a.b")
 
     assert response.status_code == 404
-    assert "no terminal has the name" in response.get_json()["detail"]
+    assert response.mimetype == "text/html"
+    message, details, is_retryable, shell_buttons = _failure_page_parts(response.text)
+    assert message == "There is no terminal named a.b. Open a terminal from the launcher."
+    assert details == "no terminal has the name 'a.b'"
+    assert (is_retryable, shell_buttons) == (False, {"agent_fix": None, "is_help_owed": False})
+    # The page's own refresh reads the same refusal as JSON.
+    assert "no terminal has the name" in pages_client.get("/api/sessions/a.b").get_json()["detail"]
+
+
+def test_a_window_whose_saved_terminals_cannot_be_read_offers_to_ask_an_agent(
+    pages_client: FlaskClient, session_store: JsonTerminalSessionStore
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True, exist_ok=True)
+    session_store.store_path.write_text("{not json")
+
+    response = pages_client.get("/?session=terminal-1")
+
+    assert response.status_code == 500
+    # The buttons are wired by the page's inline scripts, which run only if the policy admits them.
+    assert_document_policy_admits_page(response)
+    message, details, is_retryable, shell_buttons = _failure_page_parts(response.text)
+    assert message == "This workspace's saved terminals can't be read, so terminals can't open."
+    assert "is not valid JSON" in details
+    assert is_retryable is False
+    agent_fix = shell_buttons["agent_fix"]
+    assert isinstance(agent_fix, dict) and agent_fix["details"] == details
+    assert shell_buttons["is_help_owed"] is True
+
+
+def test_a_window_whose_saved_terminals_are_from_a_newer_version_says_so(
+    pages_client: FlaskClient, session_store: JsonTerminalSessionStore
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True, exist_ok=True)
+    session_store.store_path.write_text('{"version": 2, "sessions": []}')
+
+    response = pages_client.get("/?session=terminal-1")
+
+    message, details, _is_retryable, shell_buttons = _failure_page_parts(response.text)
+    assert message == (
+        "This workspace's saved terminals were written by a newer version of the workspace's software "
+        "(for example before an update was rolled back), so terminals can't open."
+    )
+    assert "written by a newer version of the app" in details
+    agent_fix = shell_buttons["agent_fix"]
+    assert isinstance(agent_fix, dict) and agent_fix["details"] == details
+
+
+def test_a_window_while_tmux_cannot_run_asks_to_try_again(
+    session_store: JsonTerminalSessionStore, terminal_paths: TerminalPaths, tmp_path: Path
+) -> None:
+    source = TmuxSessionSource(
+        tmux=SubprocessTmux(tmux_executable=str(tmp_path / "no-tmux-here")),
+        store=session_store,
+        agent_session_prefix="mngr-",
+        default_workdir=DEFAULT_TEST_WORKDIR,
+        sessions_dir=terminal_paths.sessions_dir,
+        session_command=TEST_SESSION_COMMAND,
+    )
+    client = build_pages_test_client(source, write_registry_labels(tmp_path / "apps.toml", {}), tmp_path / "c.js", [])
+
+    page = client.get("/?session=terminal-1")
+    launch = client.post("/new", json={})
+
+    message, details, is_retryable, shell_buttons = _failure_page_parts(page.text)
+    assert message == "Terminals aren't responding in this workspace right now. Try again in a moment."
+    assert "cannot run" in details
+    assert (is_retryable, shell_buttons) == (True, {"agent_fix": None, "is_help_owed": False})
+    # A launch is answered to the shell, as JSON.
+    assert "cannot run" in launch.get_json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UnknownSessionPageError("no terminal has the name 'a.b'"),
+        TmuxCommandError("tmux did not finish list-sessions within 5.0s"),
+        TerminalStoreVersionError("written by a newer version of the app"),
+        TerminalStoreError("is not valid JSON"),
+        TerminalAppError("unexpected"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+def test_every_failure_page_that_owes_help_hands_an_agent_the_raw_reason(error: TerminalAppError) -> None:
+    failure = page_failure(error, "terminal-1")
+
+    if failure.is_help_owed:
+        assert failure.agent_fix is not None and failure.agent_fix.details == str(error)
+    else:
+        assert failure.agent_fix is None
+
+
+def test_the_fallback_failure_page_asks_an_agent_about_the_terminal_it_could_not_open() -> None:
+    assert page_failure(TerminalAppError("unexpected"), "terminal-1").agent_fix == AgentFix(
+        what_failed="The terminal terminal-1 couldn't be opened", details="unexpected"
+    )
 
 
 def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_path(
@@ -323,7 +439,7 @@ def test_the_wrapper_attaches_the_pty_as_a_viewer_when_the_shell_says_the_window
     argument the session script reads as a read-only attach that never sizes the window, and attaches again the
     other way when the shell's word changes."""
     wrapper = pages_client.get("/?session=terminal-1").text
-    assert "onHandshake: (handshake) => takeViewing(handshake.isViewing)" in wrapper
+    assert "onHandshake: (handshake) => {\n            takeViewing(handshake.isViewing);" in wrapper
     assert f'(isViewing ? "&arg={VIEWER_ARGUMENT}" : "")' in wrapper
 
 
