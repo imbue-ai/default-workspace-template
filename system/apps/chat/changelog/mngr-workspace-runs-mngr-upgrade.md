@@ -1,0 +1,1 @@
+The README now says an older Claude chat gets mngr's compaction hooks once a workspace boot upgrades it, so the compaction status shows for its own compactions from then on; before, it said only chats created after mngr gained the hooks have them.
