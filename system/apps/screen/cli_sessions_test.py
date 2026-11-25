@@ -2,6 +2,7 @@
 of them the reaper ends, over a fleet whose tokens, lease and clock are real (the README's "The browser" section)."""
 
 import os
+import shutil
 from pathlib import Path
 
 from imbue.imbue_common.model_update import to_update
@@ -176,3 +177,26 @@ rm -rf "$DAEMON_PROC_ENTRY"
     assert sessions.end(session) is True
     assert calls.read_text().splitlines() == [f"{workspace.resolve()} -s=plaud-sync-1 detach"]
     assert not entry.exists()
+
+
+def test_a_daemon_already_gone_is_not_detached_by_name_since_a_successor_may_hold_the_name(tmp_path: Path) -> None:
+    proc = tmp_path / "proc"
+    proxy_server = ProxyServer(requested_port=0)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stale_url = proxy_server.attach_url("browser-1", "tok-stale")
+    _write_process(proc, 4_230_590, ["node", _DAEMON, "browser-1", f"--cdp={stale_url}"], {}, workspace)
+    calls = tmp_path / "calls.log"
+    cli = tmp_path / "playwright-cli"
+    cli.write_text(f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "{calls}"
+""")
+    cli.chmod(0o755)
+    sessions = ProcCliSessions(proc_dir=proc, playwright_cli=str(cli))
+    [stale] = sessions.attached_through(proxy_server)
+    # The stale daemon exits and a successor attaches under the same name before the sweep reaches it.
+    shutil.rmtree(proc / "4230590")
+    live_url = proxy_server.attach_url("browser-1", "tok-live")
+    _write_process(proc, 4_230_591, ["node", _DAEMON, "browser-1", f"--cdp={live_url}"], {}, workspace)
+    assert sessions.end(stale) is True
+    assert not calls.exists()

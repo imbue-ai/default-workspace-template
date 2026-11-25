@@ -160,6 +160,9 @@ class ProcCliSessions(CliSessionsInterface):
         )
 
     def end(self, session: AttachedCliSession) -> bool:
+        # detach names the session, not the pid: once this daemon is gone, the name may belong to a live successor.
+        if not self._is_daemon_of(session):
+            return True
         if self.playwright_cli is not None and session.working_dir is not None:
             try:
                 result = subprocess.run(
@@ -182,8 +185,6 @@ class ProcCliSessions(CliSessionsInterface):
                 logger.debug("playwright-cli detach of {} did not run ({})", session.session_name, e)
             if self._wait_until_gone(session):
                 return True
-        if not self._is_daemon_of(session):
-            return True
         logger.info("The playwright-cli daemon of {} outlived detach; sending SIGTERM", session.session_name)
         _signal(session.pid, signal.SIGTERM)
         return self._wait_until_gone(session)
