@@ -8330,6 +8330,93 @@ def test_a_rebind_made_with_nothing_to_say_sends_nothing_once_the_agent_is_back(
         manager.stop()
 
 
+class _DrainBugError(RuntimeError):
+    """An error no drain anticipates, standing in for a harness session's bug."""
+
+
+def _raising_drain(manager_holder: list[AgentManager], chat_id: ChatId) -> Callable[[AgentInfo], str]:
+    """A drain that, as a send lands mid-drain, holds that send on the switch, then raises an unanticipated error."""
+
+    def drain(agent_info: AgentInfo) -> str:
+        manager_holder[0].hold_send(chat_id, "m-2", "sent while draining", HeldSendOrigin.CLIENT)
+        raise _DrainBugError("'AntigravityHarnessSession' object has no attribute '_handed_back_tokens'")
+
+    return drain
+
+
+def test_a_handoff_whose_drain_raises_is_undone_rather_than_stranded(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The rest of a handoff runs on a thread spawned only once its drain returns, so a drain that raises would
+    leave the chat converging for good. The switch is undone instead: the chat stays on its agent, a send held
+    while draining goes to it, and the chat can be switched again."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    chat_id = ChatId(first)
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    account = _openai_account()
+    working = _handoff_capabilities(sent)
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=working.ensure_watcher,
+            drain_to_composer=_raising_drain([manager], chat_id),
+            deliver=working.deliver,
+        )
+    )
+    try:
+        with pytest.raises(_DrainBugError):
+            manager.begin_handoff(chat_id, account, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        assert manager.get_handoff_state(chat_id) is None
+        assert store.read(chat_id) is None
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None and snapshot.handoff is None and snapshot.agent_ids == (first,)
+        # The confirming message is the page's to restore; the one held behind it reaches the agent it stays on.
+        wait_for(lambda: sent == [(first, "sent while draining", "m-2")], timeout=15.0)
+
+        manager.set_handoff_capabilities(working)
+        phase, _block = manager.begin_handoff(chat_id, account, "Carry on in Codex", "m-3", HeldSendOrigin.CLIENT)
+        assert phase is HandoffPhase.SUMMARIZING
+        record = _wait_until_settled(store, chat_id)
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+    finally:
+        manager.stop()
+
+
+def test_a_rebind_whose_drain_raises_is_undone_rather_than_stranded(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rebind drains on the request too and restarts on a thread spawned after it, so it is undone the same way."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    working = _handoff_capabilities(sent)
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=working.ensure_watcher,
+            drain_to_composer=_raising_drain([manager], chat_id),
+            deliver=working.deliver,
+        )
+    )
+    try:
+        with pytest.raises(_DrainBugError):
+            manager.begin_switch(chat_id, second_account, "Carry on here", "m-1", HeldSendOrigin.CLIENT)
+
+        assert manager.get_handoff_state(chat_id) is None
+        assert store.read(chat_id) is None
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.handoff is None
+        assert snapshot.active_agent.account_id == first_account
+        wait_for(lambda: sent == [(agent_id, "sent while draining", "m-2")], timeout=15.0)
+        # Nothing was stopped or relabelled: the agent never left its account.
+        assert not argv_log.exists() or argv_log.read_text() == ""
+    finally:
+        manager.stop()
+
+
 def test_the_switch_target_rule_keeps_the_agent_only_for_its_own_harness_and_lane() -> None:
     claude = AgentStateItem(id="agent-1", name="c", state="RUNNING", labels={"account": "acct-a"}, work_dir=None)
     anthropic_2 = Account(id="acct-a2", lane="anthropic", seq=2, display="Anthropic")

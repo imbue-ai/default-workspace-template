@@ -3192,10 +3192,15 @@ class AgentManager:
             target.harness.value,
             target.account_id or "(none)",
         )
+        is_drained = False
         try:
             returned_block = runner.drain(chat_id, handoff.handoff_id)
+            is_drained = True
         except HandoffCancelledError:
             return HandoffPhase.DRAINING, ""
+        finally:
+            if not is_drained:
+                self._undo_switch_whose_drain_raised(chat_id, handoff.handoff_id)
         # A cancel that landed while the queue was being drained leaves nothing to run; the
         # drained text still goes back with the answer, the one place left for it.
         if self.get_handoff_state(chat_id) is None:
@@ -3248,10 +3253,15 @@ class AgentManager:
             rebind.previous_account_id or "(none)",
             target.account_id,
         )
+        is_drained = False
         try:
             returned_block = runner.drain(chat_id, rebind.rebind_id)
+            is_drained = True
         except RebindCancelledError:
             return HandoffPhase.DRAINING, ""
+        finally:
+            if not is_drained:
+                self._undo_switch_whose_drain_raised(chat_id, rebind.rebind_id)
         self._spawn_rebind(chat_id, rebind.rebind_id, runner)
         return HandoffPhase.RESTARTING, returned_block
 
@@ -3417,6 +3427,41 @@ class AgentManager:
                 is_checked=False,
             )
         return transition.trigger_text
+
+    def _undo_switch_whose_drain_raised(self, chat_id: ChatId, transition_id: str) -> None:
+        """Take back a switch whose drain raised on the request that began it, so the chat is not stranded.
+
+        Nothing would drive an entry left in the draining phase: the rest of a switch runs on a thread
+        spawned only once the drain returns, and only the next start of this app resumes one, so the chat
+        would read as converging, holding every send for a successor that is never made. The route answers
+        the error, and the page puts the confirming message back in the composer and says the switch
+        failed, so the switch is undone to match: its entry is cleared as a cancel clears one, and a send
+        held behind the confirming message goes to the agent the chat stays on. A switch already called
+        off, or one whose drain did move it on, is left alone.
+        """
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+            transition = record.converging if record is not None else None
+            if record is None or transition is None or transition.phase is not HandoffPhase.DRAINING:
+                return
+            current_id = transition.rebind_id if isinstance(transition, ChatRebindRecord) else transition.handoff_id
+            if current_id != transition_id:
+                return
+            others = transition.held_sends_after_trigger()
+            if len(record.agents) == 1:
+                self._delete_record_locked(chat_id)
+            else:
+                self._write_record_locked(record.with_converging(None))
+            staying_id = record.agents[-1].agent_id
+        self._broadcast_chats_updated()
+        _loguru_logger.warning("Chat {} stays on agent {}: draining it for the switch failed", chat_id, staying_id)
+        if others:
+            self._creation_cg.start_new_thread(
+                target=self._deliver_held_sends,
+                args=(chat_id, staying_id, others),
+                name=f"switch-undo-{str(chat_id)[:14]}",
+                is_checked=False,
+            )
 
     def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
         """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""
