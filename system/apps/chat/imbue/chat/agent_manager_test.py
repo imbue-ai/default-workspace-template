@@ -7454,25 +7454,23 @@ def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_no
 ) -> None:
     """The handoff's stop of the retiring agent never landed (its tracked state read stopped while a restarted
     process ran): when the observe stream reports that member running, the manager stops it."""
-    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
     archived_name = f"archived-1-Chat-1-{first}"
     try:
+        # Every mngr call waits on the gate, so a stop one of these readings started would still be in flight.
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
         stopped = _agent_details(archived_name, agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED)
         manager._handle_observe_event(make_agent_state_event(stopped))
-        assert _stop_lines(argv_log) == []
+        assert manager._retired_stops_in_flight == set()
 
         running = stopped.model_copy_update(to_update(stopped.field_ref().state, AgentLifecycleState.RUNNING))
         manager._handle_observe_event(make_agent_state_event(running))
-        wait_for(
-            lambda: _stop_lines(argv_log) == [f"stop {archived_name}"],
-            timeout=10.0,
-            poll_interval=0.05,
-            error_message=f"the retired member was never stopped: {_stop_lines(argv_log)}",
-        )
+        assert manager._retired_stops_in_flight == {first}
     finally:
+        gate.touch()
         manager.stop()
+    assert _stop_lines(argv_log) == [f"stop {archived_name}"]
 
 
 def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_first_snapshot(
@@ -7490,14 +7488,10 @@ def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_firs
                 ]
             )
         )
-        wait_for(
-            lambda: _stop_lines(argv_log) == [f"stop {archived_name}"],
-            timeout=10.0,
-            poll_interval=0.05,
-            error_message=f"the retired member was never stopped: {_stop_lines(argv_log)}",
-        )
     finally:
         manager.stop()
+    # The stop joins every thread the snapshot started, so nothing else is still on its way.
+    assert _stop_lines(argv_log) == [f"stop {archived_name}"]
 
 
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
