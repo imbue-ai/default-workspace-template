@@ -1,85 +1,97 @@
 # Billing and credentialing model
 
-Why the scenarios are credentialed the way they are, and why a service can call
-Claude heavily without blocking the user's interactive chat.
+How each way of calling a model from code is billed and credentialed, and what
+it shares with the user's own chats.
 
-## Three billing buckets
+## Billing buckets
 
-| How the call is made | Bucket it draws | Blocks interactive chat? |
+| How the call is made | What it draws on | Shares the user's chat limits? |
 |---|---|---|
-| Direct Anthropic API (`ANTHROPIC_API_KEY` set; litellm) | Pay-per-token API account | No |
-| `claude -p` on a subscription, no key | Programmatic / Agent-SDK credit pool | No |
-| Interactive Claude Code / chat / Cowork | Interactive subscription pool | -- (the pool to protect) |
+| Anthropic API key (`ANTHROPIC_API_KEY`, direct or through a proxy; litellm) | Pay-per-token API account | No |
+| `claude -p` on a Claude plan sign-in or long-lived token | The plan's usage limits | Yes |
+| `claude -p` on a Console sign-in | Pay-per-token API account of that Console organisation | No |
+| Interactive Claude Code / chat | The plan's usage limits | -- |
+| OpenAI API key (litellm, or `codex exec` on a pasted key) | Pay-per-token OpenAI API account | No |
+| `codex exec` on a ChatGPT sign-in | The ChatGPT plan's usage limits | Yes |
+| Interactive Codex chat | The ChatGPT plan's usage limits | -- |
 
-`claude -p` / Agent-SDK usage draws a separate pool from interactive usage, so
-neither service path competes with the user's chat quota. **The live concern is
-cost, not chat availability** -- which is why there is no gating to protect the
-chat, only cost surfacing.
+Anthropic's help centre (update dated 2026-10-07): `claude -p` and the Agent SDK
+on a plan sign-in draw from the plan's usage limits, and the separate
+programmatic pool announced earlier was paused on 2026-06-15. The monthly API
+credits of Max, Ultra and Team plans apply only to calls made with an API key
+from the plan's linked Console organisation.
 
-## Why `claude -p` costs more than the direct API
+So on a subscription, calls from code and the user's chats spend the same
+limits: a heavy flow can leave the user unable to chat until the limits reset.
+Keep subscription flows small, measure before scaling, and suggest an API key
+when the volume is high.
+
+## Why `claude -p` uses more than the direct API
 
 Not the model -- the **default agent context it reloads per call**: the Claude
 Code system prompt, all tool definitions, auto-discovered `CLAUDE.md` / skills,
-and a multi-turn tool loop. The keyless completion path in `claude_p.py` sheds
-nearly all of it (measured on this repo, Haiku, a one-line prompt):
+and a multi-turn tool loop. The completion path (`complete()`, through
+`claude_p_completion`) sheds nearly all of it (measured on this repo, Haiku, a
+one-line prompt):
 
-| Config | Turns | Context | Cost | Notes |
-|---|---|---|---|---|
-| Default `claude -p` | ~7 | ~238k | ~$0.086 | May wander off-task (e.g. tries to commit an unrelated file) |
-| `--system-prompt` + `--tools ""` | 1 | ~13k | ~$0.016 | The residual ~13k is CLAUDE.md + skills |
-| above **+ isolated cwd** | 1 | ~0.2k | ~$0.012 | What `claude_p_completion` does; CLAUDE.md not loaded |
-| `--bare` (+ replace) | -- | -- | -- | Strips CLAUDE.md/skills too, but **fails to auth keyless** |
+| Config | Turns | Context | Notes |
+|---|---|---|---|
+| Default `claude -p` | ~7 | ~238k | May wander off-task (e.g. tries to commit an unrelated file) |
+| `--system-prompt` + `--tools ""` | 1 | ~13k | The residual ~13k is CLAUDE.md + skills |
+| above **+ isolated cwd** | 1 | ~0.2k | What `claude_p_completion` does; CLAUDE.md not loaded |
+| `--bare` (+ replace) | -- | -- | Strips CLAUDE.md/skills too, but **fails to auth keyless** |
 
 - **`--tools ""` is a correctness fix, not just cost**: the default agent given a
   "just answer this" prompt will use tools and may do unrelated work.
 - **The isolated cwd is the real context-bleed fix**: `claude -p` auto-discovers
   `CLAUDE.md` / `.claude` hooks from the *working directory*, so the completion
   path runs from a throwaway temp dir -- with no key and no `--bare` (which can't
-  authenticate keyless: it needs `ANTHROPIC_API_KEY` or an `apiKeyHelper`). Before
-  this, an empty/weak system prompt let the ambient `CLAUDE.md` hijack the answer
-  (~1 in 5 trivial-prompt runs). The agentic task path does *not* isolate cwd -- it
-  needs the repo context for file access.
+  authenticate keyless: it needs `ANTHROPIC_API_KEY` or an `apiKeyHelper`).
+  Without it, an empty or weak system prompt lets the ambient `CLAUDE.md` hijack
+  the answer (about 1 in 5 trivial-prompt runs). The agentic task path does
+  *not* isolate cwd -- it needs the repo context for file access.
+
+`complete()` on a ChatGPT sign-in runs `codex exec` the same way: from an empty
+temporary directory, with the account folder's `config.toml` and rules ignored
+(`--ignore-user-config`, `--ignore-rules`), a read-only sandbox, and nothing
+persisted (`--ephemeral`), so no `AGENTS.md`, MCP server or hook reaches the
+answer.
 
 ## Credential resolution
 
-Workspace credentials live in a per-ACCOUNT config directory. Signing in through the provider
-chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time by an env var
-naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
-antigravity, `PI_CODING_AGENT_DIR` for pi. Nothing rebinds a chat afterwards.
+Each sign-in through the provider chooser is an account: a folder
+`~/.minds/accounts/<id>/` and a row in `~/.minds/accounts/index.json` naming its
+provider. The library reads the index on every call and picks the account as
+SKILL.md says; it never takes the account from the calling process's
+`CLAUDE_CONFIG_DIR` or `CODEX_HOME`.
 
-This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
-why the resolver below still falls back to it when no account exists. The shared path is still what
-a bare `claude` in a terminal uses; it is no longer where a CHAT's credential lives. A helper
-that wants the credential a particular chat is running on has to read that chat's account
-folder, not the shared one.
-
-- **Keyed integrations pin their key at setup.** A keyed integration
-  snapshots `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
-  `data/.secrets/anthropic.env` when it is set up
-  (`write_anthropic_env_snapshot()` in the skill's `python/use_ai_integration_skill/claude_p.py` -- a
-  program-mediated copy, which is why the secrets guard allows it while refusing a
-  direct read or write of the file; re-keying is delete and re-snapshot), and
-  `read_workspace_ai_credentials()` resolves that snapshot first, then the
-  settings env, then the process env. So a built service keeps billing
-  against the key it was set up with even after the user switches the
-  workspace's sign-in (the modal tells them so, and points them at the agent
-  to remove or re-key integrations). The subscription
-  `CLAUDE_CODE_OAUTH_TOKEN` is never snapshotted: it cannot authenticate
-  direct API (litellm) calls.
-- With no key anywhere, `claude -p`, which authenticates itself from the
-  account's settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a
-  `.credentials.json` login) -- every spawn is a fresh claude, so the keyless
-  path always uses current auth.
-- If neither resolves, the call fails with a clear error from the path it
-  attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
-  `ClaudeCLIError`) rather than hanging.
-
-`CLAUDE_CONFIG_DIR` is unset workspace-WIDE, so a bare `claude` in a terminal lands on claude's
-own default `~/.claude`. A chat AGENT is deliberately different: its own `CLAUDE_CONFIG_DIR` is
-set on its process, pointing at the account it was created against. `claude_p.py` runs its
-child `claude -p` on the account its resolver reads -- the agent's when the var is set, else the
-workspace's default account -- so a supervisord service or a cron job authenticates the same
-way a skill script inside a chat does.
+- **Anthropic.** `read_workspace_ai_credentials()` resolves the key: the
+  `data/.secrets/anthropic.env` snapshot first, then the account's
+  `settings.json` `env` block, then the process env. With a key, `complete()`
+  calls litellm with it (and its `ANTHROPIC_BASE_URL`, for a proxy) and
+  `run_task()` hands it to `claude -p`. Without one, `claude -p` runs with
+  `CLAUDE_CONFIG_DIR` set to the account folder and authenticates itself from
+  it (a `CLAUDE_CODE_OAUTH_TOKEN` in the settings env, or a sign-in in
+  `.credentials.json`), so every call uses current auth.
+- **Keyed integrations pin their key at setup.** `write_anthropic_env_snapshot()`
+  copies `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
+  `data/.secrets/anthropic.env` -- a program-mediated copy, which is why the
+  secrets guard allows it while refusing a direct read or write of the file --
+  so a built service keeps billing that key after the user switches the
+  workspace's sign-in. Re-keying is delete and re-snapshot. The subscription
+  `CLAUDE_CODE_OAUTH_TOKEN` is never snapshotted: it cannot authenticate direct
+  API calls.
+- **OpenAI.** The account folder is a `CODEX_HOME`, and its `auth.json` says
+  which kind it is. A pasted key (`{"auth_mode": "apikey", "OPENAI_API_KEY":
+  "sk-..."}`) is called through litellm by `complete()` and through `codex exec`
+  by `run_task()`. A ChatGPT sign-in is only ever used by `codex exec`, with
+  `CODEX_HOME` set to the account folder; the library never reads its tokens.
+- **Older copies of `claude_p.py`** resolve the account themselves:
+  `$CLAUDE_CONFIG_DIR` when set (inside an agent, the chat's account), else the
+  workspace's default Anthropic account.
+- A call that cannot be made fails with a typed error (`NoUsableAccountError`,
+  `UnsupportedProviderError`, `ProviderCallError`, `ProviderTimeoutError`)
+  rather than hanging.
 
 ## The mngr `claude -p` session-hook bug
 
@@ -87,13 +99,22 @@ mngr sets `MAIN_CLAUDE_SESSION_ID` to mark its managed main session, and its
 stop/readiness hooks are guarded on that variable. A child `claude -p` that
 inherits it looks like the managed session and trips those hooks. The
 `claude_p.py` helper unsets `MAIN_CLAUDE_SESSION_ID` in the child environment,
-which neutralizes them -- the main reason to use the helper rather than shelling
-out to `claude -p` yourself.
+which neutralizes them. The library does the same for `claude -p`, and runs
+`codex exec` without `MNGR_AGENT_STATE_DIR`, so neither child is taken for the
+agent that started it -- one reason to call the library rather than shelling out
+to either CLI yourself.
 
-## The footgun
+## The footguns
 
 If an `ANTHROPIC_API_KEY` is configured (in the settings env block or the
 process env), `claude -p` bills **full API rates** against the API account, not
-the subscription's programmatic credit. In a key-mode workspace a `claude -p`
-task path therefore *is* real per-token spend. An unattended `claude -p` loop on an API key can run up
-four-figure spend in days, so surface the projected cost before scaling a flow.
+the plan's usage limits. In a key-mode workspace a `claude -p` task path
+therefore *is* real per-token spend. An unattended `claude -p` loop on an API
+key can run up four-figure spend in days, so surface the projected cost before
+scaling a flow.
+
+`CODEX_API_KEY` in a `codex exec` process's environment (not `OPENAI_API_KEY`)
+silently switches it to API billing on that key, whatever the account folder
+holds. The library removes `CODEX_API_KEY`, `OPENAI_API_KEY` and
+`CODEX_ACCESS_TOKEN` from the codex child's environment, so only the account
+folder decides how a codex call is billed.
