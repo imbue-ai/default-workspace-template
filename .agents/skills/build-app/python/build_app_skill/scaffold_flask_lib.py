@@ -296,7 +296,7 @@ dev = [
 # rather than the workspace's root configuration.
 [tool.pytest.ini_options]
 testpaths = ["."]
-# The test gate selects by these marks (AGENTS.md, "Manual verification and testing").
+# The test gate selects by these marks (.agents/shared/references/web-frontend-testing.md).
 markers = [
     "browser: drives a browser",
     "frontend: reads the app's frontend source",
