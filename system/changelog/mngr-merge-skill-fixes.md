@@ -19,3 +19,21 @@
 - The mngr pin moves to a commit that carries the guide.
 
 - `.reviewer/settings.json` sets code-guardian's `stop_hook.reviewable_markdown_paths` (from code-guardian 0.7.0) to `.agents/skills` and `.agents/shared`, so a branch that changes only skill markdown gets autofix and the other review gates, including `skill_hygiene`. Before, the Stop hook skipped any branch whose changes were all markdown.
+
+- `AGENTS.md`'s "Dealing with the unexpected" section points at the `check-app-errors` and `assist` skills, and its test-gate pointer follows the harden worker to `.agents/skills/harden-worker/`.
+
+- The worker create template's comment in `.mngr/settings.toml` and `system/test_mngr_template_stacking.py` describe the harden worker as a tracked skill the checkout carries, still never an installed copy.
+
+- `docs/system/workspace-internals.md` follows the new path, and the stale `docs/system/specs/skill-lifecycle-shared-refs/` spec is removed.
+
+- `system/test_skills.py` fails when a file under `.agents/shared/`, or `AGENTS.md`, links a markdown file inside a skill other than its `SKILL.md`: either may name a skill and run its scripts, and what several skills need lives in the shared layer.
+
+- `AGENTS.md` names the shared `review-gates.md` for a shed command of a worker's test gate, and the `submit-upstream-changes` skill for a change to mngr.
+
+- `user_packages.py` and `system/test_python_launch_rules.py` name `python-packaging-migration.md` at its shared path, `.agents/shared/references/`.
+
+- `docs/system/skill_exemptions.md` lists `boundary` among the checks.
+
+`system/test_skills.py` checks that every reference `update-self`'s prose reaches, through any number of links, lies in a path the flow stages, so a staged file cannot send the flow to a file read from the workspace's own tree. The crawl behind it is `references_reached_outside` in `skill_checks.py`.
+
+`AGENTS.md` names the `update-app` skill's live change loop in the order the skill runs it: apply, verify, refresh.
