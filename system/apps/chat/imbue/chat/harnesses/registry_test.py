@@ -1,4 +1,7 @@
-"""Unit tests for the harness registry's declared popups."""
+"""Unit tests for the harness registry's declared popups and session contracts."""
+
+from pathlib import Path
+from typing import NoReturn
 
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
@@ -6,6 +9,33 @@ from imbue.chat.harnesses.registry import HarnessPopup
 from imbue.chat.harnesses.registry import HarnessType
 from imbue.chat.harnesses.registry import PopupAction
 from imbue.chat.harnesses.registry import PopupTrigger
+from imbue.chat.harnesses.session import FileHarnessSession
+from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session import SessionDeps
+
+
+def _session_deps(harness: HarnessType, state_dir: Path) -> SessionDeps:
+    """Deps a build needs to exist and nothing else: a build must do no I/O and touch no harness."""
+
+    def unused(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("a session build must not reach into its harness")
+
+    return SessionDeps(
+        harness=harness,
+        state_dir=state_dir,
+        model_state_path=state_dir / "model_state.json",
+        send_to_harness=lambda _text, _is_resent_when_unsure: SendOutcome.OK,
+        notify_agents_changed=lambda: None,
+        is_harness_starting_up=lambda: False,
+        is_tracked=lambda: True,
+        on_queue_snapshot=lambda _snapshot: None,
+        on_user_turn=lambda _event: None,
+        recompute_activity=lambda: None,
+        clear_queue_state=lambda: None,
+        catalog_options=lambda: (),
+        build_interrupter=unused,
+        build_shoulder_tap=unused,
+    )
 
 
 def _notice_popups(harness: HarnessType) -> list[HarnessPopup]:
@@ -107,3 +137,29 @@ def test_a_composer_compact_runs_on_every_harness_mngr_can_compact_and_is_declin
         if spec.composer_compact_handling is not ComposerCompactHandling.SENT_AS_TEXT:
             assert spec.supports_compaction
             assert all("/compact" not in popup.commands for popup in _notice_popups(harness))
+
+
+def test_every_file_session_build_keeps_every_field_its_base_builds(tmp_path: Path) -> None:
+    """A subclass ``build`` that re-lists the base's fields goes stale the moment the base grows one.
+
+    agy's did: it never made the set of sends a stop hands back, and the shared stop/handoff drain
+    reads it, so every handoff off an agy chat 500'd in its draining step. Every file session in
+    the registry is checked here, so the next one that overrides ``build`` cannot repeat it.
+    """
+    file_sessions = {
+        harness: spec.session_class
+        for harness, spec in HARNESS_SPECS.items()
+        if issubclass(spec.session_class, FileHarnessSession)
+    }
+    # The override this guard exists for; if agy ever drops it the guard still covers the rest.
+    assert HarnessType.ANTIGRAVITY in file_sessions
+    for harness, session_class in file_sessions.items():
+        state_dir = tmp_path / "agents" / harness.value
+        state_dir.mkdir(parents=True)
+        session = session_class.build(_session_deps(harness, state_dir))
+        base = FileHarnessSession.build(_session_deps(harness, state_dir))
+        assert set(vars(base)) <= set(vars(session)), harness
+        # Declared-but-unset is the same drift seen from the other side: a field added to the
+        # class body and forgotten by a build that lists fields by hand.
+        declared = {name for klass in session_class.__mro__ for name in klass.__dict__.get("__annotations__", {})}
+        assert declared <= set(vars(session)), (harness, declared - set(vars(session)))
