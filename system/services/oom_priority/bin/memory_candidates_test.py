@@ -454,6 +454,11 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
 
     assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["finished"]
+    assert report.agents.others is not None
+    assert {(e.name, e.why, e.anonymous_kib) for e in report.agents.others} == {
+        (name, "waiting on a background task, which will start its next turn", 100)
+        for name in ("lead", "successor", "fix-login")
+    }
 
 
 def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again(
