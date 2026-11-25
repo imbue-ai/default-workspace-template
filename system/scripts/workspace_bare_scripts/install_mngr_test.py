@@ -172,9 +172,8 @@ def test_the_install_runs_the_command_it_built_under_the_pin_it_computed(
     The build pins the tool directories in its own shell before calling, so an install
     that computed the pin and then failed to hand it over would still look right there.
     The other caller is an agent following ``.agents/shared/references/runtime-failures.md``,
-    which runs this with HOME=/home/user
-    while the mngr being repaired is the one under the pinned home -- and would get a
-    success message and an untouched broken tool.
+    which runs this with HOME=/home/user while the mngr being repaired is the one under the
+    pinned home -- and would get a success message and an untouched broken tool.
 
     The environment handed over is empty rather than the process's own: an already-set
     ``UV_TOOL_DIR`` wins over the computed pin (by design, covered above), and
