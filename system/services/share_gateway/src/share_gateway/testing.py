@@ -1,11 +1,14 @@
 """Test utilities shared across the gateway's test modules."""
 
 import json
+import os
+import select
 import subprocess
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 from wsgiref.types import WSGIApplication
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -35,10 +38,14 @@ def set_cookies_by_name(response: Response) -> dict[str, str]:
 
 @contextmanager
 def serve_wsgi(
-    app: WSGIApplication, request_handler: type[WSGIRequestHandler] | None = None
+    app: WSGIApplication, request_handler: type[WSGIRequestHandler] | None = None, is_threaded: bool = False
 ) -> Generator[str, None, None]:
-    """Serve ``app`` on a loopback port through ``request_handler`` until the block ends; yields its base URL."""
-    server = make_server("127.0.0.1", 0, app, request_handler=request_handler)
+    """Serve ``app`` on a loopback port through ``request_handler`` until the block ends; yields its base URL.
+
+    ``is_threaded`` serves each request on its own thread, as the runner does, which is also what makes the server
+    answer in HTTP/1.1 and so send a streamed answer in chunks.
+    """
+    server = make_server("127.0.0.1", 0, app, threaded=is_threaded, request_handler=request_handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -155,3 +162,27 @@ def build_agent_test_app(
         get_registered_apps=lambda: apps,
     )
     return app
+
+
+class ProcessLifeline:
+    """A FIFO a command holds open, so a test can wait for every process of that command to be gone.
+
+    The command's shell opens ``path`` for writing on a spare descriptor
+    (``exec 3>path``), which everything it starts inherits. The read end
+    reports the end of the file only once the last of them has exited, and a
+    test waits on that rather than on a timer. Ask only after the command has
+    said it opened the FIFO: one no process has opened yet reads as released.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.path = directory / f"lifeline-{uuid4().hex}"
+        os.mkfifo(self.path)
+        self._reader = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+
+    def close(self) -> None:
+        os.close(self._reader)
+
+    def is_released_within(self, timeout_seconds: float) -> bool:
+        """Whether every process holding the FIFO open exits within ``timeout_seconds``."""
+        readable, _writable, _exceptional = select.select([self._reader], [], [], timeout_seconds)
+        return bool(readable) and os.read(self._reader, 1) == b""
