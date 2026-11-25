@@ -37,6 +37,7 @@ import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   BOOT_REPORT_AFTER_MS,
   BOOT_RETRY_CAP_MS,
+  BOOT_RETRY_FIRST_MS,
   DesktopStore,
   IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
@@ -123,6 +124,7 @@ let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let stores: DesktopStore[];
 let reloads: number;
+let recoveryPagesOpened: number;
 let bugReports: number;
 
 /** The toasts every store of the test has on screen, oldest first. */
@@ -145,6 +147,7 @@ function makeStore(
     modes: MODES,
     redraw,
     reloadInterface: () => void (reloads += 1),
+    openDesktopsRecoveryPage: () => void (recoveryPagesOpened += 1),
     reportBug: () => void (bugReports += 1),
     ...extra,
   });
@@ -187,6 +190,7 @@ beforeEach(() => {
   socket = new FakeDesktopSocket();
   stores = [];
   reloads = 0;
+  recoveryPagesOpened = 0;
   bugReports = 0;
   api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
@@ -336,6 +340,43 @@ describe("bootstrap", () => {
     expect(last(socket.reports)).toEqual(followingReport("work"));
     expect(api.calls).toContain("fetchPlacements:work");
     expect(store.getState().isLayoutLoaded).toBe(true);
+  });
+
+  it("sends the page to the shell's recovery page when the shell answers the startup read with an error", async () => {
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    // The recovery page says what failed, so the backdrop says nothing of it and keeps its spinner until the page goes.
+    expect(recoveryPagesOpened).toBe(1);
+    expect(notices()).toEqual([]);
+    expect(store.getBootFailure()).toBeNull();
+    expect(store.hasBootAnswered()).toBe(false);
+    expect(store.getState().activeDesktopId).toBeNull();
+    // Nothing tries the read again meanwhile: the recovery page does that.
+    const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
+    await settle();
+    expect(reads()).toBe(1);
+    expect(recoveryPagesOpened).toBe(1);
+  });
+
+  it("sends the page to the recovery page for a shell error that follows reads nothing answered", async () => {
+    api.refusal = new HttpError(readFailure({ status: 0, body: null, rawText: null, requestKind: "read" }));
+    const store = makeStore();
+    await store.start(NO_LINK);
+    expect(store.getBootFailure()?.notice.message).toBe("The workspace didn't answer. Still trying\u2026");
+    expect(recoveryPagesOpened).toBe(0);
+    api.refusal = new HttpError(
+      readFailure({ status: 500, body: { detail: "desktops.json unreadable" }, rawText: null, requestKind: "read" }),
+    );
+    vi.advanceTimersByTime(BOOT_RETRY_FIRST_MS);
+    await settle();
+    expect(recoveryPagesOpened).toBe(1);
+    expect(store.getBootFailure()).toBeNull();
+    // The retry timer went with the read the shell answered.
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
+    await settle();
+    expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(2);
   });
 
   it("keeps trying a startup read nothing answered, on a timer that grows, until one answers, and then stops", async () => {
@@ -5208,6 +5249,7 @@ describe("the backdrop size report (the multiplayer spec, section 8.3)", () => {
       modes: MODES,
       redraw: () => undefined,
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
     });
     stores.push(store);
     await store.start(NO_LINK);

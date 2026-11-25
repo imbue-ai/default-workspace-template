@@ -114,6 +114,7 @@ async function mountApp(
     modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
@@ -147,6 +148,8 @@ afterEach(() => {
 describe("the startup read", () => {
   /** A store over a fake shell whose startup read is held open (or refused with ``refusal``), with the App mounted
    *  over it before it answers. */
+  let recoveryPagesOpened = 0;
+
   async function mountBeforeTheRead(refusal: Error | null): Promise<() => void> {
     unmountViews();
     vi.stubGlobal(
@@ -164,7 +167,9 @@ describe("the startup read", () => {
       modes: { isPhone: false, isTouch: false },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => void (recoveryPagesOpened += 1),
     });
+    recoveryPagesOpened = 0;
     const answer = refusal === null ? api.holdReads() : () => undefined;
     api.refusal = refusal;
     void store.start(NO_LINK);
@@ -209,6 +214,17 @@ describe("the startup read", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-boot-failure]")).toBeNull();
     expect(store.getState().activeDesktopId).toBe("home");
+  });
+
+  it("keeps the spinner, with no line, while the page goes to the recovery page for a read the shell refused", async () => {
+    await mountBeforeTheRead(
+      new HttpError(
+        readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
+      ),
+    );
+    expect(recoveryPagesOpened).toBe(1);
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
   });
 });
 
@@ -1583,6 +1599,7 @@ describe("the switch to the phone layout", () => {
       modes: { isPhone: true, isTouch: true },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
       soloWindowId: null,
       outsideLinks: {
         openInEmbedder: () => undefined,
@@ -1621,6 +1638,7 @@ describe("the switch to the phone layout", () => {
       modes: { isPhone: true, isTouch: true },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
       soloWindowId: null,
       outsideLinks: {
         openInEmbedder: () => undefined,

@@ -587,6 +587,9 @@ export interface StoreDependencies {
   readonly redraw: () => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
+  /** Send the page to the shell's recovery page for desktops that couldn't be loaded, which says why, offers an agent,
+   *  and comes back once they load. */
+  readonly openDesktopsRecoveryPage: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
@@ -1916,8 +1919,8 @@ export class DesktopStore {
     return this.bootRead;
   }
 
-  /** Arrive (until an arrival has been answered), read the inventory, and land; a read that failed is told in the
-   *  backdrop and tried again. */
+  /** Arrive (until an arrival has been answered), read the inventory, and land; a read nothing answered is told in
+   *  the backdrop and tried again, and one the shell answered with an error sends the page to the recovery page. */
   private async readAndLand(): Promise<void> {
     this.clearBootRetry();
     const entryPushesBefore = this.entryPushes;
@@ -1946,9 +1949,17 @@ export class DesktopStore {
     await this.land(inventory, this.bootArrival, entryPushesBefore);
   }
 
-  /** Tell why the startup read failed until a read answers, trying it again after a wait that grows to
-   *  ``BOOT_RETRY_CAP_MS`` (a reconnect of the socket tries it at once). */
+  /** Tell why nothing answered the startup read until a read answers, trying it again after a wait that grows to
+   *  ``BOOT_RETRY_CAP_MS`` (a reconnect of the socket tries it at once); a read the shell answered with an error goes
+   *  to the recovery page, which reads the desktops itself and says why they couldn't be loaded. */
   private takeBootFailure(failure: Failure): void {
+    if (failure.cause !== "not_answered") {
+      this.bootFailure = null;
+      this.bootUnansweredSince = null;
+      this.deps.openDesktopsRecoveryPage();
+      this.notifyListeners();
+      return;
+    }
     this.bootFailure = failure;
     this.bootUnansweredSince ??= Date.now();
     const delay = this.bootRetryDelayMs;

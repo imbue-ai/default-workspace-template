@@ -30,6 +30,7 @@ async function startedStore(): Promise<DesktopStore> {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
   });
   await started.start(NO_LINK);
   return started;
