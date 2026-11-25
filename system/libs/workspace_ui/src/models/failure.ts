@@ -18,9 +18,9 @@ export type Failure = FailureFields &
         readonly userFacingMessage: string;
         /** The server's developer text beside its sentence, when it gave one. */
         readonly reason: string | null;
-        /** The server said its refusal is ordinary operation that its sentence fully explains (``expected: true``:
+        /** The server said its refusal is ordinary operation that its sentence fully explains (``routine: true``:
          *  an app still starting, an account to sign in to first), so nothing is broken and no help is owed. */
-        readonly isExpected: boolean;
+        readonly isRoutine: boolean;
       }
     | {
         /** The server (or the code that threw) gave a reason of its own (``detail`` or ``error``), developer text
@@ -56,7 +56,7 @@ export interface FailureMessage {
   readonly message: string;
   readonly details: string | null;
   /** False where trying again is the whole remedy (nothing answered), where the server refused by a rule of its own
-   *  and wrote no sentence about it (a 4xx with a reason), and where it called its refusal expected. A surface keeps
+   *  and wrote no sentence about it (a 4xx with a reason), and where it called its refusal routine. A surface keeps
    *  a failure that owes help on screen. */
   readonly isHelpOwed: boolean;
 }
@@ -147,7 +147,7 @@ export function readFailure(answer: FailedAnswer): Failure {
       cause: "user_facing",
       userFacingMessage: userFacing,
       reason,
-      isExpected: body?.expected === true,
+      isRoutine: body?.routine === true,
     };
   }
   if (reason !== null) return { ...fields, cause: "reason", reason };
@@ -165,7 +165,7 @@ export function failureSentence(failure: Failure, whatFailed: string = DEFAULT_W
   const { details } = failure;
   switch (failure.cause) {
     case "user_facing":
-      return { message: failure.userFacingMessage, details, isHelpOwed: !failure.isExpected };
+      return { message: failure.userFacingMessage, details, isHelpOwed: !failure.isRoutine };
     case "not_answered":
       return { message: notAnsweredSentence(failure.requestKind), details, isHelpOwed: false };
     case "reason":

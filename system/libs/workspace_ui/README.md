@@ -31,7 +31,8 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `models/request-error.ts`): one reader, `readFailure`, says what went wrong,
   for the REST helpers (`HttpError.failure`) and for a mithril rejection
   (`describeRequestFailure`) alike: a route's `user_facing_message` (a sentence
-  for people, which owes the person help unless the body says `expected: true`), else its
+  for people, which owes the person help unless the body says `routine: true`:
+  ordinary operation the sentence fully explains, so nothing is broken), else its
   `detail` or `error` (a reason, developer text), else no answer (nothing
   answered, or a gateway status 502, 503 or 504 with no JSON reason), else
   nothing. `failureSentence(failure, whatFailed)` is the one place that becomes

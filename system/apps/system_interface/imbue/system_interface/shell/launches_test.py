@@ -13,5 +13,5 @@ def test_a_launch_no_app_answers_carries_the_reason_and_no_sentence_of_the_shell
         post_launch(post)
 
     assert raised.value.user_facing_message is None
-    assert raised.value.expected is None
+    assert raised.value.is_routine is None
     assert str(raised.value).startswith("buddy could not be reached for the launch: ")
