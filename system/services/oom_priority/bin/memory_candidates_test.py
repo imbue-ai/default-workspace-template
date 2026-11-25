@@ -829,6 +829,37 @@ def test_an_app_sharing_a_critical_apps_program_is_never_offered(
     assert report.apps.candidates == ()
 
 
+def test_a_program_several_apps_share_takes_its_most_binding_reason_whatever_their_order(
+    tmp_path: Path,
+) -> None:
+    proc = tmp_path / "proc"
+    _fake_process(proc, 600, 1024)
+    _fake_process(proc, 610, 2048)
+    apps = [
+        _app("screen-tools", program="screen", internal=True),
+        _app("screen", program="screen"),
+        _app("terminal-extras", program="terminal", internal=True),
+        _app("terminal", program="terminal", critical=True),
+    ]
+
+    held = memory_candidates.held_programs(
+        apps, (), {"screen": 600, "terminal": 610}, proc
+    )
+
+    assert [(e.name, e.title, e.why) for e in held] == [
+        (
+            "terminal",
+            "terminal-extras, terminal",
+            "a critical app: the workspace is reached and talked to through it",
+        ),
+        (
+            "screen",
+            "screen-tools, screen",
+            "the Screen's service: its browser is listed on its own",
+        ),
+    ]
+
+
 def test_apps_are_unknown_rather_than_none_when_supervisord_cannot_be_asked(
     tmp_path: Path, runtime_dir: Path
 ) -> None:

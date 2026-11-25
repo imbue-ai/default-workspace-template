@@ -1003,7 +1003,6 @@ def held_programs(
     )
     candidate_programs = {candidate.program for candidate in candidates}
     titles_by_program: dict[str, list[str]] = {}
-    why_by_program: dict[str, str] = {}
     for app in apps:
         name = app.get("name")
         program = app.get("program")
@@ -1012,26 +1011,19 @@ def held_programs(
         if program in candidate_programs:
             continue
         titles_by_program.setdefault(program, []).append(_app_title(app, name))
-        if program in critical_programs:
-            why = "a critical app: the workspace is reached and talked to through it"
-        elif name == SCREEN_APP_NAME:
-            why = "the Screen's service: its browser is listed on its own"
-        else:
-            why = "an internal app"
-        why_by_program.setdefault(program, why)
     entries: list[HeldEntry] = []
     for program, pid in pids_by_program.items():
         if program in candidate_programs:
             continue
-        is_app = program in why_by_program
+        titles = titles_by_program.get(program)
         entries.append(
             HeldEntry(
-                kind="app" if is_app else "service",
+                kind="service" if titles is None else "app",
                 name=program,
-                title=", ".join(titles_by_program[program]) if is_app else None,
-                why=why_by_program[program]
-                if is_app
-                else "a workspace service, not the user's to stop",
+                title=None if titles is None else ", ".join(titles),
+                why=_why_program_is_held(
+                    program, titles is not None, critical_programs, screen_programs
+                ),
                 pids=(pid,),
                 anonymous_kib=process_trees_anonymous_kib(
                     (pid,),
@@ -1043,6 +1035,22 @@ def held_programs(
             )
         )
     return _largest_first(entries)
+
+
+def _why_program_is_held(
+    program: str,
+    is_app: bool,
+    critical_programs: set[str],
+    screen_programs: set[str],
+) -> str:
+    """Why a running program is not a candidate: the most binding reason any app on it carries."""
+    if program in critical_programs:
+        return "a critical app: the workspace is reached and talked to through it"
+    if program in screen_programs:
+        return "the Screen's service: its browser is listed on its own"
+    if is_app:
+        return "an internal app"
+    return "a workspace service, not the user's to stop"
 
 
 def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
