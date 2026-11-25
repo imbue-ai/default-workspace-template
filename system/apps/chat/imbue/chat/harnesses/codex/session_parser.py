@@ -839,7 +839,10 @@ def parse_line_image(record: dict[str, Any], event_id: str, index: int) -> Event
     image_urls = _output_image_urls(payload.get("output"))
     if not 0 <= index < len(image_urls):
         return None
-    return decode_image_data_url(image_urls[index])
+    image = decode_image_data_url(image_urls[index])
+    if image is None:
+        logger.warning("Image {} of codex tool result {} is not valid base64", index, event_id)
+    return image
 
 
 def parse_reasoning_detail(record: dict[str, Any]) -> str | None:
