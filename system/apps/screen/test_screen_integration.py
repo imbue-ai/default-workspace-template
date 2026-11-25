@@ -42,6 +42,7 @@ from screen.browser_manifest import ManifestStore
 from screen.cdp_client import WebSocketCdpConnector
 from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
+from screen.cli import ENV_SERVICE_URL
 from screen.cli_sessions import AbandonReason
 from screen.cli_sessions import CliSessionReaper
 from screen.cli_sessions import ProcCliSessions
@@ -516,7 +517,7 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
     # A chat id or agent name inherited from the shell would make the script speak as someone other than chat-itest.
     environment = {
         **{key: value for key, value in os.environ.items() if key not in ("MINDS_CHAT_ID", "MNGR_AGENT_NAME")},
-        "MINDS_SCREEN_SERVICE_URL": f"http://127.0.0.1:{server.server_port}",
+        ENV_SERVICE_URL: f"http://127.0.0.1:{server.server_port}",
         "MNGR_AGENT_ID": "chat-itest",
     }
 
