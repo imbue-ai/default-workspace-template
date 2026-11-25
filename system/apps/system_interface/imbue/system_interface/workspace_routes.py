@@ -71,7 +71,6 @@ from workspace_update_control.control import skip_target
 from workspace_update_control.control import start_update
 from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.dispatcher import PROC_ROOT
-from workspace_update_control.protocol import LIVE_CRON_DIRECTORY
 from workspace_update_control.protocol import OUTCOME_STARTING
 
 from imbue.system_interface.app_context import get_state
@@ -485,7 +484,7 @@ def start_update_now() -> ResponseReturnValue:
         override_ref=body.override_ref,
         is_backup_configured=body.is_backup_configured,
         now=time.time(),
-        live_cron_dir=LIVE_CRON_DIRECTORY,
+        live_cron_dir=str(get_state().live_cron_directory),
         proc_root=PROC_ROOT,
         agent_environment=AgentEnvironment(),
         read_agents=_observed_agents_reader(),
@@ -514,7 +513,7 @@ def arm_update_schedule() -> ResponseReturnValue:
         is_backup_configured=body.is_backup_configured,
         is_auto_armed=body.is_auto_armed,
         now=time.time(),
-        live_cron_dir=LIVE_CRON_DIRECTORY,
+        live_cron_dir=str(get_state().live_cron_directory),
         agent_environment=AgentEnvironment(),
     )
     logger.info("Asked to arm an update schedule: {}", answer.get("outcome"))
@@ -532,7 +531,7 @@ def refresh_update_schedule() -> ResponseReturnValue:
         window_start_minute_utc=body.window_start_minute_utc,
         window_length_minutes=body.window_length_minutes,
         is_backup_configured=body.is_backup_configured,
-        live_cron_dir=LIVE_CRON_DIRECTORY,
+        live_cron_dir=str(get_state().live_cron_directory),
     )
     return model_response(UpdateScheduleRefreshedResponse.model_validate(answer))
 
@@ -570,7 +569,9 @@ def read_update_liveness() -> ResponseReturnValue:
     _admit(is_changing_the_workspace=False)
     _require_workspace_root_as_working_directory()
     liveness = read_liveness(
-        live_cron_dir=LIVE_CRON_DIRECTORY, agent_environment=AgentEnvironment(), read_agents=_observed_agents_reader()
+        live_cron_dir=str(get_state().live_cron_directory),
+        agent_environment=AgentEnvironment(),
+        read_agents=_observed_agents_reader(),
     )
     agents = liveness["agents"]
     busy_chats = liveness["busy_chats"]

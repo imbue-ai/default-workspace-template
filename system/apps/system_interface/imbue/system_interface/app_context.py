@@ -3,6 +3,7 @@ from pathlib import Path
 from flask import Flask
 from flask import current_app
 from pydantic import Field
+from workspace_update_control.protocol import LIVE_CRON_DIRECTORY
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.config import Config
@@ -71,6 +72,11 @@ class SystemInterfaceState(MutableModel):
     # live state: it refuses the verbs that would reach the live workspace (an app's stop
     # and start, the update notice's), tells its page so, and raises no staleness banner.
     is_preview: bool = Field(default=False, description="Whether this shell is a preview of a proposed change")
+    live_cron_directory: Path = Field(
+        default=Path(LIVE_CRON_DIRECTORY),
+        description="The directory the cron daemon reads its drop-ins from, where the update routes install the "
+        "dispatcher's line; another one only where a test stands in for it",
+    )
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""
