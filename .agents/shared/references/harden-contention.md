@@ -101,15 +101,29 @@ or a provisional milestone merge:
    until the lease is released, then continue -- their edit will usually make
    your pass stale anyway, which the next check catches.
 
-2. **Freshness check.** The pass is mergeable only if no creation in it has
-   changed since the worker branched. The paths to diff are every creation's
-   whole footprint, not just the files the worker touched, which is what the
-   worker's scope file holds. That file lives under the worker's own `data/`
-   (gitignored, and only the reports directory syncs back), so recompute it on
-   your side with the same command:
+2. **Freshness check.** The pass is mergeable only if no file of any creation
+   in it has changed on your side since the worker branched. Before each
+   merge, run a command that shows what changed on your side since the branch
+   point, covering at least the pass's creations' own files. Any of these does
+   it, with `BASE=$(git merge-base HEAD "$WORKER_BRANCH")`: `git diff
+   --name-only "$BASE" HEAD` or `git log "$BASE..HEAD"`, over the whole tree
+   or the creations' paths, or `git merge-base --is-ancestor HEAD
+   "$WORKER_BRANCH"` (success: the branch already contains your `HEAD`). A
+   command that shows only the worker's side, or only tests for a conflict,
+   is not this check.
+
+   If none of those files changed, the pass is fresh: merge normally. If one
+   did, the base moved under the worker: the pass is stale -- do not merge;
+   catch it up (below). A change anywhere else (another creation, a shared
+   library the pass depends on, the derived `uv.lock`) is not staleness, so
+   fresh means "nothing the pass's creations own moved", not "this pass is
+   still valid".
+
+   A creation's files can reach outside its folder: its supervisord drop-in
+   (wiring) and the paths its manifest lists as references. A check limited
+   to the folder misses a change there; this recipe lists the whole footprint:
 
    ```bash
-   BASE=$(git merge-base HEAD "$WORKER_BRANCH")
    SCOPE=$(mktemp)
    uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --out "$SCOPE" || exit 1
    PATHS=$(jq -r '[.creations[] | .primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
@@ -117,44 +131,13 @@ or a provisional milestone merge:
    git diff --name-only "$BASE" HEAD -- $PATHS
    ```
 
-   The guards matter: with an empty `$PATHS` the diff covers the whole
-   tree, and any commit anywhere reads as a moved base. If the command fails
-   (a reference a manifest names no longer exists, say), fix the manifest on
-   your branch first and rerun; do not treat the failure as staleness. When
-   the worker's `done` report lists paths under `References registered:`, add
-   them to `$PATHS` as well -- your tree's manifest predates them. A critical
-   app's merge lives in
-   `update-app/references/critical-app.md` step 4, which applies this same
-   check over the pass's footprint together with `system/libs/workspace_ui/`,
-   `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, `system/package.json`,
-   `system/package-lock.json`, and every file the pass branch changes. Empty
-   output means fresh: merge normally. Any output means the base moved under
-   the worker: the pass is stale -- do not merge; catch it up (below).
-
-   No shared *authored* file remains in that footprint -- a creation's
-   supervisord program lives in its own drop-in rather than in the shared
-   config, and the root `pyproject.toml` needs no per-creation entry -- so two
-   creations built in the same tree no longer collide textually: neither
-   appears in the other's diff, and neither makes the merge conflict.
-
-   That is a claim about paths, not about correctness. The check reads the
-   pass's own creations' paths, so it cannot see a change to something they
-   *depend on*: a shared library under `system/libs/` (`app_manifest` alone
-   backs `chat`, `terminal` and the system interface), a skill script an app
-   calls or reads (`system_interface`'s `update_staleness_test.py` asserts
-   against `update-self`'s `update_apply_contract.py`), or another creation's
-   `app.toml`, which every registry reader joins against. Such a change breaks
-   a pass this check calls fresh, and conflicts with nothing. Widening the
-   footprint to cover it would not do: every shared-library commit would then
-   stale every pass in flight, which is the serialization the split exists to
-   remove. So read a green result as "nothing the pass's creations own moved",
-   not as "this pass is still valid".
-
-   `uv.lock` is deliberately NOT in the footprint. It is derived, every
-   creation's scaffold regenerates it, and `.gitattributes` marks it
-   `merge=binary` so any divergence is a hard conflict -- including it would
-   make two concurrent creations collide on a generated file and force one of
-   them into a catch-up. See step 3.
+   Empty output means fresh. If the command fails (a reference a manifest
+   names no longer exists, say), fix the manifest on your branch and rerun; a
+   failure is not staleness. Add any paths the worker's `done` report lists
+   under `References registered:` to `$PATHS`. A critical app's merge lives in
+   `update-app/references/critical-app.md` step 4, which runs this recipe
+   over the pass's footprint, the shared UI libraries, the npm files, and
+   every file the pass branch changes.
 
 3. **Never resolve a conflicted hardened branch on your side.** If the merge
    itself conflicts, `git merge --abort` and catch the pass up (below): the
