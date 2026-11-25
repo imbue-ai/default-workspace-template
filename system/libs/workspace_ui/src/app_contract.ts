@@ -874,3 +874,131 @@ export function withAskFailure(page: ReportedFailure, ask: ReportedFailure | nul
 export function bugReportText({ message, details }: ReportedFailure): string {
   return details === null || details.trim() === "" ? message : `${message}\n\n${details}`;
 }
+
+/** The words of the buttons a failure offers (``FailureButtons`` and ``mountFailureRemedies``), here since this
+ *  module imports nothing. */
+export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
+export const ASKING_AN_AGENT_LABEL = "Asking an agent…";
+/** What a refused ask offers: the same request left unsent in a chat's message box, for the person to send. */
+export const DRAFT_ASK_LABEL = "Draft it in a chat";
+/** The button a failure that owes help carries, where Imbue Studio can open a bug report. */
+export const REPORT_A_BUG_LABEL = "Report a bug";
+
+/** What a page drawn without the workspace's components (one its server writes whole, such as an app's "not built"
+ *  page) offers for the failure it shows, through ``mountFailureRemedies``. */
+export interface PageFailureRemedies {
+  /** The failure the page shows: its sentence and what its own "See details" holds, which a bug report files. */
+  readonly failure: ShownFailure;
+  /** What the agent is asked to do about it. */
+  readonly request: AgentFixRequest;
+  /** The ask button's words where the page names what the agent is to do ("Ask an agent to rebuild it"). */
+  readonly askLabel?: string;
+}
+
+export interface MountedFailureRemedies {
+  /** Show what the connection allows now: a page calls it on each handshake. */
+  redraw(): void;
+}
+
+function remedyButton(document: Document, className: string, label: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  return button;
+}
+
+/**
+ * ``FailureRemedies`` for a page without Mithril, drawn into ``root`` (whose children it replaces): nothing for a
+ * failure that owes no help; while a shell frames the page, the ask, which reads "Asking an agent…" and takes no second
+ * press until the shell answers, and then shows a failed ask under it, its details behind its own "See details"; a
+ * failed ask that owes help offers "Draft it in a chat", and "Report a bug" filing the page's failure with the ask's
+ * (``withAskFailure``) while the shell's latest handshake says it can open one. With no shell to ask, "Report a bug"
+ * stands in place of the ask where one can be opened. An answer that comes after the ask was settled as not answered
+ * (the shell started again) replaces what is shown, unless the button was pressed again since.
+ */
+export function mountFailureRemedies(
+  root: HTMLElement,
+  connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug">,
+  remedies: PageFailureRemedies,
+): MountedFailureRemedies {
+  const document = root.ownerDocument;
+  const askLabel = remedies.askLabel ?? ASK_AGENT_TO_FIX_LABEL;
+  const reported: ReportedFailure = { message: remedies.failure.message, details: remedies.failure.details };
+
+  const ask = remedyButton(document, "ask-agent-to-fix", askLabel);
+  const pageReport = remedyButton(document, "report-bug", REPORT_A_BUG_LABEL);
+  const askFailure = document.createElement("div");
+  askFailure.className = "ask-agent-failure";
+  askFailure.setAttribute("role", "alert");
+  const askFailureMessage = document.createElement("p");
+  askFailureMessage.className = "ask-agent-failure-message";
+  const askFailureDetails = document.createElement("details");
+  askFailureDetails.className = "see-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "See details";
+  const askFailureDetailsText = document.createElement("pre");
+  askFailureDetailsText.className = "see-details-text";
+  askFailureDetails.append(summary, askFailureDetailsText);
+  const draft = remedyButton(document, "draft-ask", DRAFT_ASK_LABEL);
+  const askReport = remedyButton(document, "report-bug", REPORT_A_BUG_LABEL);
+  const askFailureButtons = document.createElement("div");
+  askFailureButtons.className = "ask-agent-failure-actions";
+  askFailureButtons.append(draft, askReport);
+  askFailure.append(askFailureMessage, askFailureDetails, askFailureButtons);
+
+  let isAsking = false;
+  let failure: ShownFailure | null = null;
+  let latestAsk = 0;
+
+  function redraw(): void {
+    const isOwed = remedies.failure.isHelpOwed;
+    const canAsk = isOwed && connection.hasShell();
+    ask.hidden = !canAsk;
+    ask.disabled = isAsking;
+    ask.textContent = isAsking ? ASKING_AN_AGENT_LABEL : askLabel;
+    pageReport.hidden = !isOwed || canAsk || !connection.canReportBug();
+    askFailure.hidden = !canAsk || failure === null;
+    askFailureMessage.textContent = failure?.message ?? "";
+    askFailureDetails.hidden = failure === null || failure.details === null || failure.details.trim() === "";
+    askFailureDetailsText.textContent = failure?.details ?? "";
+    draft.hidden = failure === null || !failure.isHelpOwed;
+    askReport.hidden = draft.hidden || !connection.canReportBug();
+  }
+
+  function show(outcome: StartOutcome): void {
+    failure = outcome.isOpened ? null : outcome.failure;
+    redraw();
+  }
+
+  async function press(): Promise<void> {
+    if (isAsking || !connection.hasShell()) return;
+    latestAsk += 1;
+    const thisAsk = latestAsk;
+    isAsking = true;
+    failure = null;
+    redraw();
+    const outcome = await askAgentToFix(connection, remedies.request, {
+      showsOutcome: true,
+      onLateAnswer: (late) => {
+        if (thisAsk === latestAsk && !isAsking) show(late);
+      },
+    });
+    isAsking = false;
+    show(outcome);
+  }
+
+  ask.addEventListener("click", () => void press());
+  // The shell tells a draft that could not be made itself.
+  draft.addEventListener(
+    "click",
+    () => void askAgentToFix(connection, remedies.request, { showsOutcome: true }, "draft"),
+  );
+  askReport.addEventListener("click", () => {
+    if (failure !== null) connection.reportBug(withAskFailure(reported, failure));
+  });
+  pageReport.addEventListener("click", () => connection.reportBug(reported));
+  root.replaceChildren(ask, pageReport, askFailure);
+  redraw();
+  return { redraw };
+}

@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -124,6 +125,10 @@ def share_grants() -> FakeShareGrants:
     return FakeShareGrants()
 
 
+# A stand-in for the shell's built app contract module, which a could-not-start page carries to ask an agent with.
+_APP_CONTRACT_MODULE: Final[str] = "export function connectToShell() {}"
+
+
 def _manager_over(
     inventory: AppInventory,
     supervisor: FakeSupervisor,
@@ -145,6 +150,7 @@ def _manager_over(
         start_program=start_program if start_program is not None else supervisor.start,
         stop_program=supervisor.stop,
         read_stderr_tail=supervisor.stderr_tail,
+        read_app_contract_module=lambda: _APP_CONTRACT_MODULE,
         clock=clock if clock is not None else FakeClock(),
     )
 
@@ -505,7 +511,8 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
 
     assert manager.is_app_parked("docs")
     # The next request wakes it again (within the budget) and is told where to look while it waits: the end of the
-    # program's error log as supervisord reads it, then the command that shows the rest.
+    # program's error log as supervisord reads it, and an agent asked to look at it told the command that shows the
+    # rest.
     answer = send_raw_get_over_socket(closed_port)
     assert b"Docs couldn't start." in answer and b"supervisorctl tail docs stderr" in answer
     assert b"ImportError: cannot import name &#x27;serve&#x27; &lt;docs&gt;" in answer

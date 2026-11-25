@@ -108,6 +108,23 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `'sha256-...'` source for one inline script or stylesheet, which the shell's
   parked-port page uses for its stylesheet) are the pieces; a built document
   served with `send_file` is not read and must carry no inline script.
+- `app_manifest.failure_pages`: the pages an app's server writes whole when it
+  cannot show what was asked for. `not_built_page_response(display_name,
+  build, health_path)` (and `not_built_page_html`) is every app's page while
+  its frontend is not built: "<display name> isn't available right now.", a
+  Reload, the build command (`WORKSPACE_FRONTEND_BUILD`, `npm run build` in
+  `system/`, for every built-in app) behind "See details", a check of
+  `health_path` (which answers `is_frontend_built`) every ten seconds that
+  reloads once the build is there, and, inside a shell's window, "Ask an agent
+  to rebuild it". The ask and what a refused ask offers come from the app
+  contract module's `mountFailureRemedies`, imported from `APP_CONTRACT_ROUTE`,
+  so an app that serves the page serves that module too.
+  `failure_remedies_script(remedies, contract_module_source)` is the script
+  that mounts them, for any such page (the shell's could-not-start page passes
+  the module's text, since its origin serves nothing else); `FailureRemedies`
+  and `AgentFixRequest` say what it offers and asks, and
+  `FAILURE_REMEDIES_STYLE` lays it out. `testing.assert_serves_the_not_built_page`
+  checks an app serves the page under its own name.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own

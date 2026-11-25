@@ -1,0 +1,1 @@
+While the viewer is not built, the Screen shows every app's not-built page: it says the Screen isn't available right now, comes back on its own once rebuilt, offers Reload, and inside a shell's window an agent to rebuild it. `GET /health` answers `is_frontend_built` beside the lifecycle, which that page checks.

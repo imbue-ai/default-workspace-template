@@ -1,0 +1,1 @@
+While its page is not built, the Onboarding checklist shows every app's not-built page: it says the checklist isn't available right now, comes back on its own once rebuilt, offers Reload, and inside a shell's window an agent to rebuild it.

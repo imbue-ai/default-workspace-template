@@ -22,8 +22,10 @@ schedule. It is the user's view of the routines library
 - **`/<id>/runs/<run id>/log`**, the run's whole log, with the same
   navigation header as every other page.
 
-One document serves every page; the page reads its path, reports it to the
-shell with `shell:location`, and polls the API every 30 seconds (every 5 while
+One document serves every page (until it is built, every app's not-built page,
+`app_manifest.failure_pages`, which asks an agent to rebuild it through the
+shell's app contract module, served at `/_static/app_contract.js`); the page
+reads its path, reports it to the shell with `shell:location`, and polls the API every 30 seconds (every 5 while
 a run is going). The API is typed through `app_schema` and published at
 `/api/schema`; every model is the library's, so the `routines` command's JSON
 and the API's are the same shapes:

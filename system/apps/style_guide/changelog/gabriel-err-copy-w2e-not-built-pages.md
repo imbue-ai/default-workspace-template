@@ -1,0 +1,1 @@
+While its page is not built, the Style Guide shows every app's not-built page: it says the Style Guide isn't available right now, comes back on its own once rebuilt, offers Reload, and inside a shell's window an agent to rebuild it. The app serves the shell's app contract module (`/_static/app_contract.js`) for that ask.

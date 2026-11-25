@@ -1,6 +1,7 @@
-"""The page Getting Started serves while its bundle is missing, framed by a stand-in shell in a real browser: its
-"Ask an agent to rebuild it" shows a refused ask under the button; one that owes help offers the same request as a
-draft in a chat, and "Report a bug" while the shell's handshake says Imbue Studio opens a bug report."""
+"""The page Getting Started serves while its bundle is missing (every app's shared not-built page), framed by a
+stand-in shell in a real browser: its "Ask an agent to rebuild it" shows a refused ask under the button; one that owes
+help offers the same request as a draft in a chat, and "Report a bug" while the shell's handshake says Imbue Studio
+opens a bug report."""
 
 import contextlib
 import json
@@ -27,7 +28,7 @@ _BUILT_CONTRACT: Final[Path] = _REPO_ROOT / SHELL_APP_CONTRACT_PATH
 pytestmark = pytest.mark.browser
 
 _FAILURE: Final[dict[str, object]] = {
-    "message": "Chat couldn't open that. Try again.",
+    "message": "Chat couldn't open that.",
     "details": "HTTP 500\nboom",
     "isHelpOwed": True,
 }
@@ -77,10 +78,12 @@ def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: boo
         shell_port = stack.enter_context(serve_in_background("127.0.0.1", 0, shell)).socket.getsockname()[1]
         page = stack.enter_context(contextlib.closing(browser.new_context())).new_page()
         page.goto(f"http://localhost:{shell_port}/")
-        ask = page.frame_locator("#page").locator("#ask-agent")
+        ask = page.frame_locator("#page").get_by_role("button", name="Ask an agent to rebuild it")
         expect(ask).to_be_visible()
         ask.click()
-        expect(page.frame_locator("#page").locator("#ask-agent-failure")).to_have_text(str(_FAILURE["message"]))
+        expect(page.frame_locator("#page").locator(".ask-agent-failure-message")).to_have_text(
+            str(_FAILURE["message"])
+        )
         yield page
 
 
@@ -91,8 +94,14 @@ def test_a_refused_ask_offers_a_bug_report_that_carries_its_failure(tmp_path: Pa
         report.click()
         page.wait_for_function("window.posted.some((message) => message.type === 'shell:report-bug')")
         reported = page.evaluate("window.posted.filter((message) => message.type === 'shell:report-bug')")
+        # The report files what the page says, with the refused ask under its details.
         assert reported == [
-            {"type": "shell:report-bug", "message": _FAILURE["message"], "details": _FAILURE["details"]}
+            {
+                "type": "shell:report-bug",
+                "message": "Getting Started isn't available right now.",
+                "details": "Its built files are missing. They are rebuilt with npm run build in system/.\n\n"
+                "Asking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 500\nboom",
+            }
         ]
 
 
@@ -107,7 +116,7 @@ def test_a_refused_ask_offers_the_request_as_a_draft_and_no_bug_report_where_non
         # The draft is the request the ask sent: what the page says, its details, and to rebuild it.
         assert drafted["text"] == asked["text"] and drafted["delivery"] == "draft"
         assert asked["text"] == (
-            "Imbue Studio showed the user this failure: The Getting Started page isn't available right now.\n\n"
+            "Imbue Studio showed the user this failure: Getting Started isn't available right now.\n\n"
             "Details:\n```\nIts built files are missing. They are rebuilt with npm run build in system/.\n```\n\n"
             "Rebuild it so the page comes back, then tell the user what was wrong and what you changed."
         )

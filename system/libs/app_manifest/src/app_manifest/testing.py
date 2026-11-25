@@ -8,8 +8,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
+from app_manifest.failure_pages import WORKSPACE_FRONTEND_BUILD
+from app_manifest.failure_pages import not_built_page_html
+from app_manifest.failure_pages import not_built_sentence
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
@@ -331,3 +335,17 @@ def assert_document_policy_admits_page(response: TestResponse) -> None:
             continue
         digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
         assert f"'sha256-{digest}'" in policy, (body[:80], policy)
+
+
+def assert_serves_the_not_built_page(client: FlaskClient, page_path: str, display_name: str, health_path: str) -> None:
+    """Fail unless the app behind ``client``, its frontend not built, answers ``page_path`` with the shared not-built
+    page under its own name, whose health check is ``health_path``, and that route says the build is missing (so the
+    page's check keeps it up until a build lands)."""
+    response = client.get(page_path)
+    assert response.status_code == 200, response.status_code
+    page = response.get_data(as_text=True)
+    assert not_built_sentence(display_name) in page
+    assert page == not_built_page_html(display_name, WORKSPACE_FRONTEND_BUILD, health_path)
+    assert response.headers["Cache-Control"] == "no-store"
+    health = client.get(health_path).get_json()
+    assert health is not None and health["is_frontend_built"] is False, health

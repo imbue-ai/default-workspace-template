@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.testing import assert_document_policy_admits_page
+from app_manifest.testing import assert_serves_the_not_built_page
 from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
@@ -23,6 +26,8 @@ from routines.testing import TEST_NOW
 from routines.testing import build_test_service
 from routines.testing import wait_for_last_run
 from routines_app.mock_fix_chat_test import RecordingFixChatStarter
+from routines_app.server import APP_DISPLAY_NAME
+from routines_app.server import HEALTH_PATH
 from routines_app.server import create_app
 
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
@@ -196,11 +201,14 @@ def test_a_removal_that_cannot_delete_the_state_says_so_and_keeps_the_routine(
     static_directory: Path,
     fix_chat_starter: RecordingFixChatStarter,
     sync_routine: RoutineId,
+    contract_path: Path,
 ) -> None:
     """The routine's definition file is the one the fixture's service wrote; this service only refuses the removal."""
     states = RefusingRemovalStateStore(paths=git_paths)
     service = build_test_service(git_paths, repository, states, clock, chat_app, notifier)
-    client = create_app(service, static_directory, is_preview=False, fix_chat_starter=fix_chat_starter).test_client()
+    client = create_app(
+        service, static_directory, is_preview=False, fix_chat_starter=fix_chat_starter, contract_path=contract_path
+    ).test_client()
 
     response = client.delete(f"/api/routines/{sync_routine}")
 
@@ -276,15 +284,23 @@ def test_the_health_probe_says_whether_the_pages_are_built(client: FlaskClient) 
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
 
 
-def test_an_unbuilt_frontend_serves_the_not_built_page_and_says_so_in_the_health_probe(
-    service: RoutinesService, tmp_path: Path, fix_chat_starter: RecordingFixChatStarter
+def test_an_unbuilt_frontend_serves_the_not_built_page_at_every_page_and_the_contract_module_it_asks_with(
+    service: RoutinesService, tmp_path: Path, fix_chat_starter: RecordingFixChatStarter, contract_path: Path
 ) -> None:
-    unbuilt = create_app(service, tmp_path / "nothing-built", is_preview=False, fix_chat_starter=fix_chat_starter)
+    unbuilt = create_app(
+        service,
+        tmp_path / "nothing-built",
+        is_preview=False,
+        fix_chat_starter=fix_chat_starter,
+        contract_path=contract_path,
+    )
     client = unbuilt.test_client()
-    page = client.get("/")
-    assert page.status_code == 200
-    assert b"has not been built yet" in page.data
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
+    for page_path in ("/", "/sync", "/sync/runs/r1", "/sync/runs/r1/log"):
+        assert_serves_the_not_built_page(client, page_path, APP_DISPLAY_NAME, HEALTH_PATH)
+    assert_document_policy_admits_page(client.get("/"))
+    module = client.get(APP_CONTRACT_ROUTE)
+    assert module.status_code == 200 and module.mimetype == "text/javascript"
+    assert module.data == contract_path.read_bytes()
 
 
 def test_a_schedule_body_the_model_refuses_is_a_bad_request(

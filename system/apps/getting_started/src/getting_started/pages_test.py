@@ -6,8 +6,11 @@ import pytest
 from flask.testing import FlaskClient
 
 from app_manifest.testing import assert_document_policy_admits_page
+from app_manifest.testing import assert_serves_the_not_built_page
 from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from getting_started.pages import APP_DISPLAY_NAME
+from getting_started.pages import HEALTH_PATH
 from getting_started.pages import build_pages_app
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
@@ -33,18 +36,8 @@ def _client(
 
 def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_it(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    response = client.get("/")
-    assert response.status_code == 200
-    page = response.text
-    assert "The Getting Started page isn't available right now. It comes back on its own once it is rebuilt." in page
-    assert 'id="reload">Reload</button>' in page and "Ask an agent to\nrebuild it" in page
-    # A refused ask's remedies wait hidden until one is refused.
-    assert 'id="ask-agent-draft" hidden>Draft it in a chat</button>' in page
-    # The build command is behind "See details", and the page asks its health probe whether it has been built since.
-    assert page.index("<summary>See details</summary>") < page.index("<code>npm run build</code>")
-    assert 'fetch("api/health"' in page and 'import("/_static/app_contract.js")' in page
-    assert_document_policy_admits_page(response)
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
+    assert_serves_the_not_built_page(client, "/", APP_DISPLAY_NAME, HEALTH_PATH)
+    assert_document_policy_admits_page(client.get("/"))
 
     (tmp_path / "static" / "assets").mkdir(parents=True)
     # The build puts the theme boot inline in the head (workspace_ui's themeBoot), so the policy must admit it.

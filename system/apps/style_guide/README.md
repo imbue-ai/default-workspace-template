@@ -37,7 +37,10 @@ icon under Classic Mac and Windows 2000 is in each theme's `icons/style-guide.pn
 The page is a build of `frontend/`, one of the npm workspace's frontends
 (`system/package.json`), into `src/style_guide_app/static/`; the Flask server
 in `src/style_guide_app/server.py` serves it at `/`, its bundle under
-`/assets/`, and `/api/health`, on port 8060. It stores nothing.
+`/assets/`, and `/api/health`, on port 8060. It stores nothing. Until the page
+is built, `/` is every app's not-built page (`app_manifest.failure_pages`),
+which asks an agent to rebuild it through the shell's app contract module, so
+the app serves that module too (`/_static/app_contract.js`).
 
 It does not start at boot, and is not listed until it has been started once
 by hand: `supervisorctl start style-guide` registers it and starts it. From

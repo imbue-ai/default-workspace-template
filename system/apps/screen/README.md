@@ -107,7 +107,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   a rate limit on `/neko/api/login`.
 - `GET /_static/app_contract.js` and `/_static/context_menu.js`: the shell's modules,
   served from this origin as every app serves them.
-- `GET /health`: `{"status", "lifecycle"}`.
+- `GET /health`: `{"status", "lifecycle", "is_frontend_built"}`; until the viewer is built, `/` is every
+  app's not-built page (`app_manifest.failure_pages`), which checks this to come back on its own.
 - `GET /api/schema`: the OpenAPI document of this API, built from the routes and the route table
   (`api_models.py` names what every route takes and answers; the manifest's `api_schema_path`;
   `system/libs/app_schema`), for an agent that reaches the Screen from inside the workspace or

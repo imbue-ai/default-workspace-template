@@ -18,8 +18,9 @@ from the workspace venv (`.venv/bin/getting-started`), serving on
 `http://127.0.0.1:8030`:
 
 - `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; until it is
-  built, a placeholder that checks again every ten seconds and offers Reload and, inside a shell's
-  window, an agent to rebuild it), with its bundle under `/assets/`.
+  built, every app's not-built page, `app_manifest.failure_pages`, which checks again every ten
+  seconds and offers Reload and, inside a shell's window, an agent to rebuild it), with its bundle
+  under `/assets/`.
 - `GET /api/health`: `{"status", "is_frontend_built"}`, the app's liveness probe (the update
   apply's post-restart probes cover critical apps only, which this one is not).
 - `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map

@@ -3,8 +3,13 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.testing import assert_document_policy_admits_page
+from app_manifest.testing import assert_serves_the_not_built_page
 from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from style_guide_app.server import APP_DISPLAY_NAME
+from style_guide_app.server import HEALTH_PATH
 from style_guide_app.server import create_app
 from workspace_themes.testing import write_standard_theme
 
@@ -48,12 +53,18 @@ def test_a_content_named_asset_is_cached_for_good_and_another_is_revalidated(cli
     assert client.get("/assets/missing.js").status_code == 404
 
 
-def test_an_unbuilt_page_says_how_to_build_it_and_health_reports_it(tmp_path: Path) -> None:
-    client = create_app(tmp_path / "never-built").test_client()
-    page = client.get("/")
-    assert page.status_code == 200
-    assert "npm run build" in page.get_data(as_text=True)
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
+def test_an_unbuilt_page_is_the_shared_not_built_page_and_serves_the_contract_module_it_asks_with(
+    tmp_path: Path,
+) -> None:
+    shell_static = tmp_path / "shell-static"
+    shell_static.mkdir()
+    (shell_static / "app_contract.js").write_text("export function connectToShell() {}")
+    client = create_app(tmp_path / "never-built", shell_static_directory=shell_static).test_client()
+    assert_serves_the_not_built_page(client, "/", APP_DISPLAY_NAME, HEALTH_PATH)
+    assert_document_policy_admits_page(client.get("/"))
+    module = client.get(APP_CONTRACT_ROUTE)
+    assert module.status_code == 200 and module.mimetype == "text/javascript"
+    assert module.get_data(as_text=True) == "export function connectToShell() {}"
 
 
 def test_health_reports_a_built_page(client: FlaskClient) -> None:
@@ -88,14 +99,14 @@ def test_the_page_kit_files_are_served_from_the_shells_build_and_nothing_else_is
     kit.mkdir()
     (kit / "workspace_theme.js").write_text("/* kit */")
     (kit / "workspace_theme.css").write_text(":root {}")
-    (kit / "app_contract.js").write_text("/* not the kit */")
+    (kit / "context_menu.js").write_text("/* not the kit */")
     client = create_app(static_directory, shell_static_directory=kit).test_client()
 
     script = client.get("/_static/workspace_theme.js")
     assert script.status_code == 200 and script.mimetype == "text/javascript"
     assert script.get_data(as_text=True) == "/* kit */"
     assert client.get("/_static/workspace_theme.css").mimetype == "text/css"
-    assert client.get("/_static/app_contract.js").status_code == 404
+    assert client.get("/_static/context_menu.js").status_code == 404
     assert (
         create_app(static_directory, shell_static_directory=tmp_path / "unbuilt")
         .test_client()

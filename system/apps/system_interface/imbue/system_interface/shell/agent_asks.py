@@ -1,7 +1,7 @@
-"""The task an "Ask an agent ..." button gives the agent, for the pages the shell's server renders itself (its recovery
-page, an app's could-not-start page). They cannot import workspace_ui's ``agentFixTask`` (``app_contract.ts``): each is
-served exactly when a bundle may be missing or an app is not there to serve one. So the same text is worded here, and
-a ``frontend`` test pins it to that source."""
+"""The task an "Ask an agent ..." button gives the agent, for the shell's recovery page, which its server renders
+itself. It cannot import workspace_ui's ``agentFixTask`` (``app_contract.ts``): it is served exactly when the shell's
+bundle, the contract module included, may be missing. So the same text is worded here, and a ``frontend`` test pins
+it to that source."""
 
 import re
 from typing import Final
