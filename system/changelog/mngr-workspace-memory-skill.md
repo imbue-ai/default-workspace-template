@@ -1,0 +1,1 @@
+AGENTS.md sends every question about memory (how much something uses, what is using it, what could be stopped, a reported shed) to the new `workspace-memory` skill, instead of naming the freeing-memory reference only for shed reports.
