@@ -3,10 +3,12 @@ the promise a release makes about it.
 
 The shell's ``/api/schema`` is built when the shell runs, so a client's code cannot be held to it before a
 workspace exists. The workspace routes alone are therefore also described in a file in the tree, which a test keeps
-equal to what the code produces, and which the Imbue Studio clients are held to and generated from.
+equal to what the code produces, and which the Imbue Studio clients are held to and generated from. Each route's
+entry names the operation it serves (``x-workspace-operation``), the name a client looks for in the status route's
+answer.
 
-For as long as a client that calls a route is supported, the route keeps its path, no field of an answer is removed,
-and no field of a request becomes required. Each release freezes a copy of the description
+For as long as a client that calls a route is supported, the route keeps its path and its operation's name, no
+field of an answer is removed, and no field of a request becomes required. Each release freezes a copy of the description
 (``workspace_routes_api_frozen/``), and ``description_compatibility_breaks`` holds the current description to every
 copy still there.
 """
@@ -19,6 +21,7 @@ from typing import Final
 from app_schema.api_schema import build_openapi_document
 from flask import Flask
 
+from imbue.system_interface.workspace_routes import WORKSPACE_OPERATION_BY_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_PREFIX
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 
@@ -32,6 +35,9 @@ _DESCRIPTION_TEXT: Final[str] = (
     "snapshot and timezone, its backup configuration, and its updates."
 )
 _DESCRIPTION_VERSION: Final[str] = "1"
+# The key under which a route's entry names the operation it serves, which a client looks for in the status
+# route's answer before it calls the route.
+OPERATION_KEY: Final[str] = "x-workspace-operation"
 _SCHEMA_REFERENCE_PREFIX: Final[str] = "#/components/schemas/"
 _OPENAPI_METHODS: Final[frozenset[str]] = frozenset({"get", "put", "post", "delete", "patch"})
 
@@ -51,6 +57,8 @@ def build_workspace_routes_description(app: Flask) -> dict[str, Any]:
         for path, path_item in document["paths"].items()
         if path.startswith(WORKSPACE_ROUTE_PREFIX + "/")
     }
+    for (method, path), operation in WORKSPACE_OPERATION_BY_ROUTE.items():
+        document["paths"][path][method.lower()][OPERATION_KEY] = operation
     return document
 
 
@@ -119,8 +127,9 @@ def _removed_fields(
 
 
 def description_compatibility_breaks(current: Mapping[str, Any], frozen: Mapping[str, Any]) -> list[str]:
-    """What ``current`` breaks for a client written against ``frozen``: a route or a method gone, a field of an
-    answer removed, or a field of a request become required. Empty when a client of ``frozen`` still works."""
+    """What ``current`` breaks for a client written against ``frozen``: a route or a method gone or serving an
+    operation of another name, a field of an answer removed, or a field of a request become required. Empty when a
+    client of ``frozen`` still works."""
     breaks: list[str] = []
     for path, frozen_item in frozen.get("paths", {}).items():
         current_item = current.get("paths", {}).get(path)
@@ -135,6 +144,9 @@ def description_compatibility_breaks(current: Mapping[str, Any], frozen: Mapping
             if not isinstance(current_operation, Mapping):
                 breaks.append(f"{where} is no longer served")
                 continue
+            frozen_name = frozen_operation.get(OPERATION_KEY)
+            if frozen_name is not None and current_operation.get(OPERATION_KEY) != frozen_name:
+                breaks.append(f"{where} no longer serves the operation {frozen_name!r}")
             frozen_request = _json_schema(frozen_operation.get("requestBody"), frozen)
             current_request = _json_schema(current_operation.get("requestBody"), current)
             newly_required = sorted(set(current_request.get("required", ())) - set(frozen_request.get("required", ())))

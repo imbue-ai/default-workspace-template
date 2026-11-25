@@ -102,6 +102,22 @@ from imbue.system_interface.workspace_api_models import GrantRefusalEntry
 from imbue.system_interface.workspace_api_models import GrantsDocumentModel
 from imbue.system_interface.workspace_api_models import GrantsStoredResponse
 from imbue.system_interface.workspace_api_models import InvalidGrantsError
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_REMOVE
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_SETUP_READ
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_VERIFICATION_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_PROFILE_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_SHARING_GRANTS_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_SHARING_READ
+from imbue.system_interface.workspace_api_models import OPERATION_TIMEZONE_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_DISMISS
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_LIVENESS_READ
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_READ
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_CANCEL
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_REFRESH
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SKIP
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_START
 from imbue.system_interface.workspace_api_models import ProfileSnapshotRequest
 from imbue.system_interface.workspace_api_models import ProfileWrittenResponse
 from imbue.system_interface.workspace_api_models import ReplaceGrantsRequest
@@ -638,6 +654,26 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("POST", UPDATE_SKIP_ROUTE): _route(UpdateSkipRequest, UpdateSkippedResponse),
     ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissalsResponse),
     ("GET", UPDATE_LIVENESS_ROUTE): _route(None, UpdateLivenessResponse),
+}
+
+# The operation each route serves, as the status route names it; the status route itself serves none.
+WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
+    ("GET", SHARING_ROUTE): OPERATION_SHARING_READ,
+    ("PUT", SHARING_GRANTS_ROUTE): OPERATION_SHARING_GRANTS_WRITE,
+    ("PUT", PROFILE_ROUTE): OPERATION_PROFILE_WRITE,
+    ("PUT", TIMEZONE_ROUTE): OPERATION_TIMEZONE_WRITE,
+    ("PUT", BACKUP_CREDENTIALS_ROUTE): OPERATION_BACKUPS_CREDENTIALS_WRITE,
+    ("DELETE", BACKUP_CREDENTIALS_ROUTE): OPERATION_BACKUPS_CREDENTIALS_REMOVE,
+    ("GET", BACKUP_SETUP_ROUTE): OPERATION_BACKUPS_SETUP_READ,
+    ("PUT", BACKUP_VERIFICATION_ROUTE): OPERATION_BACKUPS_VERIFICATION_WRITE,
+    ("GET", UPDATE_ROUTE): OPERATION_UPDATE_READ,
+    ("POST", UPDATE_START_ROUTE): OPERATION_UPDATE_START,
+    ("PUT", UPDATE_SCHEDULE_ROUTE): OPERATION_UPDATE_SCHEDULE_WRITE,
+    ("PATCH", UPDATE_SCHEDULE_ROUTE): OPERATION_UPDATE_SCHEDULE_REFRESH,
+    ("DELETE", UPDATE_SCHEDULE_ROUTE): OPERATION_UPDATE_SCHEDULE_CANCEL,
+    ("POST", UPDATE_SKIP_ROUTE): OPERATION_UPDATE_SKIP,
+    ("POST", UPDATE_DISMISSALS_ROUTE): OPERATION_UPDATE_DISMISS,
+    ("GET", UPDATE_LIVENESS_ROUTE): OPERATION_UPDATE_LIVENESS_READ,
 }
 
 _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] = {

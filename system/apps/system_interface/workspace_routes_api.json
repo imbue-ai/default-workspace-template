@@ -1205,7 +1205,8 @@
             "description": "Error"
           }
         },
-        "summary": "Move restic.env aside to restic.env.<timestamp>, so the backup service goes idle; refused with 409 SETUP_RUNNING while a repository is being initialised."
+        "summary": "Move restic.env aside to restic.env.<timestamp>, so the backup service goes idle; refused with 409 SETUP_RUNNING while a repository is being initialised.",
+        "x-workspace-operation": "backups.credentials.remove"
       },
       "put": {
         "description": "Take the backup credentials (the contents of restic.env) and start initialising the repository they name.\n\nAnswers 202 with the setup's state, without waiting: restic.env is written when the repository is ready, and\nnot before, so the backup service never sees credentials for a repository that is not initialised. Read the\nsetup route until the state is READY or FAILED. Credentials already in place and ready change nothing and\nanswer 200 with READY. A second request while one initialisation runs is refused with 409 SETUP_RUNNING.",
@@ -1292,7 +1293,8 @@
             "description": "Error"
           }
         },
-        "summary": "Take the backup credentials (the contents of restic.env) and start initialising the repository they name."
+        "summary": "Take the backup credentials (the contents of restic.env) and start initialising the repository they name.",
+        "x-workspace-operation": "backups.credentials.write"
       }
     },
     "/api/workspace/backups/setup": {
@@ -1361,7 +1363,8 @@
             "description": "Error"
           }
         },
-        "summary": "How the initialisation of the backup repository stands: NONE, INITIALIZING, READY, or FAILED with restic's own words. An initialisation whose process is gone reads as FAILED; sending the credentials again is safe."
+        "summary": "How the initialisation of the backup repository stands: NONE, INITIALIZING, READY, or FAILED with restic's own words. An initialisation whose process is gone reads as FAILED; sending the credentials again is safe.",
+        "x-workspace-operation": "backups.setup.read"
       }
     },
     "/api/workspace/backups/verification": {
@@ -1440,7 +1443,8 @@
             "description": "Error"
           }
         },
-        "summary": "Turn backup verification on or off for this workspace, and answer the value now set."
+        "summary": "Turn backup verification on or off for this workspace, and answer the value now set.",
+        "x-workspace-operation": "backups.verification.write"
       }
     },
     "/api/workspace/profile": {
@@ -1519,7 +1523,8 @@
             "description": "Error"
           }
         },
-        "summary": "Write the profile snapshot a client materialized from the workspace's account, as it is."
+        "summary": "Write the profile snapshot a client materialized from the workspace's account, as it is.",
+        "x-workspace-operation": "profile.write"
       }
     },
     "/api/workspace/sharing": {
@@ -1588,7 +1593,8 @@
             "description": "Error"
           }
         },
-        "summary": "Whether the workspace holds share materials, and its grants: what a client reads before every edit of who the workspace is shared with."
+        "summary": "Whether the workspace holds share materials, and its grants: what a client reads before every edit of who the workspace is shared with.",
+        "x-workspace-operation": "sharing.read"
       }
     },
     "/api/workspace/sharing/grants": {
@@ -1674,7 +1680,8 @@
             "description": "Error"
           }
         },
-        "summary": "Replace the grants, and the identities beside them, and answer the document as stored."
+        "summary": "Replace the grants, and the identities beside them, and answer the document as stored.",
+        "x-workspace-operation": "sharing.grants.write"
       }
     },
     "/api/workspace/status": {
@@ -1822,7 +1829,8 @@
             "description": "Error"
           }
         },
-        "summary": "Record the user's timezone, by default only when none is recorded, and answer the zone now on record."
+        "summary": "Record the user's timezone, by default only when none is recorded, and answer the zone now on record.",
+        "x-workspace-operation": "timezone.write"
       }
     },
     "/api/workspace/update": {
@@ -1891,7 +1899,8 @@
             "description": "Error"
           }
         },
-        "summary": "The schedule, the last run, the last dispatch, the last start, the skipped version and the dismissals."
+        "summary": "The schedule, the last run, the last dispatch, the last start, the skipped version and the dismissals.",
+        "x-workspace-operation": "update.read"
       }
     },
     "/api/workspace/update/dismissals": {
@@ -1970,7 +1979,8 @@
             "description": "Error"
           }
         },
-        "summary": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's."
+        "summary": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's.",
+        "x-workspace-operation": "update.dismiss"
       }
     },
     "/api/workspace/update/liveness": {
@@ -2039,7 +2049,8 @@
             "description": "Error"
           }
         },
-        "summary": "What tells whether a running update is still alive: the run record, the workspace's agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed."
+        "summary": "What tells whether a running update is still alive: the run record, the workspace's agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed.",
+        "x-workspace-operation": "update.liveness.read"
       }
     },
     "/api/workspace/update/schedule": {
@@ -2108,7 +2119,8 @@
             "description": "Error"
           }
         },
-        "summary": "Cancel the schedule, and answer whether there was one."
+        "summary": "Cancel the schedule, and answer whether there was one.",
+        "x-workspace-operation": "update.schedule.cancel"
       },
       "patch": {
         "description": "Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are\nconfigured), and nothing when none is armed. The version the user typed and the dispatcher's record stay.",
@@ -2185,7 +2197,8 @@
             "description": "Error"
           }
         },
-        "summary": "Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are configured), and nothing when none is armed. The version the user typed and the dispatcher's record stay."
+        "summary": "Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are configured), and nothing when none is armed. The version the user typed and the dispatcher's record stay.",
+        "x-workspace-operation": "update.schedule.refresh"
       },
       "put": {
         "description": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.\n\nAnswers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the schedule. Arming\nagain starts the dispatcher's record of earlier attempts over.",
@@ -2262,7 +2275,8 @@
             "description": "Error"
           }
         },
-        "summary": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute."
+        "summary": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.",
+        "x-workspace-operation": "update.schedule.write"
       }
     },
     "/api/workspace/update/skip": {
@@ -2341,7 +2355,8 @@
             "description": "Error"
           }
         },
-        "summary": "Cancel the schedule and record a version as skipped for this workspace; of two skips the later is kept."
+        "summary": "Cancel the schedule and record a version as skipped for this workspace; of two skips the later is kept.",
+        "x-workspace-operation": "update.skip"
       }
     },
     "/api/workspace/update/start": {
@@ -2430,7 +2445,8 @@
             "description": "Error"
           }
         },
-        "summary": "Start an update now."
+        "summary": "Start an update now.",
+        "x-workspace-operation": "update.start"
       }
     }
   }

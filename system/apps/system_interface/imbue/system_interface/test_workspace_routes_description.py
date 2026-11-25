@@ -9,8 +9,10 @@ from imbue.imbue_common.pytest_utils import inline_snapshot_is_updating
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
 from imbue.system_interface.workspace_routes import STATUS_ROUTE
 from imbue.system_interface.workspace_routes import TIMEZONE_ROUTE
+from imbue.system_interface.workspace_routes import WORKSPACE_OPERATION_BY_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.workspace_routes_description import FROZEN_DESCRIPTIONS_DIRECTORY
+from imbue.system_interface.workspace_routes_description import OPERATION_KEY
 from imbue.system_interface.workspace_routes_description import WORKSPACE_ROUTES_DESCRIPTION_PATH
 from imbue.system_interface.workspace_routes_description import build_workspace_routes_description
 from imbue.system_interface.workspace_routes_description import description_compatibility_breaks
@@ -32,13 +34,25 @@ def test_the_checked_in_description_is_what_the_code_produces(app: Flask, reques
 def test_the_description_holds_every_workspace_route_and_no_other(app: Flask) -> None:
     description = build_workspace_routes_description(app)
 
-    described = {
-        (method.upper(), path) for path, path_item in description["paths"].items() for method in path_item
-    }
+    described = {(method.upper(), path) for path, path_item in description["paths"].items() for method in path_item}
     assert described == set(WORKSPACE_ROUTE_TABLE)
     status_answer = description["components"]["schemas"]["WorkspaceStatusResponse"]
     assert set(status_answer["required"]) == {"schema", "template_ref", "operations"}
     assert len(WORKSPACE_OPERATIONS) == 16
+
+
+def test_every_route_but_the_status_names_its_own_operation_of_those_the_status_lists(app: Flask) -> None:
+    description = build_workspace_routes_description(app)
+
+    operation_by_route = {
+        (method.upper(), path): entry.get(OPERATION_KEY)
+        for path, path_item in description["paths"].items()
+        for method, entry in path_item.items()
+    }
+
+    assert operation_by_route == {**WORKSPACE_OPERATION_BY_ROUTE, ("GET", STATUS_ROUTE): None}
+    assert set(WORKSPACE_OPERATION_BY_ROUTE) == set(WORKSPACE_ROUTE_TABLE) - {("GET", STATUS_ROUTE)}
+    assert sorted(WORKSPACE_OPERATION_BY_ROUTE.values()) == sorted(WORKSPACE_OPERATIONS)
 
 
 def test_the_description_breaks_no_release_still_frozen(app: Flask) -> None:
@@ -72,6 +86,7 @@ def test_a_removed_route_a_removed_answer_field_and_a_newly_required_request_fie
     del current["components"]["schemas"]["GrantListModel"]["properties"]["email_domains"]
     del current["components"]["schemas"]["UpdateLivenessAgent"]["properties"]["chat_id"]
     current["components"]["schemas"]["UpdateStartRequest"]["required"].append("override_ref")
+    current["paths"]["/api/workspace/update/skip"]["post"][OPERATION_KEY] = "update.skip.version"
 
     breaks = description_compatibility_breaks(current, frozen)
 
@@ -82,3 +97,4 @@ def test_a_removed_route_a_removed_answer_field_and_a_newly_required_request_fie
     assert "GET /api/workspace/sharing (200).grants.services no longer answers the field 'email_domains'" in breaks
     assert "GET /api/workspace/update/liveness (200).agents no longer answers the field 'chat_id'" in breaks
     assert "POST /api/workspace/update/start now requires the request field 'override_ref'" in breaks
+    assert "POST /api/workspace/update/skip no longer serves the operation 'update.skip'" in breaks
