@@ -7545,6 +7545,59 @@ def test_an_apply_landing_a_tree_from_before_the_upgrade_command_runs_no_upgrade
     assert "stopped agents" not in err
 
 
+def _record_presence_at_upgrade(runner: _RecordingRunner, record: Path) -> list[bool]:
+    """Whether ``record`` exists each time ``runner`` runs the stopped-agent upgrade, filled in as it runs."""
+    presence: list[bool] = []
+    observe = runner.on_command
+
+    def on_command(argv: list[str]) -> None:
+        if argv == _UPGRADE_STOPPED_AGENTS:
+            presence.append(record.exists())
+        if observe is not None:
+            observe(argv)
+
+    runner.on_command = on_command
+    return presence
+
+
+def test_a_landed_apply_upgrades_the_stopped_agents_whatever_the_agent_upgrade_record_says(
+    apply_repo: Path,
+) -> None:
+    # An older release's apply can have moved the agents and the venv since the record was written.
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+    presence = _record_presence_at_upgrade(runner, record)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert presence == [False]
+
+
+def test_an_apply_landing_a_tree_from_before_the_upgrade_command_drops_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+    assert not record.exists()
+
+
+def test_an_apply_that_left_the_venv_alone_keeps_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    _syncs_the_upgrade_command(runner, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert record.exists()
+
+
 @pytest.mark.parametrize(
     "outcome",
     [
@@ -10222,6 +10275,29 @@ def test_rollback_last_to_a_tree_from_before_the_upgrade_command_runs_no_upgrade
 
     assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
     assert "warning:" not in capsys.readouterr().err
+
+
+def test_rollback_last_upgrades_the_stopped_agents_whatever_the_agent_upgrade_record_says(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _venv_moving_rollback_point(apply_repo)
+    presence = _record_presence_at_upgrade(runner, record)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert presence == [False]
+
+
+def test_rollback_last_to_a_tree_from_before_the_upgrade_command_drops_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    runner = _venv_moving_rollback_point(apply_repo, has_upgrade_command=False)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not record.exists()
 
 
 def test_rollback_last_of_an_update_that_left_the_venv_alone_upgrades_no_agent(

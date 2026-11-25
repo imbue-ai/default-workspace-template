@@ -55,10 +55,14 @@ service.
    or that something started meanwhile) leaves no record, and any pass that
    writes none removes it. An update apply that re-synced the venv removes it
    too when it rolls back, or `recover` rolls it back, since the merged tree's
-   mngr may have created agents before then. While it names the venv's mngr, the
-   step starts no mngr process at all, so only the first boot after the mngr
-   changes does any work. A venv whose mngr was not installed from a commit (an
-   editable checkout) never gets a record and is upgraded at every boot.
+   mngr may have created agents before then. update-self also removes it before
+   each of its own runs of `upgrade-stopped-agents`, so those never skip on it:
+   an apply or `rollback-last` from a release before the record moves the venv
+   and the agents without removing it. While it names the venv's mngr, the step
+   starts no mngr process at all, so only the first boot after the mngr changes
+   or an update re-syncs the venv does any work. A venv whose mngr was not
+   installed from a commit (an editable checkout) never gets a record and is
+   upgraded at every boot.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

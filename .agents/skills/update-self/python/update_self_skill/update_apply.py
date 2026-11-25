@@ -167,12 +167,25 @@ _ENV_CONVERGE_UPGRADE_ARGV = ("uv", "run", "--no-sync", "env-converge", "upgrade
 _UPGRADE_STOPPED_AGENTS_ARGV = ("uv", "run", "--no-sync", "upgrade-stopped-agents")
 # Past the bounds the command puts on its own `mngr list` and `mngr upgrade`.
 _UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS = 180.0
+# The stopped-agent pass's record of the mngr that last left every agent current.
+_AGENT_UPGRADE_COVERAGE_RECORD = Path("data/.state/agent_upgrade/coverage.json")
+
+
+def _forget_agent_upgrade_coverage(repo_root: Path) -> None:
+    """Remove the record that would let the stopped-agent pass skip every agent."""
+    record = repo_root / _AGENT_UPGRADE_COVERAGE_RECORD
+    try:
+        record.unlink(missing_ok=True)
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not remove {record} ({exc}).\n")
 
 
 def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
-    """Bring the stopped agents' mngr-generated files to the workspace venv's mngr, relaying what it says on
-    stderr; nothing when the venv has no such command (a tree from before it). Never raises: the tree it runs on
-    is already live."""
+    """Drop the agent-upgrade record, then bring the stopped agents' mngr-generated files to the workspace venv's
+    mngr, relaying what the pass says on stderr; only the drop when the venv has no such command (a tree from
+    before it). Never raises: the tree it runs on is already live."""
+    # An apply or rollback-last from before the record changes the venv and the agents without dropping it.
+    _forget_agent_upgrade_coverage(repo_root)
     if not (
         repo_root / venv_links.VENV_NAME / "bin" / _UPGRADE_STOPPED_AGENTS_ARGV[-1]
     ).exists():
@@ -196,19 +209,6 @@ def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(
             f"warning: upgrading the stopped agents exited {result.returncode}.\n"
         )
-
-
-# The stopped-agent pass's record of the mngr that last left every agent current.
-_AGENT_UPGRADE_COVERAGE_RECORD = Path("data/.state/agent_upgrade/coverage.json")
-
-
-def _forget_agent_upgrade_coverage(repo_root: Path) -> None:
-    """Remove the record that every agent is current, so the next boot's pass runs with the restored mngr."""
-    record = repo_root / _AGENT_UPGRADE_COVERAGE_RECORD
-    try:
-        record.unlink(missing_ok=True)
-    except OSError as exc:
-        sys.stderr.write(f"warning: could not remove {record} ({exc}).\n")
 
 
 # The services restart a moment earlier re-runs the one-shot env-converge program,
