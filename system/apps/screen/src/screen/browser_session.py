@@ -33,6 +33,7 @@ from screen.errors import InvalidSessionPurposeError
 from screen.errors import ScreenServiceUnreachableError
 from screen.fleet_cli import refusal_reason
 from screen.identity import AGENT_ID_HEADER
+from screen.primitives import BrowserName
 from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 
 DEFAULT_BROWSER_NAME: Final[str] = "browser-1"
@@ -44,7 +45,7 @@ _DETACH_TIMEOUT_SECONDS: Final[float] = 60.0
 class DrivenBrowser(FrozenModel):
     """The attached session a ``driven_browser`` block hands its body."""
 
-    browser_name: str = Field(description="The browser the session drives")
+    browser_name: BrowserName = Field(description="The browser the session drives")
     session_name: str = Field(description="The session's ``-s=`` name, unique to this block")
     playwright_cli: str = Field(description="The ``playwright-cli`` executable")
 
@@ -67,8 +68,10 @@ def driven_browser(
     ``ScreenServiceUnreachableError``. ``is_reclaim`` takes the Screen back from the human, only for a run the user
     started themselves. A detach that fails after the body succeeded raises ``BrowserSessionError``; after a body that
     raised, it is logged and the body's error goes on. ``purpose`` is lowercase letters and digits in words joined by
-    single dashes, at most 40 characters; any other raises ``InvalidSessionPurposeError`` before anything is reserved.
+    single dashes, at most 40 characters; any other raises ``InvalidSessionPurposeError`` before anything is reserved,
+    as a ``browser_name`` that is not a browser name raises ``InvalidBrowserNameError``.
     """
+    name = BrowserName(browser_name)
     # The reaper cannot recognize a daemon whose session name starts with a dash, so it would never end one.
     if len(purpose) > MAX_NAME_LENGTH or NAME_PATTERN.fullmatch(purpose) is None:
         raise InvalidSessionPurposeError(
@@ -80,18 +83,18 @@ def driven_browser(
     headers = identity_headers()
     if AGENT_ID_HEADER not in headers:
         raise BrowserSessionError("MNGR_AGENT_ID is not set: run the script from inside an agent")
-    acquired = call_service("POST", f"/browsers/{browser_name}/acquire", {"reclaim": is_reclaim}, headers)
+    acquired = call_service("POST", f"/browsers/{name}/acquire", {"reclaim": is_reclaim}, headers)
     if not acquired.body.get("ok"):
-        raise _unavailable(acquired, browser_name, "acquire")
+        raise _unavailable(acquired, name, "acquire")
     session_name = f"{purpose}-{uuid4().hex[:12]}"
     is_body_done = False
     try:
-        attach = call_service("GET", f"/browsers/{browser_name}/attach", None, headers)
+        attach = call_service("GET", f"/browsers/{name}/attach", None, headers)
         attach_url = attach.body.get("attach_url")
         if not attach.body.get("ok") or not isinstance(attach_url, str):
-            raise _unavailable(attach, browser_name, "attach")
+            raise _unavailable(attach, name, "attach")
         _run_cli(playwright_cli, session_name, "attach", [f"--cdp={attach_url}"], _ATTACH_TIMEOUT_SECONDS)
-        yield DrivenBrowser(browser_name=browser_name, session_name=session_name, playwright_cli=playwright_cli)
+        yield DrivenBrowser(browser_name=name, session_name=session_name, playwright_cli=playwright_cli)
         is_body_done = True
     finally:
         detach_error: BrowserSessionError | None = None
@@ -100,14 +103,14 @@ def driven_browser(
             _run_cli(playwright_cli, session_name, "detach", [], _DETACH_TIMEOUT_SECONDS)
         except BrowserSessionError as e:
             detach_error = BrowserSessionError(f"could not detach the playwright-cli session {session_name}: {e}")
-        _release(browser_name, headers)
+        _release(name, headers)
         if detach_error is not None:
             if is_body_done:
                 raise detach_error
             logger.warning("{}", detach_error)
 
 
-def _release(browser_name: str, headers: dict[str, str]) -> None:
+def _release(browser_name: BrowserName, headers: dict[str, str]) -> None:
     """Give the lease back; a failure is logged, since the lease also expires on its own when unused."""
     try:
         released = call_service("POST", f"/browsers/{browser_name}/release", {}, headers)
@@ -118,7 +121,7 @@ def _release(browser_name: str, headers: dict[str, str]) -> None:
         logger.warning("Releasing browser {} answered {}: {}", browser_name, released.status, released.body)
 
 
-def _unavailable(answer: ServiceAnswer, browser_name: str, verb: str) -> BrowserUnavailableError:
+def _unavailable(answer: ServiceAnswer, browser_name: BrowserName, verb: str) -> BrowserUnavailableError:
     status = str(answer.body.get("status") or answer.status)
     fallback = f"browser {browser_name} could not be reserved ({verb}: {status})"
     detail = str(answer.body.get("hint") or refusal_reason(answer.body, fallback))

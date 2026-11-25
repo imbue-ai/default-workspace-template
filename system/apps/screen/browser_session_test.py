@@ -13,6 +13,7 @@ from screen.cli import ENV_SERVICE_URL
 from screen.data_types import Controller
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
+from screen.errors import InvalidBrowserNameError
 from screen.errors import InvalidSessionPurposeError
 from screen.errors import ScreenServiceUnreachableError
 from screen.primitives import AgentId
@@ -82,7 +83,7 @@ def test_a_browser_another_agent_holds_is_refused_with_nothing_attached(
     assert _calls(fake_playwright_cli) == []
 
 
-def test_a_purpose_the_reaper_could_not_recognize_is_refused_before_the_browser_is_reserved(
+def test_a_purpose_the_reaper_could_not_recognize_or_a_bad_browser_name_is_refused_before_anything_is_reserved(
     service: ScreenService,
     client: FlaskClient,
     served_screen: str,
@@ -95,6 +96,10 @@ def test_a_purpose_the_reaper_could_not_recognize_is_refused_before_the_browser_
             with driven_browser(browser_name=name, purpose=purpose):
                 pytest.fail(f"the body ran with purpose {purpose!r}")
         assert not _is_leased(service, script_agent), purpose
+    with pytest.raises(InvalidBrowserNameError):
+        with driven_browser(browser_name=f"{name}/release", purpose="sync"):
+            pytest.fail("the body ran on a browser name with a slash")
+    assert not _is_leased(service, script_agent)
     assert _calls(fake_playwright_cli) == []
 
 
