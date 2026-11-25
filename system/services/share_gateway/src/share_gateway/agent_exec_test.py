@@ -3,6 +3,7 @@ import signal
 import socket
 import stat
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -283,6 +284,38 @@ def test_a_command_that_prints_nothing_is_killed_when_its_callers_connection_end
         ours.close()
         lifeline.close()
         running.kill_all()
+
+
+def test_a_command_that_closed_its_output_is_killed_when_its_callers_connection_ends(tmp_path: Path) -> None:
+    lifeline = ProcessLifeline(tmp_path)
+    output_closed = ProcessLifeline(tmp_path)
+    running = RunningCommands()
+    ours, theirs = socket.socketpair()
+    # What `sh -c 'cmd > log 2>&1'` comes to once its shell is cmd: both outputs dropped, and the command runs on.
+    # It lets go of the second FIFO once they are.
+    script = (
+        f"exec 3>{lifeline.path} 4>{output_closed.path}; echo started; exec >/dev/null 2>&1; exec 4>&-; exec sleep 600"
+    )
+    events = stream_command(RunRequest(["sh", "-c", script], tmp_path, 600.0), running, ours)
+    later_events: list[dict[str, object]] = []
+    # The stream is read on a thread: a command with no output left yields nothing while it runs on.
+    reader = threading.Thread(target=lambda: later_events.extend(events), daemon=True)
+    try:
+        assert next(events) == {"type": "stdout", "data": "started\n"}
+        reader.start()
+        assert output_closed.is_released_within(_LIFELINE_WAIT_SECONDS)
+        theirs.close()
+        reader.join(_LIFELINE_WAIT_SECONDS)
+        assert not reader.is_alive()
+        assert later_events == []
+        assert lifeline.is_released_within(_LIFELINE_WAIT_SECONDS)
+    finally:
+        running.kill_all()
+        if reader.is_alive():
+            reader.join(_LIFELINE_WAIT_SECONDS)
+        ours.close()
+        lifeline.close()
+        output_closed.close()
 
 
 def test_bytes_a_caller_sends_while_its_command_runs_do_not_end_the_command(tmp_path: Path) -> None:

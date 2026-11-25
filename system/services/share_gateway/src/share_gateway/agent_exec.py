@@ -45,6 +45,8 @@ _FILE_MODE_PATTERN = re.compile(r"0*[0-7]{1,3}")
 _READ_CHUNK_BYTES = 64 * 1024
 # A line with no newline is cut here, so a command that never ends its line cannot grow one event without bound.
 _MAX_LINE_CHARACTERS = 1024 * 1024
+# How often the caller of a command that has closed its output and runs on is looked at.
+_CALLER_CHECK_SECONDS = 0.2
 
 STDOUT_EVENT = "stdout"
 STDERR_EVENT = "stderr"
@@ -339,11 +341,25 @@ class _CommandOutput:
         return events
 
 
-def _exit_code_before(process: subprocess.Popen[bytes], deadline: float) -> int | None:
-    """The command's exit code as owner-exec reports it, or None when it has not exited by ``deadline``."""
-    try:
-        return_code = process.wait(timeout=max(deadline - time.monotonic(), 0.0))
-    except subprocess.TimeoutExpired:
+def _exit_code_while_awaited(process: subprocess.Popen[bytes], output: _CommandOutput, deadline: float) -> int | None:
+    """The command's exit code as owner-exec reports it, or None when it has not exited by ``deadline`` or its
+    caller has left first.
+
+    For a command whose output has ended and which runs on: its caller is looked at between waits, the only
+    place left where a caller that has gone would show.
+    """
+    return_code: int | None = None
+    is_awaited = True
+    while is_awaited:
+        remaining = deadline - time.monotonic()
+        try:
+            return_code = process.wait(timeout=min(max(remaining, 0.0), _CALLER_CHECK_SECONDS))
+        except subprocess.TimeoutExpired:
+            output.read_events(0.0)
+            is_awaited = remaining > 0 and not output.has_caller_left
+        else:
+            is_awaited = False
+    if return_code is None:
         return None
     return return_code if return_code >= 0 else _SIGNALLED_EXIT_CODE
 
@@ -385,10 +401,10 @@ def stream_command(
         with _CommandOutput(process, caller) as output:
             while output.is_open and not output.has_caller_left and (remaining := deadline - time.monotonic()) > 0:
                 yield from output.read_events(remaining)
+            if not output.has_caller_left and not output.is_open:
+                exit_code = _exit_code_while_awaited(process, output, deadline)
             if output.has_caller_left:
                 return
-            if not output.is_open:
-                exit_code = _exit_code_before(process, deadline)
     finally:
         if exit_code is None:
             _kill_command(process)
