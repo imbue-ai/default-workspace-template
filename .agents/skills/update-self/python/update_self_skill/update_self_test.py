@@ -7426,6 +7426,139 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     assert "uv: not found" in err
 
 
+# the stopped agents' upgrade once an update lands or is rolled back
+
+_UPGRADE_STOPPED_AGENTS = ["uv", "run", "--no-sync", "upgrade-stopped-agents"]
+
+
+def test_update_self_runs_the_command_the_bootstrap_package_declares() -> None:
+    pyproject = tomllib.loads(
+        (_WORKSPACE_ROOT / "system/libs/bootstrap/pyproject.toml").read_text()
+    )
+
+    assert list(update_apply._UPGRADE_STOPPED_AGENTS_ARGV) == _UPGRADE_STOPPED_AGENTS
+    assert (
+        pyproject["project"]["scripts"][_UPGRADE_STOPPED_AGENTS[-1]]
+        == "bootstrap.agent_upgrade:main"
+    )
+
+
+def test_a_landed_apply_upgrades_the_stopped_agents_once_on_the_landed_venv(
+    apply_repo: Path, capsys
+) -> None:
+    # Past the last rollback point: the forward restart has settled and the marker is down.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(
+        tuple(_UPGRADE_STOPPED_AGENTS),
+        _Result(stderr="mngr upgrade: upgraded worker-a (stopped)\n"),
+    )
+    is_marker_up_at_upgrade: list[bool] = []
+    runner.on_command = lambda argv: (
+        is_marker_up_at_upgrade.append(_marker_exists(apply_repo))
+        if argv == _UPGRADE_STOPPED_AGENTS
+        else None
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert runner.argvs_starting(*_UPGRADE_STOPPED_AGENTS) == [_UPGRADE_STOPPED_AGENTS]
+    assert is_marker_up_at_upgrade == [False]
+    assert runner.calls.index(list(_RESTART)) < runner.calls.index(
+        _UPGRADE_STOPPED_AGENTS
+    )
+    assert runner.cwds_of(*_UPGRADE_STOPPED_AGENTS) == [str(apply_repo)]
+    assert (
+        "agent upgrade: mngr upgrade: upgraded worker-a (stopped)\n"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    ("name_status", "is_upgraded"),
+    [
+        (_BACKEND_MANIFEST_DIFF, True),
+        (_APP_PYPROJECT_DIFF, True),
+        (_FRONTEND_DIFF, False),
+        (_DOCS_DIFF, False),
+    ],
+    ids=["backend-manifest", "app-pyproject", "frontend", "docs"],
+)
+def test_only_an_apply_that_re_synced_the_venv_upgrades_the_stopped_agents(
+    apply_repo: Path, name_status: str, is_upgraded: bool
+) -> None:
+    runner = _apply_runner(name_status, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert runner.ran(*_UPGRADE_STOPPED_AGENTS) is is_upgraded
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _Result(returncode=1, stderr="Traceback: boom\n"),
+        subprocess.TimeoutExpired(_UPGRADE_STOPPED_AGENTS, 180.0),
+        FileNotFoundError("uv: not found"),
+    ],
+    ids=["exit-1", "timed-out", "missing-uv"],
+)
+def test_a_stopped_agent_upgrade_that_fails_leaves_the_landed_apply_as_it_was(
+    apply_repo: Path, capsys, outcome: object
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(tuple(_UPGRADE_STOPPED_AGENTS), outcome)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert len(runner.argvs_starting(*_RESTART)) == 1
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert not _marker_exists(apply_repo)
+    assert (apply_repo / "docs/VERSION_HISTORY.md").exists()
+    assert runner.ran("uv", "run", "--no-sync", "env-converge", "upgrade")
+    err = capsys.readouterr().err
+    assert "warning:" in err and "upgrad" in err
+    assert err.rstrip().endswith(
+        "applied: the update is landed and the live workspace is confirmed healthy."
+    )
+
+
+def test_an_apply_that_rolls_back_before_landing_upgrades_no_agent(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    restarts = {"seen": 0}
+
+    def responder(url: str) -> int | None:
+        if not _is_live(url):
+            return 200
+        return 200 if restarts["seen"] >= 2 else 500
+
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+
+    code = _apply(runner, _FakeHttp(responder), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
 # recover
 
 
@@ -9874,6 +10007,88 @@ def test_rollback_last_resyncs_the_venv_an_update_moved(apply_repo: Path) -> Non
     ]
     # Through the link, into the venv the restored tree runs.
     assert syncs == [(["uv", "sync", "--all-packages", "--frozen"], None)]
+
+
+def _venv_moving_rollback_point(repo_root: Path) -> _RecordingRunner:
+    """A kept rollback point of an update that moved the venv, and the runner to roll it back."""
+    _link_live_venv(repo_root)
+    update_apply_contract.write_last_good(
+        update_apply_contract.LastGoodRecord(
+            merge_sha="fedcba9876543",
+            rollback_to=_ROLLBACK,
+            applied_at=1.0,
+            driven_by="lead",
+            snapshots=[],
+            programs=[],
+            apps=[],
+            needs_system_services_restart=False,
+        ),
+        repo_root,
+    )
+    runner = _rollback_runner(repo_root)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout=_BACKEND_MANIFEST_DIFF.split("\t")[1]),
+    )
+    runner.respond(
+        ("uv", "cache", "dir"), _Result(stdout=f"{_uv_cache_dir(repo_root)}\n")
+    )
+    return runner
+
+
+def test_rollback_last_upgrades_the_stopped_agents_on_the_restored_venv(
+    apply_repo: Path,
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.argvs_starting(*_UPGRADE_STOPPED_AGENTS) == [_UPGRADE_STOPPED_AGENTS]
+    assert runner.calls.index(
+        ["uv", "sync", "--all-packages", "--frozen"]
+    ) < runner.calls.index(_UPGRADE_STOPPED_AGENTS)
+    assert runner.cwds_of(*_UPGRADE_STOPPED_AGENTS) == [str(apply_repo)]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _Result(returncode=1, stderr="Traceback: boom\n"),
+        subprocess.TimeoutExpired(_UPGRADE_STOPPED_AGENTS, 180.0),
+        FileNotFoundError("uv: not found"),
+    ],
+    ids=["exit-1", "timed-out", "missing-uv"],
+)
+def test_a_stopped_agent_upgrade_that_fails_leaves_the_rollback_as_it_was(
+    apply_repo: Path, outcome: object
+) -> None:
+    runner = _venv_moving_rollback_point(apply_repo)
+    runner.respond(tuple(_UPGRADE_STOPPED_AGENTS), outcome)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == "Rolled back to the previous version."
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_rollback_last_of_an_update_that_left_the_venv_alone_upgrades_no_agent(
+    apply_repo: Path,
+) -> None:
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
 
 
 def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:

@@ -769,8 +769,12 @@ are installed instead of a live build; the apply installs them only as a set (on
 
 That one command is the whole landing: it fast-forwards to the worker's
 branch, refreshes, rebuilds and restarts what the update changed, probes the
-workspace's health, and reverts the entire merge on any failure. Exit codes,
-each spelled out in `references/apply-outcomes.md`:
+workspace's health, and reverts the entire merge on any failure. Once an update
+that re-synced the workspace venv has landed, it also rewrites the mngr-written
+files of every chat and background agent that is stopped then, the ones you
+paused included, so the resume below starts them on files that match the new
+mngr; its `agent upgrade:` lines say what it did. Exit codes, each spelled out
+in `references/apply-outcomes.md`:
 
 - **`0` -- applied.** Read its closing stderr lines before signing off.
 - **`2` -- automatically rolled back.** The update did not land and the

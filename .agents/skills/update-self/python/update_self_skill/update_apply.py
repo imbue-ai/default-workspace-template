@@ -163,6 +163,42 @@ _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 # own-process: other-tier -- update-self runs on the bare tier, and env-converge is the merged tree's venv-tier command
 _ENV_CONVERGE_UPGRADE_ARGV = ("uv", "run", "--no-sync", "env-converge", "upgrade")
 
+# own-process: other-tier -- update-self runs on the bare tier, and the stopped-agent upgrade is the venv-tier bootstrap package's command
+_UPGRADE_STOPPED_AGENTS_ARGV = ("uv", "run", "--no-sync", "upgrade-stopped-agents")
+# Past the bounds the command puts on its own `mngr list` and `mngr upgrade`.
+_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS = 180.0
+
+
+def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
+    """Bring the stopped agents' mngr-generated files to the workspace venv's mngr, relaying what it says on
+    stderr. Never raises: the tree it runs on is already live."""
+    try:
+        result = runner.run_process_group(
+            list(_UPGRADE_STOPPED_AGENTS_ARGV),
+            cwd=str(repo_root),
+            env=dict(os.environ),
+            timeout=_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(
+            "warning: upgrading the stopped agents did not finish within "
+            f"{_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS:g}s.\n"
+        )
+        return
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        sys.stderr.write(
+            f"warning: could not upgrade the stopped agents ({type(exc).__name__}: {exc}).\n"
+        )
+        return
+    for line in (getattr(result, "stderr", "") or "").splitlines():
+        if line.strip():
+            sys.stderr.write(f"agent upgrade: {line}\n")
+    if result.returncode != 0:
+        sys.stderr.write(
+            f"warning: upgrading the stopped agents exited {result.returncode}.\n"
+        )
+
+
 # The services restart a moment earlier re-runs the one-shot env-converge program,
 # and an update that advances a unit's pins (a browser engine, a desktop stack) can
 # keep it installing -- and holding the dpkg lock -- for many minutes.
@@ -1622,6 +1658,10 @@ def apply_update(
         )
         return 3
 
+    # Only a re-synced venv can hold another mngr.
+    if plan.resyncs_venv:
+        _upgrade_stopped_agents(repo_root, runner)
+
     # CLEANUP: remove this block with tool_env.remove_app_tool_installs.
     # Only once the merged tree is live and healthy, and before env-converge re-captures
     # its uv tool record, which would otherwise keep listing the removed tools. Never
@@ -2093,11 +2133,12 @@ def _run_rollback(
     ).splitlines()
     # The venv is never copied aside (the apply swapped a fresh one in and deleted the
     # old), so an update that re-synced it is undone by syncing the restored tree.
-    if plan_apply(
+    resyncs_venv = plan_apply(
         changed,
         read_provisioner_inputs(repo_root),
         user_packages.user_packages(repo_root),
-    ).resyncs_venv:
+    ).resyncs_venv
+    if resyncs_venv:
         try:
             sync_workspace_venv(repo_root, runner, keep_protected)
         except (ApplyFailed, OSError, RuntimeError) as exc:
@@ -2112,6 +2153,8 @@ def _run_rollback(
         _settle_rollback_record(record, repo_root, reason)
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
+    if resyncs_venv:
+        _upgrade_stopped_agents(repo_root, runner)
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)
         for path in changed

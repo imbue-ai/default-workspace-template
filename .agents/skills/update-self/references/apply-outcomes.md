@@ -36,6 +36,14 @@ from the apply marker, the benchmarking input for the apply's poll and step
 budgets. When an apply took unusually long, quote it rather than guessing
 which step was slow.
 
+An apply that re-synced the workspace venv then runs `upgrade-stopped-agents`
+(`system/libs/bootstrap/README.md`): every chat and background agent stopped at
+that moment, the ones 5b paused included, gets mngr-written files that match the
+new mngr and stays stopped; a running one is left as it is. Its lines start
+`agent upgrade:`. A `warning:` about it (it failed, timed out or could not run)
+changes nothing about the landing and needs nothing from you: the update stays
+applied, and the workspace's next boot brings every agent current.
+
 ## Exit 2 -- automatically rolled back
 
 The apply reverted the **entire landed merge -- every class, not just the
