@@ -15,7 +15,8 @@ The workspace's cron runs it every minute, flock-serialized, from the workspace 
   and hands them back to the template's own banding once it has one.
 
 This module also holds what the workspace's update routes (``control``) share with the tick: the
-state files, the agents listing, the account check, and the update chat's create.
+state files, the agents listing, the account check, and the update chat's create. What arms a
+schedule with no client present is the tick's other half, ``arming``.
 
 It is a port of the dispatcher the Imbue Studio desktop app ships into a workspace
 (``workspace_programs/update_dispatcher.py`` in the mngr repository). A desktop from before the

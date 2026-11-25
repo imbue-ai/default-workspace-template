@@ -49,7 +49,7 @@ STATE_DIR = Path("data/.state")
 # existed: what `routines migrate-cron` could not convert stays here, and the
 # bootstrap installs it into /etc/cron.d (on the container rootfs, lost when
 # the container is recreated) at each boot. Scheduled work is otherwise a
-# routine; nothing new is written here.
+# routine; nothing new is written here but the update dispatcher's own line.
 RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # cron silently ignores drop-ins with dots or other odd characters in their
 # names; install only names it will accept and warn about the rest.

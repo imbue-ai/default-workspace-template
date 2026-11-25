@@ -1,0 +1,1 @@
+`write_workspace_profile_snapshot` leaves the stored snapshot alone when the document sent equals it apart from `written_at`, and returns whether it wrote. A client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite announced a change that did not happen.

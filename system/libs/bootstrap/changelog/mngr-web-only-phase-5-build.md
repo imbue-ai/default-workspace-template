@@ -1,0 +1,1 @@
+The boot writes the update dispatcher's cron line (`update-self-dispatch`) through `system/scripts/install_update_dispatcher_cron.py`, so a workspace no client has armed or started an update in still runs the dispatcher every minute. It is the line the shell's update routes write, under the same name, so there is still one.
