@@ -1,5 +1,5 @@
 """Ending abandoned ``playwright-cli`` sessions: which daemons ``/proc`` shows as attached through the proxy, and which
-of them the reaper ends, over a fleet whose tokens, lease and clock are real (spec section 16)."""
+of them the reaper ends, over a fleet whose tokens, lease and clock are real (the README's CDP proxy section)."""
 
 import os
 from pathlib import Path
