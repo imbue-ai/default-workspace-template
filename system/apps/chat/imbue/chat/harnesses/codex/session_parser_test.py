@@ -6,19 +6,23 @@ user-bubble / turn-abort sourcing, and the self-contained web-search expansion.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from imbue.chat.harnesses.codex.session_parser import ImageGenerationCalls
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import _labelled_tool_call
 from imbue.chat.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
+from imbue.chat.harnesses.codex.session_parser import parse_line_image
 from imbue.chat.harnesses.codex.session_parser import parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_reasoning_detail
 from imbue.chat.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
+from imbue.chat.harnesses.codex.tool_labels import WAIT_TOOL_NAME
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 
@@ -655,3 +659,147 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
 
+
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+_PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()
+
+
+def _exec_call_line(call_id: str, program: str) -> dict[str, Any]:
+    return {
+        "timestamp": "2026-11-25T22:00:10.589Z",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call", "call_id": call_id, "name": CODE_MODE_TOOL_NAME, "input": program},
+    }
+
+
+def _wait_call_line(call_id: str, cell_id: str) -> dict[str, Any]:
+    return {
+        "timestamp": "2026-11-25T22:00:11.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "call_id": call_id,
+            "name": WAIT_TOOL_NAME,
+            "arguments": json.dumps({"cell_id": cell_id, "yield_time_ms": 120000}),
+        },
+    }
+
+
+def _result_line(call_id: str, output: list[dict[str, Any]], payload_type: str = "custom_tool_call_output") -> dict:
+    """A code-mode result as codex 0.169.0 writes it: content items, an image among them."""
+    return {
+        "timestamp": "2026-11-25T22:00:23.225Z",
+        "type": "response_item",
+        "payload": {"type": payload_type, "call_id": call_id, "output": output},
+    }
+
+
+def _generated_image_output(
+    status: str = "Script completed\nWall time 12.5 seconds\nOutput:\n",
+) -> list[dict[str, Any]]:
+    return [
+        {"type": "input_text", "text": status},
+        {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "original"},
+        {"type": "input_text", "text": "Generated images are saved to /tmp/generated_images/x.png by default."},
+    ]
+
+
+_IMAGEGEN_PROGRAM = (
+    '// @exec: {"yield_time_ms": 120000}\n'
+    'const result = await tools.image_gen__imagegen({prompt:"a red bicycle"}); generatedImage(result);\n'
+)
+_VIEW_IMAGE_PROGRAM = 'image(await tools.view_image({path:"/home/user/workspace/shot.png"}));\n'
+
+
+def _parse_all(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    tool_names: dict[str, str] = {}
+    image_generation = ImageGenerationCalls()
+    return [event for line in lines for event in parse_lines(line, tool_names, {}, image_generation)]
+
+
+def _tool_results(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {event["tool_call_id"]: event for event in events if event["type"] == "tool_result"}
+
+
+def test_an_image_generation_result_counts_its_image_and_is_marked_generated() -> None:
+    """The bicycle reproduction's shape: the chat must know the result carries a generated image."""
+    results = _tool_results(
+        _parse_all([_exec_call_line("c1", _IMAGEGEN_PROGRAM), _result_line("c1", _generated_image_output())])
+    )
+    assert results["c1"]["image_count"] == 1
+    assert results["c1"]["is_generated_image"] is True
+    # The image itself stays off the wire.
+    assert "data:image" not in json.dumps(results["c1"])
+
+
+def test_a_viewed_image_is_counted_but_not_marked_generated() -> None:
+    output = [
+        {"type": "input_text", "text": "Script completed\n"},
+        {"type": "input_image", "image_url": _PNG_DATA_URL},
+    ]
+    results = _tool_results(_parse_all([_exec_call_line("c1", _VIEW_IMAGE_PROGRAM), _result_line("c1", output)]))
+    assert results["c1"]["image_count"] == 1
+    assert "is_generated_image" not in results["c1"]
+
+
+def test_a_generation_that_outlives_its_yield_window_is_marked_on_the_wait_that_returns_it() -> None:
+    """The exec yields with no image; the image arrives on the ``wait`` for that cell."""
+    yielded = [{"type": "input_text", "text": "Script running with cell ID 7\nWall time 120.0 seconds\nOutput:\n"}]
+    results = _tool_results(
+        _parse_all(
+            [
+                _exec_call_line("c1", _IMAGEGEN_PROGRAM),
+                _result_line("c1", yielded),
+                _wait_call_line("w1", "7"),
+                _result_line("w1", _generated_image_output(), payload_type="function_call_output"),
+            ]
+        )
+    )
+    assert "image_count" not in results["c1"]
+    assert results["w1"]["image_count"] == 1
+    assert results["w1"]["is_generated_image"] is True
+
+
+def test_a_wait_on_a_cell_that_only_viewed_an_image_is_not_marked_generated() -> None:
+    yielded = [{"type": "input_text", "text": "Script running with cell ID 8\n"}]
+    viewed = [{"type": "input_image", "image_url": _PNG_DATA_URL}]
+    results = _tool_results(
+        _parse_all(
+            [
+                _exec_call_line("c1", _VIEW_IMAGE_PROGRAM),
+                _result_line("c1", yielded),
+                _wait_call_line("w1", "8"),
+                _result_line("w1", viewed, payload_type="function_call_output"),
+            ]
+        )
+    )
+    assert results["w1"]["image_count"] == 1
+    assert "is_generated_image" not in results["w1"]
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "data:image/svg+xml;base64," + base64.b64encode(b"<svg/>").decode(),
+        "https://example.com/picture.png",
+        "data:image/png,not-base64",
+    ],
+)
+def test_an_image_the_chat_cannot_serve_is_not_counted(image_url: str) -> None:
+    output = [{"type": "input_text", "text": "Script completed\n"}, {"type": "input_image", "image_url": image_url}]
+    results = _tool_results(_parse_all([_exec_call_line("c1", _IMAGEGEN_PROGRAM), _result_line("c1", output)]))
+    assert "image_count" not in results["c1"]
+    assert "is_generated_image" not in results["c1"]
+
+
+def test_parse_line_image_decodes_the_indexed_image_of_its_own_result_only() -> None:
+    line = _result_line("c1", _generated_image_output())
+    image = parse_line_image(line, "codex-result-c1", 0)
+    assert image is not None
+    assert image.media_type == "image/png"
+    assert image.data == _PNG_BYTES
+    assert parse_line_image(line, "codex-result-c1", 1) is None
+    assert parse_line_image(line, "codex-result-other", 0) is None
+    assert parse_line_image(_exec_call_line("c1", _IMAGEGEN_PROGRAM), "codex-result-c1", 0) is None

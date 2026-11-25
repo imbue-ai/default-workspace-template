@@ -22,6 +22,7 @@ This hangs off the chat app's path route (see ``server._serve_file_or_document``
   what it is: a chat page's key when it is a single segment, else not found.
 """
 
+import io
 from pathlib import Path
 
 from flask import Response
@@ -78,6 +79,17 @@ def _serve_image(file_path: Path, mime_type: str, is_download: bool) -> Response
     if file_path.suffix.lower() == _SVG_EXTENSION:
         response.headers["Content-Security-Policy"] = _SVG_CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def serve_image_bytes(data: bytes, mime_type: str, download_name: str, is_download: bool) -> Response:
+    """An image held in memory, inline or as the lightbox's Download, cached like a served file.
+
+    Its URL names one image of one event, whose content never changes, so it is immutable too.
+    """
+    response = send_file(io.BytesIO(data), mimetype=mime_type, as_attachment=is_download, download_name=download_name)
+    response.headers["Cache-Control"] = _IMMUTABLE_CACHE_CONTROL
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 

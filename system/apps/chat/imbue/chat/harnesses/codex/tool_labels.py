@@ -81,6 +81,13 @@ from imbue.imbue_common.pure import pure
 
 CODE_MODE_TOOL_NAME = "exec"
 WAIT_TOOL_NAME = "wait"
+IMAGE_GENERATION_FUNCTION_NAME = "image_gen__imagegen"
+
+# The status line an ``exec`` result starts with when its program is still running
+# (codex-rs ``core/src/tools/code_mode/mod.rs``, ``format_script_status``); the program's
+# later output arrives on ``wait`` calls naming that cell. ``wait``'s own tool description
+# tells the model to call it only after this line, so it is a documented contract.
+_YIELDED_SCRIPT_STATUS_PREFIX = "Script running with cell ID "
 
 # An exec program with no parseable tools.<fn> call. Means the JS was unparseable,
 # never "no table entry".
@@ -94,7 +101,7 @@ _LABELS_BY_FUNCTION: dict[str, tuple[str, str]] = {
     "exec_command": ("Bash", "Running"),
     "write_stdin": ("WriteStdin", "Typing into terminal"),
     "view_image": ("ViewImage", "Viewing image"),
-    "image_gen__imagegen": ("ImageGen", "Generating an image"),
+    IMAGE_GENERATION_FUNCTION_NAME: ("ImageGen", "Generating an image"),
     "web__run": ("WebSearch", "Searching the web"),
     "list_mcp_resources": ("ListMcpResources", "Listing MCP resources"),
     "list_mcp_resource_templates": ("ListMcpResourceTemplates", "Listing MCP resource templates"),
@@ -180,7 +187,7 @@ def _target_for_function(function_name: str, js: str) -> str | None:
     if function_name == "view_image":
         path = _js_string_argument(js, "path")
         return basename(path) if path is not None else None
-    if function_name == "image_gen__imagegen":
+    if function_name == IMAGE_GENERATION_FUNCTION_NAME:
         prompt = _js_string_argument(js, "prompt")
         return quoted(prompt) if prompt is not None else None
     if function_name in ("list_mcp_resources", "list_mcp_resource_templates"):
@@ -249,6 +256,23 @@ def is_single_delegated_call(raw_input: str) -> bool:
     Reading zero as "batched" suppressed the permission card on every non-code-mode call.
     """
     return len(_CODE_MODE_CALL_RE.findall(raw_input)) <= 1
+
+
+@pure
+def generates_images(tool_name: str, raw_input: str) -> bool:
+    """True when a code-mode program calls codex's image generation anywhere in it."""
+    if tool_name != CODE_MODE_TOOL_NAME:
+        return False
+    return IMAGE_GENERATION_FUNCTION_NAME in _CODE_MODE_CALL_RE.findall(raw_input)
+
+
+@pure
+def yielded_cell_id(output_text: str) -> str | None:
+    """The cell an ``exec`` program keeps running in, when its result says it yielded."""
+    if not output_text.startswith(_YIELDED_SCRIPT_STATUS_PREFIX):
+        return None
+    words = output_text[len(_YIELDED_SCRIPT_STATUS_PREFIX) :].split(None, 1)
+    return words[0] if words else None
 
 
 @pure

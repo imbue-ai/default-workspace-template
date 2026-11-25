@@ -24,6 +24,7 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
+from imbue.chat.harnesses.event_images import EventImage
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.primitives import ChatId
@@ -347,3 +348,10 @@ class ChatTranscript:
         if position is None or position.local_offset is None:
             return None
         return self._reader(position.segment_index).get_event_detail(event_id)
+
+    def get_event_image(self, event_id: str, index: int) -> EventImage | None:
+        """Image ``index`` of a tool result, from the segment that holds it; a switch marker has none."""
+        position = self._locate(event_id)
+        if position is None or position.local_offset is None:
+            return None
+        return self._reader(position.segment_index).get_event_image(event_id, index)

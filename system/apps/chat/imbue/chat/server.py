@@ -136,6 +136,7 @@ from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.file_serving import serve_image_bytes
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.binding import resolve_binding
@@ -362,6 +363,24 @@ def _get_event_detail(chat_id: str, event_id: str) -> Response:
     if detail is None:
         return error_response(f"Payload for event '{event_id}' is no longer available", 404)
     return json_response({"event_id": event_id, **detail})
+
+
+def _get_event_image(chat_id: str, event_id: str, index: int) -> Response:
+    """Image ``index`` of a tool result's output: what a result's ``image_count`` counts.
+
+    Re-read from the harness's own transcript like the detail read; ``?download`` sends it as
+    an attachment (the lightbox's Download).
+    """
+    transcript = _chat_transcript(chat_id)
+    if transcript is None:
+        return _chat_not_found_response(chat_id)
+    image = transcript.get_event_image(event_id, index)
+    if image is None:
+        return error_response(f"Image {index} of event '{event_id}' is not available", 404)
+    extension = image.media_type.removeprefix("image/").replace("jpeg", "jpg")
+    return serve_image_bytes(
+        image.data, image.media_type, f"image-{index + 1}.{extension}", is_download="download" in request.args
+    )
 
 
 def _segment_reader(state: ChatAppState, segment: ChatSegmentInfo) -> TranscriptReader:
@@ -3229,6 +3248,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("stop", _stop_chat, ("POST",)),
     ("events", _get_events, ("GET",)),
     ("events/<event_id>/detail", _get_event_detail, ("GET",)),
+    ("events/<event_id>/images/<int:index>", _get_event_image, ("GET",)),
     ("stream", _stream_events, ("GET",)),
     ("message", _send_message_endpoint, ("POST",)),
     ("presence", _presence_endpoint, ("POST",)),
@@ -3338,6 +3358,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/api/chats/{chat_id}/events"): SchemalessRoute(reason=_LOOSE_EVENTS_REASON),
     ("GET", "/api/chats/{chat_id}/events/{event_id}/detail"): SchemalessRoute(
         reason="One event's deferred payloads (tool input, tool output, thinking), shaped by the harness"
+    ),
+    ("GET", "/api/chats/{chat_id}/events/{event_id}/images/{index}"): SchemalessRoute(
+        reason="One image of a tool result's output, as image bytes"
     ),
     ("GET", "/api/chats/{chat_id}/stream"): SchemalessRoute(reason="A server-sent event stream of the chat's events"),
     ("POST", "/api/chats/{chat_id}/message"): RouteModels(
