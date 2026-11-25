@@ -9,8 +9,8 @@ import stat
 import subprocess
 from pathlib import Path
 
-import playwright_browser_paths
 import pytest
+from workspace_scripts import playwright_browser_paths
 
 _SCREEN_UNIT_PATH = Path(__file__).parent / "env.d" / "2000-screen.sh"
 _TEST_SHELL_UNIT_PATH = (

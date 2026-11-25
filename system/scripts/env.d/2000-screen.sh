@@ -436,14 +436,14 @@ _install_fortress() {
 }
 
 # Where Playwright looks for its default browsers, asked of the locked Playwright
-# (system/scripts/playwright_browser_paths.py); a path that cannot be resolved
-# comes back empty.
+# (system/scripts/workspace_scripts/playwright_browser_paths.py); a path that
+# cannot be resolved comes back empty.
 _PW_DEFAULT_CHROMIUM=""
 _PW_DEFAULT_HEADLESS_SHELL=""
 
 _resolve_playwright_default_paths() {
     local resolved
-    resolved="$( (cd "$REPO_ROOT" && uv run --no-sync python system/scripts/playwright_browser_paths.py chromium chromium-headless-shell) || true)"
+    resolved="$( (cd "$REPO_ROOT" && uv run --no-sync system/scripts/workspace_scripts/playwright_browser_paths.py chromium chromium-headless-shell) || true)"
     _PW_DEFAULT_CHROMIUM="$(sed -n 1p <<< "$resolved")"
     _PW_DEFAULT_HEADLESS_SHELL="$(sed -n 2p <<< "$resolved")"
 }

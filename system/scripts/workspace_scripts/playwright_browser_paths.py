@@ -1,13 +1,13 @@
 """Print where the locked Playwright looks for each named browser's executable, one per line.
 
-The env.d browser units run this under the root venv (``uv run --no-sync python``) on every converge
-to find the paths they link or install into. Each argument is a Playwright registry browser
-name (``chromium``, ``chromium-headless-shell``), optionally followed by ``=<dir>`` to ask
-where it would live under ``PLAYWRIGHT_BROWSERS_PATH=<dir>``. The answer comes from
-Playwright's own registry, so it tracks the locked version's revision and per-architecture
-layout. There is no public API for the headless shell's path, so this reads Playwright's
-internal registry module: a path that cannot be resolved prints an empty line (and the
-reason to stderr), so the output always has one line per argument.
+The env.d browser units run this by its path under the root venv (``uv run --no-sync``) on
+every converge to find the paths they link or install into. Each argument is a Playwright
+registry browser name (``chromium``, ``chromium-headless-shell``), optionally followed by
+``=<dir>`` to ask where it would live under ``PLAYWRIGHT_BROWSERS_PATH=<dir>``. The answer
+comes from Playwright's own registry, so it tracks the locked version's revision and
+per-architecture layout. There is no public API for the headless shell's path, so this reads
+Playwright's internal registry module: a path that cannot be resolved prints an empty line
+(and the reason to stderr), so the output always has one line per argument.
 """
 
 import argparse

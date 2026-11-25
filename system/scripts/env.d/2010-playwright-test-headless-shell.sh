@@ -29,9 +29,10 @@ readonly _TEST_BROWSERS_DIR="/opt/playwright-test-browsers"
 readonly _TEST_HEADLESS_SHELL_LINK="${_TEST_BROWSERS_DIR}/headless-shell"
 
 # Where the locked Playwright installs the shell under the tests' own browsers
-# directory (system/scripts/playwright_browser_paths.py); empty when it cannot be resolved.
+# directory (system/scripts/workspace_scripts/playwright_browser_paths.py); empty
+# when it cannot be resolved.
 _resolve_test_headless_shell_path() {
-    (cd "$REPO_ROOT" && uv run --no-sync python system/scripts/playwright_browser_paths.py "chromium-headless-shell=$_TEST_BROWSERS_DIR") || true
+    (cd "$REPO_ROOT" && uv run --no-sync system/scripts/workspace_scripts/playwright_browser_paths.py "chromium-headless-shell=$_TEST_BROWSERS_DIR") || true
 }
 
 _install_test_headless_shell() {
