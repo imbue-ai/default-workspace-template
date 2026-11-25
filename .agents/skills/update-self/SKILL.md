@@ -69,9 +69,10 @@ what this run needs, with no confirmation and no preflight script, you may:
   interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
-  (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
-  a browser stops through the browser service, an app through `run-status
-  stop-apps`, which records it so `resume-apps` starts it again).
+  (`python3 .agents/skills/update-self/scripts/update_self.py memory` lists
+  them, or the staged copy's once Step 2a has staged it; a browser stops
+  through the browser service, an app through `run-status stop-apps`, which
+  records it so `resume-apps` starts it again).
   `references/freeing-memory-for-an-update.md` has the rule, how to tell a
   scheduled run from a pressed one, and what the pass owes the user afterwards;
 - prune the worktrees of workers that are gone (`git worktree list`, then `git

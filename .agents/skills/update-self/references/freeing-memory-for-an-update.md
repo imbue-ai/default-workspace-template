@@ -3,46 +3,44 @@
 An update's heaviest moments -- launching the worker, its test gate, the frontend build -- are the
 ones the memory guard sheds first. When that happens, this pass frees memory itself rather than
 stopping to ask, within the licence below. It is the one flow that may: every other one offers the
-candidates to the user and stops only what they approve
-(`.agents/skills/workspace-memory/SKILL.md`, "Freeing memory").
+candidates to the user and stops only what they approve (the `workspace-memory` skill).
 
 ## Read the memory the guard acts on, not the container's
 
 ```bash
-python3 system/services/oom_priority/bin/memory_candidates.py
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py memory
 ```
 
-Its first line is the free memory **earlyoom decides on**: the headroom file the workspace
-publishes for `--host-meminfo` while it is fresh, else `/proc/meminfo`, and it names which it read.
-Under a memory cap those two disagree, and the container's own `/proc/meminfo` is the optimistic
-one -- it has read three times the real headroom on a capped workspace. `free -m` reads that
-optimistic file, so do not decide anything from it, and never tell the worker to rerun on a figure
-that came from it: the gate will be shed again and the round is wasted.
+It asks the workspace's own memory tool, whichever one this workspace's version has, and prints
+what that lists. Its first line is the free memory **earlyoom decides on**: the headroom file the
+workspace publishes for `--host-meminfo` while it is fresh, else `/proc/meminfo`, and it names which
+it read. Under a memory cap those two disagree, and the container's own `/proc/meminfo` is the
+optimistic one -- it has read three times the real headroom on a capped workspace. `free -m` reads
+that optimistic file, so do not decide anything from it, and never tell the worker to rerun on a
+figure that came from it: the gate will be shed again and the round is wasted.
 
 The same line says how much of that free memory is left before the guard starts stopping
 processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
 workspace is about 400 MiB of room. That room is what a heavy step can use, so judge by it.
 
-The command lists the idle chats and workers, the apps the workspace may stop with how many windows
-show each, and the browsers no window shows, each with its memory: the anonymous memory of its
-processes, roughly what stopping it frees. Read the free memory again after each round.
+Below that are the idle chats and background agents, the apps the workspace may stop with how many
+windows show each, and the browsers no window shows, each with its memory: roughly what stopping it
+frees. A section that reads `unknown` could not be listed, and the last lines say why: this
+workspace's version does not list it, or the tool could not read it. Unknown is not "nothing
+there", but stop only what is listed. Read the free memory again after each round.
 
 ## What this pass may stop
 
 **Every run** may stop what the Step 1 licence names: chats and background agents, the browser, and
 the user apps no window is showing. The main chat is not among them: the chat app starts it again as
-soon as it stops, so the candidates command lists it under "Also holding memory, not candidates"
-with that reason.
+soon as it stops, so it is never listed.
 
-**A scheduled run** may stop **any** app the candidates command lists under "Apps the workspace may
-stop" (`apps.candidates` in `--json`), windows open or not. Those candidates are the boundary, and
-they are drawn so that everything among them can be brought back:
-they hold no critical app (the shell, the chat and the terminal are what the workspace is reached and
+**A scheduled run** may stop **any** app in the listing's Apps section, windows open or not. That
+section is the boundary, and it is drawn so that everything in it can be brought back:
+it holds no critical app (the shell, the chat and the terminal are what the workspace is reached and
 talked to through), nothing sharing a critical app's program, nothing internal, and nothing without
 a supervisord program to start again.
-Nothing outside them is yours to stop -- not a service, not the shell, not the user's data, and not a
-row under "Also holding memory, not candidates" (`others`), which lists those to say what holds
-memory, not to offer them.
+Nothing outside the listing is yours to stop -- not a service, not the shell, not the user's data.
 
 Tell the two apart by who dispatched the run (before the Step 2a handoff, run the workspace's own
 `.agents/skills/update-self/scripts/update_self.py` instead of the staged copy):
@@ -59,7 +57,7 @@ surprise, so a windowed app is still theirs to approve.
 Stop as little as the run needs. Take the candidates largest first, re-read the free memory, and
 stop when there is room -- a scheduled licence is not a reason to clear the workspace.
 
-An app whose `AUTO-STOP` column reads `no` (`stop_when_no_windows: false` in `--json`) may be one
+An app whose `AUTO-STOP` column reads `no` may be one
 that does work between requests (a poller, a scheduled refresh, a job that outlives its window; the
 `build-app` skill sets the field that way on purpose). It is still yours to stop, but prefer the
 others first, and say in the results message that it was down for the update.
@@ -71,7 +69,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     run-status stop-apps <program> <program> ...
 ```
 
-The programs are the `PROGRAM` column of the candidates listing. Do **not** quit an app through the
+The programs are the `PROGRAM` column of the listing's Apps section. Do **not** quit an app through the
 shell, which closes its windows.
 
 A stopped program leaves its windows where they are. The shell parks the app's port and answers that
