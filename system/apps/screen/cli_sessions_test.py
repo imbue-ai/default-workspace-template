@@ -16,6 +16,7 @@ from screen.cli_sessions import IDLE_LIMIT_SECONDS
 from screen.cli_sessions import ProcCliSessions
 from screen.cli_sessions import abandonment_reason
 from screen.primitives import AgentId
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 from testing import FleetHarness
 
 _AGENT = AgentId("chat-a")
@@ -179,24 +180,20 @@ rm -rf "$DAEMON_PROC_ENTRY"
     assert not entry.exists()
 
 
-def test_a_daemon_already_gone_is_not_detached_by_name_since_a_successor_may_hold_the_name(tmp_path: Path) -> None:
+def test_a_daemon_already_gone_is_not_detached_by_name_since_a_successor_may_hold_the_name(
+    tmp_path: Path, fake_playwright_cli: Path
+) -> None:
     proc = tmp_path / "proc"
     proxy_server = ProxyServer(requested_port=0)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     stale_url = proxy_server.attach_url("browser-1", "tok-stale")
     _write_process(proc, 4_230_590, ["node", _DAEMON, "browser-1", f"--cdp={stale_url}"], {}, workspace)
-    calls = tmp_path / "calls.log"
-    cli = tmp_path / "playwright-cli"
-    cli.write_text(f"""#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "{calls}"
-""")
-    cli.chmod(0o755)
-    sessions = ProcCliSessions(proc_dir=proc, playwright_cli=str(cli))
+    sessions = ProcCliSessions(proc_dir=proc, playwright_cli=str(fake_playwright_cli / PLAYWRIGHT_CLI_COMMAND))
     [stale] = sessions.attached_through(proxy_server)
     # The stale daemon exits and a successor attaches under the same name before the sweep reaches it.
     shutil.rmtree(proc / "4230590")
     live_url = proxy_server.attach_url("browser-1", "tok-live")
     _write_process(proc, 4_230_591, ["node", _DAEMON, "browser-1", f"--cdp={live_url}"], {}, workspace)
     assert sessions.end(stale) is True
-    assert not calls.exists()
+    assert not (fake_playwright_cli / "calls.log").exists()
