@@ -3177,7 +3177,7 @@ export class DesktopStore {
       await this.deps.api.quitApp(appName);
     } catch (error) {
       // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
-      this.toastFailure(`Failed to quit ${appName}`, error, { isLasting: true });
+      this.toastFailure(`Failed to quit ${appDisplayName(this.state, appName)}`, error, { isLasting: true });
     }
   }
 
