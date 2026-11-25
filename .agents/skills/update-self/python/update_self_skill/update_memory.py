@@ -24,7 +24,7 @@ from typing import Any, NamedTuple
 WORKSPACE_MEMORY_REL = (
     Path("system") / "services" / "oom_priority" / "bin" / "workspace_memory.py"
 )
-# own-process: other-tree -- the memory tool reads what the running workspace wrote, so the copy in that workspace's tree is the one that matches it
+# What the tool was called before it became workspace_memory.py.
 MEMORY_CANDIDATES_REL = (
     Path("system") / "services" / "oom_priority" / "bin" / "memory_candidates.py"
 )
