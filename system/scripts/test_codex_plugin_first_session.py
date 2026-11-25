@@ -22,6 +22,8 @@ from imbue.mngr_codex.codex_config import get_codex_home
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PLUGIN = "imbue-code-guardian@imbue-code-guardian"
+_ACCOUNT_MARKETPLACE = "account-marketplace"
+_ACCOUNT_PLUGIN = f"imbue-code-guardian@{_ACCOUNT_MARKETPLACE}"
 
 
 def _rpc(
@@ -66,6 +68,14 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
     installer = next(
         command for command in provision_commands if "codex_update_plugin.sh" in command
     )
+    # Stands in for a plugin on the user's ChatGPT account, which codex installs
+    # into the agent's home itself: a copy of code-guardian under another name.
+    account_marketplace = tmp_path / "account marketplace"
+    shutil.copytree(plugins_root / "imbue-code-guardian", account_marketplace)
+    manifest_path = account_marketplace / ".agents/plugins/marketplace.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["name"] = _ACCOUNT_MARKETPLACE
+    manifest_path.write_text(json.dumps(manifest))
     for _ in range(2):
         # Model mngr's rewrite from the actual agent-type settings, retaining
         # caches. An inherited account home must never be modified.
@@ -88,6 +98,24 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
         assert result.returncode == 0, result.stdout + result.stderr
         assert (shared / "config.toml").read_text() == "# account config\n"
         assert not (shared / "plugins").exists()
+        agent_env = {**env, "CODEX_HOME": str(home)}
+        config = tomllib.loads((home / "config.toml").read_text())
+        config["marketplaces"][_ACCOUNT_MARKETPLACE] = {
+            "source_type": "local",
+            "source": str(account_marketplace),
+        }
+        (home / "config.toml").write_text(tomlkit.dumps(config))
+        subprocess.run(
+            ["codex", "plugin", "add", _ACCOUNT_PLUGIN],
+            env=agent_env,
+            capture_output=True,
+            check=True,
+            timeout=45,
+        )
+        # An account-enabled plugin reaches codex's loader with no `enabled` of its own.
+        config = tomllib.loads((home / "config.toml").read_text())
+        config["plugins"][_ACCOUNT_PLUGIN] = {}
+        (home / "config.toml").write_text(tomlkit.dumps(config))
         with (
             (tmp_path / "server.log").open("w") as log,
             subprocess.Popen(
@@ -100,7 +128,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                     "app-server",
                 ],
                 cwd=tmp_path,
-                env={**env, "CODEX_HOME": str(home)},
+                env=agent_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,
