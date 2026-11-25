@@ -112,7 +112,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
             check=True,
             timeout=45,
         )
-        # An account-enabled plugin reaches codex's loader with no `enabled` of its own.
+        # An account plugin has no `enabled` in the agent's config, so `_default` decides.
         config = tomllib.loads((home / "config.toml").read_text())
         config["plugins"][_ACCOUNT_PLUGIN] = {}
         (home / "config.toml").write_text(tomlkit.dumps(config))
