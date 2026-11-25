@@ -130,9 +130,12 @@ MINTED_TOKEN_BYTES: Final[int] = 32
 # skill reads the same file for its bearer token.
 TOKEN_FILE_RELATIVE_PATH: Final[Path] = Path("system") / "api-token"
 
-# Where the datalib skill's scripts/install_datalib.sh links the pinned binaries. An absolute path:
-# supervisord's children do not have ~/.local/bin on PATH.
-DATALIB_HTTP_RELATIVE_TO_HOME: Final[Path] = Path(".local") / "bin" / "datalib-http"
+# Where the datalib skill's scripts/install_datalib.sh links the pinned binaries: under the home
+# that holds the workspace, which the install script also derives from its own location rather than
+# from $HOME (an agent's shell has HOME=/root). An absolute path: supervised programs do not have
+# that bin directory on PATH.
+WORKSPACE_HOME: Final[Path] = Path(__file__).resolve().parents[3].parent
+DATALIB_HTTP_PATH: Final[Path] = WORKSPACE_HOME / ".local" / "bin" / "datalib-http"
 
 EXIT_NOT_READY: Final[int] = 1
 
@@ -397,7 +400,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--datalib-http",
         type=Path,
-        default=Path.home() / DATALIB_HTTP_RELATIVE_TO_HOME,
+        default=DATALIB_HTTP_PATH,
         help="The datalib-http binary to run",
     )
     parser.add_argument(
