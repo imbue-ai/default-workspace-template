@@ -1,0 +1,1 @@
+- Tests only: the stop button's shared path now runs through every file harness's own session class, and the sessions that list their fields by hand in `build` (codex, room) are checked for a declared field left unset, so a harness that drifts from the shared session setup fails in CI instead of in a chat.
