@@ -982,14 +982,11 @@ def main() -> None:
     with _bootstrap_step("converge_environment", "Preparing the environment"):
         _run_env_converge_fast_phase()
 
-    # Bring stopped agents' mngr-generated files to the venv's mngr before anything starts an
-    # agent (the DRI wake below, then the chat app). Not while an update apply is in flight:
-    # bootstrap reruns on its restarts with chats live. Not on a venv the sync left behind:
-    # `mngr upgrade` rewrites to whichever mngr runs it.
+    # Before anything starts an agent: the DRI wake below, then the chat app.
     with _bootstrap_step("upgrade_agents", "Bringing your chats up to date"):
         if UPDATE_APPLY_MARKER.exists():
             logger.info(
-                "An update apply is in flight; agents are upgraded at a later boot"
+                "An update apply is in flight; agents are upgraded when it lands or at a later boot"
             )
         elif not is_venv_converged:
             logger.warning("Not upgrading agents: the workspace venv did not converge")
