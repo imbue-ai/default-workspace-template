@@ -924,7 +924,7 @@ describe("failure toasts", () => {
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
-      expected: true,
+      routine: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
@@ -966,10 +966,10 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("leaves a plain note for a refusal the server calls expected, in the server's own sentence", async () => {
+  it("leaves a plain note for a refusal the server calls routine, in the server's own sentence", async () => {
     const store = await startedStore();
     const sentence = "This is a preview of a proposed change; it cannot change the live workspace.";
-    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, expected: true });
+    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, routine: true });
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
     expect(store.toasts.current()).toMatchObject([{ message: sentence, details: "HTTP 403", isLasting: false }]);
     vi.advanceTimersByTime(TOAST_DURATION_MS);

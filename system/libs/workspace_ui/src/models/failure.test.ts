@@ -9,16 +9,16 @@ function answer(status: number, body: unknown, rawText: string | null = null, re
 }
 
 describe("failureSentence", () => {
-  it("shows the server's sentence as written, owing help unless the server calls the refusal expected", () => {
+  it("shows the server's sentence as written, owing help unless the server calls the refusal routine", () => {
     const told = failureSentence(
-      answer(503, { detail: "x", user_facing_message: "Chat is still starting.", expected: true }),
+      answer(503, { detail: "x", user_facing_message: "Chat is still starting.", routine: true }),
       CLOSE_FAILED,
     );
     expect(told).toEqual({ message: "Chat is still starting.", details: "HTTP 503\nx", isHelpOwed: false });
     const broken = answer(500, { user_facing_message: "Docs couldn't read its notes." });
     expect(failureSentence(broken, CLOSE_FAILED).isHelpOwed).toBe(true);
     // Only the boolean true counts: any other value leaves help owed.
-    const mistyped = answer(500, { user_facing_message: "Docs couldn't read its notes.", expected: "true" });
+    const mistyped = answer(500, { user_facing_message: "Docs couldn't read its notes.", routine: "true" });
     expect(failureSentence(mistyped, CLOSE_FAILED).isHelpOwed).toBe(true);
   });
 
