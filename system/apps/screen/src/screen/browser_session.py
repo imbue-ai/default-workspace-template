@@ -1,8 +1,4 @@
-"""Drive the Screen's browser from a script, with a ``playwright-cli`` session that ends with the block.
-
-::
-
-    from screen.browser_session import driven_browser
+"""Drive the Screen's browser from a script, with a ``playwright-cli`` session that ends with the block::
 
     with driven_browser(purpose="plaud-sync") as browser:
         browser.run("goto", "https://example.com")
