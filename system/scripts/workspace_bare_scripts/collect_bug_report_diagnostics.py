@@ -46,9 +46,10 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import NamedTuple, TypeVar
@@ -157,6 +158,16 @@ MAX_LOG_CLASS_BYTES = 4 * 1024 * 1024
 # it via --scan-timeout to keep it the same fraction of whatever budget it runs
 # under.
 DEFAULT_SCAN_TIMEOUT_SECONDS = 12
+# Under --budget-seconds (the time the host gives the whole collection, less its
+# own exec overhead) the collection works to a deadline instead of to each call's
+# own timeout, so a slow workspace ships what it gathered rather than nothing:
+# gathering stops at the cutoff below and the rest of the budget is kept for the
+# secret scan and for packing what passed it. Without the flag (an older host)
+# there is no deadline.
+SCAN_RESERVE_FRACTION = 0.25
+PACK_RESERVE_FRACTION = 0.05
+# A call that would get less than this before the cutoff is not started at all.
+MIN_MNGR_CALL_SECONDS = 1.0
 SUPERVISORCTL_TIMEOUT_SECONDS = 2
 DF_TIMEOUT_SECONDS = 2
 GIT_TIMEOUT_SECONDS = 2
@@ -300,6 +311,14 @@ ZIP_MAX_TIMESTAMP = 4354819199
 # Plain-words notes for the ``collection-notes.txt`` member. The archive is
 # the only channel back to the report, so anything withheld says so here.
 NOTES_MEMBER_NAME = "collection-notes.txt"
+NOTE_LISTING_OUT_OF_TIME = "agents: the agent list could not be read before the collection's time ran out, so no agent logs or chats were collected"
+NOTE_CHATS_OUT_OF_TIME = (
+    "recent chats: {} chat(s) could not be read before the collection's time ran out"
+)
+NOTE_PANES_OUT_OF_TIME = "agent logs: {} agent pane(s) could not be captured before the collection's time ran out"
+NOTE_RECORDS_WITHHELD = (
+    "{} record(s) left out: the secret scan reported findings in them"
+)
 NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothing it was to check was released"
 NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
 NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
@@ -322,6 +341,16 @@ URL_CREDENTIAL_PARAMETER = re.compile(
     re.IGNORECASE,
 )
 REDACTED_URL_CREDENTIAL = "REDACTED"
+
+# What a chat record the scan flagged is replaced with when the rest of the chat
+# can still ship. One JSON object per line, like every other record, so the
+# member stays JSONL.
+WITHHELD_RECORD = json.dumps(
+    {
+        "type": "withheld",
+        "note": "a record the secret scan flagged was left out of the bug report",
+    }
+)
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -709,6 +738,31 @@ def parse_scan_timeout(flags: Sequence[str]) -> float:
     return DEFAULT_SCAN_TIMEOUT_SECONDS
 
 
+def parse_budget_seconds(flags: Sequence[str]) -> float | None:
+    """The host's --budget-seconds=<seconds>, or None (no deadline) when absent or unusable."""
+    for flag in flags:
+        if flag.startswith("--budget-seconds="):
+            try:
+                budget = float(flag.split("=", 1)[1])
+            except ValueError:
+                return None
+            return budget if budget > 0 else None
+    return None
+
+
+def strip_records(content: str, line_numbers: Collection[int]) -> str | None:
+    """``content`` with each numbered line (1-based) replaced by WITHHELD_RECORD; None when one is out of range.
+
+    Lines are counted at ``\\n``, as both scanners count them.
+    """
+    lines = content.split("\n")
+    for number in line_numbers:
+        if not 1 <= number <= len(lines):
+            return None
+        lines[number - 1] = WITHHELD_RECORD
+    return "\n".join(lines)
+
+
 def map_concurrently(
     function: Callable[[_Item], _Result], items: Sequence[_Item]
 ) -> list[_Result]:
@@ -717,6 +771,33 @@ def map_concurrently(
         return []
     with ThreadPoolExecutor(max_workers=MNGR_CALL_CONCURRENCY) as executor:
         return list(executor.map(function, items))
+
+
+class ScanOutcome(NamedTuple):
+    """What one run of the scan gate said about its targets.
+
+    ``verdicts`` maps every target to the reason it is withheld, or None when it
+    scanned clean. ``flagged_lines`` maps a target the findings named to the
+    1-based lines they flagged in it, or to None when any of them named no line
+    (a path-only rule); a target withheld for any other reason is absent.
+    """
+
+    verdicts: dict[str, str | None]
+    flagged_lines: dict[str, frozenset[int] | None]
+
+
+def flagged_line_numbers(
+    path: str, finding_lines: Sequence[str]
+) -> frozenset[int] | None:
+    """The line numbers these finding lines give for ``path``; None when one of them gives none."""
+    located = re.compile(re.escape(path) + r":(\d+) ")
+    numbers: set[int] = set()
+    for line in finding_lines:
+        match = located.search(line)
+        if match is None:
+            return None
+        numbers.add(int(match.group(1)))
+    return frozenset(numbers)
 
 
 class StagedMember(NamedTuple):
@@ -832,6 +913,12 @@ class Collector:
         self.max_log_class_bytes = max_log_class_bytes
         self.max_pane_class_bytes = max_pane_class_bytes
         self._listed_agents: tuple[ListedAgent, ...] | None = None
+        # The monotonic time gathering must stop by, set by ``run`` under
+        # --budget-seconds; None is no deadline.
+        self._gather_by: float | None = None
+        # The mngr calls the deadline cut short, as subcommand -> targets.
+        self._cut_short: dict[str, set[str]] = {}
+        self._cut_short_lock = threading.Lock()
 
     def select_agent_log_dbs(self, agent_id: str) -> list[str]:
         """One agent's harness log databases, newest first.
@@ -1114,7 +1201,23 @@ class Collector:
         either from the files under ~/.mngr. Any failure returns None and the
         caller reports no transcript: a collector that guessed at mngr's state
         would be the duplicate this exists to avoid.
+
+        Under a deadline the call gets no longer than the time left before the
+        gathering cutoff, and is not started at all when that is under
+        MIN_MNGR_CALL_SECONDS. Either way it is recorded as cut short (see
+        ``was_cut_short``), so the archive can say what is missing for want of
+        time rather than leave it to read as absent.
         """
+        subcommand, target = args[0], args[1] if len(args) > 1 else ""
+        is_deadline_bound = False
+        if self._gather_by is not None:
+            remaining = self._gather_by - time.monotonic()
+            if remaining < MIN_MNGR_CALL_SECONDS:
+                self._record_cut_short(subcommand, target)
+                return None
+            if remaining < timeout:
+                timeout = remaining
+                is_deadline_bound = True
         try:
             proc = subprocess.run(
                 [self.mngr_binary, *args],
@@ -1122,11 +1225,25 @@ class Collector:
                 text=True,
                 timeout=timeout,
             )
+        except subprocess.TimeoutExpired:
+            if is_deadline_bound:
+                self._record_cut_short(subcommand, target)
+            return None
         except Exception:
             return None
         if proc.returncode != 0:
             return None
         return proc.stdout
+
+    def _record_cut_short(self, subcommand: str, target: str) -> None:
+        with self._cut_short_lock:
+            self._cut_short.setdefault(subcommand, set()).add(target)
+
+    def was_cut_short(self, subcommand: str, target: str | None = None) -> bool:
+        """Whether a ``subcommand`` call (for ``target``, or for any target) ran out of the collection's time."""
+        with self._cut_short_lock:
+            targets = self._cut_short.get(subcommand, set())
+            return bool(targets) if target is None else target in targets
 
     def _query_agents(self, timeout: float) -> tuple[ListedAgent, ...]:
         """Ask mngr which agents exist, at most once per run.
@@ -1362,13 +1479,14 @@ class Collector:
 
     def scan_targets(
         self, target_paths: Sequence[str], timeout_seconds: float
-    ) -> dict[str, str | None]:
-        """Run the template's secret-scan gate over the staged files; path -> reason or None.
+    ) -> ScanOutcome:
+        """Run the template's secret-scan gate over the staged files; each path's verdict, and the lines flagged in it.
 
         One invocation covers every file (several would multiply the scanners'
         startup cost against a budget that cannot afford it) and findings are
         attributed back to a file by the path in scan_secrets.sh's own finding
-        lines, which print a file target exactly as it was passed.
+        lines, which print a file target exactly as it was passed, followed by the
+        flagged line's number when the scanner gives one.
 
         scan_secrets.sh exits 1 both for findings and for a scanner it could not run,
         and the two can happen in the same run: one scanner can break while the other
@@ -1378,44 +1496,158 @@ class Collector:
         ambiguous -- findings that match no target, or a nonzero exit with no marker
         and no findings (including the gate script itself being absent) -- also drops
         every file: a file must only be released on positive evidence that it is clean.
+        Only a verdict reached from attributed finding lines carries flagged lines.
         """
         script = os.path.join(self.scan_gate_dir, "scan_secrets.sh")
         config = os.path.join(self.scan_gate_dir, "betterleaks.toml")
         argv = ["bash", script, "--config", config] + list(target_paths)
+
+        def every_target(reason: str | None) -> ScanOutcome:
+            return ScanOutcome({path: reason for path in target_paths}, {})
+
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, timeout=timeout_seconds
             )
         except Exception:
-            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
+            return every_target(NOTE_SCANNER_UNAVAILABLE)
         if proc.returncode == 0:
-            return {path: None for path in target_paths}
+            return every_target(None)
         # scan_secrets.sh reports on stderr, but stdout is folded in so that a
         # failure printed anywhere still counts against the scan.
         output = proc.stdout + "\n" + proc.stderr
         if any(marker in output for marker in SCANNER_MALFUNCTION_MARKERS):
-            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
+            return every_target(NOTE_SCANNER_UNAVAILABLE)
         if UNPARSEABLE_REPORT_MARKER in output:
-            return {path: NOTE_SECRETS_FOUND for path in target_paths}
+            return every_target(NOTE_SECRETS_FOUND)
         finding_lines = [line for line in output.splitlines() if FINDING_MARKER in line]
         if not finding_lines:
-            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
-        verdicts = {}
-        for path in target_paths:
-            matched = [line for line in finding_lines if path in line]
-            verdicts[path] = NOTE_SECRETS_FOUND if matched else None
+            return every_target(NOTE_SCANNER_UNAVAILABLE)
         unattributed = [
             line
             for line in finding_lines
             if not any(path in line for path in target_paths)
         ]
         if unattributed:
-            return {path: NOTE_SECRETS_FOUND for path in target_paths}
-        return verdicts
+            return every_target(NOTE_SECRETS_FOUND)
+        verdicts: dict[str, str | None] = {}
+        flagged_lines: dict[str, frozenset[int] | None] = {}
+        for path in target_paths:
+            matched = [line for line in finding_lines if path in line]
+            verdicts[path] = NOTE_SECRETS_FOUND if matched else None
+            if matched:
+                flagged_lines[path] = flagged_line_numbers(path, matched)
+        return ScanOutcome(verdicts, flagged_lines)
+
+    def release_flagged_records(
+        self,
+        staging_dir: str,
+        label: str,
+        class_members: Sequence[tuple[str, str, float]],
+        staged: Sequence[StagedMember],
+        outcome: ScanOutcome,
+        timeout_seconds: float,
+    ) -> tuple[
+        list[tuple[str, str, float]],
+        list[StagedMember],
+        dict[str, str | None],
+        list[str],
+    ]:
+        """The chats the scan flagged, with only the flagged records left out where that is enough.
+
+        A chat is JSONL, one record per line, so a finding's line is one record.
+        For each chat whose content was flagged on lines the findings name (and
+        whose member name scanned clean), those records are replaced with
+        WITHHELD_RECORD and the result is scanned again; a chat whose rescan is
+        clean ships that way. Anything else -- a finding with no line, a line the
+        content does not have, a rescan that still flags it or could not run --
+        leaves the chat withheld whole, as before. Nothing a scanner flagged
+        ships: the flagged lines are gone, and what remains has passed a scan of
+        its own.
+
+        Returns the class's members and staged files with the stripped chats
+        swapped in, the verdicts for the newly staged files, and a note per chat
+        saying how many of its records were left out.
+        """
+        members = list(class_members)
+        staged_members = list(staged)
+        candidates: list[tuple[int, str, int]] = []
+        for index, ((_name, content, _mtime), staged_member) in enumerate(
+            zip(members, staged_members, strict=True)
+        ):
+            if outcome.verdicts.get(staged_member.name_path) is not None:
+                continue
+            if outcome.verdicts.get(staged_member.content_path) != NOTE_SECRETS_FOUND:
+                continue
+            line_numbers = outcome.flagged_lines.get(staged_member.content_path)
+            if not line_numbers:
+                continue
+            stripped = strip_records(content, line_numbers)
+            if stripped is not None:
+                candidates.append((index, stripped, len(line_numbers)))
+        rescan_path_by_index: dict[int, str] = {}
+        for index, stripped, _count in candidates:
+            path = stage_for_scan(
+                staging_dir, "{}-{}-records".format(TRANSCRIPT_KEY, index), stripped
+            )
+            if path is not None:
+                rescan_path_by_index[index] = path
+        if not rescan_path_by_index:
+            return members, staged_members, {}, []
+        rescan = self.scan_targets(list(rescan_path_by_index.values()), timeout_seconds)
+        verdicts: dict[str, str | None] = {}
+        notes: list[str] = []
+        for index, stripped, count in candidates:
+            path = rescan_path_by_index.get(index)
+            if (
+                path is None
+                or rescan.verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) is not None
+            ):
+                continue
+            name, _content, mtime = members[index]
+            members[index] = (name, stripped, mtime)
+            staged_members[index] = staged_members[index]._replace(content_path=path)
+            verdicts[path] = None
+            notes.append(
+                "{}: {}: {}".format(label, name, NOTE_RECORDS_WITHHELD.format(count))
+            )
+        return members, staged_members, verdicts, notes
+
+    def notes_for_time_run_out(self, scan_timeout_seconds: float) -> list[str]:
+        """A note for each part of the collection the deadline cut short; empty when it cut nothing."""
+        if self.was_cut_short("list"):
+            return [NOTE_LISTING_OUT_OF_TIME]
+        notes: list[str] = []
+        agents = self.list_agents(scan_timeout_seconds)
+        chats_cut = sum(
+            1
+            for segments in group_into_chats(agents)
+            if any(self.was_cut_short("transcript", s.target) for s in segments)
+        )
+        if chats_cut:
+            notes.append(NOTE_CHATS_OUT_OF_TIME.format(chats_cut))
+        panes_cut = sum(
+            1 for agent in agents if self.was_cut_short("capture", agent.target)
+        )
+        if panes_cut:
+            notes.append(NOTE_PANES_OUT_OF_TIME.format(panes_cut))
+        return notes
 
     def run(self, argv: Sequence[str]) -> None:
         flags = set(argv)
         scan_timeout_seconds = parse_scan_timeout(list(flags))
+        budget_seconds = parse_budget_seconds(list(flags))
+        started = time.monotonic()
+        scan_by: float | None = None
+        if budget_seconds is not None:
+            self._gather_by = started + budget_seconds * (1 - SCAN_RESERVE_FRACTION)
+            scan_by = started + budget_seconds * (1 - PACK_RESERVE_FRACTION)
+
+        def scan_time_left() -> float:
+            if scan_by is None:
+                return scan_timeout_seconds
+            return max(0.0, min(scan_timeout_seconds, scan_by - time.monotonic()))
+
         # Plain-words lines for the notes member: whenever something requested is
         # not in the archive, one line here says so. The archive is the only
         # channel back to the report.
@@ -1431,6 +1663,12 @@ class Collector:
         # chat alone. The label is what a note calls the class in plain words;
         # members ride the archive in this order.
         collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
+        # Chats are gathered before the agent logs, though they ride after them:
+        # under a deadline whatever is gathered first is what a slow workspace
+        # still sends, and the conversation is what a report most often needs.
+        chat_members: list[tuple[str, str, float]] = []
+        if "--transcript" in flags:
+            chat_members = self.collect_transcript_members(scan_timeout_seconds)
         if "--logs" in flags:
             log_members, dropped_logs = self.collect_log_members()
             dropped_by_key[WORKSPACE_LOGS_KEY] = dropped_logs
@@ -1474,9 +1712,10 @@ class Collector:
             dropped_by_key[AGENT_LOG_DB_KEY] = dropped_log_dbs
             collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
 
+        time_notes = self.notes_for_time_run_out(scan_timeout_seconds)
+        notes.extend(time_notes)
         if "--transcript" in flags:
-            chat_members = self.collect_transcript_members(scan_timeout_seconds)
-            if not chat_members:
+            if not chat_members and not time_notes:
                 notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
             collected.append((TRANSCRIPT_KEY, "recent chats", chat_members))
 
@@ -1523,7 +1762,25 @@ class Collector:
                     for staged_member in staged
                     for path in (staged_member.name_path, staged_member.content_path)
                 ]
-                verdicts = self.scan_targets(targets, scan_timeout_seconds)
+                outcome = self.scan_targets(targets, scan_time_left())
+                verdicts = dict(outcome.verdicts)
+                for position, (key, label, class_members) in enumerate(collected):
+                    if key != TRANSCRIPT_KEY or key not in staged_by_key:
+                        continue
+                    released_members, restaged, rescan_verdicts, record_notes = (
+                        self.release_flagged_records(
+                            staging_dir,
+                            label,
+                            class_members,
+                            staged_by_key[key],
+                            outcome,
+                            scan_time_left(),
+                        )
+                    )
+                    collected[position] = (key, label, released_members)
+                    staged_by_key[key] = restaged
+                    verdicts.update(rescan_verdicts)
+                    notes.extend(record_notes)
         finally:
             shutil.rmtree(staging_dir, ignore_errors=True)
 
