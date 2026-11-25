@@ -127,7 +127,7 @@ def test_a_store_a_datalib_process_still_holds_is_not_moved(tmp_path: Path) -> N
 def test_a_config_naming_the_old_folder_as_its_data_root_loses_that_line(
     tmp_path: Path,
 ) -> None:
-    """datalib-dag writes where the config's data_root says; one naming the old folder would write there again."""
+    """datalib-pipeline writes where the config's data_root says; one naming the old folder would write there again."""
     libraries_dir = tmp_path / "datalib"
     _write_store(libraries_dir, "flat store")
     (libraries_dir / "config.toml").write_text(
