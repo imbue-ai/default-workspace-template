@@ -522,6 +522,7 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
     def live_session_names() -> set[str]:
         return {session.session_name for session in sessions.attached_through(running.proxy_server)}
 
+    killed: subprocess.Popen[bytes] | None = None
     try:
         for mode, expected_exit in (("finish", 0), ("raise", 1)):
             name_file = tmp_path / f"{mode}.name"
@@ -556,6 +557,9 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
         assert orphan_name not in live_session_names()
         assert browser.is_running
     finally:
+        if killed is not None and killed.poll() is None:
+            killed.kill()
+            killed.wait(timeout=30)
         client.post("/browsers/browser-1/release", headers={"X-Mngr-Agent-Id": "chat-itest"})
         server.shutdown()
         serving.join()
