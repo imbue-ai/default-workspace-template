@@ -229,6 +229,19 @@ def test_a_request_whose_values_are_out_of_range_is_refused_and_arms_nothing(
     assert staged_update_workspace.read_state("schedule.json") is None
 
 
+def test_a_version_that_is_not_valid_unicode_is_refused_and_arms_nothing(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    refused = _client(update_workspace_app).put(
+        UPDATE_SCHEDULE_ROUTE, json={**_SCHEDULE_REQUEST, "override_ref": "minds-v0.10.5\ud800"}
+    )
+
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == "INVALID_REQUEST"
+    assert staged_update_workspace.read_state("schedule.json") is None
+    assert not (staged_update_workspace.live_cron_dir / DISPATCHER_CRON_NAME).exists()
+
+
 @pytest.mark.parametrize(
     ("method", "route", "body"),
     [

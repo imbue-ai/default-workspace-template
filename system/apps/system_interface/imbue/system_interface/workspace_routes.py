@@ -13,6 +13,7 @@ A refusal is ``{"detail", "code"}`` under a 4xx, a route that could not do what 
 5xx, and an answer that describes what the workspace did, including that it declined, is a 200 with an ``outcome``.
 """
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -164,6 +165,7 @@ UPDATE_LIVENESS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/liveness"
 CHECK_SIGN_IN_PARAMETER: Final[str] = "check_sign_in"
 
 _PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
+_INVALID_UNICODE_REFUSAL_DETAIL: Final[str] = "the request body holds text that is not valid Unicode"
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 _Answer = TypeVar("_Answer")
@@ -199,11 +201,19 @@ def _admit(is_changing_the_workspace: bool) -> None:
 
 
 def _body(model: type[_RequestModel]) -> _RequestModel:
-    """The request's body as ``model``; a body of another shape is refused with the routes' own error object."""
+    """The request's body as ``model``; a body of another shape, or one holding text that is not valid Unicode,
+    is refused with the routes' own error object."""
     try:
-        return parse_request_body(model)
+        body = parse_request_body(model)
     except InvalidRequestBodyError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from e
+    # JSON can spell a lone surrogate ("\ud800"), which no file takes. Refused before a route acts: a write that
+    # fails on one would leave whatever the route had already written.
+    try:
+        json.dumps(request.get_json(force=True, silent=True), ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise WorkspaceRouteRefusal(_INVALID_UNICODE_REFUSAL_DETAIL, CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from e
+    return body
 
 
 def _run_in_background(work: Callable[[], None]) -> None:

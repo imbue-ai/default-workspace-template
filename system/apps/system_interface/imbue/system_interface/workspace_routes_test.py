@@ -260,6 +260,34 @@ def test_a_body_of_another_shape_is_refused_with_the_routes_own_error_object(cli
     assert "users" in refused.get_json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [
+        (
+            SHARING_GRANTS_ROUTE,
+            {
+                "grants": {"workspace": {"emails": ["bob\ud800@example.com"]}},
+                "identities": {"user-1": {"email": "erin@example.com", "display_name": "Erin"}},
+            },
+        ),
+        (SHARING_GRANTS_ROUTE, {"grants": {"services": {"web\ud800": {"users": ["user-1"]}}}}),
+        (BACKUP_CREDENTIALS_ROUTE, {"env_text": _ENV_TEXT + "AWS_SECRET_ACCESS_KEY=\ud800\n"}),
+    ],
+)
+def test_a_body_holding_text_that_is_not_valid_unicode_is_refused_and_changes_no_file(
+    client: FlaskClient, app: Flask, route: str, body: dict[str, object]
+) -> None:
+    # The client's JSON spells the lone surrogate as an escape, which is how one reaches a route at all.
+    refused = client.put(route, json=body)
+
+    assert refused.status_code == 400
+    assert refused.get_json() == {
+        "detail": "the request body holds text that is not valid Unicode",
+        "code": "INVALID_REQUEST",
+    }
+    assert not (_workspace_root(app) / "data").exists()
+
+
 # The profile snapshot and the timezone
 
 
@@ -356,7 +384,10 @@ def test_backup_credentials_that_name_no_repository_are_refused(
     refused = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": "RESTIC_PASSWORD=only-a-password\n"})
 
     assert refused.status_code == 400
-    assert refused.get_json() == {"detail": "The credentials do not set RESTIC_REPOSITORY.", "code": "INVALID_CREDENTIALS"}
+    assert refused.get_json() == {
+        "detail": "The credentials do not set RESTIC_REPOSITORY.",
+        "code": "INVALID_CREDENTIALS",
+    }
     assert fake_restic_calls(fake_restic_control) == []
     assert _backup_state(client) == "NONE"
 
