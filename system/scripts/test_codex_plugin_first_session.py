@@ -74,7 +74,7 @@ def _install_account_plugin(home: Path, marketplace: Path, env: dict[str, str]) 
 
 @pytest.mark.acceptance
 @pytest.mark.timeout(120)
-def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> None:
+def test_first_session_and_reprovision_load_only_native_reviews(tmp_path: Path) -> None:
     if shutil.which("codex") is None:
         pytest.skip("Codex CLI is not installed")
     state = tmp_path / "agent state"
