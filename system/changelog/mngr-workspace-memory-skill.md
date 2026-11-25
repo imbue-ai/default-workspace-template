@@ -1,1 +1,1 @@
-AGENTS.md sends every question about memory (how much something uses, what is using it, what could be stopped, a reported shed) to the new `workspace-memory` skill, instead of naming the freeing-memory reference only for shed reports.
+AGENTS.md no longer names a freeing-memory reference for a shed an agent reports: the new `workspace-memory` skill's description is what loads it. The System Monitor spec names the Browser item of the Workspace row and where the ownership rule now lives.

@@ -434,7 +434,7 @@ run the same check when failures look unrelated to your change. Then judge
 whether a rerun would be shed again, from the ledger (are shed records still
 arriving, for processes other than yours?) and from the free memory the guard
 acts on,
-`python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`
+`python3 system/services/oom_priority/bin/workspace_memory.py free`
 (is it recovering since the shed, or still falling?). Not `/proc/meminfo` or
 `free`: under a memory cap they read far more free memory than the guard
 sees. If things are settling, rerun the shed command. If they are not, or

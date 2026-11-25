@@ -78,7 +78,7 @@ the worker's conversation history, and a SessionStart hook already tells the
 revived worker it was paused, so it re-checks state before continuing. Before
 reviving it, and whenever a worker's `question` gate reports that a test
 command was shed, free memory with the user per the
-`workspace-memory` skill ("Freeing memory"): a revival or rerun into the
+`workspace-memory` skill: a revival or rerun into the
 same pressure is shed again.
 
 ## Diagnose worker liveness before invoking failure flow

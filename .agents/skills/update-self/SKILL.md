@@ -86,7 +86,7 @@ what this run needs, with no confirmation and no preflight script, you may:
 Do what the run needs and no more, and name every one of these actions in the
 results message with its undo (`references/results-message.md`). This licence
 is this pass's alone: every other flow still asks first
-(the `workspace-memory` skill, "Freeing memory").
+(the `workspace-memory` skill).
 
 **Take the "updating workspace" lease.** One update flow at a time (worker
 name, branch and runtime dir are fixed, and two applies must never interleave).
@@ -484,7 +484,7 @@ report, re-arm the poll. The last ends the pass, as below.
 3. **Its gate was shed for memory**, and it is asking for room to rerun. Free
    it yourself per `references/freeing-memory-for-an-update.md`, which says
    what this pass may stop and how much further a scheduled run may go, then
-   reply with what you stopped and the free memory the candidates command
+   reply with what you stopped and the free memory its `memory` command
    reports *after* it. Memory pressure is never a reason to narrow the gate, so
    never answer it by telling the worker to skip or trim one. It reaches the
    user only when the licence is spent and the room is still not there: then
