@@ -490,9 +490,10 @@ registered name, else the one titled "<app_display_name> Chat" by the rule a
 create refuses a taken name by (`naming.py`'s `is_name_conflict`: canonical
 forms compared case-insensitively, so "docs chat" is found rather than refused),
 made with that title and label on the default account when there is none (a
-window's "Chat about this app"; the intake is held with a `hint` the root puts
-on the composer); `app_ask`, an ask from a page of an app (a failure's "Ask an
-agent to fix this"), whose text the shell wrote whole (`workspace_ui`'s
+window's "Chat about this app", which sends no text; the intake is held with a
+`hint` the root puts on the composer); with a text, `app_chat` is an ask from a
+page of an app (a failure's "Ask an agent to fix this"), whose text the shell
+wrote whole (`workspace_ui`'s
 `assistRequest`: the assist command first, since a chat runs a command only at
 the start of its message, then the app and window the ask was pressed in), so
 the chat takes it as it arrived and the agent runs the workspace's assist flow,
@@ -509,8 +510,8 @@ a failed create, nothing is signed in, the text is a draft and there is no such
 chat, or the create is refused; or `chat` with a `chat_id`),
 and whether the text is sent or drafted (`is_draft`), plus the sender's
 `client_id` and `desktop_id` for the shell's activity log. The chat's manifest
-declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, `app-chat`, and
-`app-ask` launch paths as POSTs onto it with those fields preset, so the launcher's
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
+launch paths as POSTs onto it with those fields preset, so the launcher's
 rows, the Getting Started tiles, the avatar dialog's "Design your own...", a click on
 a person in the tray, a page's ask, and `workspace-layout open chat --launch new --param
 message=...` all arrive here through the shell. The route

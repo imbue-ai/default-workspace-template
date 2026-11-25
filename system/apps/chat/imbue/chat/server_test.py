@@ -8053,7 +8053,7 @@ def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
     """An ask from a page of the Docs app, answered once its send was accepted or refused."""
     ask = {
         "message": _ASK,
-        "target": "app_ask",
+        "target": "app_chat",
         "app": "docs",
         "app_display_name": "Docs",
         "is_delivery_awaited": True,
@@ -8087,18 +8087,27 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
     assert manager.get_provisional_chats() == []
 
 
-def test_an_app_ask_with_no_text_sends_nothing_to_the_chat_about_the_app(tmp_path: Path) -> None:
-    """The sentence that names the app leads a text; alone it is no message, so an ask with no text only opens the
-    chat about the app, as any intake with no text opens its chat."""
+def test_an_app_chat_intake_is_an_ask_only_with_a_text(tmp_path: Path) -> None:
+    """One launch path serves both: with no text it is the window's "Chat about this app" (the chat about the app,
+    opened with its composer prefilled and nothing sent), and with a text it is an ask, sent to that chat."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     seed_agent_state(state_of(app).agent_manager, _DOCS_CHAT_ID, name="Docs-Chat", labels={"app_chat": "docs"})
+    client = app.test_client()
 
-    response = _ask_about_docs(app.test_client(), message="")
+    pressed = _ask_about_docs(client, message="")
 
-    assert response.status_code == 200, response.get_json()
-    assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
+    assert pressed.status_code == 200, pressed.get_json()
+    path = pressed.get_json()["path"]
+    assert _chat_id_of(path) == _DOCS_CHAT_ID
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
+    assert applied["composer_text"] == "Change something about the Docs app: "
     assert messenger.sent == []
+
+    asked = _ask_about_docs(client)
+
+    assert asked.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
+    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK)]
 
 
 @pytest.mark.parametrize(
@@ -8171,7 +8180,7 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     response = _ask_about_docs(app.test_client())
     visitors = app.test_client().post(
         "/api/chats/intake",
-        json={"message": _ASK, "target": "app_ask", "app": "notes", "app_display_name": "Notes"},
+        json={"message": _ASK, "target": "app_chat", "app": "notes", "app_display_name": "Notes"},
         headers=_identity_header(_VISITOR),
     )
 
@@ -8319,8 +8328,8 @@ def test_an_app_ask_that_names_no_app_or_no_display_name_is_refused(tmp_path: Pa
     messenger = RecordingMngrMessenger()
     client = _peopled_app(tmp_path, messenger).test_client()
 
-    without_a_display_name = _intake(client, message=_ASK, target="app_ask", app="docs")
-    without_an_app = _intake(client, message=_ASK, target="app_ask", app_display_name="Docs")
+    without_a_display_name = _intake(client, message=_ASK, target="app_chat", app="docs")
+    without_an_app = _intake(client, message=_ASK, target="app_chat", app_display_name="Docs")
 
     assert (without_a_display_name.status_code, without_an_app.status_code) == (400, 400)
     assert messenger.sent == []

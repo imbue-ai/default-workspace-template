@@ -48,16 +48,10 @@ export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
   return launchesWhere(apps, (launchPath) => launchPath.mention_param === null && launchPath.app_params === null);
 }
 
-/** Whether the launch path is about an app and takes an ask's text: its ``app_params`` names a ``text`` param. */
-function takesAskText(launchPath: LaunchPath): boolean {
-  return launchPath.app_params !== null && launchPath.app_params.text !== null;
-}
-
 /** The launch path a window's "Chat about this app" button runs (the multiplayer spec, section 9.2): the first of
- *  the machine whose ``app_params`` names no ``text`` param, in launcher order; null when no app declares one. */
+ *  the machine that declares ``app_params``, in launcher order; null when no app declares one. */
 export function appChatLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
-  const isButtons = (launchPath: LaunchPath): boolean => launchPath.app_params !== null && !takesAskText(launchPath);
-  return orderAppLaunches(launchesWhere(apps, isButtons))[0] ?? null;
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.app_params !== null))[0] ?? null;
 }
 
 /** The params an app-chat launch runs with: the app's name and display name in the params the path declares. */
@@ -66,18 +60,20 @@ export function appChatParams(launchPath: LaunchPath, about: AppRecord): Record<
   return { [launchPath.app_params.name]: about.name, [launchPath.app_params.display_name]: about.display_name };
 }
 
-/** The launch path an ask from a page of an app runs (``shell:ask-agent``): the first of the machine whose
- *  ``app_params`` names a ``text`` param, in launcher order; null when no app declares one. */
+/** The launch path an ask from a page of an app runs (``shell:ask-agent``): the first of the machine that declares
+ *  ``app_params`` and a ``text_param`` for the ask's text, in launcher order (the chat app's ``app-chat`` on a stock
+ *  machine, which "Chat about this app" runs with no text); null when no app declares one. */
 export function appAskLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
-  return orderAppLaunches(launchesWhere(apps, takesAskText))[0] ?? null;
+  const takesAsk = (launchPath: LaunchPath): boolean =>
+    launchPath.app_params !== null && launchPath.text_param !== null;
+  return orderAppLaunches(launchesWhere(apps, takesAsk))[0] ?? null;
 }
 
-/** The params an ask launch runs with: the app's name and display name, and the ask's text, in the params the path
- *  declares. */
+/** The params an ask launch runs with: the app's name and display name, and the ask's text in the path's
+ *  ``text_param``. */
 export function appAskParams(launchPath: LaunchPath, about: AppRecord, text: string): Record<string, string> {
-  const textParam = launchPath.app_params?.text ?? null;
-  if (textParam === null) return {};
-  return { ...appChatParams(launchPath, about), [textParam]: text };
+  if (launchPath.text_param === null) return {};
+  return { ...appChatParams(launchPath, about), [launchPath.text_param]: text };
 }
 
 /** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's

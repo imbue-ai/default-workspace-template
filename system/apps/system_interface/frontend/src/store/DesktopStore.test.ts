@@ -14,7 +14,6 @@ import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } fr
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
-  appAskLaunchPathRecord,
   appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
@@ -685,11 +684,12 @@ describe("opening", () => {
     );
   });
 
-  /** A chat-like app that declares both launch paths about an app, a Docs app, and a hidden monitor, with the
-   *  chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs window placed. */
+  /** A chat-like app that declares the launch path about an app, taking an ask's text, a Docs app, and a hidden
+   *  monitor, with the chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs
+   *  window placed. */
   function offerAppsWithAnAskPath(): void {
     const chat = chatLikeAppRecord("chat", {
-      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
     });
     offerApps(api, socket, [
       chat,
@@ -720,7 +720,7 @@ describe("opening", () => {
 
     // The shell writes the message: the assist command, then the app and the window the ask was pressed in.
     expect(launchCalls()).toEqual([
-      `launch:home:chat:app-ask:${JSON.stringify({
+      `launch:home:chat:app-chat:${JSON.stringify({
         app: "docs",
         app_display_name: "Docs",
         message: "/assist This is about the Docs app (`docs`, window `win-docs`).\n\nFix this.",
@@ -758,10 +758,13 @@ describe("opening", () => {
     expect(await store.askAgent("Fix this.", "win-docs", "main-chat")).toEqual({ isOpened: true });
     expect(launchCalls()).toEqual([primary, primary, aboutMonitor, aboutDocs]);
 
-    // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
+    // A machine whose launch path about an app takes no text has nowhere to send an ask about an app.
     offerApps(api, socket, [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
+        launch_paths: [
+          ...chatLikeAppRecord("chat").launch_paths,
+          appChatLaunchPathRecord({ params: ["app", "app_display_name"], text_param: null }),
+        ],
       }),
       appRecord("docs", { display_name: "Docs" }),
     ]);
@@ -1015,6 +1018,11 @@ describe("failure toasts", () => {
     return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
   }
 
+  beforeEach(() => {
+    // Docs is built in, so its failures are Imbue's to hear about; Notes is a user's own app.
+    api.apps = [appRecord("docs", { system: true }), appRecord("notes")];
+  });
+
   async function storeReportingBugs(
     reportBug: (failure: ReportedFailure | null) => void,
     isOpeningHelp: boolean,
@@ -1054,6 +1062,7 @@ describe("failure toasts", () => {
       actions: [],
       isLasting: true,
       isHelpOwed: true,
+      isBugReportOffered: true,
     });
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
     expect(reportBug).toHaveBeenCalledWith({
@@ -1084,20 +1093,45 @@ describe("failure toasts", () => {
   it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, false);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
     expect(reportBug).not.toHaveBeenCalled();
     store.setCanReportBug(true);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
-    store.reportBugFromPage(null);
+    store.reportBugFromPage("docs", { message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage("docs", null);
     expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
-  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal expected", async () => {
+  it("opens no bug report for a user's own app, from its page or from a toast about its launch", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, true);
+    expect([store.canReportBugFor("docs"), store.canReportBugFor("notes")]).toEqual([true, false]);
+    store.reportBugFromPage("notes", { message: "Notes couldn't save.", details: "HTTP 500" });
+    expect(reportBug).not.toHaveBeenCalled();
+
+    api.refusal = refusedWith(502, { detail: "notes answered the launch with 500: boom" });
+    await store.runLaunch("notes", "new", "new");
+    // Help is still owed (the toast stays up), but not by Imbue.
+    expect(store.toasts.current()[0]).toMatchObject({
+      message: "Notes couldn't open that. Try again.",
+      isLasting: true,
+      isHelpOwed: true,
+      isBugReportOffered: false,
+    });
+  });
+
+  it("offers Report a bug for a user's own app's window when the shell failed to open it", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
+    api.refusal = refusedWith(500, { detail: "the layout could not be written" });
+    await store.openWindowAt("notes", "/c", "new");
+    expect(store.toasts.current()[0]).toMatchObject({ isHelpOwed: true, isBugReportOffered: true });
+  });
+
+  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal routine", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
-      expected: true,
+      routine: true,
     });
     await store.runLaunch("docs", "new", "new");
     api.refusal = refusedWith(502, {
@@ -1139,10 +1173,10 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("leaves a plain note for a refusal the server calls expected, in the server's own sentence", async () => {
+  it("leaves a plain note for a refusal the server calls routine, in the server's own sentence", async () => {
     const store = await startedStore();
     const sentence = "This is a preview of a proposed change; it cannot change the live workspace.";
-    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, expected: true });
+    api.refusal = refusedWith(403, { detail: sentence, user_facing_message: sentence, routine: true });
     expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
     expect(store.toasts.current()).toMatchObject([{ message: sentence, details: "HTTP 403", isLasting: false }]);
     vi.advanceTimersByTime(TOAST_DURATION_MS);
@@ -1999,7 +2033,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices()).toEqual(["Failed to quit docs."]);
+    expect(notices()).toEqual(["Failed to quit Docs."]);
   });
 });
 
@@ -4533,7 +4567,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
     api.apps = [
       chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
       }),
       appRecord("docs"),
     ];
