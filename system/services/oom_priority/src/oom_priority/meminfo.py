@@ -27,6 +27,18 @@ PROC: Final[Path] = Path("/proc")
 KIB: Final[int] = 1024
 # earlyoom ignores the headroom file once it is older than this.
 HOST_MEMINFO_MAX_AGE_SECONDS: Final[float] = 5.0
+# A mapping's header line is "<start>-<end> <perms> <offset> <device> <inode> [<path>]"; a shared
+# memory segment's path is a memfd, a /dev/shm file, or a System V segment. Its field lines run up
+# to the next header.
+_SHARED_MAPPING: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-f]+-[0-9a-f]+ \S+ \S+ (?P<device>\S+) (?P<inode>\d+) +(?:/memfd:|/dev/shm/|/SYSV)[^\n]*\n"
+    r"(?P<fields>(?:(?![0-9a-f]+-[0-9a-f]+ )[^\n]*\n)*)",
+    re.MULTILINE,
+)
+_RSS_LINE: Final[re.Pattern[str]] = re.compile(r"^Rss:\s+(\d+)", re.MULTILINE)
+_ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^Anonymous:\s+(\d+)", re.MULTILINE
+)
 
 
 def parse_kib_fields(text: str) -> dict[str, int]:
@@ -122,20 +134,6 @@ def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
             continue
         return _summed_anonymous_kib(text)
     return None
-
-
-# A mapping's header line is "<start>-<end> <perms> <offset> <device> <inode> [<path>]"; a shared
-# memory segment's path is a memfd, a /dev/shm file, or a System V segment. Its field lines run up
-# to the next header.
-_SHARED_MAPPING: Final[re.Pattern[str]] = re.compile(
-    r"^[0-9a-f]+-[0-9a-f]+ \S+ \S+ (?P<device>\S+) (?P<inode>\d+) +(?:/memfd:|/dev/shm/|/SYSV)[^\n]*\n"
-    r"(?P<fields>(?:(?![0-9a-f]+-[0-9a-f]+ )[^\n]*\n)*)",
-    re.MULTILINE,
-)
-_RSS_LINE: Final[re.Pattern[str]] = re.compile(r"^Rss:\s+(\d+)", re.MULTILINE)
-_ANONYMOUS_LINE: Final[re.Pattern[str]] = re.compile(
-    r"^Anonymous:\s+(\d+)", re.MULTILINE
-)
 
 
 def _summed_anonymous_kib(text: str) -> int:
