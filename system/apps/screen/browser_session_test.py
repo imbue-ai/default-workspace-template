@@ -2,15 +2,18 @@
 attaches, that it detaches and gives the lease back however its body ends, and how a refusal and a failed detach
 surface."""
 
+import socket
 from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
 
 from screen.browser_session import driven_browser
+from screen.cli import ENV_SERVICE_URL
 from screen.data_types import Controller
 from screen.errors import BrowserSessionError
 from screen.errors import BrowserUnavailableError
+from screen.errors import ScreenServiceUnreachableError
 from screen.primitives import AgentId
 from screen.primitives import BrowserName
 from screen.service import ScreenService
@@ -95,3 +98,16 @@ def test_a_failed_detach_fails_a_clean_block_but_gives_way_to_the_bodys_own_erro
         with driven_browser(browser_name=name, purpose="sync"):
             raise _BodyError("the body failed")
     assert not _is_leased(service, script_agent)
+
+
+def test_a_screen_service_that_does_not_answer_raises_unreachable_with_nothing_attached(
+    fake_playwright_cli: Path, script_agent: AgentId, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setenv(ENV_SERVICE_URL, f"http://127.0.0.1:{closed_port}")
+    with pytest.raises(ScreenServiceUnreachableError):
+        with driven_browser(purpose="sync"):
+            pytest.fail("the body ran with no Screen service")
+    assert _calls(fake_playwright_cli) == []
