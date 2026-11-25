@@ -13,7 +13,12 @@ folder. SKILL.md has the summary table.
   `DEFAULT_ANTHROPIC_MODEL`.
 - **API key**: `complete()` calls litellm with the key (and its proxy base
   URL); `run_task()` hands the key to `claude -p`. A key pinned with
-  `pin_anthropic_key()` is used for every Anthropic account.
+  `pin_anthropic_key()` is used for every account added under the Anthropic
+  option.
+- An Anthropic key added through the API key option is a `pi` account (below):
+  it is never pinned, and a Claude subscription token (`sk-ant-oat...`) pasted
+  there is refused, because pi would send it as a plan sign-in. Add such a token
+  under the Anthropic option's "Get a long-lived token".
 
 ## OpenAI
 
@@ -32,49 +37,66 @@ folder and its self-updater off. The prompt goes on standard input; agy has no
 system-prompt option, so `system` (or `instructions`) leads the prompt.
 
 - `complete()` runs from an empty directory with session settings that pin
-  agy's Default mode and strict tool permissions: a command or file edit asks
-  for approval, and with no one to approve it agy refuses it and carries on.
-  It is still an agent turn, and tools that need no approval (reading the
-  empty directory, and whatever agy's own permission settings allow, such as
-  reading web pages) stay available.
+  agy's Default mode and ask for approval of every command and file edit, which
+  no one is there to give. It is still an agent turn: agy has no tools-off
+  option, and tools that need no approval (such as reading web pages, where
+  agy's own permission settings allow it) stay available.
 - `run_task()` approves every tool (`--dangerously-skip-permissions`) in
   `cwd`. agy will not take a folder with a dot-prefixed path segment as its
   project, so for such a `cwd` the library runs it from a link under `/tmp`.
-- Default model: the account's own (`result.model` is `None`). Pass a model
-  slug that `agy models` lists to choose one.
+- Default model: the account's own (`result.model` is `None`). To choose one,
+  pass a slug from
+  `HOME=/home/user/.minds/accounts/<id> AGY_CLI_DISABLE_AUTO_UPDATE=true agy models`.
 - Billing: the Google AI plan's quota, reported as `subscription`; agy reports
-  tokens, not dollars. A sign-in through a Google Cloud project can bill that
-  project per token instead, which the library cannot tell apart.
+  tokens, not dollars. A Workspace sign-in on a Google Cloud project's Pay As
+  You Go is billed per token at Cloud API prices instead, which the library
+  cannot tell apart.
 - agy keeps each run's conversation and logs under `.gemini/antigravity-cli/`
   in the account folder, as chats on that account do.
-- Google's [Antigravity FAQ](https://antigravity.google/docs/faq#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching)
-  says headless `agy -p` is meant for direct scripting and CI, and that
-  wrapping the CLI inside third-party coding agents or apps is not
-  supported on consumer plans. An app other people use calls Gemini on a Gemini API key:
-  add one through the API key option as Google Gemini.
+- Google's [Antigravity FAQ](https://antigravity.google/docs/faq) says headless
+  `agy -p` is meant for direct scripting and CI, and calls wrapping the CLI in
+  any third-party app or coding agent unsupported on consumer plans. Its
+  [Terms](https://antigravity.google/terms), clause 6, say using third-party
+  software to access the service is a breach that may be grounds for
+  suspending or terminating the Antigravity and Gemini CLI accounts. Keep a
+  Google sign-in for the owner's own direct scripting. Any app or automation
+  calls Gemini on a Gemini API key: add one through the API key option as
+  Google Gemini.
 
 ## Opencode Go, OpenRouter, and keys added through the API key option
 
 `pi` with `PI_CODING_AGENT_DIR` set to the account folder, `--provider` set to
 the one provider in the folder's `auth.json`, an explicit `--model`, and no
-provider key in its environment, so the call runs on that key alone. The
-prompt goes on standard input; pi drops its leading and trailing whitespace.
+provider key, endpoint or billing-account variable in its environment, so the
+call runs on that key alone. The prompt goes on standard input; pi drops its
+leading and trailing whitespace.
 
-- `complete()`: no tools, `system` as the whole system prompt, thinking off,
-  no session saved, and no `AGENTS.md` or `CLAUDE.md`, extensions, skills or
-  prompt templates, from an empty directory.
+- `complete()`: no tools, `system` in place of pi's own prompt (pi appends only
+  the working directory's path), thinking off, no session saved, and no
+  `AGENTS.md` or `CLAUDE.md`, extensions, skills or prompt templates, from an
+  empty directory. An empty `system` raises `EmptySystemPromptError`, since pi
+  would run its coding-agent prompt instead.
 - `run_task()`: pi's default tools (read, bash, edit, write) and its coding
   prompt with `instructions` appended, in `cwd`, where it reads `AGENTS.md`.
-  pi has no approval step.
+  pi has no approval step and no web tool.
 - Default model: `DEFAULT_PI_MODELS[provider]`, pi's own default for that
   provider, except the small `DEFAULT_ANTHROPIC_MODEL` and
   `DEFAULT_OPENAI_API_MODEL` for Anthropic and OpenAI keys. A provider with no
   entry raises `ModelRequiredError`; pass `model=`.
-- Billing: Opencode Go is a flat subscription (`subscription`, no cost). Every
-  other key is `api_key`, and `cost_usd` is pi's price for the tokens. For a
-  coding or token plan's key (ZAI Coding Plan, Kimi For Coding, Qwen Token
-  Plan, Xiaomi MiMo Token Plan) that is pi's list price, or 0, not what the
-  plan charges.
+- Model ids are pi's ids for the provider, e.g. `anthropic/claude-sonnet-4.5`
+  on OpenRouter. List them with
+  `PI_CODING_AGENT_DIR=/home/user/.minds/accounts/<id> pi --list-models <search>`
+  and pass an exact id: pi matches a partial id to the closest model, and runs
+  an unknown id as a custom model priced like the provider's default, while
+  `result.model` still echoes the id passed.
+- Billing: Opencode Go is a subscription (`subscription`, no cost). Once Extra
+  Usage is on (the default on Go Teams) it falls back to the pay-as-you-go
+  balance after its limits, and Go is meant for coding-agent traffic, so
+  high-volume completions belong on a per-token key. Every other key is
+  `api_key`, and `cost_usd` is pi's price for the tokens. A coding or token
+  plan's key (ZAI Coding Plan, Kimi For Coding, Qwen Token Plan, Xiaomi MiMo
+  Token Plan) draws on the plan's quota, shared with pi chats on that key, and
+  its `cost_usd` is pi's list price, or 0, not what the plan charges.
 - pi retries a failed model request up to three times before the call raises,
   and keeps a model catalogue cache, `models-store.json`, in the account
-  folder.
+  folder. Concurrent calls on one account share that file.

@@ -14,10 +14,11 @@ it shares with the user's own chats.
 | OpenAI API key (litellm, or `codex exec` on a pasted key) | Pay-per-token OpenAI API account | No |
 | `codex exec` on a ChatGPT sign-in | The ChatGPT plan's usage limits | Yes |
 | Interactive Codex chat | The ChatGPT plan's usage limits | -- |
-| `agy` on a Google sign-in | The Google AI plan's quota (a Cloud project's, on a Cloud-project sign-in) | Yes |
+| `agy` on a Google sign-in | The Google AI plan's quota (per token at Cloud API prices, on a Cloud project's Pay As You Go) | Yes |
 | Interactive Antigravity chat | The Google AI plan's quota | -- |
-| `pi` on an Opencode Go key | The Opencode Go subscription | Yes |
-| `pi` on OpenRouter or a key added through the API key option | Pay-per-token account at that provider | No |
+| `pi` on an Opencode Go key | The Opencode Go subscription (then its pay-as-you-go balance, once Extra Usage is on) | Yes |
+| `pi` on OpenRouter or a per-token key added through the API key option | Pay-per-token account at that provider | No |
+| `pi` on a coding or token plan key (ZAI Coding Plan, Kimi For Coding, Qwen Token Plan, Xiaomi MiMo Token Plan) | That plan's quota | Yes, with pi chats on the same key |
 
 Anthropic's help centre ([Use the Claude Agent SDK with your Claude
 plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan),
@@ -32,6 +33,14 @@ limits: a heavy flow can leave the user unable to chat until the limits reset.
 Keep subscription flows small, measure before scaling, and suggest an API key
 when the volume is high.
 
+Three cases are reported one way and billed another. A Google sign-in on a
+Cloud project's Pay As You Go is billed per token although the library reports
+`subscription`. Opencode Go spends its pay-as-you-go balance after its limits
+once Extra Usage is on, and is meant for coding-agent traffic, so high-volume
+completions belong on a per-token key. A coding or token plan key is reported
+as `api_key`, but its `cost_usd` is pi's list price (or 0), not what the plan
+charges.
+
 ## Whose use a plan sign-in covers
 
 A Claude, ChatGPT or Google plan sign-in is for the account owner's own use.
@@ -41,11 +50,21 @@ credentials on behalf of other users, and says advertised plan limits assume
 ordinary, individual usage. OpenAI's [Codex authentication
 page](https://learn.chatgpt.com/docs/auth) recommends API keys for automation
 and says not to expose Codex execution in untrusted or public environments.
-Google's [Antigravity FAQ](https://antigravity.google/docs/faq#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching)
-says headless `agy -p` is meant for direct scripting and CI, and that wrapping
-the CLI inside third-party coding agents or apps is not supported on consumer
-plans. So an app or automation that other people use (through a sharing link,
-or as other people in the workspace) runs on an API-key account.
+So an app or automation that other people use (through a sharing link, or as
+other people in the workspace) runs on an API-key account: one whose listing
+shows `billing` `api_key`, and not a coding or token plan's key, named with
+`account=`. An Opencode Go key is a subscription, not an API-key account.
+
+Google goes further. Its [Antigravity FAQ](https://antigravity.google/docs/faq)
+says headless `agy -p` is meant for direct scripting and CI, and calls wrapping
+the CLI in any third-party app or coding agent unsupported on consumer plans,
+whoever uses the app. Its [Terms](https://antigravity.google/terms), clause 6,
+say using third-party software to access the service is a breach that may be
+grounds for suspending or terminating the user's Antigravity and Gemini CLI
+accounts, and the FAQ recommends a Gemini API key instead. The library runs
+`agy` on a Google sign-in the way chats do; keep that for the owner's own
+direct scripting, and have any app or automation call Gemini on a Gemini API
+key added through the API key option.
 
 ## Why `claude -p` uses more than the direct API
 
@@ -122,22 +141,28 @@ takes the account from the calling process's `CLAUDE_CONFIG_DIR`,
 - **Google.** The account folder is agy's home; its sign-in is
   `.gemini/antigravity-cli/antigravity-oauth-token` there, and an account
   without it is signed out. `agy` runs with `HOME` set to the folder,
-  `AGY_CLI_DISABLE_AUTO_UPDATE=true`, and without `GEMINI_API_KEY`,
-  `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` or `AGY_ADC_AUTH`, any of
-  which would sign agy in some other way.
+  `AGY_CLI_DISABLE_AUTO_UPDATE=true`, and without the variables that would
+  sign it in some other way or route it elsewhere: Gemini and Google API keys
+  (`GEMINI_API_KEY`, `GOOGLE_API_KEY`), Google Cloud default credentials
+  (`GOOGLE_APPLICATION_CREDENTIALS`, `AGY_ADC_AUTH`, `CLOUDSDK_*`), Vertex and
+  Cloud project settings (`GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`,
+  ...), and agy's enterprise AI API Gateway (`AGY_LLM_GATEWAY_*`).
 - **Opencode Go, OpenRouter and the API key option.** The account folder is
   pi's config directory, and its `auth.json` holds one key under pi's provider
   id. `pi` runs with `PI_CODING_AGENT_DIR` set to the folder, `--provider` and
-  `--model` both given, and no provider key or AWS or Google Cloud credential
-  in its environment: given only `--provider`, pi picks its model among every
+  `--model` both given, and no provider key, AWS or Google Cloud credential,
+  endpoint override or billing-account header (`OPENAI_ORG_ID`,
+  `OPENAI_PROJECT_ID`, `OPENAI_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, ...) in
+  its environment: given only `--provider`, pi picks its model among every
   provider it has a key for, so an inherited `ANTHROPIC_API_KEY` would move the
-  call to Anthropic.
+  call to Anthropic. An Anthropic entry holding a Claude subscription token
+  (`sk-ant-oat...`) is refused: pi would send it as a plan sign-in.
 - **Older copies of `claude_p.py`** resolve the account themselves:
   `$CLAUDE_CONFIG_DIR` when set (inside an agent, the chat's account), else the
   workspace's default Anthropic account.
 - A call that cannot be made fails with a typed error (`NoUsableAccountError`,
-  `UnsupportedProviderError`, `ModelRequiredError`, `ProviderCallError`,
-  `ProviderTimeoutError`) rather than hanging.
+  `UnsupportedProviderError`, `EmptySystemPromptError`, `ModelRequiredError`,
+  `ProviderCallError`, `ProviderTimeoutError`) rather than hanging.
 
 ## The mngr `claude -p` session-hook bug
 
