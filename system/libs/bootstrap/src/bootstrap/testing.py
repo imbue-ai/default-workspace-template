@@ -160,8 +160,8 @@ def install_package(
 
 
 def install_mngr(venv: Path, commit: str) -> dict[str, str]:
-    """Install the metadata of mngr, one plugin and an unrelated package into ``venv`` from ``commit``; the
-    identity ``installed_mngr`` reads off them."""
+    """Install the metadata of mngr and one plugin from ``commit``, and of a package with a command of its own,
+    into ``venv``; the identity ``installed_mngr`` reads off them."""
 
     def from_commit(subdirectory: str) -> dict[str, object]:
         return {
@@ -182,7 +182,9 @@ def install_mngr(venv: Path, commit: str) -> dict[str, str]:
         "[mngr]\nclaude = imbue.mngr_claude.plugin\n",
         from_commit("libs/mngr_claude"),
     )
-    install_package(venv, "loguru", "", None)
+    install_package(
+        venv, "pytest", "[console_scripts]\npytest = pytest:console_main\n", None
+    )
     return {
         "imbue-mngr": f"{MNGR_GIT_URL}@{commit}",
         "imbue-mngr-claude": f"{MNGR_GIT_URL}@{commit}",

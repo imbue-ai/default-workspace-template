@@ -179,12 +179,6 @@ def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
             env=dict(os.environ),
             timeout=_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired:
-        sys.stderr.write(
-            "warning: upgrading the stopped agents did not finish within "
-            f"{_UPGRADE_STOPPED_AGENTS_TIMEOUT_SECONDS:g}s.\n"
-        )
-        return
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         sys.stderr.write(
             f"warning: could not upgrade the stopped agents ({type(exc).__name__}: {exc}).\n"
