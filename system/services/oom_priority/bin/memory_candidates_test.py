@@ -808,9 +808,16 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert report.browsers.candidates is not None
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
+    table = memory_candidates.render_table(report)
     assert (
         "Idle chats and workers (waiting, not on a background task, no activity for 15m or more):\n  unknown\n  note: could not run"
-        in (memory_candidates.render_table(report))
+        in table
+    )
+    assert (
+        "Also holding memory, not candidates:\n  unknown\n"
+        "  note: which chats and workers hold memory is unknown (see the note above)\n"
+        "  note: which apps and services hold memory is unknown (see the note above)\n"
+        in table
     )
 
 

@@ -1246,18 +1246,22 @@ def render_table(report: Report) -> str:
     lines += [f"  note: {note}" for note in report.browsers.notes]
 
     lines += ["", "Also holding memory, not candidates:"]
+    sections_others = (
+        ("chats and workers", report.agents.others),
+        ("apps and services", report.apps.others),
+        ("browsers", report.browsers.others),
+    )
     held = _largest_first(
         entry
-        for section_others in (
-            report.agents.others,
-            report.apps.others,
-            report.browsers.others,
-        )
+        for _, section_others in sections_others
         if section_others is not None
         for entry in section_others
     )
+    unknown = [
+        label for label, section_others in sections_others if section_others is None
+    ]
     if not held:
-        lines.append("  none")
+        lines.append("  unknown" if unknown else "  none")
     else:
         lines += _table(
             ("KIND", "NAME", "TITLE", "WHY NOT", "MEMORY"),
@@ -1272,6 +1276,10 @@ def render_table(report: Report) -> str:
                 for entry in held
             ],
         )
+    lines += [
+        f"  note: which {label} hold memory is unknown (see the note above)"
+        for label in unknown
+    ]
 
     lines += [
         "",
