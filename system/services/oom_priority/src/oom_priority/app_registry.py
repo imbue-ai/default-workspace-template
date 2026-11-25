@@ -1,6 +1,6 @@
 """The app registry as this package reads it: each registered app's
 ``priority`` band name, keyed by the supervisord program that runs it (the
-memory backstop), and an app's ``url`` (the memory candidates command, which
+memory backstop), and an app's ``url`` (the workspace memory command, which
 finds the browser service there).
 
 ``data/.state/apps.toml`` is written by ``system/scripts/forward_port.py``,

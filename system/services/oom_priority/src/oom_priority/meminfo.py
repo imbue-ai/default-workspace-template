@@ -7,10 +7,9 @@ the file while it is fresh (``--host-meminfo``, ``earlyoom.conf``), and so does
 this, falling back to ``/proc/meminfo``. The resource sampler records memory
 through it, and the system monitor app shows the same figures.
 
-It also reads one process's anonymous memory, which the memory candidates command
-(``bin/memory_candidates.py``) sums per candidate, and, from ``smaps`` under gVisor,
-its anonymous memory beside the shared memory segments it maps, which the System
-Monitor's breakdown counts once each.
+It also reads, from ``smaps`` under gVisor, one process's anonymous memory beside the
+shared memory segments it maps (``processes`` counts each segment once), and whether
+``/tmp`` is held in memory.
 
 Stdlib-only (see ``paths``): the sampler runs under a plain ``python3``.
 """
@@ -56,7 +55,7 @@ def is_host_meminfo_fresh(host_meminfo: Path, now_seconds: float) -> bool:
     """Whether the headroom file is new enough that earlyoom still acts on it.
 
     One rule for every reader of the guard's figure (``read_meminfo`` here, the
-    candidates command's own ``read_free_memory``), since it is earlyoom's rule
+    workspace memory command's own ``read_free_memory``), since it is earlyoom's rule
     and not ours. A file that cannot be stat'd is stale: there is nothing to act
     on, so ``/proc/meminfo`` is the answer.
     """
@@ -119,21 +118,23 @@ def read_smaps_memory(pid: int, proc: Path = PROC) -> SmapsMemory | None:
     )
 
 
-def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
-    """A process's anonymous memory in KiB: the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup``,
-    or of ``smaps`` under gVisor, which has no rollup, summed. None when it is gone or unreadable.
+def is_tmpfs(path: Path, mounts: Path = PROC / "mounts") -> bool:
+    """Whether ``path`` is the mount point of a tmpfs, whose files are held in memory.
 
-    Roughly what stopping the process frees. Under gVisor ``VmRSS`` counts the whole span of every
-    mapping the process has touched, so it reads up to ten times higher for an agent's harness,
-    which maps a large binary.
+    ``/tmp`` is one in every workspace today (the docker and cloud providers mount one; Debian's
+    own tmp.mount does under lima). Where it is not, its files are on disk and use no memory.
     """
-    for name in ("smaps_rollup", "smaps"):
-        try:
-            text = (proc / str(pid) / name).read_text(errors="replace")
-        except OSError:
-            continue
-        return _summed_anonymous_kib(text)
-    return None
+    try:
+        lines = mounts.read_text().splitlines()
+    except OSError:
+        return False
+    is_tmpfs_mount = False
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 3 and fields[1] == str(path):
+            # The last mount on the path is the one in effect.
+            is_tmpfs_mount = fields[2] == "tmpfs"
+    return is_tmpfs_mount
 
 
 def _summed_anonymous_kib(text: str) -> int:

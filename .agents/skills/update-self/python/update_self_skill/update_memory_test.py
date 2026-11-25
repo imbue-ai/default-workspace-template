@@ -169,9 +169,7 @@ def test_reads_each_releases_listing_and_reports_what_it_lacks_as_unknown(
         assert reading.unknown == ()
     else:
         assert reading.apps is None
-        assert reading.unknown == (
-            "apps: this workspace's version does not list them",
-        )
+        assert reading.unknown == ("apps: this workspace's version does not list them",)
 
 
 def test_prefers_the_current_tool_and_asks_it_the_way_it_takes_the_request(
@@ -234,7 +232,10 @@ def test_a_source_the_tool_could_not_read_is_unknown_with_the_tools_own_reason(
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
-        ("import sys\nsys.exit('mngr is not installed')\n", "exited 1: mngr is not installed"),
+        (
+            "import sys\nsys.exit('mngr is not installed')\n",
+            "exited 1: mngr is not installed",
+        ),
         ("print('Free memory: 12 MiB')\n", "did not print JSON"),
         ("print('[]')\n", "printed JSON that is not a listing"),
     ],
@@ -271,7 +272,16 @@ def test_the_command_prints_what_each_stop_takes(
         "1228 MiB of it before the memory guard starts stopping processes"
     )
     rows = [line.split() for line in lines]
-    assert ["chat", "weekly-report", "Weekly", "report", "3h", "00m", "195", "MiB"] in rows
+    assert [
+        "chat",
+        "weekly-report",
+        "Weekly",
+        "report",
+        "3h",
+        "00m",
+        "195",
+        "MiB",
+    ] in rows
     assert ["notes-app", "Notes", "2", "no", "97", "MiB"] in rows
     assert ["browser-1", "390", "MiB"] in rows
 
@@ -287,5 +297,6 @@ def test_resident_sizes_are_called_out_as_overstating_what_a_stop_frees(
 
     printed = capsys.readouterr().out
     assert "resident sizes" in printed
-    assert "left before the memory guard starts stopping processes is unknown" in printed
-
+    assert (
+        "left before the memory guard starts stopping processes is unknown" in printed
+    )

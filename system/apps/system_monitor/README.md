@@ -37,9 +37,14 @@ the view it was on.
 codex, pi), each with whatever it is running, found through oom_priority's
 agent-pid registry; code checkers; the workspace's own programs (chat app,
 desktop, built-in apps, background services, each listed under the Workspace
-row by the name its registry row or `programs.PROGRAM_NAMES` gives it; what
-none of them started is "SSH access", "Internal system" or "Other" by its
-command); and the apps the user built. A row
+row by the name its registry row or `programs.PROGRAM_NAMES` gives it, with
+the browsers on the Screen as one "Browser" item apart from the Screen's
+service that starts them; what none of them started is "SSH access",
+"Internal system" or "Other" by its command); and the apps the user built.
+Which processes belong to which is `oom_priority.processes`' answer, shared
+with the workspace memory command
+(`system/services/oom_priority/bin/workspace_memory.py`), so a row here and a
+row there are the same processes with the same figure. A row
 with nothing under it (Code checkers, Your apps) is left out until something
 runs there.
 
@@ -57,7 +62,7 @@ runs there.
   so its `Pss` equals its `Rss` and is not read; the Shared row there counts
   each segment (a memfd, a `/dev/shm` file, a System V segment) once, at the
   largest resident size any process that maps it reports
-  (`programs.read_smaps`).
+  (`oom_priority.processes.read_smaps`).
 - Where neither file can be read, only resident sizes are available, and each is
   scaled down by one factor until the rows add up to what is in use less the
   scratch space, with a System row for whatever the programs do not account
@@ -125,7 +130,7 @@ their pid can never mislabel them; they keep a plainer description with no
 command.
 
 One known limit: code checkers are recognised by command-line fragments of the
-common language servers (`programs.CODE_CHECKER_MARKERS`); one not in that list
+common language servers (`oom_priority.processes.CODE_CHECKER_MARKERS`); one not in that list
 counts under the chat or program that started it.
 
 The app describes its own HTTP API at `GET /api/schema` (the manifest's

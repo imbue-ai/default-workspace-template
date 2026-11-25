@@ -384,7 +384,7 @@ again in a real workspace before a release reaches production
   launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook,
-  the chat app's prioritizer, System Monitor, the resource sampler and the memory candidates command.
+  the chat app's prioritizer, System Monitor, the resource sampler and the workspace memory command.
 
 Both live under `runtime/` so they ride the runtime-backup branch. Their absolute
 location is pinned via `OOM_PRIORITY_RUNTIME_DIR` (see `.mngr/settings.toml`) so
@@ -393,26 +393,36 @@ same files. `paths` is the single source of truth for the layout, and -- like
 every module here -- is stdlib-only, so the hooks (which run under a plain
 `python3`, not `uv`) can import it via a `sys.path` insert.
 
-## Memory candidates
+## Workspace memory
 
-`system/services/oom_priority/bin/memory_candidates.py` lists what could be
-stopped to free memory, next to how much memory is free, and then everything
-else holding memory with why it is not a candidate. That second list makes it
-the answer to "how much memory is this using" as well as to "what can I stop"
-(the `workspace-memory` skill). It only reads: it never stops, kills, or
-re-tags anything.
+`system/services/oom_priority/bin/workspace_memory.py` says what holds the
+workspace's memory, measured the way the memory guard measures it, and what
+could be stopped to free some (the `workspace-memory` skill is the flow around
+it). It only reads: it never stops, kills, or re-tags anything.
 
 ```bash
-python3 system/services/oom_priority/bin/memory_candidates.py          # a table
-python3 system/services/oom_priority/bin/memory_candidates.py --json   # the same report as JSON
-python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
+python3 system/services/oom_priority/bin/workspace_memory.py free               # only the free memory line
+python3 system/services/oom_priority/bin/workspace_memory.py list --stoppable   # only what could be stopped
+python3 system/services/oom_priority/bin/workspace_memory.py list               # everything holding memory
+python3 system/services/oom_priority/bin/workspace_memory.py list --json        # the whole report as JSON
+python3 system/services/oom_priority/bin/workspace_memory.py show <pid or name> # one process, or one row's processes
+python3 system/services/oom_priority/bin/workspace_memory.py guard-order        # the order the guard stops processes in
 ```
 
-`--free-memory` reads nothing but the meminfo files and earlyoom's program file
-(for its threshold), so it is cheap enough to poll while memory is short, when
-the full report's `mngr list` and service calls would add to the pressure.
+`free` reads nothing but the meminfo files and earlyoom's program file (for its
+threshold), so it is cheap enough to poll while memory is short, when the full
+report's `mngr list` and service calls would add to the pressure.
 
-It lists:
+Which processes are a chat's, an app's, a service's or a browser's is
+`oom_priority.processes`' answer, the one the System Monitor app's breakdown
+uses, so a row here and an item there are the same processes with the same
+figure. A process belongs to the nearest of its ancestors that is an agent's
+main process (the pid mngr reports, every live pid the agent-pid registry holds
+for it, and failing those claude found by its command line), a program
+supervisord runs, or a browser on the Screen (the Chromium profile on its
+command line).
+
+`list` prints:
 
 - **Free memory**, read where the memory guard reads it (`oom_priority.meminfo`
   and "How it fits together" above): the `--host-meminfo` headroom file while it
@@ -436,7 +446,7 @@ It lists:
   A candidate:
   - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
     primary services agent and any agent with neither label (an automation, for
-    example) are never listed;
+    example) are never candidates;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
   - is in a chat that is not busy. An agent that ended its turn to wait on a
@@ -456,41 +466,57 @@ It lists:
     holds memory instead. A file that is there but cannot be read gets a note,
     since the main chat may then be listed.
 
-  Its memory is the summed anonymous memory of its process trees (see below).
-  The trees are rooted at the `pid` mngr reports and at every live pid the
-  agent-pid registry holds for it (codex registers two).
+  Its memory is the summed anonymous memory of its processes (see below).
 - **Apps the workspace may stop**, from the shell's `GET /api/inventory` joined
   to the programs supervisord reports running. A candidate has a program, is not
   critical (the shell, the chat and the terminal are what the workspace is
   reached and talked to through), does not share a critical app's program (the
   stop would take that app down with it), is not internal, and is running. The
   Screen is left out: its service holds almost nothing and the browser's Chromium
-  processes have their own section below. Each row carries how many windows show
-  the app, which is what decides whether stopping it takes something off the
-  user's screen, and `AUTO-STOP` (`stop_when_no_windows` in JSON), which says
-  whether the shell stops the app by itself once no window has shown it for the
-  grace period. An app it does not is one that may do work between requests, so
-  it is the costlier one to take down. Its memory is the summed anonymous memory
-  of its program's process tree.
+  processes are the browser's. Each row carries how many windows show the app
+  (`window_count` in JSON), which is what decides whether stopping it takes
+  something off the user's screen: an app a window shows reads `on screen`
+  rather than `yes` under CAN STOP, and `list --stoppable` prints those in a
+  second group, to be offered only when the first is not enough. Each row also
+  says whether the shell stops the app by itself once no window has shown it for
+  the grace period (`stop_when_no_windows` in JSON). An app it does not is one
+  that may do work between requests, so it is the costlier one to take down.
 - **The browser while no window shows the Screen**, from the Screen service's
   `GET /browsers` (`system/apps/screen/README.md`, "The browser"). A candidate
   is a `running` browser while no window of the `screen` app exists on any
-  desktop, according to the same inventory document. Its memory is the summed
-  anonymous memory of the Chromium processes on its profile and their children.
-
-- **Also holding memory, not candidates**: every other chat or worker whose
+  desktop, according to the same inventory document.
+- **Everything else holding memory, with why it cannot be stopped**: every other chat or worker whose
   agent may be alive (`WAITING`, `RUNNING`, `RUNNING_BACKGROUND`,
   `RUNNING_UNKNOWN_AGENT_TYPE`, `REPLACED` or `UNKNOWN`: mid-turn, waiting on
   a background task, active within `IDLE_AFTER_SECONDS`, with no activity time
   to judge it by, of an agent type mngr cannot tell the turn of, with another
   program in its window, with a state mngr could not read, or the main chat),
-  every running program that is not a candidate's (a critical or internal app,
-  the Screen's service less the browser processes it launches, a workspace
-  service no app names, one row per program), and a running browser while a
-  window shows the Screen. Each row says why it is not a candidate and carries
+  every other agent whose processes hold memory (the workspace's own services
+  agent, one that is neither a chat nor a worker, one mngr's listing does not
+  name), every running program that is not a candidate's (a critical or
+  internal app, the Screen's service, a workspace service no app names, one row
+  per program), a running browser while a window shows the Screen, and the
+  processes nothing above started, under "SSH access", "Internal system" or
+  "Other" by their command. Each row says why it is not a candidate and carries
   the same memory figure, so "what is using the memory" is answered by the
   same numbers as "what can I stop". In JSON each section carries these as
-  `others`, `null` when the section is unknown.
+  `others`, and the last as `unowned`.
+- **What no process holds**, so the list adds up to the memory in use: the
+  shared memory segments programs map, counted once (Shared), the files in
+  `/tmp` where it is a tmpfs (Temporary files), and the rest (System: the
+  kernel, and the processes that cannot be read). `totals` in JSON.
+
+`show <pid>` prints one process's own memory, its band, and the row it belongs
+to; `show <name>` prints one row (by its NAME or TITLE) with each of its
+processes. This is how to answer "how much is this using" for anything.
+
+`guard-order` prints the processes in the order earlyoom would stop them,
+highest score first, scored as the fork does ("How it fits together" above):
+each process's memory (its anonymous memory under gVisor, its resident size on
+a Linux kernel) plus its swap and page tables, plus its `oom_score_adj` times a
+thousandth of `/proc/meminfo`'s `MemTotal` and `SwapTotal`, less 300 band points
+for a name `--avoid` shields. The guard stops one process at a time, so the
+order is of processes, not of chats or apps.
 
 The Screen's stack never stops for emptiness and the browser is never stopped
 when its windows close, so a browser nobody is looking at keeps its memory until
@@ -507,13 +533,14 @@ again after stopping something.
 
 Each source is read on its own. When `mngr list`, the Screen service, the
 shell or supervisord cannot be read, that section says so, and its candidates are
-`null` in JSON: "unknown", not "none". The other sections are still listed, and
+`null` in JSON: "unknown", not "none". What its processes hold is still listed,
+with CAN STOP reading `unknown`. The other sections are still listed, and
 the command still exits 0. The shell is read once, and its one document answers
 both the apps and whether a window shows the Screen, so a shell that cannot be
 reached takes both sections to "unknown" together.
 
-A lead runs it when one of its agents reports a shed. It shows the user the
-list and the free memory, and stops only what the user approves (a scheduled
+A lead runs `list --stoppable` when one of its agents reports a shed. It shows the
+user the list and the free memory, and stops only what the user approves (a scheduled
 update is the one flow that may go further on its own judgment; see the
 `update-self` skill's "What this pass may do without asking"):
 

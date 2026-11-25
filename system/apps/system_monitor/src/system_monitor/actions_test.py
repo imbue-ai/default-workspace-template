@@ -11,10 +11,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
+from oom_priority.processes import Process
 from oom_priority.testing import fake_supervisord
 
 from system_monitor import actions
-from system_monitor.programs import Process
 
 
 class _ChatAppHandler(BaseHTTPRequestHandler):

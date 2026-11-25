@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from oom_priority.meminfo import read_meminfo
+from oom_priority.meminfo import is_tmpfs, read_meminfo
 from oom_priority.paths import shed_ledger_path
+from oom_priority.processes import has_breakdown, read_processes
 from oom_priority.supervisor_rpc import supervised_pids
 
 from system_monitor import cpu, memory, programs, stops, usage
@@ -28,7 +29,7 @@ def snapshot(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = now or datetime.now(timezone.utc)
-    procs = programs.read_processes()
+    procs = read_processes()
     chats = programs.chats()
     names = {agent_id: chat.name for agent_id, chat in chats.items()}
     chat_ids = {agent_id: chat.chat_id for agent_id, chat in chats.items()}
@@ -38,10 +39,8 @@ def snapshot(
     program_names = programs.program_names(supervised)
     scratch = memory.disk(usage.SCRATCH_DIR)
     # Scratch space is memory only where /tmp is a tmpfs; elsewhere its files are on disk.
-    scratch_memory = scratch if usage.scratch_in_memory() else None
-    breakdown = (
-        usage.exact_usage if programs.has_breakdown(procs) else usage.scaled_usage
-    )
+    scratch_memory = scratch if is_tmpfs(usage.SCRATCH_DIR) else None
+    breakdown = usage.exact_usage if has_breakdown(procs) else usage.scaled_usage
     reading = cpu.read_recent(recent_path, moment.timestamp())
     stop_records = stops.recent_stops(shed_ledger_path(), now=moment, names=names)
     events = [

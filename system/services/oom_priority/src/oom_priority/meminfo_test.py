@@ -46,24 +46,23 @@ def test_meminfo_follows_the_memory_guard_to_a_fresh_host_meminfo(
     )
 
 
-def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(
+def test_a_directory_is_held_in_memory_only_when_a_tmpfs_is_mounted_on_it(
     tmp_path: Path,
 ) -> None:
-    entry = tmp_path / "10"
-    entry.mkdir()
-    # Under gVisor there is no rollup: every mapping's Anonymous line is summed, and the binary's
-    # file-backed Rss is not counted.
-    (entry / "smaps").write_text(
-        "00400000-00500000 r-xp 00000000 00:00 0\nRss:   900 kB\nAnonymous:   0 kB\n"
-        "00600000-00700000 rw-p 00000000 00:00 0\nRss:   300 kB\nAnonymous:   300 kB\n"
-        "7f000000-7f100000 rw-p 00000000 00:00 0\nRss:   50 kB\nAnonymous:   50 kB\n"
+    mounts = tmp_path / "mounts"
+    scratch = Path("/tmp")
+    mounts.write_text(
+        "/dev/vda1 / ext4 rw 0 0\ntmpfs /tmp tmpfs rw,nosuid,nodev,size=2009212k 0 0\n"
     )
-    assert meminfo.read_process_anonymous_kib(10, tmp_path) == 350
+    assert meminfo.is_tmpfs(scratch, mounts)
 
-    (entry / "smaps_rollup").write_text("Rss:   1250 kB\nAnonymous:   340 kB\n")
-    assert meminfo.read_process_anonymous_kib(10, tmp_path) == 340
+    mounts.write_text("/dev/vda1 / ext4 rw 0 0\n/dev/vdb1 /tmp ext4 rw 0 0\n")
+    assert not meminfo.is_tmpfs(scratch, mounts)
 
-    assert meminfo.read_process_anonymous_kib(11, tmp_path) is None
+    # The last mount on /tmp is the one in effect.
+    mounts.write_text("/dev/vdb1 /tmp ext4 rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n")
+    assert meminfo.is_tmpfs(scratch, mounts)
+    assert not meminfo.is_tmpfs(scratch, tmp_path / "missing")
 
 
 def test_smaps_names_each_shared_memory_segment_once_beside_the_anonymous_memory(

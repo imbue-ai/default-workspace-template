@@ -165,9 +165,7 @@ def parse_listing(tool: Path, document: Mapping[str, Any]) -> MemoryReading:
     """The parts of the tool's JSON an update reads, each taken only where it has the expected shape."""
     unknown: list[str] = []
     resident: list[bool] = []
-    agents = _section(
-        document, "agents", "idle chats and background agents", unknown
-    )
+    agents = _section(document, "agents", "idle chats and background agents", unknown)
     apps = _section(document, "apps", "apps", unknown)
     browsers = _section(document, "browsers", "browsers", unknown)
     free = _free_memory(document.get("free_memory"))
@@ -233,7 +231,9 @@ def _section(
             if isinstance(notes, list)
             else []
         )
-        unknown_out.append(f"{label}: {'; '.join(reasons) or 'the tool could not list them'}")
+        unknown_out.append(
+            f"{label}: {'; '.join(reasons) or 'the tool could not list them'}"
+        )
         return None
     return [row for row in candidates if isinstance(row, dict)]
 
@@ -322,7 +322,10 @@ def render_reading(reading: MemoryReading) -> str:
         )
         lines = [f"Free memory: {_mib(free.free_kib)}{origin}{room}"]
 
-    lines += ["", "Idle chats and background agents (`run-status stop-chats --agent <NAME>`):"]
+    lines += [
+        "",
+        "Idle chats and background agents (`run-status stop-chats --agent <NAME>`):",
+    ]
     lines += (
         ["  unknown"]
         if reading.agents is None
@@ -380,5 +383,7 @@ def render_reading(reading: MemoryReading) -> str:
             "every file a process maps, so stopping something frees less than its row says."
         )
     if reading.tool is not None:
-        lines.append(f"Read by this workspace's own {reading.tool}. Nothing was stopped.")
+        lines.append(
+            f"Read by this workspace's own {reading.tool}. Nothing was stopped."
+        )
     return "\n".join(lines).rstrip("\n") + "\n"
