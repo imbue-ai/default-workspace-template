@@ -46,6 +46,7 @@ from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import UNKNOWN_LIFECYCLE_STATE
 from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
@@ -6147,13 +6148,14 @@ class AgentManager:
 
         # A retired member found running (a handoff's stop that never landed, or one revived since) holds memory for
         # a chat that has moved on. Checked on every agent a full snapshot lists, so a leak from before a restart is
-        # found, and otherwise on the agents this event changed.
+        # found, and otherwise on the agents this event changed. UNKNOWN is no evidence of running.
         checked_ids = after_ids if is_full_snapshot else state_changed_ids | added_agent_ids
         with self._lock:
             running_retired_ids = [
                 agent_id
                 for agent_id in sorted(checked_ids)
                 if not is_lifecycle_dead(details_by_id[agent_id].state.value)
+                and details_by_id[agent_id].state.value != UNKNOWN_LIFECYCLE_STATE
                 and self._is_retired_member_locked(agent_id)
                 and agent_id not in self._retired_stops_in_flight
             ]

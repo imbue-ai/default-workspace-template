@@ -7473,9 +7473,13 @@ def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_no
     assert _stop_lines(argv_log) == [f"stop {archived_name}"]
 
 
+@pytest.mark.parametrize(
+    ("state", "is_stopped"), [(AgentLifecycleState.WAITING, True), (AgentLifecycleState.UNKNOWN, False)]
+)
 def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_first_snapshot(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, state: AgentLifecycleState, is_stopped: bool
 ) -> None:
+    """A member that reads UNKNOWN could not be observed, which says nothing of it running, so it is left alone."""
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
     archived_name = f"archived-1-Chat-1-{first}"
@@ -7484,14 +7488,14 @@ def test_a_retired_member_left_running_before_a_restart_is_stopped_from_the_firs
             make_full_agent_state_event(
                 [
                     _agent_details("Chat-1", agent_id=MngrAgentId(second)),
-                    _agent_details(archived_name, agent_id=MngrAgentId(first), state=AgentLifecycleState.WAITING),
+                    _agent_details(archived_name, agent_id=MngrAgentId(first), state=state),
                 ]
             )
         )
     finally:
         manager.stop()
     # The stop joins every thread the snapshot started, so nothing else is still on its way.
-    assert _stop_lines(argv_log) == [f"stop {archived_name}"]
+    assert _stop_lines(argv_log) == ([f"stop {archived_name}"] if is_stopped else [])
 
 
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
