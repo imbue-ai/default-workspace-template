@@ -185,11 +185,12 @@ class ImageGenerationCalls(MutableModel):
     def note_output(self, call_id: str, output_text: str) -> None:
         if call_id not in self.call_ids:
             return
+        waited_cell_id = self.waited_cell_by_call_id.pop(call_id, None)
         running_cell_id = yielded_cell_id(output_text)
         if running_cell_id is not None:
             self.cell_ids.add(running_cell_id)
-        else:
-            self.cell_ids.discard(self.waited_cell_by_call_id.pop(call_id, ""))
+        elif waited_cell_id is not None:
+            self.cell_ids.discard(waited_cell_id)
 
 
 def _waited_cell_id(raw_arguments: str) -> str | None:
