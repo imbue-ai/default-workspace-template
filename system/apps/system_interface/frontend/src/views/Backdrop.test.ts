@@ -91,7 +91,6 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
-    openDesktopsRecoveryPage: () => undefined,
   });
   store.setBackdropSize({ width: 1000, height: 800 });
   await store.start(NO_LINK);

@@ -17,7 +17,6 @@ from imbue.system_interface.shell.app_lifecycle import ProgramStatesReader
 from imbue.system_interface.shell.app_lifecycle import TRANSITION_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
-from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import WindowCountsReader
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
@@ -46,7 +45,6 @@ class FakeSupervisor:
         self.started: list[str] = []
         self.stopped: list[str] = []
         self.is_reachable = True
-        self.stderr_by_program: dict[str, str] = {}
 
     def states(self) -> dict[str, SupervisorProgramState] | None:
         if not self.is_reachable:
@@ -72,9 +70,6 @@ class FakeSupervisor:
     def stop(self, program: str) -> None:
         self.stopped.append(program)
         self.statename_by_program[program] = "STOPPED"
-
-    def stderr_tail(self, program: str) -> str | None:
-        return self.stderr_by_program.get(program) if self.is_reachable else None
 
 
 class FakeClock:
@@ -144,7 +139,6 @@ def _manager_over(
         program_states=program_states if program_states is not None else supervisor.states,
         start_program=start_program if start_program is not None else supervisor.start,
         stop_program=supervisor.stop,
-        read_stderr_tail=supervisor.stderr_tail,
         clock=clock if clock is not None else FakeClock(),
     )
 
@@ -388,7 +382,7 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
         assert manager.wake("docs") is ParkedPageKind.STARTING
         supervisor.statename_by_program["docs"] = "STOPPED"
 
-    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
+    assert manager.wake("docs") is ParkedPageKind.FAILED
     assert len(supervisor.started) == WAKE_BUDGET_COUNT
 
     clock.now += WAKE_BUDGET_WINDOW_SECONDS + 1
@@ -414,12 +408,12 @@ def test_a_request_past_the_wake_budget_is_answered_the_failure_page_and_starts_
 
     refused = send_raw_get_over_socket(closed_port)
 
-    assert refused.startswith(b"HTTP/1.1 503") and b"Docs failed to start several times" in refused
+    assert refused.startswith(b"HTTP/1.1 503") and b"Docs could not start" in refused
     assert len(supervisor.started) == WAKE_BUDGET_COUNT
     manager.sweep_once()
     assert manager.is_app_parked("docs")
     clock.now += WAKE_BUDGET_WINDOW_SECONDS + 1
-    assert b"Docs couldn't start." in send_raw_get_over_socket(closed_port)
+    assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
     assert len(supervisor.started) == WAKE_BUDGET_COUNT + 1
 
 
@@ -443,7 +437,7 @@ def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
         assert manager.wake("docs") is ParkedPageKind.STARTING
         supervisor.statename_by_program["docs"] = "FATAL"
         manager.sweep_once()
-    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
+    assert manager.wake("docs") is ParkedPageKind.FAILED
 
 
 def test_a_wake_ended_by_a_deliberate_stop_spends_none_of_the_budget(
@@ -466,7 +460,7 @@ def test_a_wake_ended_by_a_deliberate_stop_spends_none_of_the_budget(
     for _ in range(WAKE_BUDGET_COUNT):
         assert manager.wake("docs") is ParkedPageKind.STARTING
         manager.stop_app("docs")
-    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
+    assert manager.wake("docs") is ParkedPageKind.FAILED
 
 
 def test_a_wake_supervisord_refuses_is_answered_as_failed_and_awaits_no_outcome(
@@ -488,7 +482,7 @@ def test_a_wake_supervisord_refuses_is_answered_as_failed_and_awaits_no_outcome(
         refusing.sweep_once()
 
         assert refusing.is_app_parked("docs")
-        assert b"Docs couldn't start." in send_raw_get_over_socket(closed_port)
+        assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
     finally:
         refusing.stop()
 
@@ -499,16 +493,13 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     manager.sweep_once()
     send_raw_get_over_socket(closed_port)
     supervisor.statename_by_program["docs"] = "FATAL"
-    supervisor.stderr_by_program["docs"] = "ImportError: cannot import name 'serve' <docs>\n"
 
     manager.sweep_once()
 
     assert manager.is_app_parked("docs")
-    # The next request wakes it again (within the budget) and is told where to look while it waits: the end of the
-    # program's error log as supervisord reads it, then the command that shows the rest.
+    # The next request wakes it again (within the budget) and is told where to look while it waits.
     answer = send_raw_get_over_socket(closed_port)
-    assert b"Docs couldn't start." in answer and b"supervisorctl tail docs stderr" in answer
-    assert b"ImportError: cannot import name &#x27;serve&#x27; &lt;docs&gt;" in answer
+    assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
     assert supervisor.started == ["docs", "docs"]
     # Once the app has run again, a later stop is an ordinary one and its request is answered as starting.
     supervisor.statename_by_program["docs"] = "RUNNING"
@@ -547,14 +538,14 @@ def test_wake_and_wait_answers_once_the_app_accepts(
 
     waiting = _manager_over(manager.inventory, supervisor, start_program=start, clock=time.monotonic)
     try:
-        assert waiting.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.UP
+        assert waiting.wake_and_wait(entry, timeout_seconds=5.0) is True
     finally:
         listener.close()
-    # An app that never binds is still starting once the wait is up, and a running one is answered at once.
+    # An app that never binds is answered False once the wait is up, and a running one at once.
     is_bound[0] = True
-    assert waiting.wake_and_wait(entry, timeout_seconds=0.3) is WakeOutcome.STILL_STARTING
+    assert waiting.wake_and_wait(entry, timeout_seconds=0.3) is False
     running = manager.inventory.entry("plain")
-    assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is WakeOutcome.UP
+    assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is True
 
 
 def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
@@ -575,7 +566,7 @@ def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
 
     failing = _manager_over(manager.inventory, supervisor, start_program=start_then_fail_and_sweep, clock=clock)
     try:
-        assert failing.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.FAILED
+        assert failing.wake_and_wait(entry, timeout_seconds=5.0) is False
         assert failing.is_app_parked("docs")
     finally:
         failing.stop()
@@ -585,37 +576,14 @@ def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
 def test_wake_and_wait_gives_up_once_the_manager_is_stopped(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
-    """A launch in flight while the shell stops is answered at once rather than polled to its deadline
+    """A launch in flight while the shell stops is answered False at once rather than polled to its deadline
     (the fake clock never reaches one, so a poll that ignored the stop would never return)."""
     entry = manager.inventory.entry("docs")
     assert entry is not None and entry.is_running is False
     manager.stop()
 
-    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.STILL_STARTING
+    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is False
     assert supervisor.started == ["docs"]
-
-
-def test_wake_and_wait_says_why_a_wake_brought_nothing_up(
-    manager: AppLifecycleManager, supervisor: FakeSupervisor
-) -> None:
-    """The launch that waited words its refusal from this: a start supervisord refused, and a wake the budget
-    refused, are each answered at once without polling the port."""
-    entry = manager.inventory.entry("docs")
-    assert entry is not None and entry.is_running is False
-
-    def refuse(program: str) -> None:
-        raise SupervisorProgramActionError(f"supervisord refused to start {program!r}")
-
-    refusing = _manager_over(manager.inventory, supervisor, start_program=refuse)
-    try:
-        assert refusing.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.FAILED
-    finally:
-        refusing.stop()
-
-    for _ in range(WAKE_BUDGET_COUNT):
-        assert manager.wake("docs") is ParkedPageKind.STARTING
-    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.BUDGET_SPENT
-    assert len(supervisor.started) == WAKE_BUDGET_COUNT
 
 
 def _clock_of(manager: AppLifecycleManager) -> FakeClock:

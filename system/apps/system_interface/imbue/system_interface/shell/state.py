@@ -67,7 +67,6 @@ from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
-from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
@@ -126,7 +125,6 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.errors import LaunchUnreachableError
 from imbue.system_interface.shell.errors import LaunchedNotOpenedError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import RefusalKind
@@ -143,8 +141,6 @@ from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
-from imbue.system_interface.shell.port_parking import could_not_start_sentence
-from imbue.system_interface.shell.port_parking import start_budget_spent_sentence
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
@@ -496,27 +492,15 @@ class ShellState(MutableModel):
         asked of the app for a POST one, with the requesting client, its desktop, and the aimed-at window's path as
         the envelope. A POST to a stoppable app that is stopped wakes it first and waits for it to answer (the
         stop-when-no-windows spec, section 5.6) when the lifecycle manager owns the live workspace's apps; a
-        preview's does not. A post nothing listens for, to an app that is then read as not running, is refused as
-        one to a stopped app. Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a 502), the latter with
-        a ``kind`` when the app is not running."""
+        preview's does not, and its post fails as one to any unreachable app does. Raises LaunchRefusedError (a
+        400) and LaunchUnavailableError (a 502)."""
         if launch_path.method is LaunchPathMethod.POST and not entry.is_running and self.lifecycle.is_enabled:
-            if stoppable_program_of(entry, self.inventory.entries()) is not None:
-                _raise_unless_up(entry, self.lifecycle.wake_and_wait(entry))
-        try:
-            return resolve_launch_destination(
-                entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
-            )
-        except LaunchUnreachableError as e:
-            # The inventory's liveness is a sweep's reading; the refused connection is newer news.
-            self.inventory.refresh_liveness()
-            refreshed = self.inventory.entry(str(entry.row.name))
-            if refreshed is None or refreshed.is_running:
-                raise
-            raise LaunchUnavailableError(
-                f"{entry.row.name} is not running, so it could not take the launch: {e}",
-                f"{entry.display_name} isn't running right now, so it couldn't open that.",
-                kind=RefusalKind.APP_STOPPED,
-            ) from e
+            is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
+            if is_stoppable and not self.lifecycle.wake_and_wait(entry):
+                raise LaunchUnavailableError(f"{entry.row.name} is stopped and could not be brought up for the launch")
+        return resolve_launch_destination(
+            entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
+        )
 
     def _client_desktop_view(self, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
         """The desktop as one client sees it: its layout, and the windows at the client's own paths."""
@@ -1276,36 +1260,6 @@ def _launched_not_opened(
         ),
         kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
     )
-
-
-@pure
-def _raise_unless_up(entry: AppInventoryEntry, outcome: WakeOutcome) -> None:
-    """Refuse a POST launch whose wake did not bring the app up, in the could-not-start page's words."""
-    name = entry.display_name
-    match outcome:
-        case WakeOutcome.UP:
-            return
-        case WakeOutcome.FAILED:
-            raise LaunchUnavailableError(
-                f"{entry.row.name} is stopped and could not be started for the launch",
-                could_not_start_sentence(name),
-                kind=RefusalKind.APP_COULD_NOT_START,
-            )
-        case WakeOutcome.BUDGET_SPENT:
-            raise LaunchUnavailableError(
-                f"{entry.row.name} is stopped and its wake budget is spent, so it was not started for the launch",
-                start_budget_spent_sentence(name),
-                kind=RefusalKind.APP_START_BUDGET_SPENT,
-            )
-        case WakeOutcome.STILL_STARTING:
-            raise LaunchUnavailableError(
-                f"{entry.row.name} was started for the launch but did not answer in time",
-                f"{name} is still starting. Try again in a moment.",
-                is_routine=True,
-                kind=RefusalKind.APP_STILL_STARTING,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
 
 
 def _count_windows_by_app(desktops: DesktopStore) -> Counter[str]:

@@ -1,15 +1,8 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { catalogTemplateRecord } from "../testing/records";
 import type { TemplateCatalog } from "./TemplateCatalog";
-import {
-  getTemplateCatalogState,
-  resolveShelves,
-  retryTemplateCatalog,
-  searchTemplates,
-  writeUpParagraphs,
-} from "./TemplateCatalog";
+import { resolveShelves, searchTemplates, writeUpParagraphs } from "./TemplateCatalog";
 
 const CATALOG: TemplateCatalog = {
   generated_at: "",
@@ -60,24 +53,5 @@ describe("writeUpParagraphs", () => {
       "A second one.",
     ]);
     expect(writeUpParagraphs("")).toEqual([]);
-  });
-});
-
-describe("the catalog's Try again", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("asks the app to fetch afresh rather than answer from its hold after a failure, and shows what comes back", async () => {
-    const fetchMock = vi.fn<(url: string) => Promise<Response>>(
-      async () => new Response(JSON.stringify({ catalog: CATALOG, is_stale: true })),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    retryTemplateCatalog();
-
-    expect(getTemplateCatalogState()).toEqual({ kind: "loading" });
-    await vi.waitFor(() => expect(getTemplateCatalogState()).toEqual({ kind: "loaded", catalog: CATALOG }));
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/templates-catalog?retry=1"]);
   });
 });

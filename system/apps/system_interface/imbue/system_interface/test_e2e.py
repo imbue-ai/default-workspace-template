@@ -53,9 +53,7 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
-from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
 from imbue.system_interface.server import create_application
-from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
@@ -905,30 +903,6 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     )
 
 
-def test_a_startup_read_the_shell_answers_with_an_error_goes_to_the_recovery_page_whose_reload_lands_the_desktop(
-    e2e_server: E2EServer, page: Page
-) -> None:
-    """The shell answering the read of the desktops and apps with an error sends the page to the recovery page, which
-    says so from its own read of them; once they load, its Reload lands the desktop."""
-    desktops_file = e2e_server.state_dir / DESKTOPS_FILENAME
-    set_aside = desktops_file.with_name("desktops.json.aside")
-    if desktops_file.exists():
-        desktops_file.rename(set_aside)
-    # A directory where the desktops file should be: the shell cannot seed the first desktop, so its read fails.
-    desktops_file.mkdir()
-
-    page.goto(f"{e2e_server.base_url}/")
-
-    page.wait_for_url(f"{e2e_server.base_url}{DESKTOPS_RECOVERY_PATH}", timeout=15000)
-    expect(page.get_by_role("heading")).to_have_text("This workspace's desktops couldn't be loaded.")
-    desktops_file.rmdir()
-    if set_aside.exists():
-        set_aside.rename(desktops_file)
-    page.get_by_role("button", name="Reload").click()
-    page.wait_for_url(f"{e2e_server.base_url}/", timeout=15000)
-    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-
-
 @pytest.mark.timeout(60, func_only=False)
 def test_the_tray_stacks_four_people_and_opens_a_persons_card_on_hover(e2e_server: E2EServer, page: Page) -> None:
     """With three people granted the workspace, the tray's people are four (the three in grant order, then the
@@ -1198,57 +1172,6 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]').click()
         expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
-
-
-@pytest.mark.timeout(90, func_only=False)
-def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to_start_it(
-    tmp_path: Path, page: Page
-) -> None:
-    """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
-    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the launch
-    path about an app, naming the stopped app, the note staying up."""
-    ghost_row = registry_row_toml(
-        "ghost",
-        f"http://127.0.0.1:{find_free_port()}",
-        display_name="Ghost",
-        default_shortcuts=[("new", "new")],
-        launch_paths=(("new", "New ghost", "/new"),),
-        launch_methods={"new": "POST"},
-    )
-    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), extra_rows=(ghost_row,)) as server:
-        _land(page, server)
-        windows_before = [window["id"] for window in _windows(server.base_url)]
-
-        page.locator('[data-shortcut="ghost:new"]').dblclick()
-
-        toast = page.locator("[data-toast]")
-        expect(toast).to_contain_text("Ghost isn't running.", timeout=10000)
-        expect(toast).not_to_contain_text("couldn't open that")
-        ask = toast.get_by_role("button", name="Ask an agent to start it")
-        expect(ask).to_be_visible()
-        ask.click()
-        wait_for(
-            lambda: len(_posted_launches(server.pinned_url)) > 0,
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="the request to start Ghost never reached the agent's app",
-        )
-        (asked,) = _posted_launches(server.pinned_url)
-        assert asked["path"] == f"/{_PINNED_APP_CHAT_LAUNCH_ID}"
-        assert asked["body"] == {
-            _PINNED_APP_PARAM: "ghost",
-            _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
-            _PINNED_TEXT_PARAM: (
-                "/assist This is about the Ghost app (`ghost`).\n\n"
-                "Imbue Studio showed the user this failure: Ghost isn't running.\n\n"
-                "Find out why it stopped and start it again, then tell the user what was wrong."
-            ),
-            "client_id": _client_id(page),
-            "desktop_id": _HOME_DESKTOP_ID,
-        }
-        # Handing the failure to an agent leaves the note up.
-        expect(toast).to_contain_text("Ghost isn't running.")
-        assert [window["id"] for window in _windows(server.base_url)] == windows_before
 
 
 @pytest.mark.timeout(90, func_only=False)

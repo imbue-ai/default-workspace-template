@@ -26,7 +26,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     hasShare: false,
     sizeMenuTrigger: {},
     isShielded: false,
-    stopped: null,
+    isStopped: false,
     onReportBug: null,
     gone: null,
     immersive: null,
@@ -216,82 +216,17 @@ describe("Window", () => {
     expect(unlocked.querySelector("[data-fullscreen-hint]")?.textContent).toBe("Immersive, without the keyboard lock");
   });
 
-  it("shows what the caller says of a stopped app in place of its page, with the next step's button", () => {
-    const askAgent = vi.fn();
-    const element = render({
-      app: appRecord("docs", { is_running: false, program: "" }),
-      stopped: {
-        message: "Docs isn't running.",
-        details: null,
-        actions: [{ label: "Ask an agent to start it", run: askAgent }],
-        isHelpOwed: true,
-        isBugReportOffered: false,
-      },
-      // The agent is the remedy: no Report a bug is drawn beside it, though one could be opened.
-      onReportBug: vi.fn(),
-    });
+  it("shows a placeholder, and no page, for an app the caller says is stopped", () => {
+    const element = render({ app: appRecord("docs", { is_running: false, program: "" }), isStopped: true });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
-    expect(placeholder.querySelector(".stopped-app-notice-message")?.textContent).toBe("Docs isn't running.");
-    expect([...placeholder.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
-      "Ask an agent to start it",
-    ]);
-    (placeholder.querySelector("button") as HTMLButtonElement).click();
-    expect(askAgent).toHaveBeenCalledTimes(1);
+    expect(placeholder.textContent).toContain("Docs");
+    expect(placeholder.textContent).toContain("not running (managed outside the workspace)");
+    expect(placeholder.querySelector("button")).toBeNull();
     unmountViews();
     // A stopped app the shell wakes on a request keeps its page: the parker answers it.
     expect(
-      render({ app: appRecord("docs", { is_running: false }), stopped: null }).querySelector("[data-stopped-app]"),
+      render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
     ).toBeNull();
-  });
-
-  it("draws a pending button as its pending label, taking no press, until it settles", () => {
-    let isPending = true;
-    const askAgent = vi.fn();
-    const element = render({
-      app: appRecord("docs", { is_running: false, program: "" }),
-      stopped: {
-        message: "Docs isn't running.",
-        details: null,
-        actions: [
-          {
-            label: "Ask an agent to start it",
-            run: askAgent,
-            pending: { isPending: () => isPending, label: "Asking an agent…" },
-          },
-        ],
-        isHelpOwed: true,
-        isBugReportOffered: false,
-      },
-    });
-    const button = (): HTMLButtonElement => element.querySelector("[data-stopped-app] button") as HTMLButtonElement;
-    expect(button().textContent).toBe("Asking an agent…");
-    expect(button().disabled).toBe(true);
-    button().click();
-    expect(askAgent).not.toHaveBeenCalled();
-    isPending = false;
-    m.redraw.sync();
-    expect(button().textContent).toBe("Ask an agent to start it");
-    expect(button().disabled).toBe(false);
-  });
-
-  it("offers Report a bug about a stopped app no agent can be asked about, decided as it draws", () => {
-    const stopped = {
-      message: "Chat is not running right now.",
-      details: null,
-      actions: [],
-      isHelpOwed: true,
-      isBugReportOffered: true,
-    };
-    const chat = appRecord("chat", { is_running: false });
-    expect(render({ app: chat, stopped }).querySelector("[data-stopped-app] button")).toBeNull();
-    unmountViews();
-    const reportBug = vi.fn();
-    const button = render({ app: chat, stopped, onReportBug: reportBug }).querySelector(
-      "[data-stopped-app] button",
-    ) as HTMLButtonElement;
-    expect(button.textContent).toBe("Report a bug");
-    button.click();
-    expect(reportBug).toHaveBeenCalledWith({ message: stopped.message, details: null });
   });
 
   it("shows a window's app couldn't be found in place of its page, with its buttons, and drops Refresh", () => {

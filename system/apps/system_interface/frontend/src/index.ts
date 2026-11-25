@@ -38,7 +38,7 @@ import { makeAgentWorkingSignal } from "./model/agentWorking";
 import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
 import { initEmbedderRelay, setChildFrameMessageHandler, setEmbedderAppMessageHandler } from "./relay";
-import { openDesktopsRecoveryPage, reloadInterface } from "./reload";
+import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { openBugReport } from "@imbue/workspace-ui/src/report-bug";
 import { runTourAction } from "./store/tourActions";
@@ -124,7 +124,6 @@ function bootstrap(): void {
           modes,
           redraw: () => m.redraw(),
           reloadInterface,
-          openDesktopsRecoveryPage,
           popOut: popOutBridge,
           outsideLinks,
           reportBug: openBugReport,

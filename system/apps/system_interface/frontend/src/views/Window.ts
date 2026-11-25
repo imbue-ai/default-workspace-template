@@ -94,12 +94,12 @@ export interface WindowAttrs {
   /** Whether the shield covers the content: every window while a menu or the launcher is open, and on a touch
    *  client every unfocused window. */
   readonly isShielded: boolean;
-  /** What the window says in place of its page while the app behind it is stopped and nothing brings it back on a
-   *  request (a row the workspace cannot start: no supervised program, critical, or inside a critical app's
-   *  program), with the next step the workspace has; null otherwise. A stoppable app's window keeps its page, which
-   *  the shell's parker answers with a loading page until the app is up. */
-  readonly stopped: FailureNotice | null;
-  /** Report a bug about the stopped notice where it offers one; null where no bug report can be opened. */
+  /** Whether the app behind the window is stopped and nothing brings it back on a request (a row the workspace
+   *  cannot start: no supervised program, critical, or inside a critical app's program): its page is replaced by
+   *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
+   *  loading page until the app is up. */
+  readonly isStopped: boolean;
+  /** Report a bug about the gone app's notice where it offers one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
   /** What the window says in place of a page it can never show when its app couldn't be found (the app list has
    *  landed without it), with its close (the store's ``goneAppNotice``); null otherwise. */
@@ -114,8 +114,23 @@ export interface WindowAttrs {
   readonly chrome: ThemeChrome;
 }
 
-/** What a window shows in place of its page: why it has none (its app is stopped, or couldn't be found), with the
- *  buttons for the next step. */
+/** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
+ *  it back on a request. */
+export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
+  const label = app?.display_name ?? "This app";
+  const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
+  return m(
+    "div",
+    { "data-stopped-app": "", class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
+    [
+      m("div", { class: "type-label text-primary" }, label),
+      m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
+    ],
+  );
+}
+
+/** What a window shows in place of its page: why it has none (its app couldn't be found), with the buttons for the
+ *  next step. */
 export function windowPlaceholder(marker: string, notice: FailureNotice, onReportBug: ReportBug): m.Vnode {
   return m(
     "div",
@@ -190,7 +205,7 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, gone, onReportBug } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped, gone, onReportBug } = attrs;
       const isFullscreen = state === "FULLSCREEN";
       const isResizable = !isTouch && !isFullscreen;
       return m(
@@ -254,7 +269,7 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  stopped === null ? null : windowPlaceholder("stopped-app", stopped, onReportBug),
+                  isStopped ? stoppedPlaceholder(app) : null,
                   gone === null ? null : windowPlaceholder("gone-app", gone, onReportBug),
                   // The shield: the press that closes an open menu or the launcher (or raises the window, on touch)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to

@@ -226,7 +226,7 @@ class UpdateStalenessTracker(FrozenModel):
     ``git rev-parse``; the tree diff behind the moved-tree verdict runs only
     when ``HEAD`` differs from the last ask, since the verdict for a given
     ``HEAD`` cannot change (it is a content comparison against a fixed
-    baseline). The caller keeps the recovery page's ``HEAD`` poll --
+    baseline). The caller keeps the not-built placeholder's ``HEAD`` poll --
     ten seconds apart per open tab -- from asking at all.
     """
 

@@ -6,7 +6,6 @@ when no catalog URL is configured, and a 503 says nothing could be loaded). The 
 the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
 """
 
-import json
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -14,7 +13,6 @@ from typing import assert_never
 from flask import Blueprint
 from flask import Flask
 from flask import Response
-from flask import request
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
@@ -45,7 +43,6 @@ HEALTH_PATH: Final[str] = "/api/health"
 APP_DISPLAY_NAME: Final[str] = "Getting Started"
 APP_DESCRIPTION: Final[str] = "The ways into the workspace: things to start, and the published templates to adapt."
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
-RETRY_QUERY_PARAMETER: Final[str] = "retry"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
 HTTP_NOT_FOUND: Final[int] = 404
@@ -53,121 +50,11 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
 
-# How often the not-built page asks whether the page has been built since, so a rebuild by any route brings it back.
-NOT_BUILT_POLL_SECONDS: Final[int] = 10
-
-# What an agent asked to rebuild the page is told, as the contract module's ``askAgentToFix`` takes it: what the page
-# says, what is behind its "See details", and what to do.
-_REBUILD_REQUEST: Final[dict[str, str]] = {
-    "whatFailed": "The Getting Started page isn't available right now.",
-    "details": "Its built files are missing. They are rebuilt with npm run build in system/.",
-    "instruction": "Rebuild it so the page comes back, then tell the user what was wrong and what you changed.",
-}
-
-# Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
-# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command, and a failed
-# ask's reason, are behind "See details". A failed ask that owes help offers the same request as a draft in a chat, and
-# a bug report where the shell can open one. The contract module it asks the shell with is the shell's, served from
-# this origin; when it cannot be loaded (the shell's frontend is not built either), or no shell greets the page, the
-# agent button stays hidden.
+# Served in place of the page while the frontend has not been built (``static/`` is build output).
 _NOT_BUILT_PAGE: Final[str] = (
-    """<!doctype html>
-<html><head><meta charset="utf-8"><title>Getting Started</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;
-margin:0;color:#334155}main{max-width:32rem;padding:2rem}p{line-height:1.5}button{font:inherit;padding:0.4rem 1rem;
-border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:inherit;cursor:pointer;margin-right:0.5rem}
-button:hover{background:#f1f5f9}button[hidden]{display:none}details{margin-top:1.5rem;font-size:0.85em;color:#64748b}
-summary{cursor:pointer}</style></head>
-<body><main>
-<p>The Getting Started page isn't available right now. It comes back on its own once it is rebuilt.</p>
-<p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
-rebuild it</button></p>
-<p id="ask-agent-failure" hidden></p>
-<p><button type="button" id="ask-agent-draft" hidden>Draft it in a chat</button><button type="button"
-id="ask-agent-report" hidden>Report a bug</button></p>
-<details><summary>See details</summary>
-<pre id="ask-agent-failure-details" hidden></pre>
-<p>Its built files are missing. They are rebuilt with <code>npm run build</code> in <code>system/</code>.</p></details>
-</main>
-<script type="module">
-  document.getElementById("reload").addEventListener("click", () => window.location.reload());
-  setInterval(() => {
-    fetch("__HEALTH_PATH__", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((health) => {
-        if (health.is_frontend_built === true) window.location.reload();
-      })
-      // The app restarting is the expected way for this to fail, and a moment the page may be arriving: ask again.
-      .catch(() => {});
-  }, __POLL_SECONDS__ * 1000);
-  if (window.parent !== window) {
-    import("__CONTRACT_PATH__")
-      .then(({ connectToShell, askAgentToFix }) => {
-        const ask = document.getElementById("ask-agent");
-        const draft = document.getElementById("ask-agent-draft");
-        const report = document.getElementById("ask-agent-report");
-        const request = __REBUILD_REQUEST__;
-        let shown = null;
-        // A failed ask that owes help offers the request as a draft, and a bug report while the shell's latest
-        // handshake says it can open one.
-        const showRemedies = () => {
-          const isHelpOwed = shown !== null && shown.isHelpOwed;
-          draft.hidden = !isHelpOwed;
-          report.hidden = !(isHelpOwed && shell.canReportBug());
-        };
-        // Only a shell can ask an agent, so the ask button waits for one to greet the page.
-        const shell = connectToShell({
-          onHandshake: () => {
-            ask.hidden = false;
-            showRemedies();
-          },
-        });
-        // The shell tells a draft that could not be made itself.
-        draft.addEventListener("click", () => void askAgentToFix(shell, request, { showsOutcome: true }, "draft"));
-        report.addEventListener("click", () => {
-          if (shown !== null) shell.reportBug({ message: shown.message, details: shown.details });
-        });
-        const failure = document.getElementById("ask-agent-failure");
-        const failureDetails = document.getElementById("ask-agent-failure-details");
-        const askLabel = ask.textContent;
-        const show = (outcome) => {
-          shown = outcome.isOpened ? null : outcome.failure;
-          showRemedies();
-          failure.hidden = outcome.isOpened;
-          failureDetails.hidden = outcome.isOpened || outcome.failure.details === null;
-          if (outcome.isOpened) return;
-          failure.textContent = outcome.failure.message;
-          failureDetails.textContent = outcome.failure.details ?? "";
-        };
-        let presses = 0;
-        // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out. An answer
-        // that comes after the ask was settled as not answered (the shell restarted) replaces what is shown, unless
-        // the button was pressed again since.
-        ask.addEventListener("click", async () => {
-          presses += 1;
-          const press = presses;
-          ask.disabled = true;
-          ask.textContent = "Asking an agent\u2026";
-          show({ isOpened: true });
-          const outcome = await askAgentToFix(shell, request, {
-            showsOutcome: true,
-            onLateAnswer: (late) => {
-              if (press === presses) show(late);
-            },
-          });
-          ask.disabled = false;
-          ask.textContent = askLabel;
-          show(outcome);
-        });
-      })
-      .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
-  }
-</script>
-</body></html>
-""".replace("__HEALTH_PATH__", HEALTH_PATH.lstrip("/"))
-    .replace("__POLL_SECONDS__", str(NOT_BUILT_POLL_SECONDS))
-    .replace("__CONTRACT_PATH__", APP_CONTRACT_ROUTE)
-    .replace("__REBUILD_REQUEST__", json.dumps(_REBUILD_REQUEST))
+    '<!doctype html><html><head><meta charset="utf-8"><title>Getting Started</title></head>'
+    "<body><p>The Getting Started page has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
+    "</body></html>"
 )
 
 
@@ -251,8 +138,7 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
     @blueprint.get(TEMPLATES_CATALOG_PATH)
     def templates_catalog() -> ResponseReturnValue:
         """The published template catalog as last fetched (null when none is configured; 503 when none could be loaded)."""
-        # A person's Try again asks for a fresh fetch, past the hold the store keeps after a failed one.
-        reading = catalog.read(is_retry=request.args.get(RETRY_QUERY_PARAMETER) == "1")
+        reading = catalog.read()
         match reading.availability:
             case TemplateCatalogAvailability.DISABLED:
                 return model_response(TemplatesCatalogResponse(catalog=None, is_stale=False))

@@ -248,7 +248,7 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
             case AppLifecycleAction.STOP:
                 shell.lifecycle.stop_app(name)
             case AppLifecycleAction.START:
-                if shell.lifecycle.wake(name) is not ParkedPageKind.STARTING:
+                if shell.lifecycle.wake(name) is ParkedPageKind.FAILED:
                     return detail_response(
                         f"App {name!r} (program {program!r}) could not be started", HTTP_BAD_GATEWAY
                     )

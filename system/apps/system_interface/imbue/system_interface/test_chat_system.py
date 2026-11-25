@@ -26,7 +26,7 @@ from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
@@ -253,7 +253,7 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     role. So every flag the page suggests must be one the app itself passes
     when it creates a chat, and the command must be one the live CLI accepts.
     """
-    argv = list(INTERFACE_NOT_BUILT_REPAIR_ARGV)
+    argv = list(_NOT_BUILT_REPAIR_ARGV)
     assert_mngr_argv_valid(argv)
 
     real = _build_chat_create_command(
@@ -315,6 +315,5 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # plain prose -- an escape dropped from the line above splits it into several
     # words, or leaves the escapes themselves in what the agent is told.
     assert argv[argv.index("--message") + 1] == (
-        "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt.\n\n"
-        "Find out why it failed and fix it, then tell the user what was wrong and what you changed."
+        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
     )

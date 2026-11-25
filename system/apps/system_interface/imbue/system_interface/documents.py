@@ -7,7 +7,7 @@ from typing import Final
 from flask import Response
 
 # Stamped on every document response so a caller can tell the real app from
-# the recovery page served while it is not built, which is otherwise an identical HTTP 200 HTML
+# the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
 # response. The reveal flow's frontend health check reads it.
 FRONTEND_BUILT_HEADER: Final[str] = "X-Frontend-Built"
 
@@ -39,7 +39,7 @@ def html_response(html_content: str, status_code: int = 200) -> Response:
 def document_response(html_content: str, *, is_frontend_built: bool) -> Response:
     """Return a document response, stamped with whether it is the real app.
 
-    Both the app and the recovery page are HTTP 200 HTML, so nothing
+    Both the app and the not-built placeholder are HTTP 200 HTML, so nothing
     downstream can tell them apart from the status line alone. The header says
     which one this is, so a health check does not have to pattern-match markup
     that is free to change.

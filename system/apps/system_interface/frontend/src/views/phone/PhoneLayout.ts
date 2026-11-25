@@ -31,7 +31,7 @@ import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
 import { BootFailureNotice, bootSpinner } from "../FailureLine";
-import { windowPlaceholder } from "../Window";
+import { stoppedPlaceholder, windowPlaceholder } from "../Window";
 import { isAppShareable, MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
@@ -275,16 +275,8 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 oncreate: (created: m.VnodeDOM) => onPagesHostCreated(created.dom as HTMLElement),
                 onbeforeupdate: () => false,
               }),
-              shownWindow !== null && shownApp !== undefined && isAppShownStopped(state, shownApp)
-                ? m(
-                    "div",
-                    { class: "absolute inset-0" },
-                    windowPlaceholder(
-                      "stopped-app",
-                      store.stoppedNotice(shownApp, shownWindow.id),
-                      store.reportBugAction(),
-                    ),
-                  )
+              shownWindow !== null && isAppShownStopped(state, shownApp)
+                ? m("div", { class: "absolute inset-0" }, stoppedPlaceholder(shownApp))
                 : null,
               shownWindow !== null && shownApp === undefined && state.isAppsLoaded
                 ? m(

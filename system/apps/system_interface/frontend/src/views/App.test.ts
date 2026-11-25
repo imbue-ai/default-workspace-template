@@ -23,9 +23,7 @@ import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Pres
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import { FakeTourApi } from "../testing/fakeTour";
 import {
-  appChatLaunchPathRecord,
   appRecord,
-  chatLikeAppRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
@@ -114,7 +112,6 @@ async function mountApp(
     modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
-    openDesktopsRecoveryPage: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
@@ -148,8 +145,6 @@ afterEach(() => {
 describe("the startup read", () => {
   /** A store over a fake shell whose startup read is held open (or refused with ``refusal``), with the App mounted
    *  over it before it answers. */
-  let recoveryPagesOpened = 0;
-
   async function mountBeforeTheRead(refusal: Error | null): Promise<() => void> {
     unmountViews();
     vi.stubGlobal(
@@ -167,9 +162,7 @@ describe("the startup read", () => {
       modes: { isPhone: false, isTouch: false },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
-      openDesktopsRecoveryPage: () => void (recoveryPagesOpened += 1),
     });
-    recoveryPagesOpened = 0;
     const answer = refusal === null ? api.holdReads() : () => undefined;
     api.refusal = refusal;
     void store.start(NO_LINK);
@@ -214,17 +207,6 @@ describe("the startup read", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-boot-failure]")).toBeNull();
     expect(store.getState().activeDesktopId).toBe("home");
-  });
-
-  it("keeps the spinner, with no line, while the page goes to the recovery page for a read the shell refused", async () => {
-    await mountBeforeTheRead(
-      new HttpError(
-        readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
-      ),
-    );
-    expect(recoveryPagesOpened).toBe(1);
-    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
-    expect(document.querySelector("[data-boot-failure]")).toBeNull();
   });
 });
 
@@ -1599,7 +1581,6 @@ describe("the switch to the phone layout", () => {
       modes: { isPhone: true, isTouch: true },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
-      openDesktopsRecoveryPage: () => undefined,
       soloWindowId: null,
       outsideLinks: {
         openInEmbedder: () => undefined,
@@ -1638,7 +1619,6 @@ describe("the switch to the phone layout", () => {
       modes: { isPhone: true, isTouch: true },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
-      openDesktopsRecoveryPage: () => undefined,
       soloWindowId: null,
       outsideLinks: {
         openInEmbedder: () => undefined,
@@ -1666,44 +1646,6 @@ describe("the switch to the phone layout", () => {
     } finally {
       createElement.mockRestore();
     }
-  });
-});
-
-describe("a stopped app's window", () => {
-  it("asks an agent to start the app in the chat about it, beside the window it was pressed in, on the desktop and the phone", async () => {
-    offerApps(api, socket, [
-      chatLikeAppRecord("chat", {
-        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
-      }),
-      appRecord("docs", { is_running: false, program: "" }),
-    ]);
-    m.redraw.sync();
-    const pressAsk = async (placeholder: string): Promise<void> => {
-      const ask = Array.from(document.querySelectorAll<HTMLButtonElement>(`${placeholder} button`)).find(
-        (button) => button.textContent === "Ask an agent to start it",
-      );
-      ask?.click();
-      await settle();
-      m.redraw.sync();
-    };
-    const ask = `launch:home:chat:app-chat:${JSON.stringify({
-      app: "docs",
-      app_display_name: "Docs",
-      message:
-        "/assist This is about the Docs app (`docs`, window `win-1`).\n\n" +
-        "Imbue Studio showed the user this failure: Docs isn't running.\n\n" +
-        "Find out why it stopped and start it again, then tell the user what was wrong.",
-    })}:show:beside:win-1`;
-
-    await pressAsk("[data-stopped-app]");
-    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([ask]);
-
-    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
-    m.redraw.sync();
-    store.showOnPhone({ kind: "window", windowId: "win-1" });
-    m.redraw.sync();
-    await pressAsk("[data-phone-page-host] [data-stopped-app]");
-    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([ask, `${ask}:minimized`]);
   });
 });
 

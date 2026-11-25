@@ -6,9 +6,8 @@
  * store's ``reportBugAction``).
  */
 
-import { agentFixTask } from "@imbue/workspace-ui/src/app_contract";
 import type { Failure } from "@imbue/workspace-ui/src/models/failure";
-import type { AppRecord, LaunchPath } from "./records";
+import type { LaunchPath } from "./records";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 
 /** Why the only desktop cannot be deleted, on its disabled Delete. */
@@ -27,8 +26,6 @@ export interface FailureNotice {
    *  app takes one, or this is a refused ask's own failure): the surface offers "Report a bug" after the buttons
    *  where it can. */
   readonly isBugReportOffered: boolean;
-  /** An app whose not running is all the notice says: a toast of it goes once the app list shows the app running. */
-  readonly untilRunning?: string;
 }
 
 const REFUSAL_KIND_VALUES = [
@@ -37,10 +34,6 @@ const REFUSAL_KIND_VALUES = [
   "window_gone",
   "out_of_space",
   "not_saved",
-  "app_stopped",
-  "app_could_not_start",
-  "app_start_budget_spent",
-  "app_still_starting",
   "launched_not_opened_out_of_space",
   "launched_not_opened",
   "desktop_gone",
@@ -53,37 +46,7 @@ export type RefusalKind = (typeof REFUSAL_KIND_VALUES)[number];
 
 const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>(REFUSAL_KIND_VALUES);
 
-/** What a window, a shortcut, or a launcher row says of an app that is not running and that the workspace does not
- *  start on a request: one it does not run itself, or one it treats as part of how it runs. */
-export function stoppedSentence(app: AppRecord): string {
-  return app.program === "" ? `${app.display_name} isn't running.` : `${app.display_name} is not running right now.`;
-}
-
-/** What an agent asked to start a stopped app is told. */
-export function stoppedRequest(app: AppRecord): string {
-  return agentFixTask({
-    whatFailed: stoppedSentence(app),
-    details: null,
-    instruction: "Find out why it stopped and start it again, then tell the user what was wrong.",
-  });
-}
-
-const COULD_NOT_START_INSTRUCTION =
-  "Find out why and get it running again, then tell the user what was wrong and what you changed.";
-
-/** What an agent asked to look at an app that could not start is told: where its log is, and what to do (the
- *  could-not-start page asks the same, ``port_parking.could_not_start_request``). */
-export function couldNotStartRequest(app: AppRecord): string {
-  const logHint = `Its program's log may say why (supervisorctl tail ${app.program} stderr).`;
-  return agentFixTask({
-    whatFailed: `${app.display_name} couldn't start.`,
-    details: null,
-    instruction: `${logHint} ${COULD_NOT_START_INSTRUCTION}`,
-  });
-}
-
-/** What an agent asked to free up space is told to do about a failure a full disk caused (the shell's recovery
- *  page asks the same, ``recovery_page.FREE_SPACE_INSTRUCTION``). */
+/** What an agent asked to free up space is told to do about a failure a full disk caused. */
 export const FREE_SPACE_INSTRUCTION =
   "Free up disk space in this workspace, then tell the user what was taking up the space and what you removed.";
 

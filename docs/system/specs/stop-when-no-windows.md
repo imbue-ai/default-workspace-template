@@ -139,11 +139,11 @@ And a bind that fails with address-in-use means something is listening on the ap
 
 ### 5.3 The loading page
 
-The parker answers `503 Service Unavailable` with `Retry-After` set to 2 seconds (15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
+The parker answers `503 Service Unavailable` with `Retry-After` set to the page's own refresh (2 seconds; 15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
 A fetch from a page gets the same 503 and retries on its own terms.
 Nothing here depends on the shell's liveness sweep: the page reloads into the app the moment the app binds.
 
-When the app fails to start (section 5.5), the page instead says "<display name> couldn't start." (and, when the wake budget refused the wake, that it failed to start several times in the last few minutes and to try again in a few minutes), with a Try again button that reloads (left out when the wake budget refused the wake, since it would refuse the next one too), an "Ask an agent to look at it" button (shown once the shell that frames the page has greeted it, which it asks with `shell:ask-agent`, saying what the page says and where the app's log is, so the shell sends the ask to the chat about the app whose window frames the page; pressed, it reads "Asking an agent…" and takes no second press until the shell answers with `shell:ask-agent-result` for that request, or a restarted shell (a handshake with another `shellId`) greets the page, which reads as not answered until the old shell's answer still comes, and a failed ask is told under it with its details at the top of "See details"; one that owes help offers "Draft it in a chat", which sends the same ask with `"delivery": "draft"` so it waits unsent in a chat's message box, and a "Report a bug" that sends `shell:report-bug` with its sentence and details while the shell's latest handshake says `canReportBug`), and behind a collapsed "See details" the last few KB of the program's stderr log in a code block, as supervisord's `tailProcessStderrLog` answers it (HTML-escaped; when it cannot be read or is empty, "See details" is left out until a failed ask has details to put there). It does not refresh itself: each reload is a new request and so a new wake, which spends the budget, so the next wake attempt is the user's Try again.
+When the app fails to start (section 5.5), the page instead says the app could not start, names `supervisorctl tail <program> stderr` as where to look, and refreshes every 15 seconds; each refresh is a new request, so the next wake attempt is the user's reload.
 
 ### 5.4 The lifecycle manager
 
@@ -176,7 +176,7 @@ The budget is per shell process and resets with it.
 A GET launch path needs no special handling: the window's frame requests the page, the parker wakes the app, and the loading page reloads into it.
 A POST launch path is asked for its page by the shell itself (`shell/launches.py`), and a POST to the parker would be answered 503.
 So before posting a launch to a stoppable app that is not running, the shell wakes it and waits for the app's port to accept a connection (polled, up to 20 seconds; `startsecs` is supervisord's notion of "started" and says nothing about when the app binds), then posts.
-A wake that does not bring the app up fails the launch with a `502` whose `kind` says why, in the could-not-start page's words: `app_could_not_start` (supervisord could not start it, or it failed and was parked again), `app_start_budget_spent` (the wake budget refused it), or `app_still_starting` (it did not answer within the wait).
+An app that does not come up in time fails the launch with the existing `502`.
 
 ### 5.7 The share gateway
 

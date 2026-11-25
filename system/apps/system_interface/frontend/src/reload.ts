@@ -10,18 +10,6 @@
  * transitively reloading every child chat iframe.
  */
 
-import { getBasePath } from "@imbue/workspace-ui/src/base-path";
-
-/** The shell's recovery page for desktops that couldn't be loaded (``DESKTOPS_RECOVERY_PATH`` in the backend's
- *  ``recovery_page.py``). */
-export const DESKTOPS_RECOVERY_PATH = "/recovery/desktops";
-
-/** Send this page to the recovery page for desktops that couldn't be loaded, in its place in the history (Back does
- *  not return to the failed load), keeping its query (a pulled-out window's own page comes back as itself). */
-export function openDesktopsRecoveryPage(): void {
-  window.location.replace(`${getBasePath()}${DESKTOPS_RECOVERY_PATH}${window.location.search}`);
-}
-
 /** Reload the top-level page that hosts the system interface.
  *
  * In the real deployment the shell IS the top-level page, so `window.top` and

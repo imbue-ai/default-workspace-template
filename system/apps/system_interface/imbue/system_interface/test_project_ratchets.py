@@ -50,7 +50,7 @@ _MNGR_SUBPROCESS_RULE = RatchetRuleInfo(
 )
 
 # An argv literal that starts with the mngr binary: ``["mngr", ...`` or ``("mngr", ...``. A prose
-# mention (the recovery page's repair suggestion) is a string, not an argv, so it does
+# mention (the not-built placeholder's repair suggestion) is a string, not an argv, so it does
 # not match.
 _MNGR_ARGV_PATTERN = RegexPattern(r"""[\[(]\s*["']mngr["']\s*,""", multiline=False)
 

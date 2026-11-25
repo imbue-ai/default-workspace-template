@@ -263,7 +263,6 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
-    openDesktopsRecoveryPage: () => undefined,
     reportBug: (failure) => void bugReportsOpened.push(failure),
   });
   bugReportsOpened = [];

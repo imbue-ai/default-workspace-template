@@ -13,10 +13,6 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
-import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
 import { TemplateDetail } from "./TemplateDetail";
@@ -40,7 +36,7 @@ const TEMPLATES_TITLE = "Start from a template";
 const SEARCH_TEMPLATES_TITLE = "Templates";
 const SEE_MORE_LABEL = "See more";
 const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
-const TEMPLATES_FAILED_MESSAGE = fallbackSentence("Templates couldn't be loaded");
+const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";
 const START_GLYPH_SIZE = 24;
@@ -50,11 +46,6 @@ export interface GettingStartedPageAttrs {
   readonly catalog: TemplateCatalogState;
   /** Start a chat whose first message is ``text``. */
   readonly onStartWithText: (text: string) => void;
-  /** Fetch the template catalog again, after it could not be loaded. */
-  readonly onRetryTemplates: () => void;
-  /** The page's connection to the shell that frames it, through which "Ask an agent to fix this" asks an agent and
-   *  "Report a bug" asks for the bug report. */
-  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
 }
 
 export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
@@ -159,29 +150,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  /** The failure line, with the next steps in it: Try again (a fresh fetch), then an agent, or Report a bug where
-   *  none can be asked or the ask was refused (``FailureRemedies``), and the reason under it behind "See details". */
-  function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
-    const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
-      m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
-    return m("div", { class: "getting-started-templates-failed flex flex-wrap items-center gap-x-1 py-1" }, [
-      m("p", { class: "getting-started-templates-status text-(length:--font-size-row) text-faint" }, [
-        TEMPLATES_FAILED_MESSAGE,
-      ]),
-      action("Try again", "getting-started-templates-retry", attrs.onRetryTemplates),
-      m(FailureRemedies, {
-        connection: attrs.connection,
-        failure: { message: TEMPLATES_FAILED_MESSAGE, details, isHelpOwed: true },
-        variant: "ghost",
-        sm: true,
-        extra: "getting-started-templates-remedy",
-      }),
-      m("div", { class: "basis-full" }, m(SeeDetails, { details })),
-    ]);
-  }
-
-  function templatesSection(attrs: GettingStartedPageAttrs): m.Vnode | null {
-    const { catalog } = attrs;
+  function templatesSection(catalog: TemplateCatalogState): m.Vnode | null {
     if (catalog.kind === "disabled") return null;
     let body: m.Children;
     switch (catalog.kind) {
@@ -189,7 +158,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         body = templatesStatus(TEMPLATES_LOADING_MESSAGE);
         break;
       case "failed":
-        body = templatesFailure(attrs, catalog.details);
+        body = templatesStatus(TEMPLATES_FAILED_MESSAGE);
         break;
       case "loaded":
         body = m(TemplateShelves, {
@@ -297,7 +266,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
                 { class: "mt-6" },
                 query.trim() !== ""
                   ? searchResults(attrs)
-                  : [pagedStartSomethingSection(attrs), templatesSection(attrs)],
+                  : [pagedStartSomethingSection(attrs), templatesSection(attrs.catalog)],
               ),
             ];
       return m(

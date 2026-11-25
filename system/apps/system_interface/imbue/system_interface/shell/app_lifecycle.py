@@ -24,15 +24,12 @@ from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
-from enum import auto
 from typing import Final
-from typing import assert_never
 
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -54,11 +51,9 @@ from imbue.system_interface.shell.liveness import fetch_supervisor_programs
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
-from imbue.system_interface.shell.liveness import tail_supervisor_program_stderr
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
-from imbue.system_interface.shell.port_parking import STDERR_TAIL_BYTES
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parking_target_of
 from imbue.system_interface.shell.share_grants import GrantedAppsReader
@@ -78,8 +73,6 @@ _WAKE_WAIT_CONNECT_TIMEOUT_SECONDS: Final[float] = 0.5
 
 ProgramStatesReader = Callable[[], dict[str, SupervisorProgramState] | None]
 ProgramAction = Callable[[str], None]
-# The end of a program's stderr log, or None when supervisord cannot say.
-StderrTailReader = Callable[[str], str | None]
 # How many windows across every desktop show each app, by app name; an app with none may be absent.
 WindowCountsReader = Callable[[], Mapping[str, int]]
 
@@ -96,10 +89,6 @@ def stop_supervisor_program_by_name(program: str) -> None:
     stop_supervisor_program(program, supervisor_socket_path())
 
 
-def read_supervisor_stderr_tail(program: str) -> str | None:
-    return tail_supervisor_program_stderr(program, STDERR_TAIL_BYTES, supervisor_socket_path())
-
-
 @pure
 def recent_wake_times(wake_times: Sequence[float], now: float) -> list[float]:
     """The wake times still inside the budget window at ``now``, in their order."""
@@ -109,16 +98,6 @@ def recent_wake_times(wake_times: Sequence[float], now: float) -> list[float]:
 @pure
 def is_wake_budget_spent(wake_times: Sequence[float], now: float) -> bool:
     return len(recent_wake_times(wake_times, now)) >= WAKE_BUDGET_COUNT
-
-
-class WakeOutcome(LowerCaseStrEnum):
-    """How a wake a POST launch waited on ended: the app answers, could not start, was not started because its wake
-    budget is spent, or had not answered when the wait ended."""
-
-    UP = auto()
-    FAILED = auto()
-    BUDGET_SPENT = auto()
-    STILL_STARTING = auto()
 
 
 class IdleMark(FrozenModel):
@@ -169,11 +148,6 @@ class AppLifecycleManager(MutableModel):
     )
     start_program: ProgramAction = Field(default=start_supervisor_program_by_name, frozen=True)
     stop_program: ProgramAction = Field(default=stop_supervisor_program_by_name, frozen=True)
-    read_stderr_tail: StderrTailReader = Field(
-        default=read_supervisor_stderr_tail,
-        frozen=True,
-        description="The end of a program's stderr log, which the could-not-start page shows; None when unreadable",
-    )
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="A monotonic clock")
 
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
@@ -247,8 +221,8 @@ class AppLifecycleManager(MutableModel):
 
     def wake(self, app: str) -> ParkedPageKind:
         """Release the app's parked port (if any) and ask supervisord to start its program, within the wake budget.
-        Answers STARTING when the program was asked to start, BUDGET_SPENT when the budget refused it, and FAILED when
-        supervisord could not start it. Raises AppLifecycleRefusedError for an app the workspace cannot start."""
+        Answers STARTING when the program was asked to start, FAILED when the budget refused it or supervisord could
+        not start it. Raises AppLifecycleRefusedError for an app the workspace cannot start."""
         program = self._stoppable_program_or_refuse(app, "started")
         now = self.clock()
         with self._lock:
@@ -261,7 +235,7 @@ class AppLifecycleManager(MutableModel):
                 )
                 self._wake_times_by_app[app] = recent
                 self._failed_apps.add(app)
-                kind = ParkedPageKind.BUDGET_SPENT
+                kind = ParkedPageKind.FAILED
             else:
                 self._wake_times_by_app[app] = recent + [now]
                 self._apps_awaiting_wake_outcome.add(app)
@@ -286,12 +260,12 @@ class AppLifecycleManager(MutableModel):
 
     def _wake_from_parked_port(self, app: str) -> ParkedPageKind:
         """The parker's first connection: wake the app, and answer the failure page when its last wake ended in
-        FATAL or was refused (spec section 5.5), so the page offers a Try again and names the program's log; the wake
-        itself still happens within the budget, and that Try again is the next attempt."""
+        FATAL or was refused (spec section 5.5), so the page names the program's log and reloads slowly; the wake
+        itself still happens within the budget, and that reload is the next attempt."""
         with self._lock:
             was_failed = app in self._failed_apps
         kind = self.wake(app)
-        return ParkedPageKind.FAILED if was_failed and kind is ParkedPageKind.STARTING else kind
+        return ParkedPageKind.FAILED if was_failed else kind
 
     def stop_app(self, app: str) -> None:
         """Ask supervisord to stop the app's program; the next sweep parks its port. Raises
@@ -312,35 +286,28 @@ class AppLifecycleManager(MutableModel):
             raise AppLifecycleRefusedError(f"App {app!r} cannot be {verb} through the workspace")
         return program
 
-    def wake_and_wait(self, entry: AppInventoryEntry, timeout_seconds: float = WAKE_WAIT_SECONDS) -> WakeOutcome:
-        """Wake a stoppable app that is not running and wait until its port accepts a connection. UP when it does
-        within the timeout; FAILED when supervisord could not start it or the sweep parks the port again meanwhile
-        (the wake ended in FATAL); BUDGET_SPENT when the wake budget refused the wake; STILL_STARTING when the
-        timeout passes first, or the manager is stopped. An app that is running, or that cannot be parked, is
-        answered UP at once."""
+    def wake_and_wait(self, entry: AppInventoryEntry, timeout_seconds: float = WAKE_WAIT_SECONDS) -> bool:
+        """Wake a stoppable app that is not running and wait until its port accepts a connection; True when it does
+        within the timeout, False when it does not, when the sweep parks the port again meanwhile (the wake ended in
+        FATAL), or when the manager is stopped. An app that is running, or that cannot be parked, is answered True
+        at once."""
         target = parking_target_of(str(entry.row.url))
         if entry.is_running or target is None:
-            return WakeOutcome.UP
+            return True
         app = str(entry.row.name)
-        match self.wake(app):
-            case ParkedPageKind.FAILED:
-                return WakeOutcome.FAILED
-            case ParkedPageKind.BUDGET_SPENT:
-                return WakeOutcome.BUDGET_SPENT
-            case ParkedPageKind.STARTING:
-                pass
-            case _ as unreachable:
-                assert_never(unreachable)
+        kind = self.wake(app)
+        if kind is not ParkedPageKind.STARTING:
+            return False
         deadline = self.clock() + timeout_seconds
         while self.clock() < deadline:
             # A connect on a parked port is itself a wake, so a port parked again is checked for before every poll.
             if self.is_app_parked(app):
-                return WakeOutcome.FAILED
+                return False
             if _is_accepting(target):
-                return WakeOutcome.UP
+                return True
             if self._sweep_stop.wait(_WAKE_WAIT_POLL_SECONDS):
-                return WakeOutcome.STILL_STARTING
-        return WakeOutcome.STILL_STARTING
+                return False
+        return False
 
     # The sweep
 
@@ -555,12 +522,7 @@ class AppLifecycleManager(MutableModel):
             app=app,
             target=target,
             on_first_connection=lambda: self._wake_from_parked_port(app),
-            page_for=lambda kind: parked_page_html(
-                kind,
-                display_name,
-                program,
-                None if kind is ParkedPageKind.STARTING else self.read_stderr_tail(program),
-            ),
+            page_for=lambda kind: parked_page_html(kind, display_name, program),
         )
         # The parker is recorded under the lock its first connection's wake pops it with, so a connection that
         # arrives the moment the port binds cannot find no parker and leave a woken one on the books.
