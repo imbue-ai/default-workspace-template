@@ -182,6 +182,11 @@ def test_writing_over_a_directory_fails_and_leaves_no_temp_file(tmp_path: Path) 
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["a-file", "taken"]
 
 
+def test_writing_to_the_root_which_has_no_name_fails_as_any_directory_does() -> None:
+    with pytest.raises(WorkspaceFileError, match="Is a directory"):
+        write_workspace_file(Path("/"), b"x", 0o600)
+
+
 def test_a_line_is_one_event_whatever_reads_it_arrived_in() -> None:
     splitter = _LineSplitter("stdout")
     assert splitter.feed(b"one\ntwo") == [{"type": "stdout", "data": "one\n"}]

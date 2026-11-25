@@ -13,6 +13,7 @@ could reach any file that way, so a path rule here would protect nothing.
 
 import base64
 import codecs
+import errno
 import math
 import os
 import re
@@ -194,6 +195,9 @@ def read_workspace_file(path: Path) -> bytes | None:
 
 def write_workspace_file(path: Path, content: bytes, mode: int) -> None:
     """Replace ``path`` through a same-directory temp file and a rename, creating its directory. Raises WorkspaceFileError."""
+    # The root has no name to put a temp file beside, and is a directory like any other.
+    if not path.name:
+        raise WorkspaceFileError(os.strerror(errno.EISDIR))
     temp_path = path.with_name(f".{path.name}.{uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
