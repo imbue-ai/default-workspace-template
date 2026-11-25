@@ -4,12 +4,12 @@
  * `pagehide`, whether the document has focus on every window `focus` and `blur`, that a person
  * pressed a key or the pointer in the page (at most once per `INPUT_REPORT_INTERVAL_MS`, as the
  * page's input report to the shell), and a heartbeat of all of it every thirty seconds, so a
- * page that vanished without its `pagehide` stops counting on its own. Every report names this page load's instance id, so two pages of
- * the chat in one client never overwrite each other's report, and its place in the order this
- * page sent them, since the chat app can receive two reports sent a moment apart in either
- * order. Only the chat's own page reports, never a subagent view. The OOM prioritizer reads
- * the aggregate and counts the input as use of the chat, and the notify path asks which pages
- * are watching (shown and focused).
+ * page that vanished without its `pagehide` stops counting on its own. Every report names this
+ * page load's instance id, so two pages of the chat in one client never overwrite each other's
+ * report, and its place in the order this page sent them, since the chat app can receive two
+ * reports sent a moment apart in either order. Only the chat's own page reports, never a
+ * subagent view. The OOM prioritizer reads the aggregate and counts the input as use of the
+ * chat, and the notify path asks which pages are watching (shown and focused).
  */
 
 import { INPUT_REPORT_INTERVAL_MS } from "@imbue/workspace-ui/src/app_contract";

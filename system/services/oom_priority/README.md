@@ -319,9 +319,8 @@ Re-tagging is event-driven plus a slow sweep (`SWEEP_INTERVAL_SECONDS`, 60s), an
 every pass runs on the prioritizer's one background thread. The events -- a presence
 report (`POST /api/chats/<chat_id>/presence`) that changes whether any page has the
 chat open or showing or carries input (a heartbeat that does none of these asks for
-nothing), each
-message sent through the chat app, and each lifecycle change from the observe
-stream -- cover everything that changes a chat's engagement. Each only asks that
+nothing), each message sent through the chat app, and each lifecycle change from the
+observe stream -- cover everything that changes a chat's engagement. Each only asks that
 thread for a pass, so no request waits on one; passes run one at a time, at most one
 every `MIN_PASS_INTERVAL_SECONDS` (2s), and each reads the pid registry once for
 every chat (`live_pids_by_agent_id`) and `/proc` once per registered process. The
