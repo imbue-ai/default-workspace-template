@@ -1,0 +1,3 @@
+A stopped app says it isn't running and offers an agent to start it, or to look at why it couldn't (see `system/apps/system_interface/changelog/gabriel-err-copy-w2b-stopped-apps.md`).
+
+- The desktop-interface contract describes the `kind` a launch into an app that is not running, or that a wake did not bring up, is refused with (`app_stopped`, `app_could_not_start`, `app_start_budget_spent`, `app_still_starting`), and what a preview's launch of a stopped app gets; the stop-when-no-windows spec describes the reworded parked pages, the could-not-start page's Try again, its agent and its error-log tail among them.

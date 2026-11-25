@@ -29,6 +29,7 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.errors import LaunchRefusedError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchUnreachableError
 
 # The envelope's field names (the manifest library reserves them for the shell).
 CLIENT_ID_FIELD: Final[str] = "client_id"
@@ -68,9 +69,13 @@ LaunchPoster = Callable[[LaunchPost], LaunchPostOutcome]
 
 
 def post_launch(post: LaunchPost) -> LaunchPostOutcome:
-    """Make one POST launch over loopback; an app that cannot be reached or times out raises LaunchUnavailableError."""
+    """Make one POST launch over loopback; an app that cannot be reached or times out raises LaunchUnavailableError,
+    LaunchUnreachableError when nothing listens at its address."""
     try:
         response = httpx.post(post.url, json=post.body, timeout=LAUNCH_TIMEOUT_SECONDS)
+    except httpx.ConnectError as e:
+        logger.warning("Could not connect to {} at {} for a launch: {}", post.app, post.url, e)
+        raise LaunchUnreachableError(f"{post.app} could not be reached for the launch: {e}") from e
     except httpx.HTTPError as e:
         logger.warning("Could not post a launch to {} at {}: {}", post.app, post.url, e)
         raise LaunchUnavailableError(f"{post.app} could not be reached for the launch: {e}") from e

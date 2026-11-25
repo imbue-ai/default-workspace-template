@@ -18,6 +18,7 @@ from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
+from imbue.system_interface.shell.liveness import tail_supervisor_program_stderr
 from imbue.system_interface.testing import FakeSupervisorServer
 
 
@@ -44,6 +45,29 @@ def test_fetch_supervisor_programs_reads_each_programs_state_and_pid(fake_superv
         "files": SupervisorProgramState(statename="STARTING", pid=4321),
         "browser": SupervisorProgramState(statename="STOPPED", pid=0),
     }
+
+
+def test_tail_supervisor_program_stderr_reads_the_end_of_the_programs_stderr_log(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    fake_supervisor.statename_by_program["files"] = "FATAL"
+    fake_supervisor.stderr_by_program["files"] = "early line\n" * 50 + "ModuleNotFoundError: files\n"
+    fake_supervisor.statename_by_program["quiet"] = "FATAL"
+
+    tail = tail_supervisor_program_stderr("files", 40, fake_supervisor.socket_path)
+    assert tail is not None and len(tail) == 40
+    assert tail.endswith("ModuleNotFoundError: files\n")
+    # A log shorter than asked for comes whole, an empty one empty, and an unknown program or no supervisord not at all.
+    assert (
+        tail_supervisor_program_stderr("files", 4096, fake_supervisor.socket_path)
+        == (fake_supervisor.stderr_by_program["files"])
+    )
+    assert tail_supervisor_program_stderr("quiet", 4096, fake_supervisor.socket_path) == ""
+    assert tail_supervisor_program_stderr("absent", 4096, fake_supervisor.socket_path) is None
+
+
+def test_tail_supervisor_program_stderr_answers_none_without_a_socket(tmp_path: Path) -> None:
+    assert tail_supervisor_program_stderr("files", 4096, tmp_path / "absent.sock") is None
 
 
 def test_probe_tcp_url_reports_a_listening_backend(listening_port: int) -> None:

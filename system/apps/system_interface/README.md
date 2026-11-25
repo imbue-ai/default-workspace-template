@@ -648,13 +648,15 @@ the primary free-text row instead, as `shell:start-with-text` does; the `draft`
 delivery leaves the message unsent in a chat's message box. The shell's own
 "Ask an agent to ..." buttons follow the same rule (`askAgentAbout`), each with
 a task `agentFixTask` words (what the person was shown, the details, and what
-to do): one about an app (a failure of the app's own, such as a launch it
-answered with an error) goes to the chat about that app, wherever the `show`
-target puts it; one about no app (the update notice's "Ask an agent to finish
-it") runs the primary free-text row, and so does a full disk's "Ask an agent to
-free up space" whatever it is about, since a new chat needs disk. Where the app
-an ask would go through is the app the ask is about (the chat app), no agent
-can be asked, and "Report a bug" is offered in its place. The shell names no app in any of this.
+to do): one about an app (a stopped app's "Ask an agent to start it", an app
+that couldn't start's "Ask an agent to look at it") goes to the chat about that
+app, beside the app's window when it is pressed in one and wherever the `show`
+target puts it when it is pressed in a toast; one about no app (the update
+notice's "Ask an agent to finish it") runs the primary free-text row, and so
+does a full disk's "Ask an agent to free up space" whatever it is about, since
+a new chat needs disk. Where the app an ask would go through is the app the ask
+is about (the chat app, stopped or unable to start), no agent can be asked, and
+"Report a bug" is offered in its place. The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a
@@ -759,15 +761,15 @@ answered with an error, a quit, a message it refused), else in the main chat,
 with the failure's sentence and details as `agentFixTask` words them; a full
 disk offers "Ask an agent to free up space" instead, whose task says so. No
 help is owed where the shell recovers by itself (a gone window or desktop,
-which it reads again), for a deliberate rule, or for a request nothing
-answered. "Report a bug" stands in for the agent only where
+which it reads again), for a deliberate rule, for an app still starting, or for
+a request nothing answered. "Report a bug" stands in for the agent only where
 none can be asked: the ask would go through what failed (a failure of the app
 agents are asked through, Chat on a stock workspace), or no app that takes one
 is known (the workspace has none, or the app list has not loaded). It is
 offered whenever the Imbue Studio chrome says it opens one, decided as the
 toast draws, and the report it opens carries the toast's sentence and details
 (`minds:open-help {errorDetails}`); a failure told in place (a dialog's line,
-the launcher, the backdrop, a gone app's window) does the same, and so does a
+the launcher, the backdrop, a stopped window) does the same, and so does a
 page's `shell:report-bug` with the failure the page sent. Only built-in apps
 (`system = true` in `app.toml`) get it: a user's own app's page is told
 `canReportBug: false` and its `shell:report-bug` is dropped, and a note about a

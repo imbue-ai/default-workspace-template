@@ -1175,6 +1175,57 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
 
 
 @pytest.mark.timeout(90, func_only=False)
+def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to_start_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
+    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the launch
+    path about an app, naming the stopped app, the note staying up."""
+    ghost_row = registry_row_toml(
+        "ghost",
+        f"http://127.0.0.1:{find_free_port()}",
+        display_name="Ghost",
+        default_shortcuts=[("new", "new")],
+        launch_paths=(("new", "New ghost", "/new"),),
+        launch_methods={"new": "POST"},
+    )
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), extra_rows=(ghost_row,)) as server:
+        _land(page, server)
+        windows_before = [window["id"] for window in _windows(server.base_url)]
+
+        page.locator('[data-shortcut="ghost:new"]').dblclick()
+
+        toast = page.locator("[data-toast]")
+        expect(toast).to_contain_text("Ghost isn't running.", timeout=10000)
+        expect(toast).not_to_contain_text("couldn't open that")
+        ask = toast.get_by_role("button", name="Ask an agent to start it")
+        expect(ask).to_be_visible()
+        ask.click()
+        wait_for(
+            lambda: len(_posted_launches(server.pinned_url)) > 0,
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the request to start Ghost never reached the agent's app",
+        )
+        (asked,) = _posted_launches(server.pinned_url)
+        assert asked["path"] == f"/{_PINNED_APP_CHAT_LAUNCH_ID}"
+        assert asked["body"] == {
+            _PINNED_APP_PARAM: "ghost",
+            _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
+            _PINNED_TEXT_PARAM: (
+                "/assist This is about the Ghost app (`ghost`).\n\n"
+                "Imbue Studio showed the user this failure: Ghost isn't running.\n\n"
+                "Find out why it stopped and start it again, then tell the user what was wrong."
+            ),
+            "client_id": _client_id(page),
+            "desktop_id": _HOME_DESKTOP_ID,
+        }
+        # Handing the failure to an agent leaves the note up.
+        expect(toast).to_contain_text("Ghost isn't running.")
+        assert [window["id"] for window in _windows(server.base_url)] == windows_before
+
+
+@pytest.mark.timeout(90, func_only=False)
 def test_a_send_the_app_took_shows_its_page_once_though_the_window_s_place_could_not_be_saved(
     tmp_path: Path, page: Page
 ) -> None:

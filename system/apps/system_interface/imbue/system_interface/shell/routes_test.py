@@ -33,6 +33,7 @@ from imbue.system_interface.shell.errors import APP_UNAVAILABLE_SENTENCE
 from imbue.system_interface.shell.errors import DESKTOP_GONE_SENTENCE
 from imbue.system_interface.shell.errors import LAST_DESKTOP_SENTENCE
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchUnreachableError
 from imbue.system_interface.shell.errors import WINDOW_GONE_SENTENCE
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
@@ -3044,7 +3045,12 @@ class _RecordingLaunchPoster:
         return outcome
 
 
-def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: _RecordingLaunchPoster) -> Flask:
+def _launching_shell(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    poster: _RecordingLaunchPoster,
+    prober: FakeLivenessProber | None = None,
+) -> Flask:
     """The shell over the two-app registry plus a pinned ``buddy`` app declaring a POST launch path ``new`` at
     ``/api/intake`` with a preset, a declared param, and a text param, the way the chat's manifest does."""
     registry_path = write_two_app_registry(
@@ -3061,7 +3067,9 @@ def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: 
             launch_presets={"new": {"target": "new_chat"}},
         ),
     )
-    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster, launch_poster=poster)
+    return shell_application(
+        tmp_path, build_inventory(registry_path, broadcaster, prober=prober), broadcaster, launch_poster=poster
+    )
 
 
 def _launch(client: FlaskClient, body: dict[str, Any]) -> Any:
@@ -3398,6 +3406,28 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
         assert no_page.status_code == 502
         assert set(no_page.get_json()) == {"detail"} and no_page.get_json()["detail"].startswith(expected)
     # Only the pinned window stands: nothing opened for any of them.
+    assert len(_desktop_windows(client)) == 1
+
+
+def test_a_post_launch_to_an_app_that_turns_out_to_be_stopped_answers_its_kind(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Nothing listens at the app's address and the shell then reads it as stopped: the answer names the app as
+    stopped, so the desktop words it as the app's stopped window does."""
+    prober = FakeLivenessProber()
+    poster = _RecordingLaunchPoster([LaunchUnreachableError("buddy could not be reached for the launch: refused")])
+    app = _launching_shell(tmp_path, broadcaster, poster, prober)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    prober.is_running_by_name["buddy"] = False
+
+    stopped = _launch(
+        client, {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}}
+    )
+
+    assert stopped.status_code == 502
+    assert stopped.get_json()["kind"] == "app_stopped"
+    assert stopped.get_json()["user_facing_message"] == "Buddy isn't running right now, so it couldn't open that."
     assert len(_desktop_windows(client)) == 1
 
 

@@ -229,7 +229,10 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           hasShare: attrs.isAppShareOffered && isAppSharedFromTitleBar(app),
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
-                          isStopped: isAppShownStopped(state, app),
+                          stopped:
+                            app !== undefined && isAppShownStopped(state, app)
+                              ? store.stoppedNotice(app, window.id)
+                              : null,
                           onReportBug: store.reportBugAction(),
                           gone:
                             app === undefined && state.isAppsLoaded
