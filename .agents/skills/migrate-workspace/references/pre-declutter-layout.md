@@ -183,7 +183,9 @@ often assumes the old substrate.
 
 A migrated skill or doc that names a left-hand entry will send an agent looking
 for something that does not exist. `migrate_workspace.py audit-scan
---kind retired-skill` finds these; this table is the replacement.
+--kind retired-skill` finds these; this table is the replacement. The worker
+references on the right are files of the `harden-worker` skill, under
+`.agents/skills/harden-worker/references/`.
 
 | Old | New | Note |
 |---|---|---|

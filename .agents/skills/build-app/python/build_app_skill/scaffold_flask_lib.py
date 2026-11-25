@@ -171,8 +171,7 @@ def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
 def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
     """The drop-in ``name``'s program belongs in: ``<supervisord.conf>.d/<name>.conf``.
 
-    One program per file, named after it, is what the teardown in
-    ``references/cleanup.md`` deletes and what
+    One program per file, named after it, is what removing an app deletes and what
     ``system/test_supervisord_layout.py`` pins.
     """
     return _supervisord_dropin_dir(supervisord_conf) / f"{name}.conf"
@@ -297,7 +296,7 @@ dev = [
 # rather than the workspace's root configuration.
 [tool.pytest.ini_options]
 testpaths = ["."]
-# The test gate selects by these marks (AGENTS.md, "Manual verification and testing").
+# The test gate selects by these marks (.agents/shared/references/web-frontend-testing.md).
 markers = [
     "browser: drives a browser",
     "frontend: reads the app's frontend source",
@@ -1061,7 +1060,7 @@ def main() -> None:
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
+        f".agents/shared/references/apps/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

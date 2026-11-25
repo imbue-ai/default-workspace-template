@@ -161,7 +161,7 @@ Paths are in dwt unless marked (mngr).
   - `connect-external-service`: the secret-card procedure is stated three times across SKILL.md, `direct-api.md` and `mcp.md`; keep one. `latchkey.md` hard-codes a list of services that `latchkey services list` already gives.
 - **`harden-worker` moves** from `.agents/shared/worker/` to `.agents/skills/harden-worker/`, with its `references/`.
   - Its description becomes one line saying it is not for a chat to invoke.
-  - `heal-creation`, `update-creation`, `crystallize-creation`: the task file says to invoke the skill, with the path as the fallback.
+  - `heal-creation`, `update-creation`, `crystallize-creation`: the task file says to invoke the skill, with no fallback path.
   - `system/libs/app_manifest/src/app_manifest/scope.py`, its tests and README: the `type-*.md` convention paths.
   - `.mngr/settings.toml` comment and `system/test_mngr_template_stacking.py`: the worker is a tracked skill, still never an installed copy.
   - Every other mention: `update-self`, `build-app`, `migrate-workspace`, `AGENTS.md`, `docs/system/workspace-internals.md`, `system/services/host_backup/README.md`.

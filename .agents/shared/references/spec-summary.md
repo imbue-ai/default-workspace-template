@@ -5,8 +5,7 @@ how a skill's steps are scripted and how its Python is packaged and validated.
 How to write the skill itself (SKILL.md size and order, references,
 descriptions, version-bound text, paths) is in
 `docs/system/skill_authoring_guide.md`; read it before writing or restructuring
-a skill. `.agents/shared/references/user-facing-language.md` stays the authority
-for words the user reads.
+a skill.
 
 ## Contents
 
@@ -223,8 +222,8 @@ with what to fix. It checks:
 
 - **Frontmatter**: the name rules and directory match, and the description's
   length.
-- **The guide's measurable rules**: `size`, `reachability`, `depth`, `paths`
-  and `contents`. A failure states the goal; change the skill to meet it.
+- **The guide's measurable rules**: `size`, `reachability`, `depth`, `paths`,
+  `contents` and `boundary`. A failure states the goal; change the skill to meet it.
 - **Exemptions**: a skill may carry one in its frontmatter for checks it fails.
   `--no-exemptions` refuses any: a new skill passes every check. `--edited`
   refuses a `predates-checks` one, so an edit to a skill that has carried one

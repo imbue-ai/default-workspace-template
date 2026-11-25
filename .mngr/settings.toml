@@ -365,6 +365,9 @@ model_reasoning_effort = "medium"
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
+# Codex reads at most this many bytes of AGENTS.md and cuts the rest (default 32 KiB).
+# system/test_agents_md_size.py holds AGENTS.md under the smallest such limit across harnesses.
+config_overrides.project_doc_max_bytes = 65536
 # Do not pin `service_tier` here. The visible `--remote` TUI sends the configured tier with its
 # `thread/resume`, and the app-server rebuilds an idle thread whose tier differs from it, so the
 # pin would undo every fast-mode switch the chat made before the TUI attached (on create the TUI
@@ -1806,9 +1809,8 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
 #
 # Nothing worker-specific is installed into the worker's skill tree: the harden
-# worker is followed in place, from the checkout every worker already has at
-# .agents/shared/worker/SKILL.md, because a lead's task file names that path
-# outright.
+# worker is a tracked skill, .agents/skills/harden-worker/, which the checkout
+# every worker already has carries, and a lead's task file invokes it by name.
 #
 # The worker's Claude plugins need no install: .claude/settings.json declares
 # them from local marketplaces under /opt/agent-plugins, which claude loads in

@@ -13,6 +13,8 @@ from agents_shared.skill_checks import (
     MAX_SKILL_MD_BYTES,
     Check,
     check_failures,
+    outside_links_into_skills,
+    references_reached_outside,
     unreached_shared_files,
 )
 from agents_shared.skill_exemptions import (
@@ -87,6 +89,35 @@ def test_a_python_project_is_reached_by_naming_one_of_its_files(tmp_path: Path) 
     assert _failed(skill) == set()
 
 
+def test_a_python_project_is_reached_through_a_linked_script_that_imports_it(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "stubbed", "Run `scripts/run.py`.\n")
+    _write(
+        skill, "scripts/run.py", "import sys\n\nfrom stubbed_skill.run import main\n"
+    )
+    _write(skill, "python/pyproject.toml", "[project]\nname = 'stubbed-skill'\n")
+    _write(skill, "python/stubbed_skill/__init__.py", "")
+    _write(skill, "python/stubbed_skill/run.py", "")
+    assert _failed(skill) == set()
+
+    _write(skill, "scripts/run.py", "import sys\n")
+    assert _failed(skill) == {Check.REACHABILITY}
+
+
+def test_a_shared_files_relative_path_is_not_resolved_against_the_skill_reading_it(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "reader", "Read `.agents/shared/references/generic.md`.\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/generic.md",
+        "A skill has `references/own.md`.\n",
+    )
+    _write(skill, "references/own.md", "Mine.\n")
+    assert _failed(skill) == {Check.REACHABILITY}
+
+
 def test_a_filename_pattern_links_nothing(tmp_path: Path) -> None:
     skill = _skill(tmp_path, "pattern", "Read `references/op-<operation>.md`.\n")
     _write(skill, "references/op-heal.md", "Heal.\n")
@@ -109,6 +140,21 @@ def test_a_three_link_chain_is_too_deep_until_skill_md_links_its_end(
     assert _failed(skill) == set()
 
 
+def test_a_path_into_a_copy_of_the_tree_links_the_file_it_copies(
+    tmp_path: Path,
+) -> None:
+    copy = "data/.tasks/update-self/skill-at-target"
+    skill = _skill(
+        tmp_path, "staged", f"Read `{copy}/.agents/shared/references/one.md`.\n"
+    )
+    _write(tmp_path, ".agents/shared/references/one.md", "Read `two.md`.\n")
+    _write(tmp_path, ".agents/shared/references/two.md", "Read `three.md`.\n")
+    _write(tmp_path, ".agents/shared/references/three.md", "The end.\n")
+    failures = check_failures(skill)
+    assert [failure.check for failure in failures] == [Check.DEPTH]
+    assert "three.md is 3 links away" in failures[0].detail
+
+
 def test_another_skills_file_ends_a_link_instead_of_being_read_on_from(
     tmp_path: Path,
 ) -> None:
@@ -116,7 +162,7 @@ def test_another_skills_file_ends_a_link_instead_of_being_read_on_from(
     _write(other, "references/far.md", "Read `references/farther.md`.\n")
     _write(other, "references/farther.md", "Read `system/missing.py`.\n")
     skill = _skill(tmp_path, "near", "See `.agents/skills/other/references/far.md`.\n")
-    assert _failed(skill) == set()
+    assert _failed(skill) == {Check.BOUNDARY}
 
 
 def test_a_missing_tracked_path_fails_and_untracked_kinds_are_skipped(
@@ -556,3 +602,94 @@ def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_report
         ".agents/shared/references/orphan.md",
         ".agents/shared/scripts",
     ]
+
+
+def test_a_file_outside_every_skill_may_name_a_skill_but_no_file_inside_one(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "user", "Read `references/own.md`.\n")
+    _write(skill, "references/own.md", "Text.\n")
+    _write(skill, "scripts/run.sh", "true\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/naming.md",
+        "Use the `user` skill (`.agents/skills/user/SKILL.md`), run "
+        "`.agents/skills/user/scripts/run.sh`, and read `reaching.md`.\n",
+    )
+    _write(
+        tmp_path,
+        ".agents/shared/references/reaching.md",
+        "Read `.agents/skills/user/references/own.md`.\n",
+    )
+    _write(
+        tmp_path,
+        "AGENTS.md",
+        "Use the `user` skill, as `.agents/skills/user/references/own.md` says.\n",
+    )
+
+    assert outside_links_into_skills(tmp_path) == [
+        (
+            ".agents/shared/references/reaching.md",
+            ".agents/skills/user/references/own.md",
+        ),
+        ("AGENTS.md", ".agents/skills/user/references/own.md"),
+    ]
+
+
+def test_a_skill_links_no_file_inside_another_skill_but_its_skill_md(
+    tmp_path: Path,
+) -> None:
+    other = _skill(tmp_path, "other", "Read `references/own.md`.\n")
+    _write(other, "references/own.md", "Text.\n")
+    _write(tmp_path, ".agents/shared/references/common.md", "Text.\n")
+    naming = _skill(
+        tmp_path,
+        "naming",
+        "Use the `other` skill (`.agents/skills/other/SKILL.md`) and read "
+        "`.agents/shared/references/common.md`.\n",
+    )
+    reaching = _skill(tmp_path, "reaching", "Read `references/deeper.md`.\n")
+    _write(
+        reaching,
+        "references/deeper.md",
+        "Read `.agents/skills/other/references/own.md`.\n",
+    )
+
+    assert _failed(naming) == set()
+    assert [
+        failure.detail
+        for failure in check_failures(reaching)
+        if failure.check is Check.BOUNDARY
+    ] == [
+        ".agents/skills/reaching/references/deeper.md links "
+        ".agents/skills/other/references/own.md, a file inside another skill"
+    ]
+
+
+def test_a_reference_reached_through_a_kept_directory_and_outside_it_is_reported(
+    tmp_path: Path,
+) -> None:
+    copy = "data/.tasks/update-self/skill-at-target"
+    skill = _skill(
+        tmp_path,
+        "staged",
+        f"Read `references/own.md` and `{copy}/.agents/shared/references/one.md`.\n",
+    )
+    _write(skill, "references/own.md", "Read `.agents/shared/references/one.md`.\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/one.md",
+        "Read `.agents/shared/references/two.md`, or invoke the skill at "
+        "`.agents/skills/other/SKILL.md`.\n",
+    )
+    two = _write(tmp_path, ".agents/shared/references/two.md", "The end.\n")
+    other = _skill(tmp_path, "other")
+    _write(other, "references/far.md", "Read `references/farther.md`.\n")
+    _write(other, "references/farther.md", "The end.\n")
+    assert references_reached_outside(skill, [".agents/shared"]) == []
+
+    two.write_text("Read `.agents/skills/other/references/far.md`.\n")
+    assert references_reached_outside(skill, [".agents/shared"]) == [
+        ".agents/skills/other/references/far.md"
+    ]
+    assert references_reached_outside(skill, []) == [".agents/shared/references/one.md"]

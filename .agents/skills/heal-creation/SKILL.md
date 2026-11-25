@@ -3,7 +3,7 @@ name: heal-creation
 description: "Fix an existing creation that errored or delivered a wrong result. This applies to skills, apps, and services. Invoke at turn-end, after you worked around the failure to satisfy the user's request."
 metadata:
   author: imbue
-  exempt-checks: depth contents
+  exempt-checks: contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -125,8 +125,7 @@ behavior.
 what outputs are correct. Describe success; the incident itself is above.>
 
 ## What to do
-Read and follow \`.agents/shared/worker/SKILL.md\` from your own checkout. It
-reads \`operation\` and \`creations\` from this frontmatter and follows the
+Invoke the \`harden-worker\` skill. It reads \`operation\` and \`creations\` from this frontmatter and follows the
 matching references: reproduce the failure, find the root cause, apply a minimal fix,
 re-run 2-3 fresh scenarios, and push through the single final-creation gate.
 Push reports to the lead per its reporting protocol.
@@ -170,7 +169,7 @@ Flow-specific substitutions:
   prints under `data/.tasks/harden/heal-$SLUG/reports/consumed/`
 - The only user-approval gate is `final-creation` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
-  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
   worker).
 
 ## Step 4: Merge and go live

@@ -1,6 +1,6 @@
 """The checks the skill authoring guide sets on a skill's files.
 
-Five checks, each over one skill (``check_failures``):
+Six checks, each over one skill (``check_failures``):
 
 - ``size``: SKILL.md is at most 14,000 bytes and its body at most 500 lines.
 - ``reachability``: every file in the skill's directory is linked from SKILL.md or from a file
@@ -10,12 +10,21 @@ Five checks, each over one skill (``check_failures``):
 - ``paths``: every path its markdown names under ``.agents/``, ``system/`` or ``docs/`` exists.
 - ``contents``: a SKILL.md over 200 lines, or a reference over 100, has a list in its first 100
   lines naming every H2 section below it.
+- ``boundary``: its markdown links no markdown file inside another skill, other than that
+  skill's SKILL.md. Another skill's scripts are run, not read, so they may be named.
 
-And one over the layer the skills share (``unreached_shared_files``).
+And two over what lies outside every skill: ``unreached_shared_files``, and
+``outside_links_into_skills`` for the shared layer and ``AGENTS.md``. For a skill whose files
+are read from a copy, ``references_reached_outside`` lists what its prose reaches that the
+copy leaves out.
 
 A link is a path written in a markdown file that resolves to a file: from the repository root,
-from the linking file's directory or its ``references/``, or from the skill's directory or its
-``references/``. A path holding a placeholder (``<name>``, ``$VAR``, a glob) links to nothing.
+from the linking file's directory or its ``references/``, or, in one of the skill's own files,
+from the skill's directory or its ``references/``. A script of the skill that imports a package
+of the skill's uv project reaches the project. A path into a copy of the tree kept somewhere
+else in the repository (``data/.tasks/update-self/skill-at-target/.agents/shared/...``) links
+the file of that name here: the copy is read in its place. A path holding a placeholder
+(``<name>``, ``$VAR``, a glob) links to nothing.
 The crawl follows links through the skill's own markdown and through ``.agents/shared/``; a
 file in another skill is a link's end, not a place to read on from.
 
@@ -66,6 +75,7 @@ class Check(enum.StrEnum):
     DEPTH = "depth"
     PATHS = "paths"
     CONTENTS = "contents"
+    BOUNDARY = "boundary"
 
 
 @dataclass(frozen=True)
@@ -98,6 +108,12 @@ _GOALS: dict[Check, str] = {
     Check.CONTENTS: (
         "A long file has a list in its first 100 lines naming every H2 section below it (in a "
         "SKILL.md, the step list), so an agent finds one section without reading the file."
+    ),
+    Check.BOUNDARY: (
+        "A skill's files have one reader, an agent following that skill. For each of these: "
+        "move what both skills need into `.agents/shared/`, written for any reader; name the "
+        "other skill when its flow should take over; or say what you need of it in this "
+        "skill's own terms, without the link."
     ),
 }
 _PERMISSION = (
@@ -260,20 +276,22 @@ class SkillTree:
         key = (markdown, skill)
         if key not in self._links:
             file_dir = posixpath.dirname(markdown)
+            # A shared file's relative path is not about whichever skill is reading it.
+            is_own = skill is not None and markdown.startswith(f"{skill}/")
             bases = [
                 "",
                 file_dir,
                 posixpath.join(file_dir, "references"),
-                *(
-                    [skill, posixpath.join(skill, "references")]
-                    if skill is not None
-                    else []
-                ),
+                *([skill, posixpath.join(skill, "references")] if is_own else []),
             ]
             found: set[str] = set()
             for token in _path_tokens(self.text(markdown)):
-                for base in bases:
-                    target = posixpath.normpath(posixpath.join(base, token))
+                _, is_copy, copied = token.partition("/.agents/")
+                for base, name in [
+                    *((base, token) for base in bases),
+                    *([("", f".agents/{copied}")] if is_copy else []),
+                ]:
+                    target = posixpath.normpath(posixpath.join(base, name))
                     if target.startswith(".."):
                         continue
                     if self.is_file(target):
@@ -354,6 +372,28 @@ def _crawl(tree: SkillTree, start: str, skill: str | None) -> _Crawl:
                 parent[linked] = current
                 queue.append(linked)
     return _Crawl(depth=depth, parent=parent)
+
+
+_IMPORTED_NAME = re.compile(r"^\s*(?:from|import)\s+(\w+)", re.MULTILINE)
+
+
+def _imported_projects(tree: SkillTree, skill: str, reached: Iterable[str]) -> set[str]:
+    """The skill's uv projects that one of its reached scripts imports a package of."""
+    projects = {
+        node for node in tree.own_nodes(skill) if tree.is_file(f"{node}/pyproject.toml")
+    }
+    scripts = [
+        node
+        for node in reached
+        if node.endswith(".py") and node.startswith(f"{skill}/")
+    ]
+    return {
+        project
+        for script in scripts
+        for name in _IMPORTED_NAME.findall(tree.text(script))
+        for project in projects
+        if tree.is_file(f"{project}/{name}/__init__.py")
+    }
 
 
 def _checked_markdown(crawl: _Crawl, skill: str, tree: SkillTree) -> list[str]:
@@ -538,7 +578,7 @@ def _contents_failures(
 def check_failures(
     skill_dir: Path, tree: SkillTree | None = None
 ) -> list[CheckFailure]:
-    """Every failure of the five checks for the skill at ``<root>/.agents/skills/<name>``.
+    """Every failure of the six checks for the skill at ``<root>/.agents/skills/<name>``.
 
     Exemptions are not applied here: this is what the skill fails, whatever it is excused.
     """
@@ -550,7 +590,8 @@ def check_failures(
     crawl = _crawl(tree, skill_md, skill)
 
     failures = _size_failures(tree, skill_md)
-    for unreached in sorted(tree.own_nodes(skill) - set(crawl.depth)):
+    reached = set(crawl.depth) | _imported_projects(tree, skill, crawl.depth)
+    for unreached in sorted(tree.own_nodes(skill) - reached):
         failures.append(
             CheckFailure(Check.REACHABILITY, f"{unreached} is linked from nothing")
         )
@@ -572,13 +613,92 @@ def check_failures(
             )
     for markdown in markdown_files:
         failures.extend(_contents_failures(tree, markdown, skill_md))
+    own_prefix = f"{skill}/"
+    for markdown in markdown_files:
+        if not markdown.startswith(own_prefix):
+            continue
+        for linked in sorted(tree.links(markdown, skill)):
+            if linked.startswith(own_prefix):
+                continue
+            if _is_skill_internal_markdown(linked):
+                failures.append(
+                    CheckFailure(
+                        Check.BOUNDARY,
+                        f"{markdown} links {linked}, a file inside another skill",
+                    )
+                )
     return failures
+
+
+def _is_skill_internal_markdown(linked: str) -> bool:
+    """Whether a linked file is a skill's markdown other than its SKILL.md: a file only that
+    skill's reader reads. A skill's scripts are run, not read, so they are not."""
+    return (
+        linked.startswith(_SKILLS_DIR + "/")
+        and linked.endswith(".md")
+        and not linked.endswith("/SKILL.md")
+    )
 
 
 def skill_dirs(repo_root: Path) -> list[Path]:
     """Every directory under ``.agents/skills/`` that holds a SKILL.md."""
     return sorted(
         skill_md.parent for skill_md in (repo_root / _SKILLS_DIR).glob("*/SKILL.md")
+    )
+
+
+def references_reached_outside(
+    skill_dir: Path, roots: Iterable[str], tree: SkillTree | None = None
+) -> list[str]:
+    """The references a skill's markdown reaches, through any number of links, that lie
+    outside the skill's directory and outside ``roots`` (directories relative to the root).
+
+    A reference is markdown under ``.agents/`` other than a SKILL.md: another skill's
+    SKILL.md names a skill to invoke, not prose to read on from. The crawl starts from every
+    markdown file of the skill and reads on through the skill's own files and through
+    ``roots``. A file outside both is reported, and nothing is read on from it.
+    """
+    skill_dir = skill_dir.resolve()
+    if tree is None:
+        tree = SkillTree(skill_dir.parent.parent.parent)
+    skill = tree.relative(skill_dir)
+    kept = tuple(f"{path.rstrip('/')}/" for path in (skill, *roots))
+    own = [name for name in tree.files_under(skill) if name.endswith(".md")]
+    reached = set(own)
+    queue = deque(own)
+    while queue:
+        for linked in tree.links(queue.popleft(), skill):
+            is_reference = (
+                linked.startswith(".agents/")
+                and linked.endswith(".md")
+                and not linked.endswith("/SKILL.md")
+            )
+            if is_reference and linked not in reached:
+                reached.add(linked)
+                if linked.startswith(kept):
+                    queue.append(linked)
+    return sorted(name for name in reached if not name.startswith(kept))
+
+
+def outside_links_into_skills(
+    repo_root: Path, tree: SkillTree | None = None
+) -> list[tuple[str, str]]:
+    """Each markdown file outside every skill with a markdown file it links inside one.
+
+    The files are the ones under ``.agents/shared/`` and ``AGENTS.md``. Either may name a
+    skill, by its name or its SKILL.md, and run its scripts. A skill's other markdown is that
+    skill's own: what several skills need belongs in the shared layer.
+    """
+    if tree is None:
+        tree = SkillTree(repo_root)
+    outside = [name for name in tree.files_under(_SHARED_DIR) if name.endswith(".md")]
+    if tree.is_file("AGENTS.md"):
+        outside.append("AGENTS.md")
+    return sorted(
+        (name, linked)
+        for name in outside
+        for linked in tree.links(name, None)
+        if _is_skill_internal_markdown(linked)
     )
 
 

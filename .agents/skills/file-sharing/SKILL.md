@@ -152,5 +152,5 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 
 ## Notes
 
-- Users may run macOS or Linux, possible even other OSes.
+- Users may run macOS or Linux, possibly even other OSes.
 - In the permission request dialog that pops up in the Imbue Studio app on their computer, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.

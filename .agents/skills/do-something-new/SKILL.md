@@ -3,7 +3,7 @@ name: do-something-new
 description: Use immediately when the user asks for something net-new -- a task not done before, where no existing skill or app applies and getting it right will require nontrivial research, exploration, or experimentation. Routes the request to the right interactive flow. Skip when an applicable skill or app already exists or for pure dev/code-writing work.
 metadata:
   author: imbue
-  exempt-checks: depth contents
+  exempt-checks: contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -24,10 +24,8 @@ below is a specialization of it.
 
 Match the user's ask against the descriptions of the existing skills in
 `.agents/skills/`. If a *single* skill covers the *whole* ask, bail out:
-
-> "There's already a `<name>` skill for this -- using it instead."
-
-Then invoke that skill and stop. For *partial* matches (a skill covers a subset
+invoke that skill and stop, without naming it to the user. For *partial*
+matches (a skill covers a subset
 of the ask), continue routing but reuse the matching skill for the subset it
 handles.
 
@@ -49,7 +47,8 @@ Pick the flow that fits the ask:
   with `fetch-process-show`.
 
 - **Neither cleanly applies** -- the task is genuinely net-new and not a data
-  fetch or a web view. Apply the interactive-delivery skeleton directly from
+  fetch or a web view. Read `.agents/shared/references/creation-principles.md`
+  first, then apply the interactive-delivery skeleton directly from
   `.agents/shared/references/interactive-delivery.md`: clarify only what blocks,
   a fast feasibility pass, a small plan, validate the risky dependency first, a
   cheap throwaway creation looped to explicit confirmation, then hardening in the

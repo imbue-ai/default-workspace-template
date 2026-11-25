@@ -3,7 +3,7 @@ name: fetch-process-show
 description: "Fetch data from somewhere (an external service, an API, a third-party source, uploaded data), process it, and show it to the user -- the \"go get all this stuff, do something to it, and put it in front of me\" task. Use when the ask is to retrieve real data or process real data the user uploaded, transform/summarize/classify it, and surface the result. Comes before build-app even when the ask names the surface rather than the data (\"build me a dashboard over this dump\")."
 metadata:
   author: imbue
-  exempt-checks: size depth contents
+  exempt-checks: size contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -48,8 +48,9 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 
 ## Clarify and scope (skeleton phases 1-3)
 
-Ask only what blocks (phase 1). Then a small research pass (phase 2) and a
-proposed plan (phase 3), with these data specifics:
+Read `.agents/shared/references/creation-principles.md` first. Ask only what
+blocks (phase 1). Then a small research pass (phase 2) and a proposed plan
+(phase 3), with these data specifics:
 
 For external services, load the `connect-external-service` skill first (it routes
 you to the user's connected accounts, a new connection, an MCP server, a key on
@@ -154,7 +155,7 @@ Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the
 can ask to see it and so it can **seed the first surface**. Include in each
 sampled record its **raw payload and a source reference**, not only the processed
 fields -- the first surface renders this sample, and per the preserve-and-surface
-principle (AGENTS.md) that surface must be able to show the raw record and link
+principle, that surface must be able to show the raw record and link
 to its source. If the sample carries only extracted fields, the raw/source
 affordance has nothing to point at. Default presentation is a brief
 natural-language summary; pick a table / inline JSON / structured prose if the
@@ -223,7 +224,7 @@ the user**. If you ever feel the urge to write a second way of producing the dat
 to feed a surface, stop -- that divergence is the bug this rule exists to prevent.
 
 **Surface the raw data and its source from the first version.** Per the
-preserve-and-surface principle (AGENTS.md), the first surface -- not just the
+preserve-and-surface principle, the first surface -- not just the
 crystallized one -- includes a clean, unprompted affordance to view each record's
 raw payload (rendered in its native format -- "view raw email" shows the rendered
 email, not HTML source) and jump to its source (e.g. "open in Gmail"). Build it in
@@ -237,7 +238,7 @@ A surface rendering the sample is still a mock, however real its routes are:
 `build-app` keeps it inside its labeled mock frame, with a note saying it shows a
 sample and what does not work yet, until you point it at the pipeline's output.
 Only then take the frame down, with `build-app`'s `mock_frame.py down` (its
-Step 2).
+step 5).
 
 Additional surfaces (scheduling, persistence, history, live integration) each get
 their *own* delivery and feedback gate -- even when the user's original prompt

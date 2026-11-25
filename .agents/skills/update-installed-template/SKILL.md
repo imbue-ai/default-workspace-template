@@ -93,8 +93,8 @@ git fetch <git-url> <branch>              # branch from the template repo (defau
 If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
-permission -- initiate it yourself like any other latchkey permission request, see
-`.agents/skills/connect-external-service/references/latchkey.md`, and tell the
+permission -- initiate it yourself like any other latchkey permission request, per
+the `connect-external-service` skill, and tell the
 user an approval is waiting in Imbue Studio). Fetch the URL directly rather than
 persisting a gateway-URL remote:
 
@@ -134,7 +134,7 @@ git worktree add -q "$WT" HEAD
 - **An app from an older template** (one that is a root workspace member in the template's
   layout, with no `uv.lock` of its own) needs converting to a standalone project with
   `uv run --no-sync user-package-migration migrate`, once the root venv is synced
-  (`references/python-packaging-migration.md` in update-self, "A user app, service or
+  (`.agents/shared/references/python-packaging-migration.md`, "A user app, service or
   lib"); until then it fails to start. When resolving a conflict in the root
   `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
   globs.
