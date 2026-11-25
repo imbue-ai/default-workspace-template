@@ -7723,6 +7723,12 @@ def test_a_handoff_moves_the_workspaces_create_defaults_to_the_target_account(
         manager.stop()
 
 
+def _verbs_besides_stops(verbs: list[str]) -> list[str]:
+    """The mngr verbs in order without the retiring agent's stops, which run on a thread of their own beside the
+    create and so land anywhere among the rest."""
+    return [verb for verb in verbs if verb != "stop"]
+
+
 def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_step_and_a_retry_adopts_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -7757,22 +7763,23 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create"] and verbs.count("stop") == 1
         # Only the summary request went out: the prompt waits for the pick.
         assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
 
-        # A retry on the same account adopts the successor: no create, the pick fails again the same way.
+        # A retry on the same account adopts the successor: no create, the pick fails again the same way. Each
+        # attempt stops the retiring agent again.
         assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create"] and verbs.count("stop") == 2
 
         # A retry on another account of the same harness keeps the pick, destroys the successor, and
         # creates afresh under the same pre-minted id.
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:3]) == ["create", "stop"] and verbs[3:] == ["destroy", "create"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create", "destroy", "create"] and verbs.count("stop") == 3
         assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
@@ -8155,7 +8162,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         record = _wait_until_settled(store, chat_id)
         assert [entry.agent_id for entry in record.agents] == [first, successor]
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["create"]
+        assert sorted(verbs) == ["create", "stop"]
         assert f"--id {successor}" in argv_log.read_text()
         assert manager.get_chat_snapshot(first) is not None
         with pytest.raises(HandoffError):
@@ -8194,7 +8201,7 @@ def test_an_unfinished_handoff_resumes_when_the_manager_starts(
         manager._resume_handoffs()
         record = _wait_until_settled(store, ChatId(first))
         assert [entry.agent_id for entry in record.agents] == [first, successor]
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["create"]
+        assert sorted(line.split(" ")[0] for line in argv_log.read_text().splitlines()) == ["create", "stop"]
     finally:
         manager.stop()
 
