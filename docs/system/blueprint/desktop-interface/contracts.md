@@ -346,7 +346,7 @@ A preview shell names none, and answers every route that changes the workspace `
 
 A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
 A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
-A refused grants document also carries `refusals`, one `{"scope", "kind", "entry", "reason"}` per entry.
+A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry.
 
 Two routes answer before their work is done, and a client reads on:
 
