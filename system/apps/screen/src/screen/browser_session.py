@@ -4,10 +4,10 @@
         browser.run("goto", "https://example.com")
         title = browser.run("eval", "() => document.title", "--raw")
 
-The block reserves the browser (the Screen's lease), attaches a session under a name no other caller uses, and on the
-way out, however it leaves, detaches that session and gives the lease back. The browser keeps running. A script that
-attaches by hand and is killed or times out leaves the session's daemon running with nothing to end it but the
-service's reaper (``screen.cli_sessions``); the block ends it at once.
+The block reserves the browser (the Screen's lease), attaches a session under a name no other caller uses, and when
+the body finishes or raises, detaches that session and gives the lease back. The browser keeps running. A process
+killed by a signal (a routine's time limit sends SIGTERM, then SIGKILL) never reaches that cleanup, and the session's
+daemon, spawned detached, outlives it: only the service's reaper (``screen.cli_sessions``) ends that one.
 """
 
 import shutil
