@@ -160,7 +160,7 @@ describe("a file that could not be saved", () => {
         detail: "PUT /home/user/workspace/notes.md",
         user_facing_message: said,
         kind: "in_use",
-        expected: true,
+        routine: true,
       }),
     );
     const hold = vi.spyOn(page.toasts, "hold");

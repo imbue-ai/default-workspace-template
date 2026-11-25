@@ -123,7 +123,7 @@ export function toldFailure(error: unknown, attempt: Attempt): FilesFailure {
   return {
     message: `${attempt.whatFailed}. ${causeOf(failure, attempt.operation)}`,
     details,
-    isHelpOwed: !failure.isExpected,
+    isHelpOwed: !failure.isRoutine,
     isOutOfSpace: failure.kind === "out_of_space",
     isGone: false,
     isUnexplained: false,

@@ -56,7 +56,7 @@ change is "Your computer only shares this to read." (`shared_read_only`), "It's
 no longer there." (`not_found`, which a read or a listing of a path the computer
 says is gone answers too), or else "Your computer couldn't do this.", its status
 and own text behind "See details". A refusal that is ordinary operation its
-sentence fully explains says `expected: true`, so the page offers no agent for
+sentence fully explains says `routine: true`, so the page offers no agent for
 it: in use, a name too long, and a computer that isn't answering. A refusal to a
 `?download` or a `?zip` stays plain text, which is all the hidden frame a
 download loads in can read, and so does one to a page the browser loads (a
@@ -205,7 +205,7 @@ failure nothing explained, alone or among the items of one change, is left as
 a fault for the agent to find and fix. The shell writes the message's `/assist`
 lead and toasts a refused ask itself. No agent is offered where trying
 again is the whole remedy: a request nothing answered, and a refusal the server
-calls `expected` (in use, a name too long, a computer that isn't answering).
+calls `routine` (in use, a name too long, a computer that isn't answering).
 Those leave a note that goes, its details behind "See details" (opening them
 keeps it up).
 

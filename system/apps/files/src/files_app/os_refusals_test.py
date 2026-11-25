@@ -12,7 +12,7 @@ def _os_error(number: int) -> OSError:
 
 
 @pytest.mark.parametrize(
-    ("number", "status", "kind", "is_expected"),
+    ("number", "status", "kind", "is_routine"),
     [
         (errno.EACCES, 403, "permission_denied", False),
         (errno.EPERM, 403, "permission_denied", False),
@@ -32,14 +32,14 @@ def _os_error(number: int) -> OSError:
     ],
 )
 def test_an_error_people_can_act_on_is_a_refusal_in_their_words_without_the_path(
-    number: int, status: int, kind: str, is_expected: bool
+    number: int, status: int, kind: str, is_routine: bool
 ) -> None:
     refusal = refusal_for_os_error(_os_error(number), is_read=False)
 
     assert isinstance(refusal, OsRefusal)
-    # Only a refusal that passes on its own, or that the person puts right by typing, is expected; any other leaves
+    # Only a refusal that passes on its own, or that the person puts right by typing, is routine; any other leaves
     # them unable to do what they meant, and the page offers an agent for it.
-    assert (refusal.status, refusal.kind, refusal.is_expected) == (status, kind, is_expected)
+    assert (refusal.status, refusal.kind, refusal.is_routine) == (status, kind, is_routine)
     assert "notes.txt" not in refusal.sentence
 
 

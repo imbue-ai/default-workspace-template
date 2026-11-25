@@ -705,11 +705,11 @@ describe("telling a failed change", () => {
     ]);
   });
 
-  it("offers no agent for a refusal the server calls expected, which passes on its own", async () => {
+  it("offers no agent for a refusal the server calls routine, which passes on its own", async () => {
     const { model } = harness();
     const said = "It's in use right now. Try again in a moment.";
     vi.mocked(server.movePath).mockRejectedValueOnce(
-      httpFailure(409, { detail: "MOVE /home/b.txt", user_facing_message: said, kind: "in_use", expected: true }),
+      httpFailure(409, { detail: "MOVE /home/b.txt", user_facing_message: said, kind: "in_use", routine: true }),
     );
 
     await model.moveInto(["/home/b.txt"], "/home/zeta/");

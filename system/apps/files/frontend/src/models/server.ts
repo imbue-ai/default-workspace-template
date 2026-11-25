@@ -96,7 +96,7 @@ export async function listFolder(folder: string, signal?: AbortSignal): Promise<
     const body = {
       detail: `${folder} is a file, not a folder.`,
       user_facing_message: "It's a file, not a folder.",
-      expected: true,
+      routine: true,
     };
     throw new HttpError(readFailure({ status: 400, body, rawText: null, requestKind: "read" }));
   }

@@ -331,7 +331,7 @@ def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_peo
     assert not (tmp_path / "root" / "reports" / "drafts").exists()
 
 
-def test_a_name_too_long_is_refused_as_expected_since_its_sentence_is_the_whole_remedy(tmp_path: Path) -> None:
+def test_a_name_too_long_is_refused_as_routine_since_its_sentence_is_the_whole_remedy(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
 
     response = client.open(f"/{'a' * 300}", method="MKCOL")
@@ -339,7 +339,7 @@ def test_a_name_too_long_is_refused_as_expected_since_its_sentence_is_the_whole_
     assert response.status_code == 400
     answer = response.get_json()
     assert (answer["kind"], answer["user_facing_message"]) == ("name_too_long", "That name is too long.")
-    assert answer["expected"] is True
+    assert answer["routine"] is True
 
 
 def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path) -> None:
@@ -673,7 +673,7 @@ def test_a_path_the_computer_says_is_gone_is_answered_as_gone_for_a_read_and_a_l
     assert (listed.status_code, listed.get_json()) == (404, gone)
 
 
-def test_a_computer_that_is_not_answering_is_refused_as_expected(tmp_path: Path) -> None:
+def test_a_computer_that_is_not_answering_is_refused_as_routine(tmp_path: Path) -> None:
     computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={}, is_awake=False)
 
     response = _app(computer, tmp_path).get(f"/__remote/{DEVICE}/Users/kim/Atkinson/?json")
@@ -681,7 +681,7 @@ def test_a_computer_that_is_not_answering_is_refused_as_expected(tmp_path: Path)
     assert response.status_code == 502
     answer = response.get_json()
     assert answer["user_facing_message"].startswith("Your computer isn't answering.")
-    assert answer["expected"] is True
+    assert answer["routine"] is True
 
 
 def test_a_change_the_computer_fails_says_so_with_its_status_only_behind_the_details(tmp_path: Path) -> None:

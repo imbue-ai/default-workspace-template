@@ -54,7 +54,7 @@ describe("a refused request to the Files server", () => {
     expect(failure).toMatchObject({
       cause: "user_facing",
       userFacingMessage: "It's a file, not a folder.",
-      isExpected: true,
+      isRoutine: true,
       details: "HTTP 400\n/home/notes.txt/ is a file, not a folder.",
     });
   });

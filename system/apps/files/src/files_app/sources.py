@@ -23,14 +23,14 @@ class FilesError(Exception):
         message: str,
         kind: str | None = None,
         detail: str | None = None,
-        is_expected: bool = False,
+        is_routine: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
         self.kind = kind
         self.detail = detail
-        self.is_expected = is_expected
+        self.is_routine = is_routine
 
 
 class EntryRecord(FrozenModel):

@@ -294,11 +294,11 @@ describe("a folder that cannot be listed", () => {
     expect(buttonsIn(root, ".files-empty")).toEqual(["Try again", "Ask an agent to fix this"]);
   });
 
-  it("offers only Try again for a computer that isn't answering, which the server calls expected", async () => {
+  it("offers only Try again for a computer that isn't answering, which the server calls routine", async () => {
     const said = "Your computer isn't answering. It may be asleep, or Imbue Studio may be closed.";
     const connection = { ...framedConnection(), canReportBug: () => true, askAgent: vi.fn() };
     const root = await openedOn(
-      { status: 502, body: { detail: said, user_facing_message: said, expected: true } },
+      { status: 502, body: { detail: said, user_facing_message: said, routine: true } },
       connection,
     );
 

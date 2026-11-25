@@ -102,7 +102,7 @@ class DeviceFiles:
                 granted = device_permissions(self._gateway, self._device)
             except (httpx.HTTPError, ValueError) as error:
                 logger.debug("{} did not say how its files are reached: {}", self._device, error)
-                raise FilesError(502, UNREACHABLE, is_expected=True) from error
+                raise FilesError(502, UNREACHABLE, is_routine=True) from error
             self._has_device_paths = self._device in devices_with_device_paths([granted])
         return self._has_device_paths
 
@@ -110,7 +110,7 @@ class DeviceFiles:
         # Depth 1, so a folder's page carries its listing, which the frontend shows without asking again.
         described = list_on_device(self._gateway, self._device, self.has_device_paths, path, depth=1)
         if described is None:
-            raise FilesError(502, UNREACHABLE, is_expected=True)
+            raise FilesError(502, UNREACHABLE, is_routine=True)
         if len(described) == 0:
             raise FilesError(404, _GONE, "not_found")
         entry = described[0]
@@ -127,7 +127,7 @@ class DeviceFiles:
             upstream = self._gateway.send(outgoing)
         except httpx.HTTPError as error:
             logger.debug("{} did not answer {} {}: {}", self._device, method, path, error)
-            raise FilesError(502, UNREACHABLE, is_expected=True) from error
+            raise FilesError(502, UNREACHABLE, is_routine=True) from error
         if upstream.status_code == 403:
             upstream.close()
             raise FilesError(403, "Your computer only shares this to read.", "shared_read_only")
