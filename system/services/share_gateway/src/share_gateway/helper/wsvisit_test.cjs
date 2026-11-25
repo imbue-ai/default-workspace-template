@@ -136,6 +136,35 @@ test("a run the gateway calls wrong is a usage error that carries the gateway's 
   );
 });
 
+test("a run answered with a 5xx is not retried, since a proxy may answer one for a command that had started", async () => {
+  await withServer(
+    () => ({ status: 502, body: "Bad Gateway" }),
+    async (origin) => {
+      await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"] }, 5000), (error) => {
+        assert.ok(error instanceof helper.HelperError);
+        assert.equal(error.exitCode, 1);
+        assert.equal(error.isRetryable, false);
+        assert.equal(error.message, "run answered 502: Bad Gateway (the command may have started)");
+        return true;
+      });
+    },
+  );
+});
+
+test("a run the gateway refuses before it starts the command may be retried", async () => {
+  await withServer(
+    () => ({ status: 401, body: JSON.stringify({ error: "authentication required" }) }),
+    async (origin) => {
+      await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"] }, 5000), (error) => {
+        assert.ok(error instanceof helper.HelperError);
+        assert.equal(error.isRetryable, true);
+        assert.equal(error.message, "run answered 401: authentication required");
+        return true;
+      });
+    },
+  );
+});
+
 test("a run that gets no answer is not retried, since the command may have started", async () => {
   const server = http.createServer((request) => request.socket.destroy());
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -184,9 +213,10 @@ test("a request the gateway calls wrong is a usage error, and any other refusal 
   assert.equal(wrong.exitCode, 64);
   assert.equal(wrong.message, "write answered 400: mode must be octal");
   assert.equal(helper.refusalError("write", { status: 413, detail: "the body is too large" }).exitCode, 64);
-  const failed = helper.refusalError("run", { status: 502, detail: "bad gateway" });
+  const failed = helper.refusalError("read", { status: 502, detail: "bad gateway" });
   assert.equal(failed.exitCode, 1);
   assert.equal(failed.isRetryable, true);
+  assert.equal(helper.refusalError("run", { status: 502, detail: "bad gateway" }, false).isRetryable, false);
 });
 
 test("a run's stream is written out as it arrives and ends with the command's exit code", async () => {
