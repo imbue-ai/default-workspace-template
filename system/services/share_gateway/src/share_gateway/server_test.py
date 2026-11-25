@@ -286,13 +286,15 @@ def test_unknown_label_says_nothing_is_shared_there_rather_than_refusing_the_acc
 
 def test_a_visitor_refused_by_the_grants_is_told_so_and_offered_another_account(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
-    _install_session(harness.client, "carol@example.com")
+    _install_session(harness.client, '"carol"<b>@example.com')
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers(uri="/desk?view=2"))
 
     assert resp.status_code == 403
     page = resp.get_data(as_text=True)
-    assert "This page hasn't been shared with your account" in page
+    # The page names the refused account, so the visitor knows which one to switch away from.
+    assert "This page hasn't been shared with your account (&quot;carol&quot;&lt;b&gt;@example.com)." in page
+    assert "<b>" not in page
     # The page is served at the address the visitor was opening, so an empty href reloads it.
     assert _buttons(page) == {"Reload": ""}
     assert _switch_account_form(page) == (
@@ -724,7 +726,7 @@ def test_callback_heals_wrong_audience_and_nonce_mismatch_but_refuses_a_stranger
     )
     assert refused.status_code == 403
     page = refused.get_data(as_text=True)
-    assert "This page hasn't been shared with your account" in page
+    assert "This page hasn't been shared with your account (stranger@nowhere.dev)." in page
     assert _switch_account_form(page)[1] == f"https://{_WEB_HOST}/panel"
     # Served at the spent callback address, so Reload goes to the page the visitor was opening.
     assert _buttons(page)["Reload"] == f"https://{_WEB_HOST}/panel"

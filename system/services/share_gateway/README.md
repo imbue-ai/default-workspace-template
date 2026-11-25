@@ -159,8 +159,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
 - A verified account with no grant is **"Not shared with you"** (403: "This
-  page hasn't been shared with your account. Ask the person who shared it to
-  give you access, then reload this page."). So is one whose only grants are
+  page hasn't been shared with your account (name@example.com). Ask the
+  person who shared it to give you access, then reload this page.", naming the
+  signed-in account's email). So is one whose only grants are
   per-service grants on internal apps (see "Grants") or on apps not
   registered, since those admit it nowhere, and, on any later request, a
   session with no grant for the app it is opening. The page has a Reload
