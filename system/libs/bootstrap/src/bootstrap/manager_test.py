@@ -1473,6 +1473,33 @@ def test_an_upgrade_that_fails_is_a_warning(
     )
 
 
+def test_an_agent_the_upgrade_failed_is_a_warning_that_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubSubprocess()
+    stub.reply_on = {
+        "list": (0, "agent-a|STOPPED\nagent-b|STOPPED\n"),
+        "upgrade": (
+            1,
+            "upgraded a (stopped)\n"
+            "failed b: prepare (rsync failed: Not a directory); untouched\n"
+            "1 upgraded, 0 current, 0 not upgraded, 1 failed\n",
+        ),
+    }
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    with _captured_log_lines("WARNING") as warnings:
+        _upgrade_stopped_agents()
+
+    assert any(
+        "mngr upgrade: failed b: prepare (rsync failed: Not a directory); untouched"
+        in line
+        for line in warnings
+    )
+    assert any(line.rstrip().endswith("mngr upgrade exited 1") for line in warnings)
+    assert not any("upgraded a" in line for line in warnings)
+
+
 @pytest.mark.parametrize(
     "raise_on",
     [

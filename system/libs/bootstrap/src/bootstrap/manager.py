@@ -116,9 +116,11 @@ MNGR_LIST_AGENT_STATES_ARGV = (
 _STOPPED_STATE = "STOPPED"
 _MNGR_LIST_TIMEOUT_SECONDS = 60.0
 # The most a `mngr upgrade` that hangs (say, on another mngr's host lock) holds up the boot.
-_UPGRADE_AGENTS_TIMEOUT_SECONDS = 120.0
+_UPGRADE_AGENTS_TIMEOUT_SECONDS = 60.0
 # `mngr upgrade` skipped an agent and none failed.
 _MNGR_UPGRADE_EXIT_SKIPPED = 9
+# How `mngr upgrade` starts the line for an agent it failed to upgrade, such as `failed a: prepare (...); untouched`.
+_FAILED_OUTCOME_PREFIX = "failed "
 # What `mngr upgrade` appends to an agent it cannot upgrade, such as ``; re-create it with `mngr create a --reuse --update` ``.
 _RECREATE_HINT_PATTERN = re.compile(r"; re-create it with `[^`]*`")
 
@@ -768,12 +770,18 @@ def _upgrade_stopped_agents(mngr_binary: Path = WORKSPACE_MNGR) -> None:
         return
     for line in result.stdout.splitlines():
         if line.strip():
-            logger.info("mngr upgrade: {}", _RECREATE_HINT_PATTERN.sub("", line))
+            log = (
+                logger.warning
+                if line.startswith(_FAILED_OUTCOME_PREFIX)
+                else logger.info
+            )
+            log("mngr upgrade: {}", _RECREATE_HINT_PATTERN.sub("", line))
     if result.returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
+        stderr_tail = _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:])
         logger.warning(
-            "mngr upgrade exited {}: {}",
+            "mngr upgrade exited {}{}",
             result.returncode,
-            _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:]),
+            f": {stderr_tail}" if stderr_tail else "",
         )
 
 
