@@ -379,3 +379,10 @@ that launched its own worker. Four rules are yours alone.
   counted as busy after you have finished, while a STOPPED one does not.
 - **Await sub-workers with `--timeout 60m`**, which fits inside the window your
   own lead is waiting out (90m for the harden flows).
+
+## Copying files to or from a worker
+
+The launcher makes this transfer itself at `launch`. To move files to or from a
+worker yourself, or to debug a transfer, use `mngr rsync`; the module docstring
+of `.agents/skills/launch-task/python/launch_task_skill/create_worker.py`
+explains its flags and path rules.

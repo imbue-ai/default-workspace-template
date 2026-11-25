@@ -181,7 +181,11 @@ the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
 rsync copy directory *contents* into the destination. The local source is
 ``./``-prefixed so mngr reads it as a path rather than an agent name, while the
 agent destination stays repo-relative so mngr resolves it against the worker's
-workdir. The teardown pull reverses the two and is otherwise identical.
+workdir (an absolute ``<NAME>:/PATH`` is used verbatim). The teardown pull
+reverses the two and is otherwise identical. A sync moves a directory: syncing
+a single file fails, because rsync is handed a directory at both ends. This
+workspace's mngr has no ``mngr file put``, so ``mngr rsync`` is the mechanism
+for moving files to or from an agent.
 
 Every one of these paths sits under ``data/``, and ``launch`` refuses a sync
 source that does not (``_sync_path_refusal``), because that boundary is what
