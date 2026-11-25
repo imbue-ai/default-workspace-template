@@ -150,7 +150,7 @@ APP_KIND: Final[str] = "app"
 SERVICE_KIND: Final[str] = "service"
 BROWSER_KIND: Final[str] = "browser"
 # A process no agent, program or browser started.
-UNOWNED_KIND: Final[str] = "system"
+UNOWNED_KIND: Final[str] = "unowned"
 
 # The fields each listed agent is rendered with, in column order. The display name goes last because
 # it is the one free-text value, so a separator inside it cannot shift the other columns.
@@ -218,6 +218,7 @@ EARLYOOM_AVOID_BAND_POINTS: Final[int] = -300
 NEVER_KILLED_OOM_SCORE_ADJ: Final[int] = -1000
 INIT_PID: Final[int] = 1
 GUARD_ORDER_DEFAULT_ROWS: Final[int] = 15
+COMMAND_COLUMN_WIDTH: Final[int] = 100
 SCRATCH_DIR: Final[Path] = Path("/tmp")
 KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = (
@@ -1715,7 +1716,11 @@ def render_stoppable(report: Report) -> str:
 
 
 def _command(process: Process) -> str:
-    return " ".join(process.argv) or "?"
+    """A process's command on one line, cut short: an agent's carries its whole prompt."""
+    command = " ".join(" ".join(process.argv).split()) or "?"
+    if len(command) <= COMMAND_COLUMN_WIDTH:
+        return command
+    return command[: COMMAND_COLUMN_WIDTH - 3] + "..."
 
 
 def _process_kib(process: Process) -> int | None:
@@ -1977,7 +1982,7 @@ def render_guard_order(
         )
     lines += [
         "",
-        f"A score is the process's memory plus its band (oom_score_adj) times {_mib(order.band_point_kib)},",
+        f"A score is the process's memory plus its band (oom_score_adj) times {order.band_point_kib / KIB_PER_MIB:.1f} MiB,",
         "a thousandth of the workspace's memory. MEMORY is "
         + (
             "its own anonymous memory, as the guard counts it here."

@@ -1466,9 +1466,9 @@ def test_the_list_holds_everything_using_memory_and_adds_up_to_what_is_in_use(
         ("app", "digest-app", 90, "yes"),
         ("agent", "agent-gone-from-the-listing", 60, "no"),
         ("services agent", "system-services", 40, "no"),
-        ("system", "Internal system", 21, "no"),
+        ("unowned", "Internal system", 21, "no"),
         ("app", "screen", 10, "no"),
-        ("system", "SSH access", 5, "no"),
+        ("unowned", "SSH access", 5, "no"),
     ]
     by_name = {row.name: row.detail for row in rows}
     assert by_name["system-services"] == "the workspace's own services agent"
@@ -1561,6 +1561,21 @@ def test_show_prints_one_row_with_its_processes_or_one_process_with_its_row(
         "  Band: 900 (oom_score_adj; a higher band is stopped sooner)",
         "  Belongs to: chat trip-plan (Trip plan); can stop: yes (idle 3h 00m)",
     ]
+
+    # An agent's command line carries its whole prompt, so a command is printed on one line, cut short.
+    report.processes[100].argv = [
+        "claude",
+        "--append-system-prompt",
+        "Line one.\n\nLine two. " * 40,
+    ]
+    prompted, _ = workspace_memory.render_show(report, "trip-plan", proc)
+    assert len(prompted.splitlines()) == 7
+    pid, memory, command = _cells(prompted)[5]
+    assert (pid, memory, len(command)) == ("100", "300 MiB", 100)
+    assert command.startswith(
+        "claude --append-system-prompt Line one. Line two. Line one."
+    )
+    assert command.endswith("...")
 
 
 def test_show_asks_for_one_name_when_several_rows_match_and_says_when_none_does(
@@ -1703,7 +1718,9 @@ def test_what_a_source_would_have_decided_is_unknown_while_its_memory_is_still_l
     ) == (None, None, None)
     rows = workspace_memory.report_rows(report)
     assert {
-        (row.kind, row.name, row.can_stop.value) for row in rows if row.kind != "system"
+        (row.kind, row.name, row.can_stop.value)
+        for row in rows
+        if row.kind != "unowned"
     } == {
         # Without mngr's listing only the registered agent is known to be one; the other chats'
         # processes are counted with what nothing started.
