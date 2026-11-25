@@ -538,7 +538,8 @@ def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_sess
             assert completed.returncode == expected_exit, (mode, completed.stdout, completed.stderr)
             session_name = name_file.read_text()
             assert session_name.startswith("itest-")
-            assert session_name not in live_session_names(), mode
+            # detach returns once the daemon acknowledges; its process exits a moment later.
+            assert wait_until(lambda name=session_name: name not in live_session_names(), 10.0), mode
         orphan_file = tmp_path / "hang.name"
         killed = subprocess.Popen(
             [sys.executable, str(_DRIVEN_BROWSER_SCRIPT), "hang", str(orphan_file)], env=environment
