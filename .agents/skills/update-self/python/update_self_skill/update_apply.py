@@ -193,6 +193,19 @@ def _upgrade_stopped_agents(repo_root: Path, runner: Runner) -> None:
         )
 
 
+# The stopped-agent pass's record of the mngr that last left every agent current.
+_AGENT_UPGRADE_COVERAGE_RECORD = Path("data/.state/agent_upgrade/coverage.json")
+
+
+def _forget_agent_upgrade_coverage(repo_root: Path) -> None:
+    """Remove the record that every agent is current, so the next boot's pass runs with the restored mngr."""
+    record = repo_root / _AGENT_UPGRADE_COVERAGE_RECORD
+    try:
+        record.unlink(missing_ok=True)
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not remove {record} ({exc}).\n")
+
+
 # The services restart a moment earlier re-runs the one-shot env-converge program,
 # and an update that advances a unit's pins (a browser engine, a desktop stack) can
 # keep it installing -- and holding the dpkg lock -- for many minutes.
@@ -1601,6 +1614,9 @@ def apply_update(
             f"rolling back to {marker.rollback_to[:12]} and restoring the "
             "workspace...\n"
         )
+        # The merged tree's mngr may have created agents before this rollback.
+        if plan.resyncs_venv:
+            _forget_agent_upgrade_coverage(repo_root)
         try:
             _restore_tree(name_status, marker.rollback_to, repo_root, runner)
             _commit_rollback(
@@ -2382,6 +2398,9 @@ def recover(
         read_provisioner_inputs(repo_root),
         user_packages.user_packages(repo_root),
     )
+    # The merged tree's mngr may have created agents before the apply was interrupted.
+    if plan.resyncs_venv:
+        _forget_agent_upgrade_coverage(repo_root)
     try:
         # Before anything commits: an apply killed inside its merge left the
         # merge staged, and committing on top of that would land it instead of

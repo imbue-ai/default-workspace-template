@@ -48,16 +48,17 @@ service.
    plugins) came from, read from their `direct_url.json` in the venv. A pass
    writes it only when the listing succeeded (exit 0, every line an `id|state`
    row), every agent but the one running the pass (`MNGR_AGENT_ID`, the services
-   agent at boot) read `STOPPED`, and
-   `mngr upgrade` (run with `--format jsonl`) reported each of those upgraded or
-   current, or skipped as one its harness has no upgrade for (an `UNSUPPORTED`
-   skip, which no later pass would change); a failure, a timeout or any other skip
-   (an agent whose state could not be read, or that something started meanwhile)
-   leaves no record, and any pass that writes none removes it. While it names the
-   venv's mngr, the step starts no mngr process at all, so only the first boot
-   after the mngr changes does any work. A venv whose mngr was not installed from
-   a commit (an editable checkout) never gets a record and is upgraded at every
-   boot.
+   agent at boot) read `STOPPED`, and `mngr upgrade` (run with `--format jsonl`)
+   reported each of those upgraded or current, or skipped as one its harness has
+   no upgrade for (an `UNSUPPORTED` skip, which no later pass would change); a
+   failure, a timeout or any other skip (an agent whose state could not be read,
+   or that something started meanwhile) leaves no record, and any pass that
+   writes none removes it. An update apply that re-synced the venv removes it
+   too when it rolls back, or `recover` rolls it back, since the merged tree's
+   mngr may have created agents before then. While it names the venv's mngr, the
+   step starts no mngr process at all, so only the first boot after the mngr
+   changes does any work. A venv whose mngr was not installed from a commit (an
+   editable checkout) never gets a record and is upgraded at every boot.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

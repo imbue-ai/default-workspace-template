@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+from bootstrap.agent_upgrade import COVERAGE_RECORD
 from oom_priority.ledger import append_shed_record
 
 from update_self_skill import (
@@ -7536,10 +7537,11 @@ def test_a_stopped_agent_upgrade_that_fails_leaves_the_landed_apply_as_it_was(
     )
 
 
-def test_an_apply_that_rolls_back_before_landing_upgrades_no_agent(
-    apply_repo: Path,
-) -> None:
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+def _apply_rolled_back_after_its_restart(
+    name_status: str, repo_root: Path
+) -> _RecordingRunner:
+    """Run an apply of ``name_status`` whose restart never settles, so its own rollback restores the workspace."""
+    runner = _apply_runner(name_status, repo_root)
     restarts = {"seen": 0}
 
     def responder(url: str) -> int | None:
@@ -7553,10 +7555,45 @@ def test_an_apply_that_rolls_back_before_landing_upgrades_no_agent(
 
     runner.on_command = count_restarts
 
-    code = _apply(runner, _FakeHttp(responder), _FakeSpawner(), apply_repo)
+    assert _apply(runner, _FakeHttp(responder), _FakeSpawner(), repo_root) == 2
+    return runner
 
-    assert code == 2
+
+def _plant_agent_upgrade_record(repo_root: Path) -> Path:
+    record = repo_root / update_apply._AGENT_UPGRADE_COVERAGE_RECORD
+    record.parent.mkdir(parents=True)
+    record.write_text(
+        '{"mngr": {"imbue-mngr": "https://github.com/imbue-ai/mngr@0ld"}}\n'
+    )
+    return record
+
+
+def test_the_apply_drops_the_record_the_stopped_agent_pass_keeps() -> None:
+    assert update_apply._AGENT_UPGRADE_COVERAGE_RECORD == COVERAGE_RECORD
+
+
+def test_an_apply_that_rolls_back_before_landing_upgrades_no_agent(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_rolled_back_after_its_restart(_BACKEND_MANIFEST_DIFF, apply_repo)
+
     assert not runner.ran(*_UPGRADE_STOPPED_AGENTS)
+
+
+@pytest.mark.parametrize(
+    ("name_status", "is_record_kept"),
+    [(_BACKEND_MANIFEST_DIFF, False), (_APP_PYPROJECT_DIFF, False), (_DOCS_DIFF, True)],
+    ids=["backend-manifest", "app-pyproject", "docs"],
+)
+def test_an_apply_that_rolls_back_an_update_that_re_synced_the_venv_drops_the_agent_upgrade_record(
+    apply_repo: Path, name_status: str, is_record_kept: bool
+) -> None:
+    # The merged tree's mngr ran from its refresh until the rollback, and an agent it created has its files.
+    record = _plant_agent_upgrade_record(apply_repo)
+
+    _apply_rolled_back_after_its_restart(name_status, apply_repo)
+
+    assert record.exists() is is_record_kept
 
 
 # recover
@@ -7633,6 +7670,43 @@ def test_recover_if_stale_acts_only_on_a_marker_that_is_really_stale(
     else:
         assert runner.calls == []
         assert _marker_exists(apply_repo) is has_marker
+
+
+@pytest.mark.parametrize("no_restart", [True, False], ids=["at-boot", "live"])
+@pytest.mark.parametrize(
+    ("name_status", "is_record_kept"),
+    [(_BACKEND_MANIFEST_DIFF, False), (_FRONTEND_DIFF, True)],
+    ids=["backend-manifest", "frontend"],
+)
+def test_recover_drops_the_agent_upgrade_record_of_an_update_that_re_synced_the_venv(
+    apply_repo: Path, name_status: str, is_record_kept: bool, no_restart: bool
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    _plant_marker(apply_repo)
+    runner = _apply_runner(name_status, apply_repo)
+
+    _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=no_restart)
+
+    assert record.exists() is is_record_kept
+
+
+def test_recover_that_finds_no_stale_apply_keeps_the_agent_upgrade_record(
+    apply_repo: Path,
+) -> None:
+    record = _plant_agent_upgrade_record(apply_repo)
+    _plant_marker(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    code = _recover(
+        runner,
+        _FakeHttp(_all_healthy),
+        apply_repo,
+        if_stale=True,
+        is_pid_live=lambda pid: True,
+    )
+
+    assert code == 0
+    assert record.exists()
 
 
 def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None:
