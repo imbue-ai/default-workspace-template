@@ -3811,6 +3811,37 @@ def _hold_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
             fcntl.flock(other.fileno(), fcntl.LOCK_UN)
 
 
+def test_drain_to_composer_antigravity_returns_the_queue_block_from_the_real_session(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """agy's stop -- and the draining step a handoff borrows it for -- ends the turn and hands the queue back.
+
+    Nothing here stubs the session: the drain builds the registry's agy session out of the
+    manager, which is the seam a stop and a handoff off an agy chat both cross. That build once
+    re-listed the base's fields and went stale, so the drain crashed on a field it never set and
+    every handoff off an agy chat 500'd in its draining step.
+    """
+    agent_state_dir = tmp_path / "agents" / "agent-0000000000000000000000000000005a"
+    agent_state_dir.mkdir(parents=True)
+    agent_info = _agent_info(name="agy-agent", harness=HarnessType.ANTIGRAVITY, agent_state_dir=agent_state_dir)
+    # No turn is open, so the whole stop is taking the queue back: agy holds it itself.
+    fake_watcher = SimpleNamespace(
+        take_unclaimed_queue=lambda: ("bring me back to edit", ("q1",)),
+        take_whole_queue=lambda: ("bring me back to edit", ("q1",)),
+    )
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post(f"/api/chats/{agent_info.id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+    # Nothing to cancel and nothing of agy's to restart: the queue was always ours to take.
+    mock_run.assert_not_called()
+
+
 def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
     client: FlaskClient, tmp_path: Path
 ) -> None:
