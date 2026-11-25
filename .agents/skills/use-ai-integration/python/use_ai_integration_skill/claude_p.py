@@ -1,11 +1,13 @@
-"""Copyable helper for calling headless ``claude -p`` from a service.
+"""Self-contained helper for calling headless ``claude -p`` from a service.
 
-COPY THIS FILE into your service and adapt it -- it is a self-contained reference
-snippet, not something to import from the skill's package. It is the **keyless**
-path for an AI-driven service: when an ``ANTHROPIC_API_KEY`` is configured for the
-workspace, call ``litellm`` directly instead (cheaper for non-agentic work; see the
-use-ai-integration skill). With no key, ``claude -p`` runs on the local Claude
-subscription's programmatic pool.
+New code calls ``use_ai_integration_skill.ai`` instead, which runs this module's ``claude -p``
+path on an Anthropic sign-in; the file stays self-contained, so copies that services already
+hold keep working.
+
+It is the **keyless** path for an AI-driven service: when an ``ANTHROPIC_API_KEY`` is
+configured for the workspace, call ``litellm`` directly instead (cheaper for non-agentic
+work; see the use-ai-integration skill). With no key, ``claude -p`` runs on the Claude plan
+the account is signed in with, and draws on that plan's usage limits.
 
 Workspace credentials live in the ``env`` block of a provider account's
 ``settings.json`` under ``~/.minds/accounts/<id>/`` (the account
@@ -42,8 +44,8 @@ handles the things that are easy to get wrong by hand:
 
 - ``claude_p_task(prompt, *, append_system=None, system=None, model=...,
   permission_mode="bypassPermissions")`` -- a one-shot agentic task that needs
-  tools / file access. Tools stay enabled and it runs in the current working
-  directory (the repo). ``bypassPermissions`` is load-bearing: a headless run has
+  tools / file access. Tools stay enabled and it runs in ``cwd``, by default the
+  current working directory (the repo). ``bypassPermissions`` is load-bearing: a headless run has
   no human to approve tool use, so otherwise Read/Write/Bash are auto-denied.
 
 Both unset ``MAIN_CLAUDE_SESSION_ID`` in the child environment (an inherited value
@@ -75,6 +77,10 @@ _DEFAULT_MODEL = "claude-haiku-4-5"
 
 class ClaudeCLIError(RuntimeError):
     """A ``claude -p`` invocation failed or returned unparseable / error output."""
+
+
+class ClaudeCLITimeoutError(ClaudeCLIError):
+    """A ``claude -p`` invocation did not finish within its timeout."""
 
 
 @dataclass(frozen=True)
@@ -166,6 +172,9 @@ def _read_env_file(path: str) -> dict[str, str]:
 
 def read_workspace_ai_credentials(
     snapshot_path: str = ANTHROPIC_ENV_SNAPSHOT_PATH,
+    *,
+    # the account folder whose settings are read; None for $CLAUDE_CONFIG_DIR, else the default account
+    account_dir: str | None = None,
 ) -> WorkspaceAICredentials:
     """Resolve current credentials: the snapshot file, then account settings, then env.
 
@@ -180,7 +189,7 @@ def read_workspace_ai_credentials(
     """
     snapshot_env = _read_env_file(snapshot_path)
     settings_env: dict[str, object] = {}
-    config_dir = _account_config_dir() or os.path.expanduser("~/.claude")
+    config_dir = account_dir or _account_config_dir() or os.path.expanduser("~/.claude")
     settings_path = os.path.join(config_dir, "settings.json")
     try:
         with open(settings_path, encoding="utf-8") as f:
@@ -260,16 +269,29 @@ class ClaudeResult:
     raw: dict[str, object]  # the verbatim JSON object claude -p emitted
 
 
-def _child_env(strip_mngr_agent_vars: bool = False) -> dict[str, str]:
+def _child_env(
+    strip_mngr_agent_vars: bool = False,
+    *,
+    # the account folder claude runs on; None for $CLAUDE_CONFIG_DIR, else the default account
+    account_dir: str | None = None,
+    # an API key (and its base URL) claude authenticates with instead of the account's own
+    api_credentials: WorkspaceAICredentials | None = None,
+) -> dict[str, str]:
     """Build the child environment: a copy of os.environ minus the session var.
 
-    ``CLAUDE_CONFIG_DIR`` is set to the account the resolver reads.
+    ``CLAUDE_CONFIG_DIR`` is set to ``account_dir``, else to the account the resolver reads.
     """
     env = dict(os.environ)
     env.pop(_MAIN_CLAUDE_SESSION_ID, None)
-    config_dir = _account_config_dir()
+    config_dir = account_dir or _account_config_dir()
     if config_dir:
         env["CLAUDE_CONFIG_DIR"] = config_dir
+    if api_credentials is not None and api_credentials.api_key:
+        env["ANTHROPIC_API_KEY"] = api_credentials.api_key
+        if api_credentials.base_url:
+            env["ANTHROPIC_BASE_URL"] = api_credentials.base_url
+        else:
+            env.pop("ANTHROPIC_BASE_URL", None)
     if strip_mngr_agent_vars:
         for var in _MNGR_AGENT_VARS:
             env.pop(var, None)
@@ -428,19 +450,29 @@ def _parse_result(data: object) -> ClaudeResult:
 
 
 def _run_blocking(
-    argv: Sequence[str], *, env: Mapping[str, str], cwd: str | None
+    argv: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: str | None,
+    timeout_seconds: float | None = None,
 ) -> ClaudeResult:
     """Run ``claude -p`` synchronously and parse its JSON. Raises on failure."""
-    proc = subprocess.run(
-        list(argv),
-        # A service's inherited stdin never closes, and claude -p waits 3s for it.
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        env=dict(env),
-        check=False,
-        cwd=cwd,
-    )
+    try:
+        proc = subprocess.run(
+            list(argv),
+            # A service's inherited stdin never closes, and claude -p waits 3s for it.
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=dict(env),
+            check=False,
+            cwd=cwd,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ClaudeCLITimeoutError(
+            f"claude -p did not finish within {exc.timeout:g}s"
+        ) from exc
     if proc.returncode != 0:
         raise ClaudeCLIError(
             f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}"
@@ -458,15 +490,18 @@ def claude_p_completion(
     system: str,
     model: str = _DEFAULT_MODEL,
     strip_mngr_agent_vars: bool = False,
+    # the account folder claude runs on; None for $CLAUDE_CONFIG_DIR, else the default account
+    account_dir: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> ClaudeResult:
     """One non-agentic completion. ``system`` is required (see module docstring)."""
-    env = _child_env(strip_mngr_agent_vars)
+    env = _child_env(strip_mngr_agent_vars, account_dir=account_dir)
     argv = _completion_argv(prompt, system=system, model=model)
     # Isolated cwd: claude -p auto-discovers CLAUDE.md / .claude hooks from the
     # working directory, so a throwaway dir keeps that project context out of the
     # answer. Credentials come from the env, not the cwd, so auth is unaffected.
     with tempfile.TemporaryDirectory(prefix="claude_p_completion_") as cwd:
-        return _run_blocking(argv, env=env, cwd=cwd)
+        return _run_blocking(argv, env=env, cwd=cwd, timeout_seconds=timeout_seconds)
 
 
 def claude_p_task(
@@ -477,14 +512,23 @@ def claude_p_task(
     model: str = _DEFAULT_MODEL,
     permission_mode: str | None = "bypassPermissions",
     strip_mngr_agent_vars: bool = False,
+    # the account folder claude runs on; None for $CLAUDE_CONFIG_DIR, else the default account
+    account_dir: str | None = None,
+    # an API key (and its base URL) claude authenticates with instead of the account's own
+    api_credentials: WorkspaceAICredentials | None = None,
+    # the directory the task runs in; None for the current working directory
+    cwd: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> ClaudeResult:
-    """One agentic task: tools enabled, run in the current (repo) working dir.
+    """One agentic task: tools enabled, run in ``cwd`` (by default the current, repo, working dir).
 
     ``append_system`` layers task instructions on Claude Code's default agent
     prompt; pass ``system`` to replace it outright (rare -- you usually want the
     default agent here).
     """
-    env = _child_env(strip_mngr_agent_vars)
+    env = _child_env(
+        strip_mngr_agent_vars, account_dir=account_dir, api_credentials=api_credentials
+    )
     argv = _task_argv(
         prompt,
         system=system,
@@ -492,4 +536,4 @@ def claude_p_task(
         model=model,
         permission_mode=permission_mode,
     )
-    return _run_blocking(argv, env=env, cwd=None)
+    return _run_blocking(argv, env=env, cwd=cwd, timeout_seconds=timeout_seconds)

@@ -214,6 +214,7 @@ terminal-app = { workspace = true }
 workspace-scripts = { workspace = true }
 agents-shared = { workspace = true }
 update-self-skill = { workspace = true }
+use-ai-integration-skill = { workspace = true }
 imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "f1cd33c318ade8e4c7e607947aa15fc44ef2f88d", subdirectory = "libs/imbue_common" }
 imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "f1cd33c318ade8e4c7e607947aa15fc44ef2f88d", subdirectory = "libs/mngr" }
 imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "f1cd33c318ade8e4c7e607947aa15fc44ef2f88d", subdirectory = "libs/mngr_claude" }

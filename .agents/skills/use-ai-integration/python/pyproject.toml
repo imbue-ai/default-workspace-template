@@ -1,9 +1,11 @@
 [project]
 name = "use-ai-integration-skill"
 version = "0.1.0"
-description = "Calls Claude with the workspace's AI credentials"
+description = "Calls a model through the workspace's signed-in AI accounts"
 requires-python = ">=3.12"
 dependencies = [
+    "litellm>=1.88.1",
+    "openai>=2",
     "pydantic>=2",
 ]
 

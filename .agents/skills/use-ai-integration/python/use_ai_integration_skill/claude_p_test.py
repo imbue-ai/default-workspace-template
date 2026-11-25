@@ -526,3 +526,104 @@ def test_snapshot_path_is_the_workspace_secrets_dir_from_any_cwd() -> None:
     Code then diffs, key included, into the session transcript."""
     path = claude_p.ANTHROPIC_ENV_SNAPSHOT_PATH
     assert path == "/home/user/workspace/data/.secrets/anthropic.env"
+
+
+def test_child_env_runs_on_the_named_account_over_claude_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/chat")
+
+    env = claude_p._child_env(account_dir="/accounts/named")
+
+    assert env["CLAUDE_CONFIG_DIR"] == "/accounts/named"
+
+
+def test_child_env_gives_claude_the_given_key_and_drops_a_stale_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://stale/")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    without_base = claude_p._child_env(
+        api_credentials=claude_p.WorkspaceAICredentials(
+            api_key="sk-given", base_url=None, oauth_token=None
+        )
+    )
+    with_base = claude_p._child_env(
+        api_credentials=claude_p.WorkspaceAICredentials(
+            api_key="sk-given", base_url="https://proxy", oauth_token=None
+        )
+    )
+
+    assert without_base["ANTHROPIC_API_KEY"] == "sk-given"
+    assert "ANTHROPIC_BASE_URL" not in without_base
+    assert with_base["ANTHROPIC_API_KEY"] == "sk-given"
+    assert with_base["ANTHROPIC_BASE_URL"] == "https://proxy"
+
+
+def test_credentials_read_the_named_account_not_claude_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    chat_settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-chat-key"}}')
+    named_dir = tmp_path / "named"
+    named_dir.mkdir()
+    (named_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-named-key"}}'
+    )
+
+    creds = claude_p.read_workspace_ai_credentials(
+        _snapshot_path(tmp_path), account_dir=str(named_dir)
+    )
+
+    assert creds.api_key == "sk-named-key"
+
+
+# Stands in for claude: reports its working directory as the result text.
+_STUB_CLAUDE_REPORTING_CWD = """#!/usr/bin/env python3
+import json, os
+print(json.dumps({"subtype": "success", "result": os.getcwd(), "total_cost_usd": 0}))
+"""
+
+_HANGING_STUB_CLAUDE = """#!/usr/bin/env python3
+import signal
+signal.pause()
+"""
+
+
+def _put_stub_claude_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """Put a stub ``claude`` first on PATH, with HOME (so ~/.minds) an empty tmp dir."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(source)
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def test_task_runs_in_the_given_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _put_stub_claude_on_path(tmp_path, monkeypatch, _STUB_CLAUDE_REPORTING_CWD)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    result = claude_p.claude_p_task("do work", cwd=str(work_dir), timeout_seconds=8)
+
+    assert Path(result.text).resolve() == work_dir.resolve()
+
+
+def test_a_claude_that_outlives_its_timeout_raises_a_timeout_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _put_stub_claude_on_path(tmp_path, monkeypatch, _HANGING_STUB_CLAUDE)
+
+    with pytest.raises(claude_p.ClaudeCLITimeoutError, match="within 1s") as raised:
+        claude_p.claude_p_completion(
+            "hello", system="Answer briefly.", timeout_seconds=1.0
+        )
+
+    assert isinstance(raised.value, claude_p.ClaudeCLIError)
