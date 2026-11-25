@@ -41,9 +41,10 @@ python3 .agents/skills/connect-external-service/python/connect_external_service_
 - **Rotating a value** is a new request for the same file and variable; the
   card says which existing variables it replaces. **Removing** one is
   `rm data/.secrets/<file>.env`. You never edit the file.
-- Where there is no chat app (the script says so and exits 1), the last resort
-  is to ask the user to create the file from a terminal: one `NAME='value'` line
-  per variable, then `chmod 600`.
+- Where there is no chat app (an agent created outside Imbue Studio, a headless
+  run; the script says so and exits 1), the last resort is to ask the user to
+  create `data/.secrets/<file>.env` from a terminal themselves: one
+  `NAME='value'` line per variable, then `chmod 600`.
 
 ## Running the SDK or CLI under the wrapper
 
