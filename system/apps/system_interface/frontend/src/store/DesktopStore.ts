@@ -710,9 +710,14 @@ export class DesktopStore {
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
    * retry is the control just pressed asks for a plain note; any other, and any failure that owes the person help,
    * shows one that stays, which for a failure that owes help offers "Report a bug" wherever the embedder opens a bug
-   * report when the toast is drawn (``reportBugAction``).
+   * report when the toast is drawn (``reportBugAction``). ``causedBy`` names the app whose own answer the failure is
+   * (its refusal of a launch): the report is offered only where that app is built in (``isBuiltInApp``).
    */
-  private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
+  private toastFailure(
+    whatFailed: string,
+    error: unknown,
+    options: { readonly isLasting: boolean; readonly causedBy?: string },
+  ): void {
     this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
   }
 
@@ -723,7 +728,10 @@ export class DesktopStore {
   }
 
   /** ``toastFailure`` for a failure already worded. */
-  private showFailure(told: FailureMessage, { isLasting }: { readonly isLasting: boolean }): void {
+  private showFailure(
+    told: FailureMessage,
+    { isLasting, causedBy }: { readonly isLasting: boolean; readonly causedBy?: string },
+  ): void {
     if (!isLasting && !told.isHelpOwed) {
       this.toasts.show(told.message, { isLasting: false, details: told.details });
       return;
@@ -732,6 +740,7 @@ export class DesktopStore {
       isLasting: true,
       details: told.details,
       isHelpOwed: told.isHelpOwed,
+      isBugReportWithheld: causedBy !== undefined && !this.isBuiltInApp(causedBy),
     });
   }
 
@@ -803,10 +812,23 @@ export class DesktopStore {
     return this.canReportBug ? (failure) => this.reportBug(failure) : null;
   }
 
-  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
-   *  it with nothing attached. */
-  reportBugFromPage(failure: ReportedFailure | null): void {
-    if (this.canReportBug) this.reportBug(failure);
+  /** Whether a failure ``app`` caused is Imbue's to hear about: the app is built in (``system = true`` in its
+   *  app.toml). A user's own app's faults are not Imbue's bugs, so neither its pages nor the shell's toasts about its
+   *  failures offer "Report a bug". */
+  isBuiltInApp(app: string): boolean {
+    return appByName(this.state, app)?.system === true;
+  }
+
+  /** Whether a page of ``app`` may offer "Report a bug", which its handshake says: the embedder opens a bug report
+   *  and the app is built in. */
+  canReportBugFor(app: string): boolean {
+    return this.canReportBug && this.isBuiltInApp(app);
+  }
+
+  /** A page of ``app`` sent ``shell:report-bug``: the bug report about ``failure`` opens where that page may offer
+   *  one (``canReportBugFor``); null opens it with nothing attached. */
+  reportBugFromPage(app: string, failure: ReportedFailure | null): void {
+    if (this.canReportBugFor(app)) this.reportBug(failure);
   }
 
   /** Whether the embedder opens its workspace settings when a page asks, which each page is told in its handshake. */
@@ -2930,8 +2952,9 @@ export class DesktopStore {
   /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
    *  an ask of the shell's own). The one place an ask becomes the message an agent reads: the assist command and
    *  the app and window it came from go in front of ``text`` (``assistRequest``). It is sent to the chat about that
-   *  window's app, through the first launch path of the machine that takes an ask's text, whose page is put on
-   *  screen by the show rule and laid out beside the window, as "Chat about this app" lays it out. With no such
+   *  window's app, through the first launch path of the machine about an app that takes text (``appAskLaunchOf``),
+   *  whose page is put on screen by the show rule and laid out beside the window, as "Chat about this app" lays it
+   *  out. With no such
    *  window, a window of an internal app, no such launch path, or the ``main-chat`` delivery, the primary text action
    *  runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. Settles as
    *  ``startWithText`` does. */
@@ -3082,7 +3105,7 @@ export class DesktopStore {
       );
       // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
       // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
-      if (onFailure === null) this.showFailure(told, { isLasting: true });
+      if (onFailure === null) this.showFailure(told, { isLasting: true, causedBy: app });
       else onFailure(told);
       return null;
     }

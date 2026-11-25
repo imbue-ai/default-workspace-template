@@ -119,12 +119,12 @@ WINDOW_NOT_SHOWN_MESSAGE: Final[str] = (
 
 
 def _refusal(
-    reason: str, status: int, user_facing_message: str | None = None, is_expected: bool | None = None
+    reason: str, status: int, user_facing_message: str | None = None, is_routine: bool | None = None
 ) -> Response:
     """A refusal, as the shell and the fleet CLI read one: the reason under ``detail``, and the sentence for a person
-    beside it when there is one. ``is_expected`` marks a sentence that fully explains an ordinary state (still being
+    beside it when there is one. ``is_routine`` marks a sentence that fully explains an ordinary state (still being
     set up, not ready yet, too many open), for which the shell offers no agent."""
-    return error_response(reason, status, user_facing_message, is_expected)
+    return error_response(reason, status, user_facing_message, routine=is_routine)
 
 
 def _install_refusal(missing: str, failure: str | None) -> Response:

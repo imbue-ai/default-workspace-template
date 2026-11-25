@@ -1,9 +1,14 @@
 """Unit tests for agy's send: it enqueues, always, and never types."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
+from typing import cast
+
+import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
@@ -13,11 +18,20 @@ from imbue.chat.harnesses.antigravity.queue_tracker import session_token
 from imbue.chat.harnesses.antigravity.session import AntigravityHarnessSession
 from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
+from imbue.chat.harnesses.interrupt import PressChord
+from imbue.chat.harnesses.interrupt import RestartProcess
+from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.models import AgentRestartError
 
 
-def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
+def _session(
+    state_dir: Path, sent: list[str], interrupter: InterruptToComposer | None = None
+) -> AntigravityHarnessSession:
     state_dir.mkdir(parents=True, exist_ok=True)
     # Each test gets a fresh queue and reading for this agent id.
     drop_tracker(state_dir.name)
@@ -40,7 +54,7 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
             recompute_activity=lambda: None,
             clear_queue_state=lambda: None,
             catalog_options=lambda: ANTIGRAVITY_CATALOG.options,
-            build_interrupter=unused,
+            build_interrupter=unused if interrupter is None else lambda agent_info: interrupter,
             build_shoulder_tap=lambda agent_info: None,
         )
     )
@@ -169,6 +183,63 @@ def test_a_failed_delivery_demotes_it_back_to_queued(tmp_path: Path) -> None:
     _block, claimed, generation = tracker.begin_flush()
     tracker.finish_flush(claimed, generation, delivered=())
     assert [e["is_sending"] for e in session._queue().snapshot()] == [False]
+
+
+class _Stop(InterruptToComposer):
+    """A stop that reads the in-flight block, then succeeds or fails as told."""
+
+    def __init__(self, is_failing: bool) -> None:
+        self.is_failing = is_failing
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "_Stop":
+        return cls(is_failing=False)
+
+    def drain_to_composer(
+        self,
+        watcher: AgentSessionWatcher,
+        restart_process: RestartProcess,
+        settle_activity: SettleActivity,
+        press_chord: PressChord,
+        get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
+    ) -> str:
+        block = get_in_flight_block()
+        if self.is_failing:
+            raise AgentRestartError("the restart failed")
+        return block
+
+
+def _stop(session: AntigravityHarnessSession, state_dir: Path) -> str:
+    return session.interrupt_to_composer(
+        AgentInfo(
+            id=state_dir.name,
+            name="agy",
+            state="RUNNING",
+            agent_state_dir=state_dir,
+            claude_config_dir=state_dir,
+        ),
+        cast(AgentSessionWatcher, object()),
+        lambda: (True, ""),
+        lambda: None,
+        lambda: True,
+        lambda: False,
+    )
+
+
+def test_a_stop_returns_its_block(tmp_path: Path) -> None:
+    """The stop button and a harness switch both drain through here; agy's session once lacked a
+    field the base's stop reads, so both failed with an AttributeError."""
+    state_dir = tmp_path / "agent-stop"
+    session = _session(state_dir, [], _Stop(is_failing=False))
+    assert _stop(session, state_dir) == ""
+
+
+def test_a_failed_stop_surfaces_its_own_error(tmp_path: Path) -> None:
+    state_dir = tmp_path / "agent-stop-failing"
+    session = _session(state_dir, [], _Stop(is_failing=True))
+    with pytest.raises(AgentRestartError):
+        _stop(session, state_dir)
 
 
 def test_a_turn_opening_first_demotes_it_back_to_queued(tmp_path: Path) -> None:

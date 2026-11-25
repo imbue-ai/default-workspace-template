@@ -78,7 +78,7 @@ def test_the_launch_path_refuses_a_bad_start_page_under_detail(client: FlaskClie
     assert refused.status_code == 400
     assert "url" in refused.get_json()["detail"]
     assert refused.get_json()["user_facing_message"] == BAD_START_PAGE_MESSAGE
-    assert refused.get_json()["expected"] is True
+    assert refused.get_json()["routine"] is True
     assert client.post("/launch/browser", json=["https://example.com"]).status_code == 400
     assert client.post("/launch/browser", json={"url": 3}).status_code == 400
     assert client.get("/launch/browser").status_code == 405
@@ -170,11 +170,11 @@ def test_an_external_link_is_refused_with_a_sentence_for_the_person_who_clicked_
     answer = client.post("/api/open-url", json={"client_id": "c-link", "url": "https://example.com/"})
     assert answer.status_code == 400
     assert answer.get_json()["user_facing_message"] == BAD_LINK_MESSAGE
-    assert "expected" not in answer.get_json()
+    assert "routine" not in answer.get_json()
 
 
 @pytest.mark.parametrize("path", ["/launch/browser", "/api/open-url"])
-def test_a_browser_not_yet_installed_says_so_as_expected_and_one_that_failed_to_install_owes_help(
+def test_a_browser_not_yet_installed_says_so_as_routine_and_one_that_failed_to_install_owes_help(
     client: FlaskClient, fake_install: FakeInstall, loopback_shell: LoopbackShell, path: str
 ) -> None:
     body = {"client_id": "c-link", "url": "http://localhost:3000/"}
@@ -184,13 +184,13 @@ def test_a_browser_not_yet_installed_says_so_as_expected_and_one_that_failed_to_
     assert installing.get_json() == {
         "detail": "Chromium is still installing in this workspace; try again in a minute.",
         "user_facing_message": BROWSER_INSTALLING_MESSAGE,
-        "expected": True,
+        "routine": True,
     }
     fake_install.failure = "env-converge ran system/scripts/env.d/2000-screen.sh in this boot and it failed"
     failed = client.post(path, json=body)
     assert failed.status_code == 503
     assert failed.get_json()["user_facing_message"] == BROWSER_INSTALL_FAILED_MESSAGE
-    assert "expected" not in failed.get_json()
+    assert "routine" not in failed.get_json()
     assert "2000-screen.sh in this boot and it failed" in failed.get_json()["detail"]
 
 
@@ -204,7 +204,7 @@ def test_open_url_says_why_when_the_shell_will_not_show_the_screen(
     assert "No client 'c-gone'" in answer.get_json()["detail"]
     # The page did open, but the window the person asked for did not: a sentence of ours that owes help.
     assert answer.get_json()["user_facing_message"] == WINDOW_NOT_SHOWN_MESSAGE
-    assert "expected" not in answer.get_json()
+    assert "routine" not in answer.get_json()
     assert fake_cdp_connector.clients[0].created == ["http://localhost:3000/"]
 
 
@@ -227,7 +227,7 @@ def test_a_named_create_and_its_refusals(client: FlaskClient, service: ScreenSer
     full = client.post("/browsers", json={"name": "second"})
     assert full.status_code == 409
     assert full.get_json()["user_facing_message"] == FLEET_FULL_MESSAGE
-    assert full.get_json()["expected"] is True
+    assert full.get_json()["routine"] is True
     assert client.post("/browsers", json={"url": "nope"}).status_code == 400
 
 
