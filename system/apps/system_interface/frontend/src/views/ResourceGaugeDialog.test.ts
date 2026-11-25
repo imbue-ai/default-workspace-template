@@ -4,6 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResourceGaugeSettings } from "../model/resourceGauge";
+import { refusedWith, wordFailureAsTheStoreDoes } from "../testing/failures";
 import { ResourceGaugeDialog, parseLevelText } from "./ResourceGaugeDialog";
 
 const SETTINGS: ResourceGaugeSettings = {
@@ -43,7 +44,15 @@ async function save(): Promise<void> {
 }
 
 function mount(onSave: (settings: ResourceGaugeSettings) => Promise<void>, onClose: () => void = vi.fn()): void {
-  mountView(() => m(ResourceGaugeDialog, { settings: SETTINGS, onSave, onClose }));
+  mountView(() =>
+    m(ResourceGaugeDialog, {
+      settings: SETTINGS,
+      wordFailure: wordFailureAsTheStoreDoes,
+      onReportBug: vi.fn(),
+      onSave,
+      onClose,
+    }),
+  );
 }
 
 describe("ResourceGaugeDialog", () => {
@@ -79,13 +88,23 @@ describe("ResourceGaugeDialog", () => {
     expect(onSave).toHaveBeenCalledWith({ ...SETTINGS, diskWarningFreeGb: null });
   });
 
-  it("says why when the shell refuses the save, and stays open", async () => {
-    const onSave = vi.fn<(settings: ResourceGaugeSettings) => Promise<void>>().mockRejectedValue(new Error("busy"));
+  it("says the settings couldn't be saved, with the shell's reason behind See details, stays open, and saves again on Try again", async () => {
+    const onSave = vi
+      .fn<(settings: ResourceGaugeSettings) => Promise<void>>()
+      .mockRejectedValueOnce(refusedWith(500, { detail: "cannot write shell state file" }))
+      .mockResolvedValue();
     const onClose = vi.fn();
     mount(onSave, onClose);
     await save();
-    expect(card().querySelector("[data-gauge-error]")?.textContent).toBe("Could not save: busy");
+    expect(card().querySelector(".resource-gauge-error-message")?.textContent).toBe(
+      "The resource gauge settings couldn't be saved. Try again.",
+    );
+    expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 500\ncannot write shell state file");
     expect(onClose).not.toHaveBeenCalled();
+    (card().querySelector(".resource-gauge-error-action") as HTMLButtonElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("reads a typed level as GB for the disk and a whole percentage for memory and CPU", () => {

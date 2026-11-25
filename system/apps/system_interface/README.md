@@ -175,7 +175,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, where it resumes, and whether it is finished), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the default shortcuts the shell has
-offered), `placements/<desktop>/<client>.json`,
+offered), `shortcut_names.json` (what each shortcut's app and launch path were
+called while the app was registered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `visitor_desktops_adopted` (the mark that the visitors' desktops from before desktop owners were given their visitors),
@@ -630,19 +631,30 @@ with both on the default provider when there is none (so the chat app's own
 windows open "Chat Chat"), with a pending intake whose `hint` the chat root puts
 on the composer as its placeholder, "How do you want to change <App>?", and
 focuses. A page's ask (`shell:ask-agent`, `store/DesktopStore.ts` `askAgent`;
-a failure's "Ask an agent to fix this" sends it) reaches that same chat: for a
+a failure's "Ask an agent to fix this" sends it) reaches that same chat. The
+shell writes the message the agent reads, the one place that does
+(`assistRequest`): `/assist `, so the agent runs the workspace's assist flow,
+then the app and the window the ask was pressed in, then the ask's text. For a
 page in a window of an app that is not internal, the shell runs the first
 launch path of the machine that declares `app_params` and a `text_param` (the
 chat app's `app-chat` again) with the app's name, its display name, and the
 ask's text in that `text_param`,
 through the same `show` target beside the page's window, and the chat app sends
-the text to the chat about the app as a message (making that chat with it when
-there is none, and sending it to the main chat when that chat cannot take it).
-With no such launch path, an internal app, or no window (the shell's own ask),
-the ask runs the primary free-text row instead, as `shell:start-with-text`
-does, with the text behind `/assist ` (`assistRequest`), so the agent runs the
-workspace's assist flow either way (the chat app puts the command in front of
-its own lead-in on the other path). The shell names no app in any of this.
+it to the chat about the app as a message (making that chat with it when there
+is none, and sending it to the main chat when that chat cannot take it). With
+no such launch path, an internal app, no window (an ask of the shell's own that
+is about no app), or an ask sent with the `main-chat` delivery, the ask runs
+the primary free-text row instead, as `shell:start-with-text` does; the `draft`
+delivery leaves the message unsent in a chat's message box. The shell's own
+"Ask an agent to ..." buttons follow the same rule (`askAgentAbout`), each with
+a task `agentFixTask` words (what the person was shown, the details, and what
+to do): one about an app (a failure of the app's own, such as a launch it
+answered with an error) goes to the chat about that app, wherever the `show`
+target puts it; one about no app (the update notice's "Ask an agent to finish
+it") runs the primary free-text row, and so does a full disk's "Ask an agent to
+free up space" whatever it is about, since a new chat needs disk. Where the app
+an ask would go through is the app the ask is about (the chat app), no agent
+can be asked, and "Report a bug" is offered in its place. The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a
@@ -737,15 +749,38 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert. A toast whose failure owes the person help offers
-"Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
-the toast draws, and the report it opens carries the toast's sentence and
-details (`minds:open-help {errorDetails}`); a page's `shell:report-bug` does
-the same with the failure the page sent. Only built-in apps (`system = true`
-in `app.toml`) get it: a user's own app's page is told `canReportBug: false`
-and its `shell:report-bug` is dropped, and a toast about a launch such an app
-refused or could not answer offers no "Report a bug"
-(`DesktopStore.isBuiltInApp`, `canReportBugFor`).
+than a browser alert. A failure that owes the person help (one the server did
+not explain, or wrote a sentence about without calling it routine), and a
+refusal that leaves the person unable to do what they meant to (an app that
+couldn't be found, a launch path an app no longer offers), offers an agent,
+decided in one place (the store's notice builder): "Ask an agent to fix this",
+asked in the chat about the app when the failure is the app's (a launch it
+answered with an error, a quit, a message it refused), else in the main chat,
+with the failure's sentence and details as `agentFixTask` words them; a full
+disk offers "Ask an agent to free up space" instead, whose task says so. No
+help is owed where the shell recovers by itself (a gone window or desktop,
+which it reads again), for a deliberate rule, or for a request nothing
+answered. "Report a bug" stands in for the agent only where
+none can be asked: the ask would go through what failed (a failure of the app
+agents are asked through, Chat on a stock workspace), or no app that takes one
+is known (the workspace has none, or the app list has not loaded). It is
+offered whenever the Imbue Studio chrome says it opens one, decided as the
+toast draws, and the report it opens carries the toast's sentence and details
+(`minds:open-help {errorDetails}`); a failure told in place (a dialog's line,
+the launcher, the backdrop, a gone app's window) does the same, and so does a
+page's `shell:report-bug` with the failure the page sent. Only built-in apps
+(`system = true` in `app.toml`) get it: a user's own app's page is told
+`canReportBug: false` and its `shell:report-bug` is dropped, and a note about a
+launch such an app refused or could not answer offers no "Report a bug"
+(`DesktopStore.isBuiltInApp`, `canReportBugFor`). A send from the
+launcher that Chat itself refused, whose line keeps the typed text in the
+field, also offers "Open Chat", where the person can send it themselves. "Ask
+an agent to ..." and "Report a bug" leave their toast up; Try again takes it
+down. Pressed, an "Ask an agent to ..." button reads "Asking an agent…" and
+takes no second press until the agent's chat is on the desktop. An ask that
+fails is told in a toast of its own, which offers no second ask: where the
+failure owes help it offers "Draft it in a chat", which leaves the same request
+unsent in a chat's message box for the person to send, beside "Report a bug".
 
 ### The phone layout
 

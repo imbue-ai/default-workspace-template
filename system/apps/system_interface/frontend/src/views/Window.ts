@@ -25,7 +25,10 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
+import type { FailureNotice } from "../model/failures";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
+import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 import { glyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -96,11 +99,17 @@ export interface WindowAttrs {
    *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
    *  loading page until the app is up. */
   readonly isStopped: boolean;
+  /** Report a bug about the gone app's notice where it offers one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
+  /** What the window says in place of a page it can never show when its app couldn't be found (the app list has
+   *  landed without it), with its close (the store's ``goneAppNotice``); null otherwise. */
+  readonly gone: FailureNotice | null;
   /** Immersive mode's state and verbs for the fullscreen strip; null hides its control. */
   readonly immersive: ImmersiveControls | null;
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onToggleMaximize: () => void;
+  readonly onClose: () => void;
   /** The theme's arrangement of the title bar. */
   readonly chrome: ThemeChrome;
 }
@@ -117,6 +126,19 @@ export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
       m("div", { class: "type-label text-primary" }, label),
       m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
     ],
+  );
+}
+
+/** What a window shows in place of its page: why it has none (its app couldn't be found), with the buttons for the
+ *  next step. */
+export function windowPlaceholder(marker: string, notice: FailureNotice, onReportBug: ReportBug): m.Vnode {
+  return m(
+    "div",
+    {
+      [`data-${marker}`]: "",
+      class: "flex h-full w-full flex-col items-center justify-center bg-surface px-6 text-center",
+    },
+    m(FailureLine, { notice, onReportBug, marker: `${marker}-notice`, messageClass: "type-label text-primary" }),
   );
 }
 
@@ -183,7 +205,7 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped, gone, onReportBug } = attrs;
       const isFullscreen = state === "FULLSCREEN";
       const isResizable = !isTouch && !isFullscreen;
       return m(
@@ -226,6 +248,8 @@ export function Window(): m.Component<WindowAttrs> {
                     app,
                     state,
                     isFocused,
+                    // A window with no page has nothing to refresh.
+                    canRefresh: gone === null,
                     isMenuOpen: attrs.isMenuOpen,
                     hasAppChat: attrs.hasAppChat,
                     share: attrs.hasShare ? { barWidth: rect.width, isTouch } : undefined,
@@ -246,6 +270,7 @@ export function Window(): m.Component<WindowAttrs> {
                 },
                 [
                   isStopped ? stoppedPlaceholder(app) : null,
+                  gone === null ? null : windowPlaceholder("gone-app", gone, onReportBug),
                   // The shield: the press that closes an open menu or the launcher (or raises the window, on touch)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

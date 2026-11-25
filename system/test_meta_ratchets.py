@@ -498,7 +498,9 @@ _SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset(
         # cannot restart itself; that agent is not an app.
         "needs_system_services_restart",
         "needsSystemServicesRestart",
+        "SYSTEM_SERVICES_RESTART_COMMAND",
         "SYSTEM_SERVICES_RESTART_DETAILS",
+        "SYSTEM_SERVICES_RESTART_SETTLED_DETAILS",
     }
 )
 

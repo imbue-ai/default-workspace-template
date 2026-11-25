@@ -1511,6 +1511,28 @@ describe("the contract", () => {
     ]);
   });
 
+  it("offers a refused ask that owes help as a draft on its toast, for a page that does not show the outcome", async () => {
+    const failure = { message: "Chat couldn't open that. Try again.", details: "HTTP 502", isHelpOwed: true };
+    const askAgent = vi.spyOn(store, "askAgent").mockResolvedValue({ isOpened: false, failure });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-4" });
+    await settle();
+    const [toast] = store.toasts.current();
+    // The ask's own failure offers no second ask: the same request as a draft, and Report a bug.
+    expect(toast).toMatchObject({ message: failure.message, isLasting: true, isHelpOwed: true });
+    expect(toast.actions.map((action) => action.label)).toEqual(["Draft it in a chat"]);
+    toast.actions[0].run();
+    expect(askAgent.mock.calls).toEqual([
+      ["Fix this.", "win-1", "app-chat"],
+      ["Fix this.", "win-1", "draft"],
+    ]);
+
+    // A draft that could not be made is not offered as a draft again: its toast, saying the same, takes the place
+    // of the first.
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-5", delivery: "draft" });
+    await settle();
+    expect(store.toasts.current().map((shown) => shown.actions)).toEqual([[]]);
+  });
+
   it("toasts a refused start itself when the page does not show the outcome, as for Routines' add field", async () => {
     offerApps(api, socket, [
       appRecord("docs", {

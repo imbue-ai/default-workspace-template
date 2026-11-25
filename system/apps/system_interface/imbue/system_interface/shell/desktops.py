@@ -43,6 +43,8 @@ from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopThemesDocument
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
+from imbue.system_interface.shell.data_types import ShortcutNames
+from imbue.system_interface.shell.data_types import ShortcutNamesDocument
 from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import default_shortcut_targets
@@ -79,6 +81,14 @@ DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 2
 # The record's version while it named apps (``AppsOfferedDocument``).
 _APPS_OFFERED_FILE_VERSION: Final[int] = 1
+# What each shortcut's app and launch path were called while the app was registered. A file of its own because a
+# shell older than the one that keeps desktops.json's unknown fields reads an unknown field there as an unreadable
+# file and seeds a fresh desktop over it, and an update's rollback can put such a shell back.
+# CLEANUP: move these names onto the shortcut records in desktops.json once every shell a rollback can return to
+# keeps desktops.json's unknown fields (dwt PR #1205), reading this file once
+# to carry the names over.
+SHORTCUT_NAMES_FILENAME: Final[str] = "shortcut_names.json"
+SHORTCUT_NAMES_FILE_VERSION: Final[int] = 1
 # Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
 # runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
 VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
@@ -339,6 +349,41 @@ class DesktopStore(MutableModel):
         kept = {key: value for key, value in choices.theme_by_desktop_id.items() if key not in desktop_ids}
         if len(kept) != len(choices.theme_by_desktop_id):
             self._write_themes_unlocked(ThemeChoices(default=choices.default, theme_by_desktop_id=kept))
+
+    def _shortcut_names_path(self) -> Path:
+        return self.state_directory / SHORTCUT_NAMES_FILENAME
+
+    def _read_shortcut_names_unlocked(self) -> dict[ShortcutTarget, ShortcutNames]:
+        """The recorded names by target; none when the file is absent, unreadable, or of another version (logged)."""
+        document = parse_versioned_document(
+            read_json_object(self._shortcut_names_path()),
+            ShortcutNamesDocument,
+            SHORTCUT_NAMES_FILE_VERSION,
+            self._shortcut_names_path(),
+        )
+        if document is None:
+            return {}
+        return {ShortcutTarget(app=names.app, launch=names.launch): names for names in document.shortcuts}
+
+    def read_shortcut_names(self) -> dict[ShortcutTarget, ShortcutNames]:
+        """What each shortcut's app and launch path were called while the app was registered, by target."""
+        with STATE_FILES_LOCK:
+            return self._read_shortcut_names_unlocked()
+
+    def record_shortcut_names(self, known: Sequence[ShortcutNames], kept: AbstractSet[ShortcutTarget]) -> None:
+        """Record ``known`` (the names of shortcuts whose app is registered now) over the recorded names, keeping a
+        recorded entry while a desktop still holds its target (``kept``), so a shortcut whose app has gone keeps the
+        names it had; written only when that changes the record. Raises ShellStateError when it cannot be written."""
+        with STATE_FILES_LOCK:
+            recorded = self._read_shortcut_names_unlocked()
+            merged = {target: names for target, names in recorded.items() if target in kept}
+            for names in known:
+                merged[ShortcutTarget(app=names.app, launch=names.launch)] = names
+            if merged == recorded:
+                return
+            ordered = sorted(merged.values(), key=lambda names: (str(names.app), str(names.launch)))
+            document = ShortcutNamesDocument(version=SHORTCUT_NAMES_FILE_VERSION, shortcuts=tuple(ordered))
+            write_json_atomic(self._shortcut_names_path(), document.model_dump(mode="json"))
 
     def _offered_path(self) -> Path:
         return self.state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME

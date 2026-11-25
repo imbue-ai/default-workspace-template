@@ -9,8 +9,9 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { KeyboardSettingsSection } from "./KeyboardSettingsSection";
+import type { KeyboardSettingsSectionAttrs } from "./KeyboardSettingsSection";
 
-export interface KeyboardShortcutsDialogAttrs {
+export interface KeyboardShortcutsDialogAttrs extends KeyboardSettingsSectionAttrs {
   readonly onClose: () => void;
 }
 
@@ -30,7 +31,7 @@ export function KeyboardShortcutsDialog(): m.Component<KeyboardShortcutsDialogAt
           card: { "data-keyboard-shortcuts-dialog": true },
           actions: [m(Button, { extra: "keyboard-shortcuts-close", onclick: attrs.onClose }, "Close")],
         },
-        [m(KeyboardSettingsSection)],
+        [m(KeyboardSettingsSection, { wordFailure: attrs.wordFailure, onReportBug: attrs.onReportBug })],
       );
     },
   };

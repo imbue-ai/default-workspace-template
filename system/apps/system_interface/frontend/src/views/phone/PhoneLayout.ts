@@ -24,12 +24,14 @@ import {
   startSheetRows,
   windowsSheetRows,
 } from "../../reducers/phone";
+import type { FailureNotice } from "../../model/failures";
 import type { ShownMountPolicy } from "../../pages/livePages";
 import type { DesktopStore } from "../../store/DesktopStore";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
-import { stoppedPlaceholder } from "../Window";
+import { BootFailureNotice, bootSpinner } from "../FailureLine";
+import { stoppedPlaceholder, windowPlaceholder } from "../Window";
 import { isAppShareable, MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
@@ -61,6 +63,8 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
   let windowQuery = "";
   let startQuery = "";
   let startHighlight: number | null = null;
+  // Why the last row the start sheet ran failed, shown under its field until the text changes or the sheet closes.
+  let startFailure: FailureNotice | null = null;
   let root: HTMLElement | null = null;
   let isKeyboardUp = false;
   const menu = createMenu({
@@ -102,11 +106,13 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     const found = findWindow(state, windowId);
     if (found === null) return null;
     const app = appByName(state, found.window.app);
-    return phoneWindowMenuRows(app, {
-      refresh: () => store.refreshWindow(windowId),
+    const rows = phoneWindowMenuRows(app, {
+      // A window whose app is gone shows a placeholder, not a page.
+      refresh: app === undefined && state.isAppsLoaded ? null : () => store.refreshWindow(windowId),
       share: isAppShareable(app) && isEmbedded() ? () => openShareSettings(app) : null,
       quit: app !== undefined && store.canStopApp(app) ? () => void store.quitApp(app.name) : null,
     });
+    return rows.length === 0 ? null : rows;
   }
 
   /** An app's launch rows, each opening a new window (the focus row of a pinned app shows its window). */
@@ -133,20 +139,32 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     return defaultHighlightIndex(rows);
   }
 
-  /** Run a start-sheet row: the sheet closes and its text clears first, whatever the row does. */
+  /** Run a start-sheet row: the sheet closes first, whatever the row does. Its field keeps the text until the row
+   *  has run, and a row that failed opens the sheet again with the failure under the field. */
   function runStartRow(store: DesktopStore, row: LauncherRow): void {
     store.openPhoneSheet(null);
-    startQuery = "";
     startHighlight = null;
+    startFailure = null;
+    const text = startQuery;
+    const report = (failure: FailureNotice): void => {
+      startFailure = failure;
+      store.openPhoneSheet("start");
+    };
+    const clearIfUnchanged = (isRun: boolean): void => {
+      if (!isRun || startQuery !== text) return;
+      startQuery = "";
+      m.redraw();
+    };
     switch (row.kind) {
       case "launch":
-        void store.runLaunchRow(row.app.name, row.launchPath.id);
+        void store.runLaunchRow(row.app.name, row.launchPath.id, report).then(clearIfUnchanged);
         return;
       case "window":
+        startQuery = "";
         store.showOnPhone({ kind: "window", windowId: row.window.id });
         return;
       case "text":
-        void store.runFreeText(row.app.name, row.launchPath.id, row.text);
+        void store.runFreeText(row.app.name, row.launchPath.id, row.text, report).then(clearIfUnchanged);
         return;
     }
   }
@@ -183,6 +201,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
           onQuery: (query) => {
             startQuery = query;
             startHighlight = null;
+            startFailure = null;
           },
           onRun: (row) => runStartRow(store, row),
           onHighlight: (index) => {
@@ -193,7 +212,12 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
             const index = startHighlightIndex(rows);
             if (index >= 0) runStartRow(store, rows[index]);
           },
-          onDismiss: () => store.openPhoneSheet(null),
+          onDismiss: () => {
+            startFailure = null;
+            store.openPhoneSheet(null);
+          },
+          failure: startFailure,
+          onReportBug: store.reportBugAction(),
         });
       }
     }
@@ -220,6 +244,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       // Nothing shown yet is the page before it lands, not home: drawing the home grid then would flash it before
       // the window the phone lands on.
       const isHome = state.phone.shown?.kind === "home";
+      const bootFailure = store.getBootFailure();
       const thresholdPx = store.getMetrics().dragThreshold;
       const menuRows =
         openMenu === null
@@ -253,6 +278,26 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
               shownWindow !== null && isAppShownStopped(state, shownApp)
                 ? m("div", { class: "absolute inset-0" }, stoppedPlaceholder(shownApp))
                 : null,
+              shownWindow !== null && shownApp === undefined && state.isAppsLoaded
+                ? m(
+                    "div",
+                    { class: "absolute inset-0" },
+                    windowPlaceholder(
+                      "gone-app",
+                      store.goneAppNotice(shownWindow.app, () => void store.closeOrMinimizeWindow(shownWindow.id)),
+                      store.reportBugAction(),
+                    ),
+                  )
+                : null,
+              bootFailure !== null
+                ? m(
+                    "div",
+                    { class: "absolute inset-0 flex items-center justify-center" },
+                    m(BootFailureNotice, { failure: bootFailure, onReportBug: store.reportBugAction() }),
+                  )
+                : !store.hasBootAnswered()
+                  ? m("div", { class: "absolute inset-0 flex items-center justify-center bg-page" }, bootSpinner())
+                  : null,
               isHome
                 ? m(HomeGrid, {
                     apps: homeGridApps(state),
@@ -282,6 +327,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 onNew: () => {
                   startQuery = "";
                   startHighlight = null;
+                  startFailure = null;
                   store.openPhoneSheet("start");
                 },
                 thresholdPx,

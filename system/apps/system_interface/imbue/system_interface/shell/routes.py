@@ -56,6 +56,7 @@ from imbue.system_interface.shell.embedder_messages import deliver_forwarded_mes
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
 from imbue.system_interface.shell.embedder_messages import message_delivery_view
 from imbue.system_interface.shell.embedder_messages import shown_pages
+from imbue.system_interface.shell.errors import APP_UNAVAILABLE_SENTENCE
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -69,6 +70,7 @@ from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoMessageHandlerError
 from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.errors import PinnedWindowError
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
@@ -114,7 +116,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | WindowNotFoundError()
             | WallpaperNotFoundError()
         ):
-            return detail_response(str(error), HTTP_NOT_FOUND)
+            status = HTTP_NOT_FOUND
         case (
             DesktopConflictError()
             | LastDesktopError()
@@ -122,23 +124,28 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | PinnedWindowError()
             | UpdateNoticeRefusedError()
         ):
-            return detail_response(str(error), HTTP_CONFLICT)
+            status = HTTP_CONFLICT
         case UpdateNoticeCommandError():
             logger.opt(exception=error).error("An update-notice verb failed")
-            return detail_response(str(error), HTTP_INTERNAL_ERROR)
-        case InvalidShellValueError() | AppLifecycleRefusedError() | LayoutOpError() | DesktopValueError():
-            return detail_response(str(error), HTTP_BAD_REQUEST)
-        case LaunchRefusedError():
-            return detail_response(str(error), HTTP_BAD_REQUEST, error.user_facing_message, error.is_routine)
+            status = HTTP_INTERNAL_ERROR
+        case (
+            InvalidShellValueError()
+            | AppLifecycleRefusedError()
+            | LayoutOpError()
+            | DesktopValueError()
+            | LaunchRefusedError()
+        ):
+            status = HTTP_BAD_REQUEST
         case LaunchUnavailableError():
-            return detail_response(str(error), HTTP_BAD_GATEWAY, error.user_facing_message, error.is_routine)
+            status = HTTP_BAD_GATEWAY
         case NoTargetClientError():
-            return detail_response(str(error), HTTP_PRECONDITION_FAILED)
+            status = HTTP_PRECONDITION_FAILED
         case WindowPoppedOutError():
-            return detail_response(str(error), POPPED_OUT_REFUSAL_STATUS)
+            status = POPPED_OUT_REFUSAL_STATUS
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
-            return detail_response(str(error), HTTP_INTERNAL_ERROR)
+            status = HTTP_INTERNAL_ERROR
+    return detail_response(str(error), status, error.user_facing_message, is_routine=error.is_routine, kind=error.kind)
 
 
 def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
@@ -170,7 +177,11 @@ def _refuse_if_preview() -> ResponseReturnValue | None:
 def _entry_or_raise(name: str) -> AppInventoryEntry:
     entry = _shell().inventory.entry(name)
     if entry is None:
-        raise UnknownAppError(f"No registered app named {name!r}")
+        raise UnknownAppError(
+            f"No registered app named {name!r}",
+            user_facing_message=APP_UNAVAILABLE_SENTENCE,
+            kind=RefusalKind.APP_UNAVAILABLE,
+        )
     return entry
 
 

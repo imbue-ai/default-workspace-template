@@ -3,11 +3,14 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { refusedWith, wordFailureAsTheStoreDoes } from "../testing/failures";
 import { desktopRecord } from "../testing/records";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import type { WallpaperChooserDialogAttrs } from "./WallpaperChooserDialog";
 
 afterEach(unmountViews);
+
+const reportBug = vi.fn();
 
 const ARCS = { kind: "bundled" as const, name: "arcs", url: "/wallpapers/bundled/arcs" };
 const DAWN = { kind: "bundled" as const, name: "dawn", url: "/wallpapers/bundled/dawn" };
@@ -16,6 +19,8 @@ function render(overrides: Partial<WallpaperChooserDialogAttrs> = {}): Wallpaper
   const attrs: WallpaperChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [ARCS, DAWN],
+    wordFailure: wordFailureAsTheStoreDoes,
+    onReportBug: reportBug,
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
     ...overrides,
@@ -60,13 +65,33 @@ describe("WallpaperChooserDialog", () => {
     expect(attrs.onSave).toHaveBeenCalledWith({ kind: "bundled", name: "dawn" });
   });
 
-  it("shows the shell's refusal of a save and lets the user try again", async () => {
-    const attrs = render({ onSave: vi.fn(async () => Promise.reject(new Error("no such wallpaper"))) });
+  it("says the wallpaper couldn't be changed, with the shell's reason behind See details, and lets the user try again", async () => {
+    const attrs = render({
+      onSave: vi.fn(async () => Promise.reject(refusedWith(400, { detail: "no such wallpaper" }))),
+    });
     save();
     await settled();
-    expect(card().textContent).toContain("no such wallpaper");
+    expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(
+      "The wallpaper couldn't be changed.",
+    );
+    expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nno such wallpaper");
     expect((card().querySelector(".wallpaper-chooser-save") as HTMLButtonElement).disabled).toBe(false);
     expect(attrs.onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Try again, which saves again, and Report a bug about the line's failure, for a save with no reason", async () => {
+    const attrs = render({ onSave: vi.fn(async () => Promise.reject(refusedWith(500, null, "boom"))) });
+    save();
+    await settled();
+    const message = "The wallpaper couldn't be changed. Try again.";
+    expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(message);
+    const buttons = [...card().querySelectorAll<HTMLButtonElement>(".wallpaper-chooser-error-action")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Report a bug"]);
+    buttons[1].click();
+    expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\nboom" });
+    buttons[0].click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledTimes(2);
   });
 
   it("Escape cancels", () => {

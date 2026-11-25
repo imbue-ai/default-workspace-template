@@ -52,6 +52,7 @@ from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
@@ -85,6 +86,7 @@ from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
+from imbue.system_interface.shell.data_types import ShortcutNames
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowInputReport
@@ -105,6 +107,7 @@ from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import placement_of
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
@@ -117,12 +120,16 @@ from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.desktops import validated_desktop_glyph
+from imbue.system_interface.shell.errors import APP_UNAVAILABLE_SENTENCE
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchedNotOpenedError
 from imbue.system_interface.shell.errors import PinnedWindowError
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.errors import WINDOW_GONE_SENTENCE
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
@@ -380,9 +387,35 @@ class ShellState(MutableModel):
         the state lock and read ``rows`` under it."""
         shortcuts_outcome = self.desktops.reconcile_shortcuts_with(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
+        self._record_shortcut_names(pinned_outcome.desktops)
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
         return pinned_outcome.desktops
+
+    def _record_shortcut_names(self, desktops: Sequence[Desktop]) -> None:
+        """Keep what each shortcut's app and launch path are called while the app is registered, so a window still
+        showing a shortcut whose app has left the app list can name it. A record that cannot be written is logged:
+        the names are a courtesy, and the next reconcile records them again."""
+        entry_by_name = {str(entry.row.name): entry for entry in self.inventory.entries()}
+        known: list[ShortcutNames] = []
+        targets = shortcut_targets_on(desktops)
+        for target in targets:
+            entry = entry_by_name.get(str(target.app))
+            label = (
+                None
+                if entry is None
+                else next((path.label for path in effective_launch_paths(entry.row) if path.id == target.launch), None)
+            )
+            if entry is not None and label is not None:
+                known.append(
+                    ShortcutNames(
+                        app=target.app, launch=target.launch, app_display_name=entry.display_name, launch_label=label
+                    )
+                )
+        try:
+            self.desktops.record_shortcut_names(known, targets)
+        except ShellStateError as e:
+            logger.warning("Could not record the names of the desktops' shortcuts: {}", e)
 
     def create_desktop(self, name: str, color: str | None, glyph: int | None, identity: RequestIdentity) -> Desktop:
         """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, owned by the
@@ -423,7 +456,11 @@ class ShellState(MutableModel):
         """The inventory entry of a registered app; raises DesktopValueError (a 400) for any other name."""
         entry = self.inventory.entry(app)
         if entry is None:
-            raise DesktopValueError(f"No registered app named {app!r}")
+            raise DesktopValueError(
+                f"No registered app named {app!r}",
+                user_facing_message=APP_UNAVAILABLE_SENTENCE,
+                kind=RefusalKind.APP_UNAVAILABLE,
+            )
         return entry
 
     def require_launch_path(self, entry: AppInventoryEntry, launch: LaunchPathId) -> RegistryLaunchPath:
@@ -433,7 +470,13 @@ class ShellState(MutableModel):
             (candidate for candidate in effective_launch_paths(entry.row) if candidate.id == launch), None
         )
         if launch_path is None:
-            raise DesktopValueError(f"App {str(entry.row.name)!r} declares no launch path {str(launch)!r}")
+            # The label of a launch path the app no longer declares is only the frontend's to know; it words the
+            # refusal with it, and this sentence is for any other reader.
+            raise DesktopValueError(
+                f"App {str(entry.row.name)!r} declares no launch path {str(launch)!r}",
+                user_facing_message=f"{entry.display_name} no longer offers that, so nothing was changed.",
+                kind=RefusalKind.LAUNCH_PATH_GONE,
+            )
         return launch_path
 
     def launch_destination(
@@ -524,13 +567,68 @@ class ShellState(MutableModel):
         window there (the ``new`` and ``focus`` targets, as ``open_window`` does), point the named window at it (the
         ``window`` target, as the op route's ``navigate`` does), or put it on screen by the ``show`` op's rule and,
         when the target names a window, lay the shown window out beside it (the ``show`` target; the multiplayer
-        spec, section 9.2)."""
+        spec, section 9.2).
+
+        Once the page is resolved the app has acted on the launch (a POST launch may have started a chat), so a
+        state write that fails after that does not fail the launch: a window that shows the page is answered as
+        the client should see it, with the write's kind as ``unsaved``; with no such window the launch raises
+        LaunchedNotOpenedError rather than inviting a second launch."""
         desktop = self.get_desktop(desktop_id)
         entry = self.require_app_entry(str(request.app))
         launch_path = self.require_launch_path(entry, request.launch)
+        aimed: Window | None = None
+        window_path: WindowPath | None = None
+        if request.target.kind is LaunchTargetKind.WINDOW:
+            aimed = self._launch_target_window(desktop, request)
+            window_path = aimed.path if request.target.sends_window_path else None
+        beside = (
+            require_window(desktop, request.target.beside)
+            if request.target.kind is LaunchTargetKind.SHOW and request.target.beside is not None
+            else None
+        )
+        path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, window_path)
+        windows_before = {window.id for window in desktop.windows}
+        try:
+            return self._land_launch(desktop, request, path, aimed, beside)
+        except ShellStateError as e:
+            logger.opt(exception=e).warning(
+                "{} took a launch, but the shell could not record its window", entry.row.name
+            )
+            window = self._window_showing_launch(desktop.id, request, path, aimed, windows_before)
+            if window is None:
+                raise _launched_not_opened(entry, launch_path, e) from e
+            is_new = window.id not in windows_before
+            if is_new:
+                self.broadcast_desktops_updated()
+            return LaunchOutcome(window=window, path=path, is_new=is_new, unsaved=e.kind)
+
+    def _launch_target_window(self, desktop: Desktop, request: LaunchRequest) -> Window:
+        """The window a ``window`` target names, as the requesting client sees it; refused as gone when the desktop has
+        no such window or it shows another app."""
+        assert request.target.window_id is not None, "a window target names its window"
+        window = find_window(desktop, request.target.window_id)
+        if window is None:
+            raise WindowNotFoundError(
+                str(request.target.window_id),
+                user_facing_message=WINDOW_GONE_SENTENCE,
+                kind=RefusalKind.WINDOW_GONE,
+                is_routine=True,
+            )
+        if window.app != request.app:
+            raise DesktopValueError(
+                f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}",
+                user_facing_message=WINDOW_GONE_SENTENCE,
+                kind=RefusalKind.WINDOW_GONE,
+                is_routine=True,
+            )
+        return effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+
+    def _land_launch(
+        self, desktop: Desktop, request: LaunchRequest, path: WindowPath, aimed: Window | None, beside: Window | None
+    ) -> LaunchOutcome:
+        """Put the launched page on screen for the target, writing the shell's state for it."""
         match request.target.kind:
             case LaunchTargetKind.NEW | LaunchTargetKind.FOCUS:
-                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
                 if_present = IfPresent.NEW if request.target.kind is LaunchTargetKind.NEW else IfPresent.FOCUS
                 opened = self.open_window(
                     desktop.id,
@@ -545,22 +643,10 @@ class ShellState(MutableModel):
                 )
                 return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
             case LaunchTargetKind.WINDOW:
-                assert request.target.window_id is not None, "a window target names its window"
-                window = require_window(desktop, request.target.window_id)
-                if window.app != request.app:
-                    raise DesktopValueError(
-                        f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}"
-                    )
-                seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
-                window_path = seen.path if request.target.sends_window_path else None
-                path = self.launch_destination(
-                    entry, launch_path, request.params, request.client_id, desktop.id, window_path
-                )
-                navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
+                assert aimed is not None, "a window target's window is found before the launch"
+                navigated = self.report_window_location(desktop.id, aimed.id, request.client_id, path, aimed.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
             case LaunchTargetKind.SHOW:
-                beside = require_window(desktop, request.target.beside) if request.target.beside is not None else None
-                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
                 shown = self.show_window(
                     request.client_id,
                     desktop,
@@ -592,6 +678,45 @@ class ShellState(MutableModel):
             case _ as unreachable:
                 assert_never(unreachable)
 
+    def _window_showing_launch(
+        self,
+        desktop_id: DesktopId,
+        request: LaunchRequest,
+        path: WindowPath,
+        aimed: Window | None,
+        windows_before: AbstractSet[WindowId],
+    ) -> Window | None:
+        """After a state write failed partway through landing a launch, the window that shows its page, as the client
+        should see it (at ``path``, whatever was or was not written), or None when no window was put there."""
+        desktop = self.get_desktop(desktop_id)
+        window: Window | None
+        match request.target.kind:
+            case LaunchTargetKind.WINDOW:
+                window = aimed
+            case LaunchTargetKind.NEW:
+                window = next(
+                    (
+                        candidate
+                        for candidate in desktop.windows
+                        if candidate.id not in windows_before
+                        and (candidate.app, candidate.path) == (request.app, path)
+                    ),
+                    None,
+                )
+            case LaunchTargetKind.FOCUS:
+                window = find_window_at(desktop, request.app, path)
+            case LaunchTargetKind.SHOW:
+                # The writes before the failed one changed nothing the rule reads, but the opened window itself.
+                window = choose_show_target(
+                    self._client_desktop_view(desktop, request.client_id), [], request.app, path, set(), set()
+                ).window
+            case _ as unreachable:
+                assert_never(unreachable)
+        if window is None:
+            return None
+        seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+        return seen.model_copy_update(to_update(seen.field_ref().path, path))
+
     def get_desktop(self, desktop_id: str) -> Desktop:
         for desktop in self.list_desktops():
             if desktop.id == desktop_id:
@@ -620,7 +745,11 @@ class ShellState(MutableModel):
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
         theme_by_desktop_id = self.desktops.read_theme_choices().theme_by_desktop_id
-        return [desktop_view(desktop, by_window, theme_by_desktop_id.get(desktop.id)) for desktop in desktops]
+        names_by_target = self.desktops.read_shortcut_names()
+        return [
+            desktop_view(desktop, by_window, theme_by_desktop_id.get(desktop.id), names_by_target)
+            for desktop in desktops
+        ]
 
     def desktop_view(self, desktop: Desktop) -> DesktopView:
         (view,) = self.desktop_views((desktop,))
@@ -1101,6 +1230,36 @@ class ShellState(MutableModel):
                 report.report_id,
             )
         return outcome
+
+
+@pure
+def _launch_lead(entry: AppInventoryEntry, launch_path: RegistryLaunchPath) -> str:
+    """How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
+    into the app, or else the launch path by its label. The desktop's ``tookLaunchLead`` says the same."""
+    name = entry.display_name
+    if launch_path.text_param is not None:
+        return f"Your message was sent to {name}"
+    if launch_path.draft_param is not None:
+        return f"Your text was put into {name}"
+    return f"\u201c{launch_path.label}\u201d went through in {name}"
+
+
+@pure
+def _launched_not_opened(
+    entry: AppInventoryEntry, launch_path: RegistryLaunchPath, error: ShellStateError
+) -> LaunchedNotOpenedError:
+    """The refusal of a launch the app took when no window could be written to show it, a full disk named as such."""
+    lead = _launch_lead(entry, launch_path)
+    is_out_of_space = error.kind is RefusalKind.OUT_OF_SPACE
+    return LaunchedNotOpenedError(
+        f"{entry.row.name} took the launch, but its window could not be recorded: {error}",
+        user_facing_message=(
+            f"{lead}, but this workspace is out of space, so its window couldn't be opened."
+            if is_out_of_space
+            else f"{lead}, but its window couldn't be opened."
+        ),
+        kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
+    )
 
 
 def _count_windows_by_app(desktops: DesktopStore) -> Counter[str]:

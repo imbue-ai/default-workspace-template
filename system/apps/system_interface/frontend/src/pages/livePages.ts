@@ -1173,8 +1173,13 @@ export class LivePagesLayer implements PageDriver {
    *  active desktop (a page can only be pressed there), and the page is answered with
    *  ``shell:start-with-text-result``; the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    this.startAndAnswer(frame, payload, SHELL_START_WITH_TEXT, SHELL_START_WITH_TEXT_RESULT, (text) =>
-      this.store.startWithText(text),
+    this.startAndAnswer(
+      frame,
+      payload,
+      SHELL_START_WITH_TEXT,
+      SHELL_START_WITH_TEXT_RESULT,
+      (text) => this.store.startWithText(text),
+      null,
     );
   }
 
@@ -1185,20 +1190,27 @@ export class LivePagesLayer implements PageDriver {
     const windowId = this.pageOfFrame(frame)?.windowId ?? null;
     const delivery: AskDelivery =
       payload.delivery === "main-chat" || payload.delivery === "draft" ? payload.delivery : "app-chat";
-    this.startAndAnswer(frame, payload, SHELL_ASK_AGENT, SHELL_ASK_AGENT_RESULT, (text) =>
-      this.store.askAgent(text, windowId, delivery),
+    this.startAndAnswer(
+      frame,
+      payload,
+      SHELL_ASK_AGENT,
+      SHELL_ASK_AGENT_RESULT,
+      (text) => this.store.askAgent(text, windowId, delivery),
+      delivery === "draft" ? null : (text) => void this.store.askAgent(text, windowId, "draft"),
     );
   }
 
   /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
    *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. A failure
-   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told. */
+   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told, and a
+   *  refused ask's toast offers ``draft`` (null for a start that is no ask). */
   private startAndAnswer(
     frame: HTMLIFrameElement,
     payload: Record<string, unknown>,
     type: string,
     resultType: string,
     start: (text: string) => Promise<StartOutcome>,
+    draft: ((text: string) => void) | null,
   ): void {
     const text = this.textFromPage(frame, payload, type);
     if (text === null) return;
@@ -1221,7 +1233,9 @@ export class LivePagesLayer implements PageDriver {
       })
       .then((outcome) => {
         sendToChildFrame(frame, resultType, { requestId, ...outcome });
-        if (!outcome.isOpened && payload.showsOutcome !== true) this.store.showStartFailure(outcome.failure);
+        if (!outcome.isOpened && payload.showsOutcome !== true) {
+          this.store.showStartFailure(outcome.failure, draft === null ? null : () => draft(text));
+        }
       });
   }
 

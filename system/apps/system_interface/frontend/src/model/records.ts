@@ -58,6 +58,10 @@ export interface DesktopShortcut {
   readonly target: ShortcutTarget;
   readonly mode: ShortcutMode;
   readonly cell: GridCell;
+  /** What the app and the launch path were called when the shortcut was made, so a shortcut whose app is gone can
+   *  still be named; absent on one made before the shell kept them. Never sent back: the shell records them. */
+  readonly app_display_name?: string | null;
+  readonly launch_label?: string | null;
 }
 
 export interface Wallpaper {
@@ -487,6 +491,8 @@ function parseShortcut(raw: unknown): DesktopShortcut {
     },
     mode: asOneOf(record.mode, ["focus", "new"], "shortcut.mode"),
     cell: parseGridCell(record.cell),
+    app_display_name: asOptionalString(record.app_display_name, "shortcut.app_display_name"),
+    launch_label: asOptionalString(record.launch_label, "shortcut.launch_label"),
   };
 }
 

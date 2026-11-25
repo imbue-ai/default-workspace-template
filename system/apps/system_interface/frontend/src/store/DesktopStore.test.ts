@@ -29,10 +29,14 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
-import type { BubbleWire, GridCell } from "../model/records";
+import { refusedWith } from "../testing/failures";
+import type { FailureNotice } from "../model/failures";
+import type { AppRecord, BubbleWire, GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
+  BOOT_REPORT_AFTER_MS,
+  BOOT_RETRY_CAP_MS,
   DesktopStore,
   IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
@@ -58,6 +62,25 @@ const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null, is_window_shown: true } as const;
 
 const PAGE_ID = expect.stringMatching(/^page-[0-9a-f]{16}$/);
+
+const APP_GONE_SENTENCE = "This app couldn't be found in this workspace, so nothing was changed.";
+
+/** A refusal as the shell answers one written for people: its sentence, the developer's reason behind See details,
+ *  the kind the desktop words it by, and whether the shell calls it routine (ordinary operation, which owes no
+ *  help). */
+function shellRefusal(status: number, detail: string, sentence: string, kind: string, isRoutine = false): HttpError {
+  const routine = isRoutine ? { routine: true } : {};
+  return refusedWith(status, { detail, user_facing_message: sentence, kind, ...routine });
+}
+
+/** A chat-like app, so the workspace has one an agent is asked through. */
+const AGENT_APP = chatLikeAppRecord("chat");
+
+/** What the shell puts in front of an ask about ``app``, pressed in ``windowId`` (null for a toast's). */
+function askLead(app: string, displayName: string, windowId: string | null): string {
+  const window = windowId === null ? "" : `, window \`${windowId}\``;
+  return `/assist This is about the ${displayName} app (\`${app}\`${window}).\n\n`;
+}
 
 /** A report that moves the client, as the store sends one: with an id minted for it, made at the newest revision
  *  the window heard (any, unless the test says). */
@@ -100,6 +123,7 @@ let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let stores: DesktopStore[];
 let reloads: number;
+let bugReports: number;
 
 /** The toasts every store of the test has on screen, oldest first. */
 function notices(): string[] {
@@ -121,6 +145,7 @@ function makeStore(
     modes: MODES,
     redraw,
     reloadInterface: () => void (reloads += 1),
+    reportBug: () => void (bugReports += 1),
     ...extra,
   });
   store.setBackdropSize({ width: 1000, height: 800 });
@@ -162,6 +187,7 @@ beforeEach(() => {
   socket = new FakeDesktopSocket();
   stores = [];
   reloads = 0;
+  bugReports = 0;
   api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
     desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")] }),
@@ -208,7 +234,7 @@ describe("bootstrap", () => {
       launch: "new",
     });
     await store.runLaunch("gone", "new", "focus");
-    expect(notices()).toEqual(["Cannot open: gone is not registered"]);
+    expect(notices()).toEqual(["This shortcut's app couldn't be found in this workspace, so nothing was opened."]);
   });
 
   it("is connecting, not missing apps, until the inventory answers; the socket's app list also ends the wait", async () => {
@@ -312,13 +338,75 @@ describe("bootstrap", () => {
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
-  it("tells the user when the inventory cannot be read, instead of failing silently", async () => {
-    api.refusal = "the shell is restarting";
+  it("keeps trying a startup read nothing answered, on a timer that grows, until one answers, and then stops", async () => {
+    const unanswered = new HttpError(
+      readFailure({ status: 502, body: null, rawText: "Backend connection lost", requestKind: "read" }),
+    );
+    api.refusal = unanswered;
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices()).toEqual(["Could not read the desktops and apps."]);
-    expect(store.getState().activeDesktopId).toBeNull();
-    expect(store.getState().isAppsLoaded).toBe(false);
+    const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
+    // A spinner and "Still trying…", the reason behind See details, and no button: the retry is the timer's.
+    expect(store.getBootFailure()).toEqual({
+      notice: {
+        message: "The workspace didn't answer. Still trying\u2026",
+        details: "HTTP 502\nBackend connection lost",
+        isHelpOwed: false,
+        isBugReportOffered: false,
+        actions: [],
+      },
+    });
+    expect(reads()).toBe(1);
+
+    // The waits double from two seconds and stop growing at fifteen.
+    let elapsed = 0;
+    for (const wait of [2_000, 4_000, 8_000, 15_000, 15_000]) {
+      vi.advanceTimersByTime(wait - 1);
+      await settle();
+      const before = reads();
+      vi.advanceTimersByTime(1);
+      await settle();
+      expect(reads()).toBe(before + 1);
+      elapsed += wait;
+    }
+    expect(elapsed).toBeLessThan(BOOT_REPORT_AFTER_MS);
+    expect(store.getBootFailure()?.notice.isBugReportOffered).toBe(false);
+    // After about a minute of it, the line owes a way out, and nothing answers an ask either: Report a bug.
+    vi.advanceTimersByTime(BOOT_REPORT_AFTER_MS - elapsed);
+    await settle();
+    expect(store.getBootFailure()?.notice.isBugReportOffered).toBe(true);
+    expect(store.getBootFailure()?.notice.actions).toEqual([]);
+
+    api.refusal = null;
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS);
+    await settle();
+    expect(store.getBootFailure()).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+    const readsWhenLanded = reads();
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
+    await settle();
+    expect(reads()).toBe(readsWhenLanded);
+  });
+
+  it("tries a startup read nothing answered again at once when the socket connects, and leaves no timer behind", async () => {
+    api.refusal = new HttpError(readFailure({ status: 0, body: null, rawText: null, requestKind: "read" }));
+    const store = makeStore();
+    await store.start(NO_LINK);
+    const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
+    expect(store.getBootFailure()).not.toBeNull();
+    expect(reads()).toBe(1);
+
+    api.refusal = null;
+    socket.deliver().onConnected();
+    await settle();
+    expect(reads()).toBe(2);
+    expect(store.getBootFailure()).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.getState().isLayoutLoaded).toBe(true);
+    // The timer that would have tried again was let go of with the read that answered.
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
+    await settle();
+    expect(reads()).toBe(2);
   });
 
   it("chooses the first desktop when nothing names one", () => {
@@ -586,7 +674,7 @@ describe("opening", () => {
       false,
     );
     await store.runLaunchRow("buddy", "missing");
-    expect(last(notices())).toBe("Cannot open: buddy has no launch path missing");
+    expect(last(notices())).toBe("Buddy changed while this menu was open. Try again.");
   });
 
   it("a free-text row launches into this client's view of the app's pinned window", async () => {
@@ -828,13 +916,340 @@ describe("opening", () => {
     );
   });
 
-  it("tells the user when the shell refuses, and about a launch path that does not exist", async () => {
+  it("tells the user when the shell refuses, by the app's display name, and about an app that has gone", async () => {
     const store = await startedStore();
-    api.refusal = "No registered app named 'docs'";
+    api.refusal = "the shell is restarting";
     expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
-    expect(notices()).toEqual(["Could not open Docs.", "Cannot open: gone is not registered"]);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
+      ["Docs couldn't be opened.", "HTTP 400\nthe shell is restarting"],
+      ["This shortcut's app couldn't be found in this workspace, so nothing was opened.", null],
+    ]);
+  });
+
+  it("names an app the shell no longer has, and a launch path it no longer offers, as this window last knew them", async () => {
+    const store = await startedStore();
+    api.refusal = shellRefusal(400, "No registered app named 'docs'", APP_GONE_SENTENCE, "app_unavailable");
+    expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
+    api.refusal = shellRefusal(
+      400,
+      "App 'docs' declares no launch path 'new'",
+      "Docs no longer offers that, so nothing was changed.",
+      "launch_path_gone",
+    );
+    await store.runLaunch("docs", "new", "new");
+    // Each says nothing was opened, with the reason behind See details.
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
+      ["Docs couldn't be found in this workspace, so nothing was opened.", "HTTP 400\nNo registered app named 'docs'"],
+      [
+        "Docs no longer offers “New docs”, so nothing was opened.",
+        "HTTP 400\nApp 'docs' declares no launch path 'new'",
+      ],
+    ]);
+  });
+
+  it("says what was asked for when a send into the pinned window failed, and leaves that window where it was", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "linked" })] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    store.minimizeWindow("win-9");
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+
+    // The launcher shows the failure under its field, where the text still is.
+    const reported: FailureNotice[] = [];
+    expect(await store.runFreeText("buddy", "new", "hi", (notice) => reported.push(notice))).toBe(false);
+    expect(reported.map((notice) => [notice.message, notice.details])).toEqual([
+      [
+        "Couldn't send that to Buddy, so your text is still in the box. Try again.",
+        "HTTP 502\nbuddy answered the launch with 500: boom",
+      ],
+    ]);
+    expect(notices()).toEqual([]);
+    // Any other caller is told in a toast.
+    expect(await store.runFreeText("buddy", "new", "hi")).toBe(false);
+    expect(notices()).toEqual(["Couldn't send that to Buddy. Try again."]);
+    const pinned = activePlacements(store.getState()).find((placement) => placement.window_id === "win-9");
+    expect(pinned?.is_minimized).toBe(true);
+  });
+
+  it("leaves the launcher's retry to its field, and has a toast's Try again send into the pinned window again", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        system: true,
+        pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "linked" })] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    store.minimizeWindow("win-9");
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+
+    // The launcher keeps the text in its field, whose Enter is the retry: a Try again on the line would send without
+    // letting the text go. Buddy is the app agents are asked through, so no agent can be asked about its failure:
+    // the line offers Buddy itself, where the person can send the text, and a bug report.
+    const reported: FailureNotice[] = [];
+    await store.runFreeText("buddy", "new", "hi", (notice) => reported.push(notice));
+    expect(reported.map((notice) => notice.actions.map((action) => action.label))).toEqual([["Open Buddy"]]);
+    expect(reported[0].isBugReportOffered).toBe(true);
+    const launchesBefore = api.calls.filter((call) => call.startsWith("launch")).length;
+    api.refusal = null;
+    reported[0].actions[0].run();
+    await settle();
+    // A plain open of the app, which does not send the text again.
+    expect(last(api.calls.filter((call) => call.startsWith("openWindow")))).toBe("openWindow:home:buddy:/:focus");
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toHaveLength(launchesBefore);
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+
+    await store.runFreeText("buddy", "new", "hi");
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    const pinned = activePlacements(store.getState()).find((placement) => placement.window_id === "win-9");
+    expect(pinned?.is_minimized).toBe(false);
+  });
+
+  it("takes a send the app took as sent though the shell could not record the window's place, and says so", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
+        launch_paths: [
+          launchPathRecord({ id: "new", path: "/new", method: "POST", params: ["message"], text_param: "message" }),
+        ],
+      }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" })],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.launchUnsavedKind = "out_of_space";
+
+    const reported: FailureNotice[] = [];
+    expect(await store.runFreeText("buddy", "new", "free up space", (notice) => reported.push(notice))).toBe(true);
+
+    // The launcher lets go of the text, the window shows the chat the app answered, and the launch went once.
+    expect(reported).toEqual([]);
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toHaveLength(1);
+    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/?chat=agent-1");
+    expect(notices()).toEqual([
+      "Your message was sent to Buddy, but this workspace is out of space, so window changes can't be saved.",
+    ]);
+    // A full disk offers its agent here too, and no Try again, which would ask the app a second time.
+    expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual([
+      "Ask an agent to free up space",
+    ]);
+
+    // An ask's message is the shell's own, so the note about one does not call it the person's.
+    expect(await store.askAgent("Free up disk space.", null, "main-chat")).toEqual({ isOpened: true });
+    expect(last(notices())).toBe(
+      "The request was sent to Buddy, but this workspace is out of space, so window changes can't be saved.",
+    );
+  });
+
+  it("reads the desktops again after a launch into a window that has gone, so a second try finds it as it is", async () => {
+    const store = await startedStore();
+    const readsBefore = api.calls.filter((call) => call === "fetchInventory").length;
+    api.refusal = shellRefusal(
+      404,
+      "Window 'win-1' not found",
+      "That window is no longer here, so nothing was changed. Try again.",
+      "window_gone",
+      true,
+    );
+    await store.launchAt("docs", "new", {}, { kind: "window", windowId: "win-1" });
+    api.refusal = null;
+    await settle();
+    expect(notices()).toEqual(["That window is no longer here, so nothing was changed. Try again."]);
+    expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(readsBefore + 1);
+  });
+
+  it("asks the free-up-space agent in the main chat, pending until its send settles, and toasts a refused one", async () => {
+    const store = await startedStore();
+    // A full disk is no app's, so the ask runs the primary text action whatever else the chat app declares.
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        launch_paths: [
+          launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          appChatLaunchPathRecord(),
+        ],
+      }),
+    ]);
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    await store.openWindowAt("docs", "/x", "new");
+    const [full] = store.toasts.current();
+    const [ask] = full.actions;
+    // The agent is the remedy, so the toast draws no Report a bug beside it.
+    expect(full.isHelpOwed).toBe(false);
+    api.refusal = null;
+    ask.run();
+    await settle();
+    // Behind the assist command, as Imbue Studio telling the agent what the user was shown and to free up space.
+    const request =
+      "/assist Imbue Studio showed the user this failure: This workspace is out of space, so your change could " +
+      "not be saved.\n\nDetails:\n```\nHTTP 500\ncannot write shell state file desktops.json: [Errno 28] No space " +
+      "left on device\n```\n\nFree up disk space in this workspace, then tell the user what was taking up the " +
+      "space and what you removed.";
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
+      `launch:home:buddy:main:${JSON.stringify({ message: request })}:new`,
+    ]);
+    api.refusal = refusedWith(400, { detail: "buddy refused the launch: no account is signed in" });
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    // A refusal with its reason owes no help, so its toast offers neither a draft nor a bug report.
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions])).toContainEqual([
+      "Buddy couldn't open that.",
+      "HTTP 400\nbuddy refused the launch: no account is signed in",
+      [],
+    ]);
+  });
+
+  it("offers a refused ask as a draft in a chat, beside Report a bug", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        launch_paths: [
+          launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "draft", path: "/draft", params: ["message"], draft_param: "message" }),
+        ],
+      }),
+    ]);
+    api.refusal = new HttpError(readFailure({ status: 500, body: null, rawText: null, requestKind: "change" }));
+    await store.closeWindow("win-1");
+    const [failed] = store.toasts.current();
+    expect(failed.actions.map((action) => action.label)).toEqual(["Try again", "Ask an agent to fix this"]);
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+    failed.actions[1].run();
+    await settle();
+    const sent = last(api.calls.filter((call) => call.startsWith("launch:home:buddy:main")));
+    const refused = last(store.toasts.current());
+    expect(refused).toMatchObject({
+      message: "Buddy couldn't open that. Try again.",
+      details: "HTTP 502\nbuddy answered the launch with 500: boom",
+      // The ask's own failure offers no second ask, so its toast draws Report a bug.
+      isHelpOwed: true,
+    });
+    expect(refused?.actions.map((action) => [action.label, action.keepsToast])).toEqual([
+      ["Draft it in a chat", true],
+    ]);
+
+    api.refusal = null;
+    refused?.actions[0].run();
+    await settle();
+    // The draft is the very message the ask sent, left unsent for the person to send.
+    const drafted = last(api.calls.filter((call) => call.startsWith("launch:home:buddy:draft")));
+    expect(drafted?.slice("launch:home:buddy:draft".length)).toBe(sent?.slice("launch:home:buddy:main".length));
+  });
+
+  it("offers an agent and a second try when a change could not be saved for want of space", async () => {
+    api.apps = [...api.apps, AGENT_APP];
+    const store = await startedStore();
+    store.setCanReportBug(true);
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    expect(await store.openWindowAt("docs", "/x", "new")).toBeNull();
+    const [full] = store.toasts.current();
+    expect(full.message).toBe("This workspace is out of space, so your change could not be saved.");
+    expect(full.actions.map((action) => action.label)).toEqual(["Ask an agent to free up space", "Try again"]);
+    api.refusal = null;
+    full.actions[1].run();
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("openWindow:home:docs:/x"))).toHaveLength(2);
+
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 13] Permission denied",
+      "Your change could not be saved. Try again.",
+      "not_saved",
+    );
+    await store.closeWindow("win-1");
+    expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual([
+      "Try again",
+      "Ask an agent to fix this",
+    ]);
+    // Neither toast draws Report a bug beside its agent.
+    expect(store.toasts.current().map((toast) => toast.isHelpOwed)).toEqual([false, false]);
+  });
+
+  it("offers Report a bug in the agent's place where the workspace has no app to ask one through", async () => {
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    await store.openWindowAt("docs", "/x", "new");
+    const [full] = store.toasts.current();
+    expect(full.actions.map((action) => action.label)).toEqual(["Try again"]);
+    expect(full.isHelpOwed).toBe(true);
+  });
+
+  it("words a dialog's failed save as a toast would, so a full disk offers an agent and a Try again that saves again", async () => {
+    api.apps = [...api.apps, AGENT_APP];
+    const store = await startedStore();
+    const full = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    const retry = vi.fn();
+    const notice = store.changeFailureNotice("The wallpaper couldn't be changed", full, retry);
+    expect(notice.message).toBe("This workspace is out of space, so your change could not be saved.");
+    expect(notice.actions.map((action) => [action.label, action.keepsToast === true])).toEqual([
+      ["Ask an agent to free up space", true],
+      ["Try again", false],
+    ]);
+    expect(notice.isBugReportOffered).toBe(false);
+    notice.actions[1].run();
+    expect(retry).toHaveBeenCalledTimes(1);
+    // A refusal with its reason is not one to try again.
+    const refused = store.changeFailureNotice(
+      "The wallpaper couldn't be changed",
+      refusedWith(400, { detail: "no such wallpaper" }),
+      retry,
+    );
+    expect(refused).toMatchObject({
+      message: "The wallpaper couldn't be changed.",
+      actions: [],
+      isBugReportOffered: false,
+    });
   });
 
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
@@ -1012,12 +1427,276 @@ describe("windows", () => {
   });
 });
 
-describe("failure toasts", () => {
-  /** The error the REST helper throws for ``status`` answered with ``body`` to a change. */
-  function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
-    return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
+/** A chat-like app that also declares the launch path an ask about an app runs. */
+function chatWithAskPathRecord(name: string): AppRecord {
+  return chatLikeAppRecord(name, {
+    system: true,
+    launch_paths: [...chatLikeAppRecord(name).launch_paths, appChatLaunchPathRecord()],
+  });
+}
+
+describe("a launch the app took that the shell could not open", () => {
+  const chat = chatWithAskPathRecord("chat");
+  const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })] });
+
+  function toastsShown(store: DesktopStore): [string, string | null, string[]][] {
+    return store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions.map((a) => a.label)]);
   }
 
+  it("offers an agent to free up space, and no Try again, for a launch the app took that a full disk left unopened", async () => {
+    api.apps = [chat, docs];
+    const store = await startedStore();
+    const outOfSpace =
+      "“New doc” went through in Docs, but this workspace is out of space, so its window couldn't be opened.";
+    api.refusal = shellRefusal(
+      500,
+      "docs took the launch, but its window could not be recorded",
+      outOfSpace,
+      "launched_not_opened_out_of_space",
+    );
+    await store.runLaunch("docs", "new", "new");
+    const notOpened = "“New doc” went through in Docs, but its window couldn't be opened.";
+    api.refusal = shellRefusal(
+      500,
+      "docs took the launch, but its window could not be recorded",
+      notOpened,
+      "launched_not_opened",
+    );
+    await store.runLaunch("docs", "new", "new");
+
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      [outOfSpace, ["Ask an agent to free up space"]],
+      [notOpened, ["Open Docs", "Ask an agent to fix this"]],
+    ]);
+    api.refusal = null;
+    const launchesBefore = api.calls.filter((call) => call.startsWith("launch")).length;
+    // "Open Docs" opens the app's first page, and never runs the launch the app already took again.
+    store.toasts.current()[1].actions[0].run();
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toHaveLength(launchesBefore);
+    expect(last(api.calls.filter((call) => call.startsWith("openWindow")))).toBe("openWindow:home:docs:/:focus");
+    // The agent is asked in the main chat, behind the assist command, about what the toast said.
+    store.toasts.current()[1].actions[1].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:chat:new:${JSON.stringify({
+        message:
+          `/assist Imbue Studio showed the user this failure: ${notOpened}\n\nDetails:\n\`\`\`\n` +
+          "HTTP 500\ndocs took the launch, but its window could not be recorded\n```\n\n" +
+          "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
+      })}:new`,
+    );
+  });
+});
+
+describe("an agent by default", () => {
+  const chat = chatWithAskPathRecord("chat");
+  const docs = appRecord("docs", {
+    display_name: "Docs",
+    launch_paths: [launchPathRecord({ id: "new", label: "New doc", path: "/new", method: "POST" })],
+  });
+  /** A 500 that says nothing about why: worded with the fallback, which owes help. */
+  const bareFailure = (): HttpError =>
+    new HttpError(readFailure({ status: 500, body: null, rawText: null, requestKind: "change" }));
+
+  /** The text the last launch sent, and the launch it ran (``<app>:<launch path>:<target>``). */
+  function lastAsk(): { readonly launch: string; readonly message: string } {
+    const call = last(api.calls.filter((entry) => entry.startsWith("launch"))) ?? "";
+    const params = JSON.parse(call.slice(call.indexOf("{"), call.lastIndexOf("}") + 1)) as { message: string };
+    const [, , app, launch] = call.split(":");
+    return { launch: `${app}:${launch}:${call.slice(call.lastIndexOf("}") + 2)}`, message: params.message };
+  }
+
+  beforeEach(() => {
+    api.apps = [chat, docs];
+  });
+
+  it("offers one on a toast that owes help, and no Report a bug beside it, asked in the main chat for a failure of the shell's own", async () => {
+    const store = await startedStore();
+    api.refusal = bareFailure();
+    await store.closeWindow("win-1");
+    api.refusal = null;
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe("This window couldn't be closed. Try again.");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Ask an agent to fix this"]);
+    const agent = toast.actions[1];
+    agent.run();
+    expect(agent.pending?.isPending()).toBe(true);
+    await settle();
+    expect(agent.pending?.isPending()).toBe(false);
+    // The main chat's primary text row, behind the assist command, worded as Imbue Studio about the user.
+    expect(lastAsk()).toEqual({
+      launch: "chat:new:new",
+      message:
+        "/assist Imbue Studio showed the user this failure: This window couldn't be closed. Try again.\n\n" +
+        "Details:\n```\nHTTP 500\n```\n\nFind out why it failed and fix it, then tell the user what was wrong and " +
+        "what you changed.",
+    });
+    // The toast stays up once the agent was asked, and draws no Report a bug: the agent is the remedy.
+    expect(store.toasts.current().map((shown) => shown.message)).toContain(toast.message);
+    expect(toast.isHelpOwed).toBe(false);
+  });
+
+  it("asks in the chat about the app when the failure is the app's own: a launch it answered with an error, a quit", async () => {
+    const store = await startedStore();
+    api.refusal = bareFailure();
+    await store.launchAt("docs", "new", {}, { kind: "new" });
+    await store.quitApp("docs");
+    api.refusal = null;
+    const [launched, quit] = store.toasts.current();
+    expect(launched.message).toBe("Docs couldn't open that. Try again.");
+    expect(quit.message).toBe("Docs couldn't be quit. Try again.");
+    for (const toast of [launched, quit]) {
+      expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Ask an agent to fix this"]);
+      toast.actions[1].run();
+      await settle();
+      expect(lastAsk().launch).toBe("chat:app-chat:show");
+      // The shell says which app the ask is about, ahead of what the toast said.
+      expect(lastAsk().message).toContain(
+        `${askLead("docs", "Docs", null)}Imbue Studio showed the user this failure: ${toast.message}`,
+      );
+    }
+  });
+
+  it("offers none where the ask would go through the app that failed, which only a bug report can reach", async () => {
+    const store = await startedStore();
+    api.refusal = bareFailure();
+    await store.launchAt("chat", "new", { message: "hi" }, { kind: "new" });
+    const [toast] = store.toasts.current();
+    // The toast draws Report a bug in the agent's place.
+    expect(toast.isHelpOwed).toBe(true);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+  });
+
+  it("says a shortcut's app couldn't be found, offers to remove the shortcut and an agent, and reads the apps again", async () => {
+    api.desktops = [desktopRecord("home", { shortcuts: [shortcutRecord("docs", { column: 0, row: 0 })] })];
+    const store = await startedStore();
+    const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
+    const readsBefore = reads();
+    api.nextRefusal = shellRefusal(400, "No registered app named 'docs'", APP_GONE_SENTENCE, "app_unavailable");
+    await store.runShortcut(store.getState().desktops[0].shortcuts[0]);
+    await settle();
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe("Docs couldn't be found in this workspace, so nothing was opened.");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Remove shortcut", "Ask an agent to fix this"]);
+    expect(reads()).toBe(readsBefore + 1);
+    toast.actions[0].run();
+    await settle();
+    expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
+  });
+
+  it("offers no Remove shortcut once the workspace, read again, no longer holds the shortcut", async () => {
+    api.desktops = [desktopRecord("home", { shortcuts: [shortcutRecord("docs", { column: 0, row: 0 })] })];
+    const store = await startedStore();
+    const [shortcut] = store.getState().desktops[0].shortcuts;
+    // The shell drops a gone app's shortcuts itself; this window has not heard yet.
+    api.desktops = [desktopRecord("home")];
+    api.nextRefusal = shellRefusal(400, "No registered app named 'docs'", APP_GONE_SENTENCE, "app_unavailable");
+    await store.runShortcut(shortcut);
+    await settle();
+    expect(store.getState().desktops[0].shortcuts).toEqual([]);
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe("Docs couldn't be found in this workspace, so nothing was opened.");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+  });
+
+  it("names a shortcut whose app is gone by the names it was made with, and a launch path by its label", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        shortcuts: [
+          { ...shortcutRecord("buildlog", { column: 0, row: 0 }), app_display_name: "Build log", launch_label: "Log" },
+          {
+            ...shortcutRecord("docs", { column: 1, row: 0 }, "old"),
+            app_display_name: "Docs",
+            launch_label: "Old doc",
+          },
+          shortcutRecord("gone", { column: 2, row: 0 }),
+        ],
+      }),
+    ];
+    const store = await startedStore();
+    for (const shortcut of store.getState().desktops[0].shortcuts) await store.runShortcut(shortcut);
+    expect(
+      store.toasts.current().map((toast) => [toast.message, toast.actions.map((action) => action.label)]),
+    ).toEqual([
+      [
+        "Build log couldn't be found in this workspace, so nothing was opened.",
+        ["Remove shortcut", "Ask an agent to fix this"],
+      ],
+      ["Docs no longer offers “Old doc”, so nothing was opened.", ["Remove shortcut", "Ask an agent to fix this"]],
+      // One made before the shell kept names says what it can.
+      [
+        "This shortcut's app couldn't be found in this workspace, so nothing was opened.",
+        ["Remove shortcut", "Ask an agent to fix this"],
+      ],
+    ]);
+  });
+
+  it("says a window's app couldn't be found, with its close and an agent asked in the main chat", async () => {
+    const store = await startedStore();
+    const onClose = vi.fn();
+    const gone = store.goneAppNotice("buildlog", onClose);
+    expect(gone.message).toBe("This app couldn't be found in this workspace.");
+    expect(gone.actions.map((action) => action.label)).toEqual(["Close window", "Ask an agent to fix this"]);
+    gone.actions[0].run();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    gone.actions[1].run();
+    await settle();
+    expect(lastAsk().launch).toBe("chat:new:new");
+    expect(lastAsk().message).toContain("This app couldn't be found in this workspace.");
+    expect(lastAsk().message).toContain('the app registered as "buildlog"');
+  });
+
+  it("moves a window whose desktop another window deleted off it, says where it is now, and tries again there", async () => {
+    api.desktops = [desktopRecord("home"), desktopRecord("research")];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "research" })];
+    api.writeLayout("research", CLIENT, { updated_at: null, placements: [] });
+    const store = await startedStore();
+    expect(store.getState().activeDesktopId).toBe("research");
+    // Another window deleted it; this one has not heard.
+    api.desktops = [desktopRecord("home")];
+    api.nextRefusal = shellRefusal(
+      404,
+      "Desktop 'research' not found",
+      "That desktop was just deleted, so nothing was changed.",
+      "desktop_gone",
+      true,
+    );
+    await store.launchAt("docs", "new", {}, { kind: "new" });
+    expect(store.getState().activeDesktopId).toBe("home");
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe(
+      "The desktop you were on was deleted in another window, so nothing was opened. You're now on “Home”.",
+    );
+    // A stale view the window recovered from itself: no agent, only Try again, which opens where the window is now.
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    toast.actions[0].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe("launch:home:docs:new:{}:new");
+  });
+
+  it("notes a send whose window's place the shell could not write, with an agent and no bug report beside it", async () => {
+    const store = await startedStore();
+    store.setCanReportBug(true);
+    api.launchUnsavedKind = "not_saved";
+    expect(await store.launchAt("chat", "new", { message: "hi" }, { kind: "new" })).not.toBeNull();
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe(
+      "Your message was sent to Chat, but its window's position couldn't be saved, so it may move back after a reload.",
+    );
+    expect(toast.isHelpOwed).toBe(false);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+    api.launchUnsavedKind = null;
+    // A launch that is not a send is named by its label.
+    api.launchUnsavedKind = "out_of_space";
+    await store.launchAt("docs", "new", {}, { kind: "new" });
+    expect(last(store.toasts.current())?.message).toBe(
+      "“New doc” went through in Docs, but this workspace is out of space, so window changes can't be saved.",
+    );
+  });
+});
+
+describe("failure toasts", () => {
   beforeEach(() => {
     // Docs is built in, so its failures are Imbue's to hear about; Notes is a user's own app.
     api.apps = [appRecord("docs", { system: true }), appRecord("notes")];
@@ -1049,7 +1728,7 @@ describe("failure toasts", () => {
     ]);
   });
 
-  it("words a launch the app could not answer as the fallback, whose Report a bug files the toast's failure", async () => {
+  it("words a launch the app could not answer as the fallback, with Try again, and where no agent can be asked a Report a bug that files its failure", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, true);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
@@ -1059,11 +1738,11 @@ describe("failure toasts", () => {
     expect(toast).toMatchObject({
       message: "Docs couldn't open that. Try again.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
-      actions: [],
       isLasting: true,
       isHelpOwed: true,
       isBugReportOffered: true,
     });
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
     store.reportBugAction()?.({ message: toast.message, details: toast.details });
     expect(reportBug).toHaveBeenCalledWith({
       message: "Docs couldn't open that. Try again.",
@@ -1110,11 +1789,10 @@ describe("failure toasts", () => {
 
     api.refusal = refusedWith(502, { detail: "notes answered the launch with 500: boom" });
     await store.runLaunch("notes", "new", "new");
-    // Help is still owed (the toast stays up), but not by Imbue.
+    // No agent can be asked here, and the fault is not Imbue's: the toast stays up, with no bug report.
     expect(store.toasts.current()[0]).toMatchObject({
       message: "Notes couldn't open that. Try again.",
       isLasting: true,
-      isHelpOwed: true,
       isBugReportOffered: false,
     });
   });
@@ -1126,7 +1804,7 @@ describe("failure toasts", () => {
     expect(store.toasts.current()[0]).toMatchObject({ isHelpOwed: true, isBugReportOffered: true });
   });
 
-  it("shows an app's own sentence as written, and offers Report a bug unless the app calls the refusal routine", async () => {
+  it("shows an app's own sentence as written, which owes help unless the app calls the refusal routine", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
@@ -1163,7 +1841,7 @@ describe("failure toasts", () => {
     await store.closeWindow("win-1");
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Could not close the window.",
+        message: "This window couldn't be closed.",
         details: "HTTP 409\nWindow win-1 is pinned and cannot be closed",
         actions: [],
         isLasting: false,
@@ -1183,19 +1861,49 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("keeps a failure that owes help up with its details, wherever it happened", async () => {
+  it("keeps a failure that owes help up with its details and a Try again that asks again", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(store.toasts.current()).toMatchObject([
       {
-        message: "Could not close the window. Try again.",
+        message: "This window couldn't be closed. Try again.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
         isHelpOwed: true,
       },
     ]);
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    expect(api.calls.filter((call) => call === "closeWindow:home:win-1")).toHaveLength(2);
+  });
+
+  it("offers no Try again for a change nothing answered, which may have gone through, nor a refusal with a reason", async () => {
+    const store = await startedStore();
+    api.refusal = refusedWith(504, null, "Backend timed out");
+    await store.closeWindow("win-1");
+    api.refusal = refusedWith(400, { detail: "Window win-1 shows a page that cannot be closed" });
+    await store.runLaunch("docs", "new", "new");
+    expect(store.toasts.current().map((toast) => toast.actions)).toEqual([[], []]);
+  });
+
+  it("lets a note that owes no help and has nothing to press go on its own, and keeps one that leaves the person stuck", async () => {
+    const store = await startedStore();
+    api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
+    await store.closeWindow("win-1");
+    api.refusal = null;
+    // A shortcut whose app is gone leaves the person unable to open what they meant to: with no app to ask an agent
+    // through, its note stays for Report a bug.
+    await store.runLaunch("gone", "new", "new");
+    const stuck = "This shortcut's app couldn't be found in this workspace, so nothing was opened.";
+    expect(notices()).toEqual(["This window couldn't be closed.", stuck]);
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(notices()).toEqual([stuck]);
+    expect(store.toasts.current()[0]).toMatchObject({ isLasting: true, isHelpOwed: true, actions: [] });
   });
 });
 
@@ -1591,7 +2299,26 @@ describe("gestures", () => {
     store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
     await settle();
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
-    expect(notices()).toEqual(["Could not move the shortcut."]);
+    expect(notices()).toEqual(["Couldn't move this shortcut, so it's back where it was."]);
+  });
+
+  it("offers Try again on a drop the shell failed with no reason, which makes the same move again", async () => {
+    const store = await shortcutStore();
+    api.refusal = refusedWith(500, null, "boom");
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    await settle();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    const moves = api.calls.filter((call) => call.startsWith("moveDesktopShortcut"));
+    expect(moves).toHaveLength(2);
+    expect(moves[1]).toBe(moves[0]);
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
   });
 });
 
@@ -1743,6 +2470,27 @@ describe("pinned entries", () => {
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:buddy:draft:{"message":"Draw me"}:window:win-9:without-page`,
     );
+    // A refused draft leaves the window where it was; its toast's Try again drafts again and shows the window.
+    store.minimizeWindow("win-9");
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+    expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
+    const isWin9Minimized = (): boolean | undefined =>
+      activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized;
+    expect(isWin9Minimized()).toBe(true);
+    const [toast] = store.toasts.current();
+    expect(toast.message).toMatch(/^Couldn't put that into Buddy\. /);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    expect(isWin9Minimized()).toBe(false);
+    // A chooser's request, whose dialog has closed by the time it fails, is named in its failure.
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+    expect(await store.draftIntoPinnedWindow("Draw me", false, "avatar-request")).toBe(false);
+    expect(last(store.toasts.current())?.message).toMatch(/^Couldn't start the avatar request in Buddy\. /);
+    expect(await store.draftIntoPinnedWindow("Theme me", true, "theme-request")).toBe(false);
+    expect(last(store.toasts.current())?.message).toMatch(/^Couldn't start the theme request in Buddy\. /);
+    api.refusal = null;
     // A desktop with no pinned app taking a draft has nowhere to put one.
     socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
@@ -1772,7 +2520,7 @@ describe("pinned entries", () => {
     expect(api.calls.length).toBe(callsBefore);
     api.refusal = "no such client";
     expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
-    expect(notices()).toEqual(["Could not move the window."]);
+    expect(notices()).toEqual(["This window couldn't be moved."]);
     expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
     expect(store.takeOwnNavigation()).toBeNull();
   });
@@ -1815,7 +2563,7 @@ describe("pinned entries", () => {
     });
     api.refusal = "no such client";
     await store.setEntryMode("buddy", "floating");
-    expect(notices()).toEqual(["Could not change the entry."]);
+    expect(notices()).toEqual(["Couldn't change how Buddy shows in the taskbar, so it's back as it was."]);
     expect(store.getState().entries.buddy.mode).toBe("bar");
     // An app with no pinned window on the active desktop has nothing to write.
     api.refusal = null;
@@ -1841,7 +2589,8 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy.mode).toBe("floating");
     socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: { buddy: PLAIN_BAR } });
     await refused;
-    expect(notices()).toEqual(["Could not change the entry."]);
+    // Not put back, so the toast does not say it was.
+    expect(notices()).toEqual(["Couldn't change how Buddy shows in the taskbar."]);
     expect(store.getState().entries).toEqual({ buddy: PLAIN_BAR });
   });
 
@@ -1914,7 +2663,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar. Try again."]);
+    expect(notices()).toEqual(["Couldn't change the avatar. Try again."]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {
@@ -1945,13 +2694,13 @@ describe("desktops and shortcuts", () => {
     await store.reorderDesktops(["work", "home"]);
     expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["work", "home"]);
     await store.reorderDesktops(["home"]);
-    expect(notices()).toEqual([expect.stringContaining("Could not reorder the desktops")]);
+    expect(notices()).toEqual([expect.stringContaining("Your desktops couldn't be reordered")]);
     expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["work", "home"]);
     api.refusal = "that name is taken";
     await store.renameDesktop("home", "Work");
-    expect(notices()).toContain("Could not rename the desktop: that name is taken");
+    expect(notices()).toContain("This desktop couldn't be renamed.");
     await store.deleteDesktop("home");
-    expect(notices()).toContain("Could not delete the desktop: that name is taken");
+    expect(notices()).toContain("This desktop couldn't be deleted.");
   });
 
   it("opens and closes the overview, and a desktop switch closes it", async () => {
@@ -2033,7 +2782,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices()).toEqual(["Failed to quit Docs."]);
+    expect(notices()).toEqual(["Docs couldn't be quit."]);
   });
 });
 
@@ -2121,19 +2870,53 @@ describe("embedder messages", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("tells the user when a message did not reach every app, once for a refusal that says the same", async () => {
+  it("says what a message that did not reach every app was for, once for a refusal that says the same", async () => {
     const store = await startedStore();
-    socket.deliver().onAppsUpdated([HANDLING_APP]);
+    socket
+      .deliver()
+      .onAppsUpdated([
+        HANDLING_APP,
+        appRecord("browser", { display_name: "Web Browser" }),
+        appRecord("slack", { display_name: "Slack" }),
+      ]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
-
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3001/" }, "chat")).toBe(false);
     api.refusal = "buddy did not take it: could not be reached";
     expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
+    api.refusal = "files did not take it: answered 500";
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
+    // The same refusal again replaces its note rather than stacking a second.
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(false);
+    // The app that did not take a link is named as people know it, from the relay's answer.
+    const detail = "browser did not take it: answered 500";
+    api.refusal = new HttpError(
+      readFailure({
+        status: 502,
+        body: { detail, deliveries: [{ app: "browser", status: 500, detail: "answered 500" }] },
+        rawText: null,
+        requestKind: "change",
+      }),
+    );
+    expect(await store.relayEmbedderMessage({ type: "open:web", url: "https://example.com/" }, "chat")).toBe(false);
+    // A link of any scheme is relayed as open:<scheme>, and is told as a link too.
+    const slackDetail = "slack did not take it: answered 500";
+    api.refusal = new HttpError(
+      readFailure({
+        status: 502,
+        body: { detail: slackDetail, deliveries: [{ app: "slack", status: 500, detail: "answered 500" }] },
+        rawText: null,
+        requestKind: "change",
+      }),
+    );
+    expect(await store.relayEmbedderMessage({ type: "open:slack", url: "slack://open" }, "chat")).toBe(false);
 
-    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["The workspace couldn't do that.", "HTTP 400\nNothing in this workspace handles 'open:url'"],
-      ["The workspace couldn't do that.", "HTTP 400\nbuddy did not take it: could not be reached"],
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details, toast.isLasting])).toEqual([
+      ["Couldn't open this link.", "HTTP 400\nNothing in this workspace handles 'open:url'", false],
+      ["Couldn't show that chat.", "HTTP 400\nbuddy did not take it: could not be reached", false],
+      ["Couldn't open that file.", "HTTP 400\nfiles did not take it: answered 500", false],
+      ["Web Browser couldn't open this link. Try again.", `HTTP 502\n${detail}`, true],
+      ["Slack couldn't open this link. Try again.", `HTTP 502\n${slackDetail}`, true],
     ]);
   });
 });
@@ -2390,7 +3173,7 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
 
     expect(store.toasts.current()).toMatchObject([
-      { message: "Could not open Chats.", details: "HTTP 400\nNo chat agent-1", actions: [], isLasting: false },
+      { message: "Chats couldn't be opened.", details: "HTTP 400\nNo chat agent-1", actions: [], isLasting: false },
     ]);
   });
 
@@ -2474,7 +3257,7 @@ describe("links Imbue Studio hands over", () => {
 
     await store.openLink("http://localhost:3000/", SHELL_HOST, null);
 
-    expect(notices()).toEqual(["The workspace couldn't do that."]);
+    expect(notices()).toEqual(["Couldn't open this link."]);
   });
 
   /** A started store whose links opened outside the workspace are recorded, by where they went. */
@@ -3478,7 +4261,7 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
   });
 
-  it("lands home rather than on nothing when the startup read fails, and where it was once a push brings desktops", async () => {
+  it("lands where it was once a startup read nothing answered is answered on a retry", async () => {
     api.apps = [appRecord("docs"), chat];
     api.desktops = [
       desktopRecord("home", {
@@ -3486,26 +4269,20 @@ describe("the phone layout", () => {
       }),
     ];
     api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
-    api.refusal = "the shell is restarting";
+    api.refusal = new HttpError(
+      readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" }),
+    );
     const store = makeStore();
     store.setThemeMetrics(METRICS, PHONE);
     await store.start(NO_LINK);
-    expect(store.getState().phone.shown).toEqual({ kind: "home" });
-    // The shell back: its socket pushes the desktops, and the phone reads where this client was before landing.
+    expect(store.getState().phone.shown).toBeNull();
+    expect(store.getBootFailure()).not.toBeNull();
+    // The shell back: its socket connecting tries the read again, and the phone lands where this client was.
     api.refusal = null;
-    socket.deliver().onAppsUpdated([...api.apps]);
-    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    socket.deliver().onConnected();
     await settle();
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
     expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1"]);
-  });
-
-  it("lands home when the startup read fails before the phone layout is known", async () => {
-    api.refusal = "the shell is restarting";
-    const store = makeStore();
-    await store.start(NO_LINK);
-    store.setThemeMetrics(METRICS, PHONE);
-    expect(store.getState().phone.shown).toEqual({ kind: "home" });
   });
 
   it("tells the shell again what it shows when a reread finds the show unrecorded", async () => {
@@ -4376,6 +5153,29 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     // Back on an own desktop a fullscreen window takes the whole viewport again.
     await store.stopViewing();
     expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
+  });
+
+  it("answers an agent asked for while viewing with the stop-viewing note, told once and asking for no bug report", async () => {
+    const store = await viewerStore();
+    socket.deliver().onAppsUpdated([
+      chatLikeAppRecord("chat", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    await store.switchDesktop("alice");
+
+    await store.askAgentFromShell("Please look at this.");
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
+  });
+
+  it("answers an agent asked for while viewing with the stop-viewing note even with no app to take the ask", async () => {
+    const store = await viewerStore();
+    socket.deliver().onAppsUpdated([]);
+    await store.switchDesktop("alice");
+
+    await store.askAgentFromShell("Please look at this.");
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
   });
 
   it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {

@@ -348,11 +348,18 @@ def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnVal
 
 def launch(desktop_id: str) -> ResponseReturnValue:
     """``POST /api/desktops/<id>/launch`` (post-launch-paths plan section 5.3): run a launch path for a client and
-    answer the window showing its page, the page's path, and whether the window was opened."""
+    answer the window showing its page, the page's path, whether the window was opened, and whether the shell could
+    record where it is."""
     body = parse_request_body(LaunchRequest)
     outcome = _shell().launch(desktop_id, body)
     return model_response(
-        LaunchResponse(window=_shell().window_view(outcome.window), path=str(outcome.path), is_new=outcome.is_new),
+        LaunchResponse(
+            window=_shell().window_view(outcome.window),
+            path=str(outcome.path),
+            is_new=outcome.is_new,
+            layout_saved=outcome.unsaved is None,
+            unsaved_kind=None if outcome.unsaved is None else outcome.unsaved.value,
+        ),
         HTTP_CREATED if outcome.is_new else 200,
     )
 

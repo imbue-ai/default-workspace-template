@@ -179,6 +179,14 @@ describe("windowMenuRows", () => {
   });
 });
 
+describe("phoneWindowMenuRows", () => {
+  it("offers Refresh, Share and Quit, and drops Refresh for a window with no page to refresh", () => {
+    const actions = { refresh: vi.fn(), share: vi.fn(), quit: vi.fn() };
+    expect(keysOf(phoneWindowMenuRows(appRecord("docs"), actions))).toEqual(["refresh", "share", "quit"]);
+    expect(keysOf(phoneWindowMenuRows(undefined, { refresh: null, share: null, quit: null }))).toEqual([]);
+  });
+});
+
 describe("taskbarEntryMenuRows", () => {
   const actions = {
     isDetached: false,

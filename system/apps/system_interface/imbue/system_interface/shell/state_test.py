@@ -1,7 +1,9 @@
 """Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, the
 arrival, and the absolute-directory invariant it is built with."""
 
+import errno
 import itertools
+import os
 import queue
 import socket
 import threading
@@ -27,6 +29,7 @@ from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
+from workspace_layout.records import Window
 from workspace_layout.windows import WindowClosedHint
 from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
 from workspace_themes.testing import write_standard_theme
@@ -39,20 +42,28 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
+from imbue.system_interface.shell.data_types import LaunchRequest
+from imbue.system_interface.shell.data_types import LaunchTarget
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
+from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import VISITOR_DESKTOPS_ADOPTED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchedNotOpenedError
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.ownership import is_desktop_owned_by
+from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.state_files import state_write_error
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -294,6 +305,106 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     with pytest.raises(LaunchUnavailableError, match="refused"):
         preview.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
     assert started == ["docs", "docs"]
+
+
+class _DesktopStoreWhoseWindowWriteFails(DesktopStore):
+    """Reads and writes the desktops as the real store does, except that writing a new window fails with
+    ``write_errno``."""
+
+    write_errno: int
+
+    def open_window(self, desktop_id: str, window: Window) -> Desktop:
+        raise state_write_error(
+            self.state_directory / DESKTOPS_FILENAME, OSError(self.write_errno, os.strerror(self.write_errno))
+        )
+
+
+@pytest.mark.parametrize(
+    ("write_errno", "is_text_path", "expected_kind", "expected_message"),
+    [
+        (
+            errno.ENOSPC,
+            False,
+            RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE,
+            "\u201cNew doc\u201d went through in Docs, but this workspace is out of space, so its window couldn't be "
+            "opened.",
+        ),
+        (
+            errno.EIO,
+            False,
+            RefusalKind.LAUNCHED_NOT_OPENED,
+            "\u201cNew doc\u201d went through in Docs, but its window couldn't be opened.",
+        ),
+        (
+            errno.EIO,
+            True,
+            RefusalKind.LAUNCHED_NOT_OPENED,
+            "Your message was sent to Docs, but its window couldn't be opened.",
+        ),
+    ],
+)
+def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_launched_not_opened(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    write_errno: int,
+    is_text_path: bool,
+    expected_kind: RefusalKind,
+    expected_message: str,
+) -> None:
+    """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
+    to try again (which would ask the app a second time) but as launched and not opened, naming the launch (a
+    message sent, else the launch path by its label) and saying a full disk is one. Neither is a routine refusal:
+    each owes the person help. Nothing opens."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            "http://127.0.0.1:7002",
+            program="docs",
+            display_name="Docs",
+            launch_paths=(("new", "New doc", "/api/intake"),),
+            launch_methods={"new": "POST"},
+            launch_params={"new": ["message"]} if is_text_path else None,
+            launch_text_params={"new": "message"} if is_text_path else None,
+        ),
+    )
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return LaunchPostOutcome(status_code=200, body={"path": "/?doc=1"})
+
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        launch_poster=poster,
+    )
+    shell = built.model_copy_update(
+        to_update(
+            built.field_ref().desktops,
+            _DesktopStoreWhoseWindowWriteFails(state_directory=tmp_path / "state", write_errno=write_errno),
+        )
+    )
+    (home,) = shell.list_desktops()
+    request = LaunchRequest(
+        app=AppName("docs"),
+        launch=LaunchPathId("new"),
+        params={"message": "hi"} if is_text_path else {},
+        client_id=ClientId("c1"),
+        target=LaunchTarget(kind=LaunchTargetKind.NEW),
+    )
+
+    with pytest.raises(LaunchedNotOpenedError) as not_opened:
+        shell.launch(str(home.id), request)
+
+    assert not_opened.value.kind is expected_kind
+    assert not_opened.value.user_facing_message == expected_message
+    assert not_opened.value.is_routine is None
+    assert len(posts) == 1
+    (still,) = shell.list_desktops()
+    assert still.windows == home.windows
 
 
 def _refusing_launch_poster(post: LaunchPost) -> LaunchPostOutcome:

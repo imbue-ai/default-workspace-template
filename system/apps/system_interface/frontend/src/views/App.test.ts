@@ -8,6 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import { ONLY_DESKTOP_REASON } from "../model/failures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import {
   SHELL_AGENT_WORKING,
@@ -32,7 +33,6 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
@@ -82,9 +82,6 @@ async function mountApp(
     isDetached?: boolean;
     soloWindowId?: string;
     laterWindowIds?: readonly string[];
-    /** What every route raises while the store starts (cleared once it has). */
-    startRefusal?: Error;
-    reportBug?: (failure: ReportedFailure | null) => void;
   } = {},
 ): Promise<void> {
   api = new FakeDesktopApi();
@@ -121,11 +118,8 @@ async function mountApp(
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
       launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
-    reportBug: options.reportBug,
   });
-  api.refusal = options.startRefusal ?? null;
   await store.start(NO_LINK);
-  api.refusal = null;
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   tour = new TourController({
     api: new FakeTourApi({ isSeen: true }),
@@ -148,36 +142,102 @@ afterEach(() => {
   gestureListener = null;
 });
 
-describe("a failure toast's Report a bug", () => {
-  it("appears on a toast shown before the embedder said it opens a bug report, and files that toast's failure", async () => {
+describe("the startup read", () => {
+  /** A store over a fake shell whose startup read is held open (or refused with ``refusal``), with the App mounted
+   *  over it before it answers. */
+  async function mountBeforeTheRead(refusal: Error | null): Promise<() => void> {
     unmountViews();
-    // A failed start leaves the default avatar, the animated character, which reads the reduced-motion setting.
     vi.stubGlobal(
       "matchMedia",
       vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     );
-    const reportBug = vi.fn();
-    const startRefusal = new HttpError(
-      readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
-    );
-    await mountApp({ startRefusal, reportBug });
-    m.redraw.sync();
-    const toast = (): HTMLElement => document.querySelector("[data-toast]") as HTMLElement;
-    expect(toast().querySelector(".toast-message")?.textContent).toBe(
-      "Could not read the desktops and apps. Try again.",
-    );
-    expect(toast().querySelector(".report-bug")).toBeNull();
-
-    store.setCanReportBug(true);
-    m.redraw.sync();
-    const button = toast().querySelector<HTMLButtonElement>(".report-bug");
-    expect(button?.textContent).toBe("Report a bug");
-    button?.click();
-    expect(reportBug).toHaveBeenCalledWith({
-      message: "Could not read the desktops and apps. Try again.",
-      details: "HTTP 500\ninventory unreadable",
+    api = new FakeDesktopApi();
+    socket = new FakeDesktopSocket();
+    api.desktops = [desktopRecord("home")];
+    store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: themeMetricsRecord(),
+      modes: { isPhone: false, isTouch: false },
+      redraw: () => m.redraw(),
+      reloadInterface: () => undefined,
     });
-    expect(document.querySelector("[data-toast]")).not.toBeNull();
+    const answer = refusal === null ? api.holdReads() : () => undefined;
+    api.refusal = refusal;
+    void store.start(NO_LINK);
+    mountView(() =>
+      m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
+    );
+    await settle();
+    m.redraw.sync();
+    return answer;
+  }
+
+  it("shows a spinner in the backdrop until it answers", async () => {
+    const answer = await mountBeforeTheRead(null);
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
+    // The socket's desktops arriving first land nothing, so the spinner stays.
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
+    answer();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-spinner]")).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+
+  it("shows the spinner beside its line, with no button, while nothing answers it, and lands once a try does", async () => {
+    await mountBeforeTheRead(
+      new HttpError(readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" })),
+    );
+    const failure = document.querySelector("[data-boot-failure]") as HTMLElement;
+    expect(failure.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(failure.querySelector(".boot-failure-line-message")?.textContent).toBe(
+      "The workspace didn't answer. Still trying\u2026",
+    );
+    expect(failure.querySelectorAll(".boot-failure-line-action")).toHaveLength(0);
+
+    // The socket connecting is the workspace answering again: the read is tried at once.
+    api.refusal = null;
+    socket.deliver().onConnected();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+});
+
+describe("an overview thumbnail's Delete", () => {
+  function deleteRow(): HTMLElement {
+    store.openOverview();
+    m.redraw.sync();
+    const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
+    thumbnail.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    m.redraw.sync();
+    return document.body.querySelector('[data-menu-part="menu"] [data-menu-row="delete"]') as HTMLElement;
+  }
+
+  it("is disabled on the only desktop, saying why on hover, and asks nothing when pressed", () => {
+    const row = deleteRow();
+    expect(row.textContent).toBe("Delete desktop...");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(ONLY_DESKTOP_REASON);
+    row.click();
+    expect(store.getOverviewDeletingId()).toBeNull();
+  });
+
+  it("asks to delete a desktop once there is another", () => {
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("work")]);
+    const row = deleteRow();
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    expect(row.getAttribute("data-hover-tooltip")).toBeNull();
+    row.click();
+    expect(store.getOverviewDeletingId()).toBe("home");
   });
 });
 
@@ -1148,13 +1208,16 @@ describe("the desktop shortcut rows", () => {
     await settle();
     expect(shownApps()).toEqual(["docs"]);
     const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut."]);
+    expect(toastMessages()).toEqual(["Couldn't remove this shortcut, so it's back."]);
 
     void store.addShortcut("docs", "other", "focus");
     expect(shownApps()).toEqual(["docs", "docs"]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut.", "Could not add the shortcut."]);
+    expect(toastMessages()).toEqual([
+      "Couldn't remove this shortcut, so it's back.",
+      "Couldn't add this shortcut, so it's been taken off again.",
+    ]);
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
@@ -1227,6 +1290,23 @@ describe("the desktop shortcut rows", () => {
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
       ["browse", "focus"],
     ]);
+  });
+});
+
+describe("the launcher field", () => {
+  it("lets go of a search once the tour row it found has run", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const field = (): HTMLTextAreaElement =>
+      document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
+    field().value = "tour";
+    field().dispatchEvent(new Event("input", { bubbles: true }));
+    m.redraw.sync();
+
+    (document.querySelector("[data-launcher-overlay] [data-tour-row]") as HTMLElement).click();
+    m.redraw.sync();
+
+    expect(field().value).toBe("");
   });
 });
 
@@ -1464,6 +1544,28 @@ describe("the switch to the phone layout", () => {
     expect(rightClick().defaultPrevented).toBe(true);
   });
 
+  it("tells a failed start-sheet run under its field, and a sheet opened anew starts without it", async () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    const openStartSheet = (): void => {
+      (document.querySelector("[data-phone-new]") as HTMLElement).click();
+      m.redraw.sync();
+    };
+    openStartSheet();
+    api.refusal = "the shell is restarting";
+    (document.querySelector('[data-launch="docs:new"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector(".launcher-failure-message")?.textContent).toBe("Docs couldn't open that.");
+
+    // Left some other way than its own dismiss (the windows sheet replacing it), then opened again with New.
+    store.openPhoneSheet("windows");
+    m.redraw.sync();
+    openStartSheet();
+    expect(document.querySelector('[data-launch="docs:new"]')).not.toBeNull();
+    expect(document.querySelector(".launcher-failure")).toBeNull();
+  });
+
   it("draws no home grid before the phone lands, so the window it lands on is not preceded by home", async () => {
     unmountViews();
     api = new FakeDesktopApi();
@@ -1502,11 +1604,13 @@ describe("the switch to the phone layout", () => {
     expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
   });
 
-  it("draws home, not a blank page, when the startup read of the desktops fails", async () => {
+  it("tells a phone's startup read nothing answers in place of home, not a blank page", async () => {
     unmountViews();
     api = new FakeDesktopApi();
     socket = new FakeDesktopSocket();
-    api.refusal = "the shell is restarting";
+    api.refusal = new HttpError(
+      readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" }),
+    );
     store = new DesktopStore({
       clientId: CLIENT,
       api,
@@ -1526,8 +1630,8 @@ describe("the switch to the phone layout", () => {
     mountView(() =>
       m(App, { store, gestures, tour, notePagesAgentWorking, host: "127.0.0.1:8000", protocol: "http:" }),
     );
-    expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
-    expect(document.querySelector("[data-phone-pill]")?.getAttribute("data-phone-pill")).toBe("home");
+    expect(document.querySelector("[data-boot-failure]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
   });
 
   it("creates no page for a window the phone does not show", () => {

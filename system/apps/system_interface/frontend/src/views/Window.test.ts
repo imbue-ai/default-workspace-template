@@ -27,10 +27,13 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
+    onReportBug: null,
+    gone: null,
     immersive: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
+    onClose: vi.fn(),
     chrome: STANDARD_CHROME,
     ...overrides,
   };
@@ -224,6 +227,26 @@ describe("Window", () => {
     expect(
       render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
     ).toBeNull();
+  });
+
+  it("shows a window's app couldn't be found in place of its page, with its buttons, and drops Refresh", () => {
+    const onClose = vi.fn();
+    const gone = {
+      message: "This app couldn't be found in this workspace.",
+      details: null,
+      isHelpOwed: true,
+      isBugReportOffered: false,
+      actions: [{ label: "Close window", run: onClose }],
+    };
+    const element = render({ app: undefined, gone });
+    const placeholder = element.querySelector("[data-gone-app]") as HTMLElement;
+    expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(gone.message);
+    (placeholder.querySelector("button") as HTMLButtonElement).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
+      control.getAttribute("data-window-control"),
+    );
+    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {

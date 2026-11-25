@@ -160,7 +160,7 @@ describe("Share in a window's title bar", () => {
   it("is not drawn on a window whose app the shell no longer lists", () => {
     socket.deliver().onAppsUpdated([]);
     const root = render({ isAppShareOffered: true });
-    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="close"]')).not.toBeNull();
     expect(shareOf(root, "win-2")).toBeNull();
   });
 });
