@@ -570,10 +570,11 @@ The record's `handoff` entry persists the phase, the target, the pre-minted id, 
 
 - `draining` resumes by re-checking the queue.
 - `summarizing` resumes by re-checking the summary's freshness, then the proceed conditions.
-- `switching` resumes by checking, in order: does the old agent carry the archival name (else the one rename that also sets its labels); is it stopped (else stop it, alongside the next check); does an agent with the pre-minted id exist; is `final_event_count` recorded.
+- `switching` resumes by checking, in order: does the old agent carry the archival name (else the one rename that also sets its labels); stop it, alongside the next check, whatever its tracked state reads (the drain restarts a claude agent, and the observe stream can report that restart's stop after the new process is up; `mngr stop` of a stopped agent does nothing); does an agent with the pre-minted id exist; is `final_event_count` recorded.
 - If an agent with the pre-minted id exists and is running or stopped, it is adopted as the new active agent and the handoff completes.
   If the create left something mngr refuses to reuse (`mngr create --id` raises `DuplicateAgentIdOnHostError` for an id present on the host), the partial agent is destroyed and the create rerun under the same id.
 - `failed` resumes as failed.
+- A member whose entry has ended that the observe stream reports running is stopped, on the event that reports it and on every full listing, so one a switch's stop missed, or one left running before a restart, is found.
 
 Reconciliation is chosen over replay because every step is idempotent when checked against mngr's own state, and because a replayed step could double-send the summary request or double-archive.
 

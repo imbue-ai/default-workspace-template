@@ -322,6 +322,8 @@ creates the successor under a pre-minted id with the chat's name, the account's
 binding and `chat_id`/`chat_seq` labels, carrying no message of its own, and
 records the retiring segment's length once the stop is done (switching); the prompt filled in from
 `.agents/shared/references/continue-chat.md` follows through the send path. The
+switch stops the retiring agent whatever its tracked state reads, and the app stops
+any member whose entry has ended that the observe stream reports running. The
 prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
 told to read before anything else. Every step is recorded on the chat record's `handoff` entry and
