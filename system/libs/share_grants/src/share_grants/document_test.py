@@ -2,6 +2,8 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
+
 from share_grants.document import (
     SHARE_ENV_RELATIVE_PATH,
     SHARE_GRANTS_RELATIVE_PATH,
@@ -104,7 +106,9 @@ def test_read_sharing_state_reads_the_grants_and_whether_share_env_exists(tmp_pa
     assert state.grants.workspace.users == {"user-1"}
 
 
-def test_a_grants_file_that_is_not_a_grants_document_reads_as_none_so_a_save_replaces_it(tmp_path: Path) -> None:
+def test_a_grants_file_that_is_not_a_grants_document_reads_as_none_so_a_save_replaces_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     (tmp_path / SHARE_GRANTS_RELATIVE_PATH).parent.mkdir(parents=True)
     (tmp_path / SHARE_GRANTS_RELATIVE_PATH).write_text("this is = not [ toml")
 
@@ -112,9 +116,12 @@ def test_a_grants_file_that_is_not_a_grants_document_reads_as_none_so_a_save_rep
 
     assert state.grants is None
     assert state.is_grants_unreadable is False
+    assert "is not a grants document" in caplog.text
 
 
-def test_a_grants_file_that_cannot_be_read_is_reported_and_not_read_as_none(tmp_path: Path) -> None:
+def test_a_grants_file_that_cannot_be_read_is_reported_and_not_read_as_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     # A directory where the file belongs: there, and unreadable as a file by any user.
     (tmp_path / SHARE_GRANTS_RELATIVE_PATH).mkdir(parents=True)
 
@@ -122,6 +129,7 @@ def test_a_grants_file_that_cannot_be_read_is_reported_and_not_read_as_none(tmp_
 
     assert state.grants is None
     assert state.is_grants_unreadable is True
+    assert "Could not read the grants file" in caplog.text
 
 
 def test_replace_grants_writes_the_identities_and_the_grants_for_their_owner_alone(tmp_path: Path) -> None:
