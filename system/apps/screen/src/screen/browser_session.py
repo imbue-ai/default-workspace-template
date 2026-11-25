@@ -13,6 +13,7 @@ daemon, spawned detached, outlives it: only the service's reaper (``screen.cli_s
 import shutil
 import subprocess
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Final
 from uuid import uuid4
@@ -44,10 +45,10 @@ class DrivenBrowser(FrozenModel):
     session_name: str = Field(description="The session's ``-s=`` name, unique to this block")
     playwright_cli: str = Field(description="The ``playwright-cli`` executable")
 
-    def run(self, *args: str, timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> str:
+    def run(self, command: str, *args: str, timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> str:
         """Run one ``playwright-cli`` command in the session and answer its output; raises
         ``BrowserSessionError`` when it fails (the CLI exits 1 for any tool error)."""
-        return _run_cli(self.playwright_cli, self.session_name, list(args), timeout_seconds)
+        return _run_cli(self.playwright_cli, self.session_name, command, args, timeout_seconds)
 
 
 @contextmanager
@@ -79,14 +80,14 @@ def driven_browser(
         attach_url = attach.body.get("attach_url")
         if not attach.body.get("ok") or not isinstance(attach_url, str):
             raise _unavailable(attach, browser_name, "attach")
-        _run_cli(playwright_cli, session_name, ["attach", f"--cdp={attach_url}"], _ATTACH_TIMEOUT_SECONDS)
+        _run_cli(playwright_cli, session_name, "attach", [f"--cdp={attach_url}"], _ATTACH_TIMEOUT_SECONDS)
         yield DrivenBrowser(browser_name=browser_name, session_name=session_name, playwright_cli=playwright_cli)
         is_body_done = True
     finally:
         detach_error: BrowserSessionError | None = None
         try:
             # A session the attach never started detaches cleanly.
-            _run_cli(playwright_cli, session_name, ["detach"], _DETACH_TIMEOUT_SECONDS)
+            _run_cli(playwright_cli, session_name, "detach", [], _DETACH_TIMEOUT_SECONDS)
         except BrowserSessionError as e:
             detach_error = BrowserSessionError(f"could not detach the playwright-cli session {session_name}: {e}")
         _release(browser_name, headers)
@@ -114,15 +115,15 @@ def _unavailable(answer: ServiceAnswer, browser_name: str, verb: str) -> Browser
     return BrowserUnavailableError(status, detail)
 
 
-def _run_cli(playwright_cli: str, session_name: str, args: list[str], timeout_seconds: float) -> str:
-    command = [playwright_cli, f"-s={session_name}", *args]
+def _run_cli(playwright_cli: str, session_name: str, command: str, args: Sequence[str], timeout_seconds: float) -> str:
+    argv = [playwright_cli, f"-s={session_name}", command, *args]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_seconds, check=False)
     except subprocess.TimeoutExpired as e:
-        raise BrowserSessionError(f"playwright-cli {args[0]} did not finish within {timeout_seconds:.0f}s") from e
+        raise BrowserSessionError(f"playwright-cli {command} did not finish within {timeout_seconds:.0f}s") from e
     except OSError as e:
         raise BrowserSessionError(f"playwright-cli could not run ({e})") from e
     if result.returncode != 0:
         output = (result.stdout + result.stderr).strip()
-        raise BrowserSessionError(f"playwright-cli {args[0]} failed: {output[-400:]}")
+        raise BrowserSessionError(f"playwright-cli {command} failed: {output[-400:]}")
     return result.stdout
