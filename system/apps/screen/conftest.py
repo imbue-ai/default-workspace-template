@@ -218,7 +218,8 @@ def client(app: Flask) -> FlaskClient:
 def served_screen(app: Flask, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     """The service fixture's app on a real loopback listener, named to the CLI helpers by the environment; its URL."""
     server = make_server("127.0.0.1", 0, app, threaded=True)
-    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll keeps shutdown() from waiting out serve_forever's default half second.
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     serving.start()
     url = f"http://127.0.0.1:{server.server_port}"
     monkeypatch.setenv(ENV_SERVICE_URL, url)
