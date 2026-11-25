@@ -612,11 +612,7 @@ def classify_agents(
     return (
         sorted(
             candidates,
-            key=lambda c: (
-                c.anonymous_kib is None,
-                -(c.anonymous_kib or 0),
-                -c.idle_seconds,
-            ),
+            key=lambda c: (*_memory_order(c.anonymous_kib), -c.idle_seconds),
         ),
         _largest_first(others),
     )
@@ -643,9 +639,12 @@ def _why_agent_is_held(
 
 
 def _largest_first(entries: Iterable[HeldEntry]) -> list[HeldEntry]:
-    return sorted(
-        entries, key=lambda e: (e.anonymous_kib is None, -(e.anonymous_kib or 0))
-    )
+    return sorted(entries, key=lambda e: _memory_order(e.anonymous_kib))
+
+
+def _memory_order(anonymous_kib: int | None) -> tuple[bool, int]:
+    """A sort key putting the largest memory first and unknown memory last."""
+    return anonymous_kib is None, -(anonymous_kib or 0)
 
 
 def read_main_chat_id(path: Path) -> tuple[str | None, list[str]]:
@@ -813,9 +812,7 @@ def running_browsers(
                 else None,
             )
         )
-    return sorted(
-        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
-    )
+    return sorted(candidates, key=lambda c: _memory_order(c.anonymous_kib))
 
 
 def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
@@ -946,9 +943,7 @@ def stoppable_app_candidates(
                 anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
             )
         )
-    return sorted(
-        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
-    )
+    return sorted(candidates, key=lambda c: _memory_order(c.anonymous_kib))
 
 
 def held_programs(
