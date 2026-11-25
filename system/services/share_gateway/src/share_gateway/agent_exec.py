@@ -12,7 +12,6 @@ could reach any file that way, so a path rule here would protect nothing.
 """
 
 import base64
-import binascii
 import codecs
 import math
 import os
@@ -166,7 +165,8 @@ def parse_write_file_request(body: Mapping[str, object], repo_root: Path) -> Wri
         raise InvalidAgentRequestError("content_b64 must be a string")
     try:
         content = base64.b64decode(content_b64, validate=True)
-    except binascii.Error as exc:
+    # A character outside ASCII is a plain ValueError, which binascii's own error is one of.
+    except ValueError as exc:
         raise InvalidAgentRequestError("content_b64 is not valid base64") from exc
     return WriteFileRequest(
         raw_path=raw_path,

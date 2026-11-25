@@ -126,6 +126,8 @@ def test_a_write_request_whose_content_is_absent_or_not_base64_is_refused() -> N
         parse_write_file_request({"path": "a", "content_b64": "not base64!"}, _ROOT)
     with pytest.raises(InvalidAgentRequestError, match="content_b64 is not valid base64"):
         parse_write_file_request({"path": "a", "content_b64": "AAE"}, _ROOT)
+    with pytest.raises(InvalidAgentRequestError, match="content_b64 is not valid base64"):
+        parse_write_file_request({"path": "a", "content_b64": "café"}, _ROOT)
 
 
 def test_reading_answers_the_bytes_and_none_for_a_file_that_is_not_there(tmp_path: Path) -> None:
