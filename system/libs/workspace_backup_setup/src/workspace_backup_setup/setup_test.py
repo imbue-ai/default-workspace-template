@@ -173,6 +173,24 @@ def test_a_failed_initialisation_leaves_the_file_that_was_there_and_reports_no_c
     assert "secret-in-url" not in state_text
 
 
+def test_an_initialisation_that_raises_reads_as_failed_and_holds_no_later_setup_back(
+    workspace_root: Path, fake_restic_control: Path
+) -> None:
+    # A value holding a NUL cannot be put in a process's environment, so restic is never started.
+    unstartable_env_text = restic_env_text(_REPOSITORY, "half\x00password")
+
+    with pytest.raises(ValueError):
+        _set_up(workspace_root, unstartable_env_text, _run_in_place)
+
+    status = read_setup_status(workspace_root, _PROC_ROOT)
+    assert status.state is BackupSetupState.FAILED
+    assert "half" not in status.detail
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    assert not (workspace_root / RESTIC_ENV_PATH).exists()
+    _set_up(workspace_root, _ENV_TEXT, _run_in_place)
+    assert read_setup_status(workspace_root, _PROC_ROOT).state is BackupSetupState.READY
+
+
 def test_a_second_request_while_one_initialisation_runs_is_refused(
     workspace_root: Path, fake_restic_control: Path
 ) -> None:

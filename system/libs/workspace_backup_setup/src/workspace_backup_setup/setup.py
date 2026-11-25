@@ -70,6 +70,9 @@ _START_TIME_FIELD_INDEX: Final[int] = 19
 _GONE_INITIALIZER_DETAIL: Final[str] = (
     "The process that was initialising the repository is gone; send the credentials again."
 )
+_RAISED_INITIALIZATION_DETAIL: Final[str] = (
+    "The repository could not be initialised: the initialisation ended with an error."
+)
 _WRONG_PASSWORD_DETAIL: Final[str] = (
     "The repository is already initialized with a different password; the credentials that initialized it hold "
     "the only key."
@@ -290,38 +293,49 @@ def _install_restic_env(workspace_root: Path, env_text: str, now: datetime) -> N
     _write_atomically(path, env_text, _SECRET_FILE_MODE)
 
 
+def _initialize_and_install(
+    workspace_root: Path, env_text: str, clock: Callable[[], float]
+) -> str | None:
+    """Initialise the repository, then write ``restic.env``; why either could not be done, else None."""
+    failure = _initialize_repository(parse_restic_env_file(env_text))
+    if failure is not None:
+        return failure
+    try:
+        _install_restic_env(
+            workspace_root, env_text, datetime.fromtimestamp(clock(), timezone.utc)
+        )
+    except OSError as e:
+        return f"The repository is ready, but restic.env could not be written: {e}"
+    return None
+
+
 def _finish_setup(
     workspace_root: Path, env_text: str, started_at: float, clock: Callable[[], float]
 ) -> None:
     """Initialise the repository and record how it went; ``restic.env`` is written only when it is ready."""
-    env_values = parse_restic_env_file(env_text)
-    failure = _initialize_repository(env_values)
-    if failure is None:
-        try:
-            _install_restic_env(
-                workspace_root, env_text, datetime.fromtimestamp(clock(), timezone.utc)
+    # What the record says when the initialisation raises: left at INITIALIZING, this live process would hold
+    # every later setup back as one still under way.
+    failure: str | None = _RAISED_INITIALIZATION_DETAIL
+    try:
+        failure = _initialize_and_install(workspace_root, env_text, clock)
+    finally:
+        with _setup_lock(workspace_root):
+            _write_state_record(
+                workspace_root,
+                {
+                    "schema": _STATE_SCHEMA,
+                    "state": (
+                        BackupSetupState.READY
+                        if failure is None
+                        else BackupSetupState.FAILED
+                    ).value,
+                    "detail": failure or "",
+                    "started_at": started_at,
+                    "finished_at": clock(),
+                    "env_sha256": _content_sha256(env_text),
+                },
             )
-        except OSError as e:
-            failure = (
-                f"The repository is ready, but restic.env could not be written: {e}"
-            )
-    with _setup_lock(workspace_root):
-        _write_state_record(
-            workspace_root,
-            {
-                "schema": _STATE_SCHEMA,
-                "state": (
-                    BackupSetupState.READY
-                    if failure is None
-                    else BackupSetupState.FAILED
-                ).value,
-                "detail": failure or "",
-                "started_at": started_at,
-                "finished_at": clock(),
-                "env_sha256": _content_sha256(env_text),
-            },
-        )
-        (workspace_root / PENDING_ENV_RELATIVE_PATH).unlink(missing_ok=True)
+            (workspace_root / PENDING_ENV_RELATIVE_PATH).unlink(missing_ok=True)
 
 
 def begin_setup(
