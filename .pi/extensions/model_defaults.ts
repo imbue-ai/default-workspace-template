@@ -12,7 +12,10 @@
 //
 // `system/scripts/seed_home_skeleton.sh` only seeds the OpenRouter pair, because
 // pi accepts exactly one saved default and it is ignored on any provider the user
-// has not authenticated. That leaves the other providers on pi's table.
+// has not authenticated. That leaves the other providers on pi's table. Settings
+// cannot express the fix either: `defaultProvider` / `defaultModel` is one pair for
+// every provider, and a preference list in `enabledModels` warns at every startup
+// about each pattern that matched nothing -- across pi's providers, most of them.
 //
 // So this extension runs pi's real resolution first and then corrects only the
 // outcomes listed below. It is deliberately narrow:
@@ -24,7 +27,8 @@
 //     the user has not already supplied. If that provider turns out to be
 //     unauthenticated, or the replacement slug is not in the catalog, nothing
 //     happens and pi keeps what it chose.
-//   * It runs on a fresh session only. Resuming keeps the session's own model.
+//   * It runs at process startup only. A resumed session keeps its own model, and
+//     `/new` keeps the model the user was already on.
 //
 // KEEPING IT CURRENT
 //
@@ -36,8 +40,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Structure-only views: this file must stay importable by a stub harness (the
-// test in model_defaults_test.ts), so it depends on no pi runtime value.
+// Structure-only views: this file must stay importable by a stub harness (see the
+// model-defaults cases in pi_extensions_test.py), so it depends on no pi runtime value.
 interface StartupModel {
   provider?: string;
   id?: string;
@@ -71,8 +75,10 @@ export const MODEL_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   "openrouter/moonshotai/kimi-k2.6": "deepseek/deepseek-v4.1-flash",
 };
 
-// Session starts that represent a fresh selection rather than a continuation.
-const FRESH_START_REASONS: ReadonlySet<string> = new Set(["startup", "new"]);
+// The session-start reason this extension acts on. "resume" restores the session's
+// own model and "new" carries the model the user was already on, so neither is a
+// default to correct.
+const STARTUP_REASON = "startup";
 
 /**
  * The model id `provider/modelId` should start on instead of the given startup
@@ -90,7 +96,7 @@ export function substitutionFor(provider: string | undefined, modelId: string | 
 export default function (pi: ExtensionAPI): void {
   pi.on("session_start", async (event: StartupEvent, ctx: StartupContext) => {
     try {
-      if (event?.reason && !FRESH_START_REASONS.has(event.reason)) {
+      if (event?.reason && event.reason !== STARTUP_REASON) {
         return;
       }
       const provider = ctx?.model?.provider;

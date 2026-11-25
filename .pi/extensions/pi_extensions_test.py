@@ -62,9 +62,11 @@ const handlers = {};
 const setModelCalls = [];
 const ctxSpec = spec.ctx ?? {};
 // The registry is described declaratively by the spec: `missing` ids the catalog no
-// longer carries, `unauthed` ones whose provider has no credential.
+// longer carries, `unauthed` ones whose provider has no credential, `failing` a
+// registry that throws as pi's would if it could not resolve anything.
 const registry = ctxSpec.registry ? {
   find: (provider, modelId) => {
+    if (ctxSpec.registry.failing) throw new Error("registry unavailable");
     const key = `${provider}/${modelId}`;
     return (ctxSpec.registry.missing ?? []).includes(key) ? undefined : { provider, id: modelId };
   },
@@ -674,3 +676,39 @@ def test_no_model_resolved_yet_is_left_alone(tmp_path: Path) -> None:
     """pi fires session_start before a model can resolve on an agent with no credential;
     the handler has to be a no-op there rather than throw."""
     assert _startup_model_calls(tmp_path, model=None) == []
+
+
+def test_a_new_session_in_a_running_pi_keeps_the_model_it_had(tmp_path: Path) -> None:
+    """`/new` carries over the model the user is already on, so it is that user's
+    choice by then, not a default: leave the deprecated slug where it is."""
+    assert (
+        _startup_model_calls(
+            tmp_path,
+            model={"provider": "opencode-go", "id": "kimi-k2.6"},
+            event={"reason": "new"},
+        )
+        == []
+    )
+
+
+def test_a_failing_model_registry_never_breaks_the_session_start(
+    tmp_path: Path,
+) -> None:
+    """A model preference is not worth a failed startup: an error anywhere in the
+    handler is swallowed, and pi keeps the model it resolved."""
+    assert (
+        _event_output(
+            _run_event(
+                tmp_path,
+                _MODEL_DEFAULTS,
+                "session_start",
+                {"reason": "startup"},
+                work_dir=_REPO_ROOT,
+                ctx={
+                    "model": {"provider": "opencode-go", "id": "kimi-k2.6"},
+                    "registry": {"failing": True},
+                },
+            )
+        )["setModelCalls"]
+        == []
+    )
