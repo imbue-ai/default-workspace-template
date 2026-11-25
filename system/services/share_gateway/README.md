@@ -243,6 +243,8 @@ X-Imbue-Identity: {"owner":false,"user_id":"…","email":"…"}
 - `owner` is always present.
 - `user_id` and `email` are always present over a share (a session only
   exists for a signed-in account, and a visitor's email is always verified).
+- `is_from_web_client` is present, and `true`, only on a request the hosted
+  web client's page sent to a workspace route (see "The web client's page").
 - Nothing else. Profile data (display name, profile picture) is not in the
   header: it lives in the connector, and a consumer that renders it looks it up
   by `user_id`.
@@ -258,6 +260,40 @@ it as `{"owner":true}`, never as a visitor.
 
 Services key behavior on `user_id`; `email` is for display beside whatever
 profile they fetch, never a substitute identity.
+
+## The web client's page
+
+The hosted web client (`SHARE_CHROME_ORIGIN`) is a page of another origin than
+the workspace's. It frames the workspace, and it also calls two things itself,
+with the workspace's session cookie: the workspace routes an internal app
+serves (`/api/workspace/...`, the shell's), and the gateway's own
+`/_agent/...` routes. For a request that names the web client's origin and is
+for one of those paths (on an internal app's label for the first, on the auth
+label for the second), and for no other request:
+
+- caddy answers the browser's permission check (`OPTIONS`) itself, with the web
+  client's origin, credentials allowed, the methods `GET`, `POST`, `PUT`,
+  `PATCH` and `DELETE`, and the `Content-Type` header. The check carries no
+  session and never reaches the app, whose request guard would refuse it.
+- caddy adds `Access-Control-Allow-Origin` (the web client's origin) and
+  `Access-Control-Allow-Credentials: true` to every answer, a refusal of the
+  gateway's included, so the page can read a `401` for a lapsed session.
+- `/_auth/verify` checks the session as it does for every request, and marks
+  the identity it stamps on a workspace route's request with
+  `"is_from_web_client": true`. The app's request guard admits a request of
+  another origin on that mark alone, and only on the routes the app names
+  (`app_schema.request_guard`).
+
+The mark does not ask for the owner: a grantee of the whole workspace gets it
+too, as that grantee already reaches the terminal. A program that is not a
+browser can send any `Origin` and gains nothing by it, since it holds no
+session and the mark is set only on a request whose session the gateway
+accepted. A share with no web client (`SHARE_CHROME_ORIGIN` unset) renders
+none of this.
+
+`share_gateway/web_client.py` holds the paths, the mark's name and what the
+permission check allows. `system/test_web_client_routes.py` holds them to what
+the shell serves and what its request guard reads.
 
 ## The access log
 

@@ -14,10 +14,12 @@ import pytest
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_internal_app_names
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.caddyfile import render_compression
+from share_gateway.caddyfile import render_web_client_access
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _AUTH_LABEL = "auth-x7k9q2w1"
@@ -507,6 +509,181 @@ def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(
         assert stream.read() == b"data: hello\n\n"
     finally:
         _STREAM_RELEASED.set()
+        ready.close()
+        server.terminate()
+        server.wait(timeout=10)
+        backend.shutdown()
+
+
+_APPS_TOML_WITH_AN_INTERNAL_APP = (
+    _APPS_TOML
+    + """
+[[apps]]
+name = "system_interface"
+url = "http://localhost:8000"
+label = "shell-dddd4444"
+internal = true
+"""
+)
+_INTERNAL_HOST = f"shell-dddd4444.{_DOMAIN}"
+_GRANTABLE_HOST = f"my-app-cccc3333.{_DOMAIN}"
+_AUTH_HOST = f"{_AUTH_LABEL}.{_DOMAIN}"
+
+
+def test_caddyfile_lets_the_web_client_call_the_workspace_routes_of_internal_apps_alone() -> None:
+    rendered = _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP)
+
+    matcher = rendered.split("@web_client_workspace_routes {", 1)[1].split("}", 1)[0]
+    assert f"host {_INTERNAL_HOST}\n" in matcher
+    assert "path /api/workspace/*" in matcher
+    assert f"header Origin {_CHROME_ORIGIN}" in matcher
+    # An app a per-app grant admits a visitor to is never one of the hosts.
+    assert _GRANTABLE_HOST not in matcher
+    assert f'Access-Control-Allow-Origin "{_CHROME_ORIGIN}"' in rendered
+    assert 'Access-Control-Allow-Credentials "true"' in rendered
+    # The permission check is answered ahead of the auth label's routes and of the auth step.
+    assert rendered.index("handle @web_client_workspace_routes_permission_check") < rendered.index("handle @auth")
+    assert rendered.index("handle @web_client_agent_routes_permission_check") < rendered.index("handle @auth")
+    assert rendered.index("handle @web_client_workspace_routes_permission_check") < rendered.index(
+        "forward_auth 127.0.0.1"
+    )
+
+
+def test_caddyfile_lets_the_web_client_call_the_agent_routes_on_the_auth_label() -> None:
+    rendered = _render()
+
+    matcher = rendered.split("@web_client_agent_routes {", 1)[1].split("}", 1)[0]
+    assert f"host {_AUTH_HOST}\n" in matcher
+    assert "path /_agent/*" in matcher
+    # With no internal app registered there is no workspace route to call.
+    assert "@web_client_workspace_routes" not in rendered
+
+
+def test_caddyfile_names_no_other_origin_when_the_share_carries_no_web_client() -> None:
+    rendered = _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP, chrome_origin="")
+
+    assert "Access-Control-Allow-Origin" not in rendered
+    assert "@web_client" not in rendered
+
+
+def test_only_an_internal_row_is_an_internal_app() -> None:
+    apps = parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP)
+
+    assert build_internal_app_names(apps) == frozenset({"system_interface"})
+
+
+class _RecordingBackend(BaseHTTPRequestHandler):
+    """An app behind the share that answers every request and records which ones reached it."""
+
+    protocol_version = "HTTP/1.1"
+    reached: list[tuple[str, str]] = []
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _answer(self) -> None:
+        type(self).reached.append((self.command, self.path))
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = _answer
+    do_PUT = _answer
+    do_OPTIONS = _answer
+
+
+def test_caddy_answers_the_web_clients_permission_check_and_lets_it_read_answers(tmp_path: Path) -> None:
+    """The rendered web client access, run by caddy in front of an app: the browser's permission check is answered
+    by caddy and never reaches the app, an answer to the web client's origin carries the headers that let its page
+    read it, and no other origin, path or host gets either. Skipped where no caddy is installed."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    _RecordingBackend.reached = []
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    access = render_web_client_access(
+        _DOMAIN, parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP), _AUTH_LABEL, _CHROME_ORIGIN
+    )
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://:{port} {{\n{access}\n"
+        f"    handle {{\n        reverse_proxy 127.0.0.1:{backend.server_port}\n    }}\n}}\n"
+    )
+    caddy_env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
+    ready = socket.create_server(("127.0.0.1", 0))
+    ready.settimeout(15)
+    with (tmp_path / "caddy.log").open("w") as caddy_log:
+        server = subprocess.Popen(
+            [
+                caddy,
+                "run",
+                "--config",
+                str(caddyfile),
+                "--adapter",
+                "caddyfile",
+                "--pingback",
+                f"127.0.0.1:{ready.getsockname()[1]}",
+            ],
+            stdout=caddy_log,
+            stderr=subprocess.STDOUT,
+            env=caddy_env,
+        )
+    try:
+        try:
+            ready.accept()[0].close()
+        except TimeoutError:
+            pytest.fail((tmp_path / "caddy.log").read_text())
+
+        def ask(method: str, host: str, path: str, origin: str) -> http.client.HTTPResponse:
+            response = _request(port, method, path, {"Host": host, "Origin": origin})
+            response.read()
+            return response
+
+        check = ask("OPTIONS", _INTERNAL_HOST, "/api/workspace/update/schedule", _CHROME_ORIGIN)
+        assert check.status == 204
+        assert check.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+        assert check.getheader("Access-Control-Allow-Credentials") == "true"
+        assert check.getheader("Access-Control-Allow-Methods") == "GET, POST, PUT, PATCH, DELETE"
+        assert check.getheader("Access-Control-Allow-Headers") == "Content-Type"
+        assert _RecordingBackend.reached == []
+
+        call = ask("PUT", _INTERNAL_HOST, "/api/workspace/profile", _CHROME_ORIGIN)
+        assert call.status == 200
+        assert call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+        assert call.getheader("Access-Control-Allow-Credentials") == "true"
+        assert {value.strip() for value in (call.getheader("Vary") or "").split(",")} == {"Accept-Encoding", "Origin"}
+
+        agent_check = ask("OPTIONS", _AUTH_HOST, "/_agent/grants/agent-1", _CHROME_ORIGIN)
+        assert agent_check.status == 204
+        agent_call = ask("GET", _AUTH_HOST, "/_agent/grants", _CHROME_ORIGIN)
+        assert agent_call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+        assert _RecordingBackend.reached == [("PUT", "/api/workspace/profile"), ("GET", "/_agent/grants")]
+
+        # Another origin, another path, and an app a per-app grant admits to: each reaches the app as it always
+        # did, permission check included, and its answer names no origin.
+        _RecordingBackend.reached = []
+        unanswered = (
+            ("OPTIONS", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
+            ("PUT", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
+            ("OPTIONS", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+            ("PUT", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+            ("OPTIONS", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+            ("PUT", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+            ("OPTIONS", _INTERNAL_HOST, "/_agent/grants", _CHROME_ORIGIN),
+        )
+        for method, host, path, origin in unanswered:
+            other = ask(method, host, path, origin)
+            assert other.status == 200, (method, host, path, origin)
+            assert other.getheader("Access-Control-Allow-Origin") is None, (method, host, path, origin)
+        assert _RecordingBackend.reached == [(method, path) for method, _host, path, _origin in unanswered]
+    finally:
         ready.close()
         server.terminate()
         server.wait(timeout=10)

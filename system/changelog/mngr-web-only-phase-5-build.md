@@ -1,0 +1,1 @@
+- `system/test_web_client_routes.py` holds the share gateway and the shell to one another on what the hosted web client's page may call: the path prefix, the methods the browser's permission check allows, and the name of the mark on the request identity.

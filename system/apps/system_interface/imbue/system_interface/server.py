@@ -18,7 +18,7 @@ from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import register_api_schema_route
 from app_schema.errors import InvalidRequestBodyError
-from app_schema.request_guard import install_request_guard
+from app_schema.request_guard import install_request_guard_with_web_client_routes
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from flask import Flask
@@ -82,6 +82,7 @@ from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.workspace_routes import register_workspace_routes
 from imbue.system_interface.wsgi import build_sock
 
@@ -932,8 +933,13 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static_folder=None disables Flask's default /static route; the shell serves its own
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
-    # The two browser-side modules are served to other origins on purpose (a CORS header below).
-    install_request_guard(application, exempt_rules=frozenset({APP_CONTRACT_ROUTE, CONTEXT_MENU_ROUTE}))
+    # The two browser-side modules are served to other origins on purpose (a CORS header below). The workspace
+    # routes are what the hosted web client's page calls, on the share gateway's word that it is the caller.
+    install_request_guard_with_web_client_routes(
+        application,
+        exempt_rules=frozenset({APP_CONTRACT_ROUTE, CONTEXT_MENU_ROUTE}),
+        web_client_rules=frozenset(path for _method, path in WORKSPACE_ROUTE_TABLE),
+    )
     attach_state(application, state)
     attach_document_policy(application, {"img-src": f"'self' data: blob: {ONBOARDING_MEDIA_ORIGIN}"})
     application.register_error_handler(Exception, handle_unhandled_exception)

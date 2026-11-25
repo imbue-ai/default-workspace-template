@@ -1034,3 +1034,119 @@ def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
     assert _counted_keys(misconfigured_counter) == [
         ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, DENIED_GRANTS_MISCONFIGURED, 1)
     ]
+
+
+_WEB_CLIENT_MARK = "is_from_web_client"
+
+
+def _owner_session(harness: _GatewayHarness) -> None:
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True, user_id="user-owner-9c21")
+    )
+
+
+def test_verify_vouches_for_the_web_clients_call_to_a_workspace_route(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile?x=1", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 200
+    assert _identity_header(resp) == {
+        "owner": True,
+        "user_id": "user-owner-9c21",
+        "email": "owner@example.com",
+        _WEB_CLIENT_MARK: True,
+    }
+
+
+def test_verify_vouches_for_a_whole_workspace_grantee_as_it_does_for_the_owner(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 200
+    assert _identity_header(resp)[_WEB_CLIENT_MARK] is True
+    assert _identity_header(resp)["owner"] is False
+
+
+@pytest.mark.parametrize(
+    ("host", "uri", "origin"),
+    [
+        # Another path of the same app.
+        (_SHELL_HOST, "/api/chats", _CHROME_ORIGIN),
+        (_SHELL_HOST, "/api/workspacex/profile", _CHROME_ORIGIN),
+        # The workspace's own page, and a request that names no origin.
+        (_SHELL_HOST, "/api/workspace/profile", f"https://{_SHELL_HOST}"),
+        (_SHELL_HOST, "/api/workspace/profile", None),
+        # An app a per-app grant admits a visitor to.
+        (_WEB_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+    ],
+)
+def test_verify_vouches_for_no_other_request(tmp_path: Path, host: str, uri: str, origin: str | None) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=host, method="PUT", uri=uri, origin=origin, accept="*/*")
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)
+
+
+def test_verify_never_vouches_without_a_session_it_accepted(tmp_path: Path) -> None:
+    """A program that is not a browser can send any Origin, and gains nothing by it."""
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 401
+    assert IDENTITY_HEADER not in resp.headers
+
+
+def test_verify_never_vouches_when_the_share_carries_no_web_client(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin="")
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin="", accept="*/*"),
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)
+
+
+def test_verify_never_vouches_for_a_visiting_agent(tmp_path: Path) -> None:
+    agent = AgentIdentity(agent_id="agent-1", agent_name="helper", granter="owner@example.com")
+    harness = _make_harness(tmp_path, admit_agent=lambda token, service: agent)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers={
+            **_verify_headers(
+                host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=_CHROME_ORIGIN, accept="*/*"
+            ),
+            "Authorization": "Bearer admission-token",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)

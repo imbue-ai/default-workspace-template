@@ -1,0 +1,1 @@
+- The workspace routes (`/api/workspace/...`) can be called by the hosted web client's page: the shell names them to the request guard, which admits a request of another origin to them when the share gateway vouches that the web client's page sent it. Every other route of the shell refuses that page as it refuses any other origin's.
