@@ -31,7 +31,8 @@ processes, roughly what stopping it frees. Read the free memory again after each
 
 **Every run** may stop what the Step 1 licence names: chats and background agents, the browser, and
 the user apps no window is showing. The main chat is not among them: the chat app starts it again as
-soon as it stops, so the candidates command leaves it out with a note saying so.
+soon as it stops, so the candidates command lists it under "Also holding memory, not candidates"
+with that reason.
 
 **A scheduled run** may stop **any** app the candidates command's apps section lists, windows open
 or not. That section is the boundary, and it is drawn so that everything in it can be brought back:
