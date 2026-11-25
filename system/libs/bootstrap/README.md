@@ -24,7 +24,17 @@ service.
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
    may start by itself; a workspace that already existed never gets it.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **Agent upgrade** (step id `upgrade_agents`) - runs `mngr upgrade` with the
+   workspace venv's mngr on every local agent `mngr list` reports `STOPPED`, so
+   agents an older mngr created get the current mngr-generated hooks and scripts
+   and stay stopped. At a real boot nothing has started a chat or worker yet, so
+   they are all stopped; a running agent is never named, since `mngr upgrade`
+   would restart an idle one behind the chat app. Skipped while an update apply
+   is in flight (`data/.state/update-apply/marker.json`: bootstrap also reruns on
+   the apply's restarts, with chats live) and when this boot's venv sync failed.
+   Bounded and best-effort: its outcome lines go to the boot log, and nothing it
+   does stops the boot.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

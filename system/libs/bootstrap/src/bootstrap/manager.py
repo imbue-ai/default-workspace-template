@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +97,31 @@ _UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
 # boot-time rollback. Nothing downstream depends on the wake, so a wake that
 # takes longer than this is one that is already failing.
 _DRI_WAKE_TIMEOUT_SECONDS = 120.0
+
+# The workspace venv's mngr, which the boot converges to the tree's pin before the agent upgrade runs it.
+WORKSPACE_MNGR = WORKSPACE_VENV / "bin" / "mngr"
+# As supervisord's programs run mngr (system/supervisord.conf).
+_MNGR_ENV_OVERRIDES = {"MNGR_ALLOW_UNKNOWN_CONFIG": "1"}
+_MNGR_LIST_FIELD_SEPARATOR = "|"
+# The local agents as `id|state` rows; inside a workspace a template answers where `--format json` can fail.
+MNGR_LIST_AGENT_STATES_ARGV = (
+    "list",
+    "--provider",
+    "local",
+    "--on-error",
+    "continue",
+    "--format",
+    f"{{id}}{_MNGR_LIST_FIELD_SEPARATOR}{{state}}",
+)
+_STOPPED_STATE = "STOPPED"
+_MNGR_LIST_TIMEOUT_SECONDS = 60.0
+# The most a `mngr upgrade` that hangs (say, on another mngr's host lock) holds up the boot;
+# fifty stopped agents take about five seconds.
+_UPGRADE_AGENTS_TIMEOUT_SECONDS = 120.0
+# `mngr upgrade` skipped an agent and none failed.
+_MNGR_UPGRADE_EXIT_SKIPPED = 9
+# What `mngr upgrade` appends to an agent it cannot upgrade, such as ``; re-create it with `mngr create a --reuse --update` ``.
+_RECREATE_HINT_PATTERN = re.compile(r"; re-create it with `[^`]*`")
 
 # Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
 # operation: running it on a later boot would commit whatever the user had in flight.
@@ -589,8 +614,8 @@ def _ensure_supervisor_log_dir() -> None:
 _UV_SYNC_TIMEOUT_SECONDS = 600.0
 
 
-def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the lockfile of the tree boot will run.
+def _sync_workspace_venv() -> bool:
+    """Converge the workspace .venv to the lockfile of the tree boot will run; whether it converged.
 
     The bootstrap window syncs ``--frozen`` before this program starts, but
     against the tree as the container came up. ``_recover_interrupted_update``
@@ -615,15 +640,16 @@ def _sync_workspace_venv() -> None:
             "uv sync --all-packages timed out after {}s; continuing boot",
             _UV_SYNC_TIMEOUT_SECONDS,
         )
-        return
+        return False
     if result.returncode != 0:
         logger.error(
             "uv sync --all-packages failed (rc={}): {}",
             result.returncode,
             (result.stderr or result.stdout).strip()[-500:],
         )
-        return
+        return False
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+    return True
 
 
 def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
@@ -680,6 +706,74 @@ def _run_env_converge_fast_phase() -> None:
             "env-converge fast phase failed (rc={}): {}",
             result.returncode,
             result.stderr.strip()[-500:],
+        )
+
+
+def _run_mngr(
+    mngr_binary: Path, args: Sequence[str], timeout: float
+) -> subprocess.CompletedProcess[str] | None:
+    """Run ``mngr_binary`` with ``args`` in the services' mngr environment; None, with a warning, when it could not run or timed out."""
+    try:
+        return subprocess.run(
+            [str(mngr_binary), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, **_MNGR_ENV_OVERRIDES},
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("mngr {} could not run ({})", args[0], e)
+        return None
+
+
+def _list_stopped_agent_ids(mngr_binary: Path) -> list[str]:
+    """The ids of the local agents ``mngr list`` reports stopped, from whatever it listed."""
+    result = _run_mngr(
+        mngr_binary, MNGR_LIST_AGENT_STATES_ARGV, _MNGR_LIST_TIMEOUT_SECONDS
+    )
+    if result is None:
+        return []
+    if result.returncode != 0:
+        logger.warning(
+            "mngr list exited {}: {}", result.returncode, result.stderr.strip()[-500:]
+        )
+    rows = (
+        [column.strip() for column in line.split(_MNGR_LIST_FIELD_SEPARATOR)]
+        for line in result.stdout.splitlines()
+    )
+    return [
+        row[0] for row in rows if len(row) == 2 and row[0] and row[1] == _STOPPED_STATE
+    ]
+
+
+def _upgrade_stopped_agents(mngr_binary: Path = WORKSPACE_MNGR) -> None:
+    """Rewrite each stopped local agent's mngr-generated files with ``mngr_binary``, leaving it stopped. Best-effort.
+
+    A running agent is never named: `mngr upgrade` restarts an idle one, and restarts are the chat app's. The
+    boot log gets every outcome line without the re-create command mngr suggests, since re-creating restarts
+    the agent.
+    """
+    agent_ids = _list_stopped_agent_ids(mngr_binary)
+    if not agent_ids:
+        logger.info("No stopped agents to upgrade")
+        return
+    result = _run_mngr(
+        mngr_binary,
+        ["upgrade", *agent_ids, "--on-error", "continue"],
+        _UPGRADE_AGENTS_TIMEOUT_SECONDS,
+    )
+    if result is None:
+        return
+    for line in result.stdout.splitlines():
+        if line.strip():
+            logger.info("mngr upgrade: {}", _RECREATE_HINT_PATTERN.sub("", line))
+    if result.returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
+        logger.warning(
+            "mngr upgrade exited {}: {}",
+            result.returncode,
+            _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:]),
         )
 
 
@@ -970,7 +1064,7 @@ def main() -> None:
     # (below) and before supervisord's services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
-        _sync_workspace_venv()
+        is_venv_converged = _sync_workspace_venv()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the
@@ -981,6 +1075,20 @@ def main() -> None:
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
         _run_env_converge_fast_phase()
+
+    # Bring stopped agents' mngr-generated files to the venv's mngr before anything starts an
+    # agent (the DRI wake below, then the chat app). Not while an update apply is in flight:
+    # bootstrap reruns on its restarts with chats live. Not on a venv the sync left behind:
+    # `mngr upgrade` rewrites to whichever mngr runs it.
+    with _bootstrap_step("upgrade_agents", "Bringing your chats up to date"):
+        if UPDATE_APPLY_MARKER.exists():
+            logger.info(
+                "An update apply is in flight; agents are upgraded at a later boot"
+            )
+        elif not is_venv_converged:
+            logger.warning("Not upgrading agents: the workspace venv did not converge")
+        else:
+            _upgrade_stopped_agents()
 
     # Re-engage the agent whose update the boot-time rollback undid. Held until
     # here on purpose: waking it starts a live agent running `uv run`, which

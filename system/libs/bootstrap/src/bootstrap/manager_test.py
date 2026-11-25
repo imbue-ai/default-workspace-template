@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -17,16 +18,19 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
+    _UPGRADE_AGENTS_TIMEOUT_SECONDS,
     BOOTSTRAP_COMPLETED_EVENT,
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    MNGR_LIST_AGENT_STATES_ARGV,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
+    WORKSPACE_MNGR,
     WORKSPACE_ROOT_DIR,
     _apply_container_timezone,
     _configure_git_global,
@@ -39,6 +43,7 @@ from bootstrap.manager import (
     _recover_interrupted_update,
     _set_container_timezone,
     _supervisord_environment,
+    _upgrade_stopped_agents,
     _wake_update_dri_agent,
     _write_routines_tick_cron_entry,
     _write_update_recovery_cron_entry,
@@ -123,7 +128,8 @@ class _StubSubprocess:
     runs for every argv, which is how the recovery tests model the script
     clearing the apply marker on a successful rollback. ``raise_on`` maps a
     token in the argv to the exception that call raises, for the "the
-    executable is missing / hangs" paths.
+    executable is missing / hangs" paths. ``reply_on`` maps a token in the argv
+    to the exit code and stdout that call returns instead of the defaults.
     """
 
     def __init__(self, returncode: int = 0, stdout: str = "") -> None:
@@ -134,6 +140,7 @@ class _StubSubprocess:
         self.kwargs: list[dict[str, object]] = []
         self.on_command: Callable[[list[str]], None] | None = None
         self.raise_on: dict[str, BaseException] = {}
+        self.reply_on: dict[str, tuple[int, str]] = {}
 
     def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         self.calls.append(cmd)
@@ -143,8 +150,12 @@ class _StubSubprocess:
         for token, error in self.raise_on.items():
             if token in cmd:
                 raise error
+        returncode, stdout = next(
+            (reply for token, reply in self.reply_on.items() if token in cmd),
+            (self.returncode, self.stdout),
+        )
         return subprocess.CompletedProcess(
-            args=cmd, returncode=self.returncode, stdout=self.stdout, stderr=self.stderr
+            args=cmd, returncode=returncode, stdout=stdout, stderr=self.stderr
         )
 
 
@@ -918,6 +929,7 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
         "sync_venv",
         "set_timezone",
         "converge_environment",
+        "upgrade_agents",
         "install_cron",
     ]
     assert completed == started
@@ -1140,7 +1152,9 @@ def test_routines_tick_cron_entry_states_the_boot_host_dir_for_the_wrapper(
 
     lines = (target / ROUTINES_TICK_CRON_NAME).read_text().splitlines()
     assert lines[0] == "MNGR_HOST_DIR=/mngr"
-    assert lines[1].startswith(f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} ")
+    assert lines[1].startswith(
+        f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} "
+    )
     assert len(lines) == 2
 
 
@@ -1151,3 +1165,302 @@ def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
     _write_routines_tick_cron_entry(target_dir=tmp_path / "missing")
 
     assert not (tmp_path / "missing").exists()
+
+
+# the boot's agent upgrade
+
+
+def _mngr_calls(stub: _StubSubprocess, subcommand: str) -> list[list[str]]:
+    """The venv mngr's calls of ``subcommand`` that ``stub`` recorded."""
+    return [
+        argv for argv in stub.calls if argv[:2] == [str(WORKSPACE_MNGR), subcommand]
+    ]
+
+
+@contextmanager
+def _captured_log_lines(level: str) -> Generator[list[str], None, None]:
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level=level)
+    try:
+        yield lines
+    finally:
+        logger.remove(sink)
+
+
+def test_main_upgrades_stopped_agents_on_the_converged_venv_before_anything_starts_an_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Every agent reads stopped at a real boot only until something starts one: the DRI wake, then
+    # the chat app supervisord launches. The upgrade runs the venv's mngr, so it follows the converge.
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\n")}
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord",
+        lambda: stub.calls.append(["supervisord"]),
+    )
+
+    main()
+
+    recover_index = next(
+        index for index, argv in enumerate(stub.calls) if "recover" in argv
+    )
+    assert recover_index < stub.calls.index(
+        ["uv", "sync", "--all-packages", "--frozen"]
+    )
+    assert (
+        stub.calls.index(["uv", "sync", "--all-packages", "--frozen"])
+        < stub.calls.index(
+            ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"]
+        )
+        < stub.calls.index([str(WORKSPACE_MNGR), *MNGR_LIST_AGENT_STATES_ARGV])
+        < stub.calls.index(
+            [str(WORKSPACE_MNGR), "upgrade", "agent-a", "--on-error", "continue"]
+        )
+        < stub.calls.index(["mngr", "start", "agent-omega"])
+        < stub.calls.index(["uv", "run", "--no-sync", "routines", "migrate-cron"])
+        < stub.calls.index(["supervisord"])
+    )
+
+
+def test_main_leaves_agents_alone_while_an_update_apply_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Bootstrap also reruns on an apply's restarts, with chats live and the marker on disk.
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    stub.on_command = None
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\n")}
+    handed_off: list[bool] = []
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda: handed_off.append(True)
+    )
+
+    main()
+
+    assert UPDATE_APPLY_MARKER.exists()
+    assert _mngr_calls(stub, "list") == []
+    assert _mngr_calls(stub, "upgrade") == []
+    assert handed_off == [True]
+
+
+def test_main_leaves_agents_alone_when_the_venv_did_not_converge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `mngr upgrade` rewrites agents to whichever mngr runs it, so a venv left on another lock must not run it.
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    stub.reply_on = {"sync": (1, ""), "list": (0, "agent-a|STOPPED\n")}
+    handed_off: list[bool] = []
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda: handed_off.append(True)
+    )
+
+    main()
+
+    assert _mngr_calls(stub, "list") == []
+    assert _mngr_calls(stub, "upgrade") == []
+    assert handed_off == [True]
+
+
+@pytest.mark.parametrize(
+    ("reply_on", "raise_on"),
+    [
+        ({"upgrade": (0, "upgraded a (stopped)\n")}, {}),
+        ({"upgrade": (9, "skipped a: its state could not be read\n")}, {}),
+        ({"upgrade": (1, "failed a: swap (disk full); left stopped\n")}, {}),
+        ({}, {"list": FileNotFoundError(str(WORKSPACE_MNGR))}),
+        ({}, {"upgrade": subprocess.TimeoutExpired(str(WORKSPACE_MNGR), 1.0)}),
+    ],
+    ids=["upgraded", "skipped", "failed", "missing-mngr", "timed-out"],
+)
+def test_main_boots_whatever_the_agent_upgrade_does(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reply_on: dict[str, tuple[int, str]],
+    raise_on: dict[str, BaseException],
+) -> None:
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\n"), **reply_on}
+    stub.raise_on.update(raise_on)
+    handed_off: list[bool] = []
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda: handed_off.append(True)
+    )
+
+    main()
+
+    events = [
+        json.loads(line)
+        for line in (_agent_state_dir(tmp_path) / BOOTSTRAP_EVENTS_RELATIVE_PATH)
+        .read_text()
+        .splitlines()
+    ]
+    assert _mngr_calls(stub, "list")
+    assert "upgrade_agents" in [
+        event["step"]
+        for event in events
+        if event["type"] == BOOTSTRAP_STEP_COMPLETED_EVENT
+    ]
+    assert handed_off == [True]
+
+
+def test_the_upgrade_names_only_the_stopped_agents_to_the_venv_mngr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A running agent is never named: `mngr upgrade` would restart an idle one behind the chat app.
+    stub = _StubSubprocess()
+    stub.reply_on = {
+        "list": (
+            0,
+            "agent-a|STOPPED\nagent-b|WAITING\nagent-c|STOPPED\nagent-d|RUNNING\n"
+            "agent-e|RUNNING_BACKGROUND\nagent-f|UNKNOWN\nnot a row\n",
+        )
+    }
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _upgrade_stopped_agents()
+
+    assert stub.calls == [
+        [str(WORKSPACE_MNGR), *MNGR_LIST_AGENT_STATES_ARGV],
+        [
+            str(WORKSPACE_MNGR),
+            "upgrade",
+            "agent-a",
+            "agent-c",
+            "--on-error",
+            "continue",
+        ],
+    ]
+    for argv in stub.calls:
+        assert_mngr_argv_valid(argv)
+    for kwargs in stub.kwargs:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert environment["MNGR_ALLOW_UNKNOWN_CONFIG"] == "1"
+    assert stub.kwargs[1]["timeout"] == _UPGRADE_AGENTS_TIMEOUT_SECONDS
+
+
+def test_the_upgrade_runs_the_workspace_venvs_mngr_from_the_repo_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The boot converges the venv to the tree's pin; an mngr on PATH may lag it.
+    monkeypatch.chdir(tmp_path)
+    calls = tmp_path / "calls"
+    for bin_dir, label in (
+        (tmp_path / ".venv" / "bin", "venv"),
+        (tmp_path / "tool-bin", "path"),
+    ):
+        bin_dir.mkdir(parents=True)
+        double = bin_dir / "mngr"
+        double.write_text(
+            "#!/bin/sh\n"
+            f'echo "{label} $1 $MNGR_ALLOW_UNKNOWN_CONFIG" >> {calls}\n'
+            'if [ "$1" = list ]; then echo "agent-a|STOPPED"; fi\n'
+        )
+        double.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{tmp_path / 'tool-bin'}{os.pathsep}{os.environ['PATH']}"
+    )
+
+    _upgrade_stopped_agents()
+
+    assert calls.read_text().splitlines() == ["venv list 1", "venv upgrade 1"]
+
+
+def test_the_upgrade_makes_no_call_when_no_agent_is_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A fresh create or a pool adopt: only the running services agent exists.
+    stub = _StubSubprocess()
+    stub.reply_on = {"list": (0, "agent-services|RUNNING\nagent-b|WAITING\n")}
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _upgrade_stopped_agents()
+
+    assert stub.calls == [[str(WORKSPACE_MNGR), *MNGR_LIST_AGENT_STATES_ARGV]]
+
+
+def test_the_upgrade_takes_the_stopped_agents_a_failing_listing_still_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With --on-error continue, one agent that cannot be read does not hide the others.
+    stub = _StubSubprocess()
+    stub.reply_on = {"list": (1, "agent-a|STOPPED\n")}
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _upgrade_stopped_agents()
+
+    assert _mngr_calls(stub, "upgrade") == [
+        [str(WORKSPACE_MNGR), "upgrade", "agent-a", "--on-error", "continue"]
+    ]
+
+
+def test_the_upgrade_logs_each_outcome_without_the_recreate_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Re-creating an agent restarts it, so the boot log never offers it.
+    stub = _StubSubprocess()
+    stub.reply_on = {
+        "list": (0, "agent-a|STOPPED\nagent-b|STOPPED\n"),
+        "upgrade": (
+            9,
+            "upgraded a (stopped)\n"
+            "skipped b: agent type 'pi-coding' has no upgrade support; "
+            "re-create it with `mngr create b --reuse --update`\n"
+            "1 upgraded, 0 current, 1 not upgraded, 0 failed\n",
+        ),
+    }
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    with _captured_log_lines("INFO") as lines:
+        _upgrade_stopped_agents()
+
+    assert any("mngr upgrade: upgraded a (stopped)" in line for line in lines)
+    assert any(
+        line.rstrip().endswith(
+            "mngr upgrade: skipped b: agent type 'pi-coding' has no upgrade support"
+        )
+        for line in lines
+    )
+    assert not any("--reuse" in line or "re-create" in line for line in lines)
+    assert not any("WARNING" in line for line in lines)
+
+
+@pytest.mark.parametrize("returncode", [1, 8])
+def test_an_upgrade_that_fails_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    stub = _StubSubprocess()
+    stub.stderr = "Error: no agent matched agent-a"
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\n"), "upgrade": (returncode, "")}
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    with _captured_log_lines("WARNING") as warnings:
+        _upgrade_stopped_agents()
+
+    assert any(
+        f"mngr upgrade exited {returncode}: Error: no agent matched agent-a" in line
+        for line in warnings
+    )
+
+
+@pytest.mark.parametrize(
+    "raise_on",
+    [
+        {"list": FileNotFoundError(str(WORKSPACE_MNGR))},
+        {"list": subprocess.TimeoutExpired(str(WORKSPACE_MNGR), 1.0)},
+        {"upgrade": subprocess.TimeoutExpired(str(WORKSPACE_MNGR), 1.0)},
+    ],
+    ids=["missing-mngr", "listing-timed-out", "upgrade-timed-out"],
+)
+def test_an_upgrade_that_cannot_run_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch, raise_on: dict[str, BaseException]
+) -> None:
+    stub = _StubSubprocess()
+    stub.reply_on = {"list": (0, "agent-a|STOPPED\n")}
+    stub.raise_on = raise_on
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    with _captured_log_lines("WARNING") as warnings:
+        _upgrade_stopped_agents()
+
+    (subcommand,) = raise_on
+    assert any(f"mngr {subcommand} could not run" in line for line in warnings)
