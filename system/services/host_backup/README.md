@@ -73,11 +73,14 @@ is rewritten out of history by its path pattern.
 - Single long-running tick loop run as the `host-backup` supervisord program
   (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
-- The repository is created (and keyed) by Imbue Studio, not by
-  host_backup: Imbue Studio runs `restic init` from outside the workspace -- the
-  workspace's own random password is the repository's single key -- and
-  injects the resulting `restic.env`. host_backup just backs up to the
-  existing repository -- it does not probe-then-init.
+- The repository is created (and keyed) for Imbue Studio, not by
+  host_backup: the workspace's own random password is the repository's single
+  key. Imbue Studio sends the contents of `restic.env` to the shell's backup
+  route, which runs `restic init` in the workspace and writes the file only
+  once the repository is ready (`system/libs/workspace_backup_setup`); an
+  Imbue Studio from before that route runs `restic init` from outside the
+  workspace and injects the file. host_backup just backs up to the existing
+  repository -- it does not probe-then-init.
 - Each tick reads two optional on-disk inputs:
   - `data/system/backup.toml`: purely *user* settings -- backup interval,
     retention, exclude patterns. Optional: when absent the service runs on
@@ -153,9 +156,9 @@ is rewritten out of history by its path pattern.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - `backup.toml` also carries `verification_disabled` (default `false`): the
-  Imbue Studio app's per-workspace switch for its own exec-based verification of
-  this service. The app writes and reads it; the service itself ignores it and
-  keeps backing up either way.
+  Imbue Studio app's per-workspace switch for its own verification of
+  this service. The app sets it through the shell's backup verification route
+  and reads it; the service itself ignores it and keeps backing up either way.
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
   its `extra_excludes` list (default empty; for adding patterns without
@@ -309,9 +312,10 @@ log stays bounded. Rotating only there keeps each tick's events in one file.
 ## First-run setup
 
 In the Imbue Studio app the whole `data/.secrets/restic.env` is written for you
-when you pick a backup provider on the create form -- Imbue Studio initializes the
-repository (`restic init`, keyed solely by the workspace's own random
-password) from outside the workspace and injects the file. For Imbue Cloud
+when you pick a backup provider on the create form -- the repository is
+initialized (`restic init`, keyed solely by the workspace's own random
+password) and the file written by the shell's backup route, or by an Imbue
+Studio from before that route from outside the workspace. For Imbue Cloud
 backups it holds `RESTIC_REPOSITORY=rest:https://<backup store>/<user>/<workspace>/`
 plus `RESTIC_REST_USERNAME` / `RESTIC_REST_PASSWORD`. To configure
 backups by hand instead, populate
