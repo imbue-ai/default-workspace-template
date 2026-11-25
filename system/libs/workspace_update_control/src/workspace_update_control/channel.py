@@ -39,6 +39,9 @@ CHANNEL_READ_INTERVAL_SECONDS: Final[float] = 60 * 60
 # A desktop from before the workspace armed its own updates sweeps every 300 seconds, naming its newest version
 # each time. Its word stands for three sweeps after the last, so one missed sweep does not let the workspace
 # arm past it.
+# CLEANUP: remove the client's ceiling (this hold, ``client-ceiling.json``, ``record_client_ceiling``,
+# ``read_fresh_client_ceiling`` and ``bounded_by_client_ceiling``) once no supported Imbue Studio desktop names a
+# ``ceiling`` in its requests, which is every desktop from before the workspace armed its own updates.
 CLIENT_CEILING_HOLD_SECONDS: Final[float] = 15 * 60
 
 # The key the channel's file names the version under, as the release feed's publisher writes it
