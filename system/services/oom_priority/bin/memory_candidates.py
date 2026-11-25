@@ -962,8 +962,9 @@ def held_programs(
     pids_by_program: Mapping[str, int],
     proc_dir: Path,
 ) -> list[HeldEntry]:
-    """Every running program that is not a candidate's, largest memory first: the apps the workspace
-    may not stop (one row per program, since apps can share one), then the workspace's own services.
+    """Every running program that is not a candidate's, largest memory first, whether an app the
+    workspace may not stop (one row per program, since apps can share one) or one of the
+    workspace's own services.
 
     The Screen's service launches the browser's Chromium processes as its children, so its row
     leaves them out: the browser section holds them."""
