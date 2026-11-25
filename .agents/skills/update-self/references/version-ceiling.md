@@ -10,14 +10,21 @@ owner has no desktop app running resolves like any other. A pass the workspace
 or Imbue Studio started names the ceiling in its first message instead
 (`handoff-contract.md`, "The scheduled entry").
 
+One workspace still asks an app: one that holds no update settings at all,
+because the only Imbue Studio that has opened it is a desktop app from before
+those settings existed. `resolve-target` then takes the release that app says
+it supports, as every pass did before, and only when no app answers is the
+missing channel a fault.
+
 Three things leave that release out of reach, and all three are **faults**, not
 refusals: `resolve-target` fails, and what to do next is your call with the
 user, never a version the script picks.
 
 - The workspace has read no version for its channel: it holds no update
-  settings yet (Imbue Studio writes them when it opens the workspace), or the
-  channel's file could not be read. Only a pass with no pin depends on it; a
-  pinned pass takes the ceiling from its message.
+  settings yet (Imbue Studio writes them when it opens the workspace) and no
+  desktop app answered for it, or the channel's file could not be read. Only a
+  pass with no pin depends on it; a pinned pass takes the ceiling from its
+  message.
 - The ceiling names a release the upstream does not carry -- so that release
   was never published as claimed.
 - It names no release at all; a development build of Imbue Studio pins its

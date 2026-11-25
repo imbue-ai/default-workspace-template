@@ -177,6 +177,43 @@ def test_overrides_are_never_flagged_without_a_ceiling() -> None:
 # read_channel_template_ref
 
 
+def _install_fake_latchkey(
+    monkeypatch, directory: Path, body: str, status: str, exit_code: int = 0
+) -> None:
+    """Put a stub ``latchkey`` on PATH that mimics the real curl passthrough.
+
+    The real ``latchkey curl`` forwards its arguments to ``curl`` and passes curl's
+    exit code, stdout and stderr back. The stub honors the two the fetch depends on
+    -- ``--output <file>`` for the body and ``--write-out %{http_code}`` for the
+    status on stdout -- so the test exercises the actual subprocess call.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "latchkey"
+    lines = [
+        "#!/usr/bin/env python3",
+        "import sys",
+        "argv = sys.argv[1:]",
+        "out = argv[argv.index('--output') + 1]",
+        f"open(out, 'w').write({body!r})",
+        f"sys.stdout.write({status!r})",
+    ]
+    if exit_code:
+        lines.append("sys.stderr.write('connection refused')")
+        lines.append(f"sys.exit({exit_code})")
+    script.write_text("\n".join(lines) + "\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+
+
+@pytest.fixture(autouse=True)
+def no_desktop_answers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No Imbue Studio desktop app answers a workspace under test unless the test stages one, so a workspace with
+    no update settings never reaches for whatever ``latchkey`` this machine has."""
+    _install_fake_latchkey(
+        monkeypatch, tmp_path / "no-desktop-bin", body="", status="000", exit_code=7
+    )
+
+
 def _write_update_state(repo_root: Path, name: str, content: dict[str, object]) -> None:
     path = repo_root / "data" / ".state" / "update-apply" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -10087,3 +10124,71 @@ def test_recover_runs_from_the_command_line(apply_repo: Path) -> None:
         )
         == 0
     )
+
+
+def test_a_workspace_with_no_update_settings_takes_the_release_its_desktop_app_supports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A desktop app from before the update settings writes none, so a workspace it alone drives asks it."""
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo,
+        merged_tags=("minds-v0.3.5",),
+        unmerged_tags=("minds-v0.3.9", "minds-v0.4.0"),
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "desktop-bin",
+        body=json.dumps({"workspace_template_ref": "minds-v0.3.9"}),
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 0
+    )
+
+    resolved = json.loads(capsys.readouterr().out)
+    assert resolved["ref"] == "minds-v0.3.9"
+
+
+def test_a_workspace_with_no_update_settings_and_no_desktop_app_says_it_follows_no_channel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.5",), unmerged_tags=("minds-v0.3.9",)
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    assert "holds no update settings" in capsys.readouterr().err
+
+
+def test_a_workspace_that_follows_a_channel_never_asks_a_desktop_app(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The channel's version is the newest the workspace may take, whatever a desktop app supports."""
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo,
+        merged_tags=("minds-v0.3.5",),
+        unmerged_tags=("minds-v0.3.9", "minds-v0.4.0"),
+    )
+    _stage_channel_version(repo, "", error="the feed is down")
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "desktop-bin",
+        body=json.dumps({"workspace_template_ref": "minds-v0.4.0"}),
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    assert "the feed is down" in capsys.readouterr().err

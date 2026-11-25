@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Collection, NamedTuple, Sequence
 
@@ -252,3 +254,109 @@ def read_channel_template_ref(repo_root: Path) -> str:
         + ". It asks the release feed at most once an hour, so run the update again "
         "later, or name the version to update to."
     )
+
+
+def is_workspace_without_update_settings(repo_root: Path) -> bool:
+    """Whether no client has written update settings into this workspace, so it follows no release channel."""
+    return _read_json_object(repo_root / _UPDATE_SETTINGS_PATH) is None
+
+
+# CLEANUP: everything below, with ``is_workspace_without_update_settings`` above and their use in
+# ``update_self.py``, goes once no supported Imbue Studio desktop app predates the update settings
+# (the first with them is the one that ships phase 5 of the web and desktop consolidation). Such
+# an app writes no settings into a workspace, so a workspace it alone drives follows no channel,
+# and an update started by hand there asks that app which release it supports.
+# The Imbue Studio app's version route, addressed through the latchkey gateway's
+# ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
+# permissions baseline (``minds-app-version-read``), so this needs no grant and
+# never raises a permission dialog -- which matters because update-self resolves
+# its target from a background worker, with nobody watching to approve one.
+_MINDS_APP_VERSION_URL = (
+    "http://latchkey-self.invalid/minds-api-proxy/api/v1/app/version"
+)
+
+# Bounds the gateway round-trip, at the house network default (the style guide's
+# 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
+# ``_LATCHKEY_CURL_TIMEOUT_SECONDS``).
+_APP_VERSION_TIMEOUT_SECONDS = 60
+
+# Statuses that mean "this app predates the version route", not "something went
+# wrong". 404 is the obvious one; 403 is in fact the *likelier* of the two, since
+# the route and the gateway permission that reaches it (``minds-app-version-read``)
+# ship in the same release, so an app old enough to lack the route also lacks the
+# grant -- and the gateway denies an ungranted request before the app ever sees it.
+_APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
+
+
+class DesktopVersionUnavailableError(Exception):
+    """Raised when the Imbue Studio app's own version could not be read.
+
+    Never downgraded to "no version to match": an app that cannot answer is very
+    often an app too old to *have* this route, which is exactly the case that
+    matching the app protects against.
+    """
+
+
+def fetch_desktop_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
+    """Return the newest workspace-template ref the running Imbue Studio app supports.
+
+    Goes through ``latchkey curl``, which injects the gateway credentials and
+    passes every other argument (and curl's exit code) straight through. Each
+    failure mode is reported distinctly, because the user's next action differs:
+    a transport failure is worth retrying, an :data:`_APP_TOO_OLD_STATUSES`
+    answer (403 or 404) means the app must be updated first, and any other bad
+    status or malformed body is a bug worth reporting.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json") as body_file:
+        try:
+            result = subprocess.run(
+                [
+                    "latchkey",
+                    "curl",
+                    "--silent",
+                    "--show-error",
+                    "--output",
+                    body_file.name,
+                    "--write-out",
+                    "%{http_code}",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=_APP_VERSION_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise DesktopVersionUnavailableError(
+                f"could not reach the Imbue Studio app to read its version ({e}). The app may be "
+                f"closed or the gateway down; retry once it is running."
+            ) from e
+        if result.returncode != 0:
+            raise DesktopVersionUnavailableError(
+                f"could not reach the Imbue Studio app to read its version (latchkey curl exited "
+                f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
+                f"gateway down; retry once it is running."
+            )
+        status = result.stdout.strip()
+        body = Path(body_file.name).read_text()
+
+    if status in _APP_TOO_OLD_STATUSES:
+        raise DesktopVersionUnavailableError(
+            "this workspace's Imbue Studio app is too old to report its version (it answered "
+            f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
+            "may safely update. Update the Imbue Studio app itself first."
+        )
+    if status != "200":
+        raise DesktopVersionUnavailableError(
+            f"the Imbue Studio app returned HTTP {status} for its version ({body.strip()[:200]})."
+        )
+    try:
+        template_ref = json.loads(body)["workspace_template_ref"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise DesktopVersionUnavailableError(
+            f"the Imbue Studio app's version response could not be parsed ({e}): {body.strip()[:200]}"
+        ) from e
+    if not isinstance(template_ref, str) or not template_ref:
+        raise DesktopVersionUnavailableError(
+            f"the Imbue Studio app reported an empty workspace_template_ref: {body.strip()[:200]}"
+        )
+    return template_ref

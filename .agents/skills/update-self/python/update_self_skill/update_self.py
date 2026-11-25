@@ -247,8 +247,11 @@ from update_self_skill.update_runtime import (
 from update_self_skill.update_target import (
     CeilingNotReleasedError,
     ChannelVersionUnavailableError,
+    DesktopVersionUnavailableError,
     NoUpdateTargetError,
     already_current_message,
+    fetch_desktop_template_ref,
+    is_workspace_without_update_settings,
     read_channel_template_ref,
     resolve_target,
 )
@@ -333,8 +336,22 @@ def _ceiling(args: argparse.Namespace, repo_root: Path) -> str | None:
     try:
         return read_channel_template_ref(repo_root)
     except ChannelVersionUnavailableError:
+        desktop_ref = _desktop_template_ref(repo_root)
+        if desktop_ref is not None:
+            return desktop_ref
         if args.override is None:
             raise
+        return None
+
+
+def _desktop_template_ref(repo_root: Path) -> str | None:
+    """The release a desktop app from before the update settings supports, for a workspace that holds none;
+    None for a workspace that holds settings, and when no such app answers."""
+    if not is_workspace_without_update_settings(repo_root):
+        return None
+    try:
+        return fetch_desktop_template_ref()
+    except DesktopVersionUnavailableError:
         return None
 
 
