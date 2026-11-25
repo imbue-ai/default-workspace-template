@@ -209,7 +209,7 @@ describe("the chat list's failed verbs", () => {
         detail: "Chat 'agent-1' not found",
         user_facing_message: "This chat is no longer here.",
         kind: "chat_gone",
-        expected: true,
+        routine: true,
       }),
     );
     select("stop");
@@ -261,7 +261,7 @@ describe("a message from outside a chat that the chat would not take", () => {
     expect(lines.isHelpOwed).toBe(false);
   });
 
-  it("owes help for a refusal the chat app wrote a sentence about, unless it called the refusal expected", async () => {
+  it("owes help for a refusal the chat app wrote a sentence about, unless it called the refusal routine", async () => {
     const { describeIntakeApplyFailure } = await import("./rootNotice");
     const failed = httpError(500, {
       detail: "mngr failed",
@@ -272,7 +272,7 @@ describe("a message from outside a chat that the chat would not take", () => {
       detail: "Chat 'agent-1' not found",
       user_facing_message: "That chat is no longer here. Pick another chat, or start a new one.",
       kind: "chat_gone",
-      expected: true,
+      routine: true,
     });
     expect(describeIntakeApplyFailure(gone, false).isHelpOwed).toBe(false);
   });

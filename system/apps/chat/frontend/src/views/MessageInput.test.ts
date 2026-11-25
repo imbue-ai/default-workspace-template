@@ -2250,7 +2250,7 @@ describe("MessageInput send failure notice", () => {
       mocks.sendMessage.mockRejectedValueOnce(
         Object.assign(new Error("{}"), {
           code: 409,
-          response: { detail, user_facing_message: detail, kind, expected: true },
+          response: { detail, user_facing_message: detail, kind, routine: true },
         }),
       );
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -2336,7 +2336,7 @@ describe("MessageInput send failure notice", () => {
       "agent-1",
       Object.assign(new Error("[object Object]"), {
         code: 409,
-        response: { detail: sentence, user_facing_message: sentence, expected: true, phase: "summarizing" },
+        response: { detail: sentence, user_facing_message: sentence, routine: true, phase: "summarizing" },
       }),
     );
 
@@ -2548,7 +2548,7 @@ describe("MessageInput switching harness", () => {
         detail: "Chat 'agent-1' cannot change to account acct-openai in place; it is on another harness or lane",
         user_facing_message: "This chat can't be moved to that account. Start a new chat on it instead.",
         kind: "cannot_move_to_account",
-        expected: true,
+        routine: true,
       }),
     );
     const component = MessageInput();
@@ -3326,7 +3326,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.sendMessage.mockRejectedValueOnce(
       Object.assign(new Error("{}"), {
         code: 409,
-        response: { detail, kind: "account_signed_out", user_facing_message: detail, expected: true },
+        response: { detail, kind: "account_signed_out", user_facing_message: detail, routine: true },
       }),
     );
     const component = MessageInput();
@@ -4906,14 +4906,14 @@ describe("MessageInput tells each way a send can fail", () => {
         detail: "The agent is in shell mode with an unsubmitted command.",
         user_facing_message: sentence,
         kind: "input_blocked",
-        expected: true,
+        routine: true,
       }),
     );
     stubShellConnection(true);
     const { component, turned } = composerWithSourceView();
 
     const after = await typeAndSend(component, "agent-1", "hello");
-    // Answering the dialog is the way forward, so the chat app calls the refusal expected.
+    // Answering the dialog is the way forward, so the chat app calls the refusal routine.
     expectNoHelpOffered(after);
 
     expect(renderedText(findByClass(after, "modal-message"))).toContain(sentence);
@@ -4954,7 +4954,7 @@ describe("MessageInput tells each way a send can fail", () => {
         detail: "The chat app has not read its agent list from mngr yet; try again shortly.",
         user_facing_message: "This workspace is still starting up. Try again in a few seconds.",
         kind: "chat_starting",
-        expected: true,
+        routine: true,
       }),
     );
     stubShellConnection(true);
@@ -5100,7 +5100,7 @@ describe("MessageInput tells each way a send can fail", () => {
   it("offers neither Retry nor Restart for a chat whose account was signed out, which neither can clear", async () => {
     const sentence = "You signed out of the account this chat runs on. Choose a provider to continue it on.";
     mocks.sendMessage.mockRejectedValueOnce(
-      refusal(409, { detail: sentence, user_facing_message: sentence, kind: "account_signed_out", expected: true }),
+      refusal(409, { detail: sentence, user_facing_message: sentence, kind: "account_signed_out", routine: true }),
     );
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
@@ -5118,7 +5118,7 @@ describe("MessageInput tells each way a send can fail", () => {
           "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it " +
           "into a new chat.",
         kind: "chat_gone",
-        expected: true,
+        routine: true,
       }),
     );
     mocks.selectedAccount = { id: "acct-1" };
@@ -5160,7 +5160,7 @@ describe("MessageInput tells each way a send can fail", () => {
         detail: "not moving",
         user_facing_message: sentence,
         kind: "nothing_to_cancel",
-        expected: true,
+        routine: true,
       }),
     );
     const component = MessageInput();
@@ -5243,7 +5243,7 @@ describe("MessageInput first send whose launch fails", () => {
     stubShellConnection(true);
     const sentence = "That account is signed out. Sign in to it again, or pick another one.";
     mocks.launchChat.mockRejectedValueOnce(
-      refusal(400, { detail: "no such account", user_facing_message: sentence, expected: true }),
+      refusal(400, { detail: "no such account", user_facing_message: sentence, routine: true }),
     );
 
     const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");

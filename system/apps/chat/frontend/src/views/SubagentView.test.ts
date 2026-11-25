@@ -52,7 +52,7 @@ describe("the side conversation view", () => {
         detail: "Chat 'agent-1' has no agent 'agent-9'",
         user_facing_message: "This side conversation is no longer available.",
         kind: "side_conversation_gone",
-        expected: true,
+        routine: true,
       }),
     );
     const root = await mounted();

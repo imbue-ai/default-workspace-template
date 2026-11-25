@@ -146,7 +146,7 @@ export function describeRunVerbFailure(error: unknown, title: string, isRestart:
     return {
       body: [`${lead}.`, failure.userFacingMessage],
       details: failure.details,
-      isHelpOwed: !failure.isExpected,
+      isHelpOwed: !failure.isRoutine,
     };
   }
   const told = failureSentence(failure, lead);

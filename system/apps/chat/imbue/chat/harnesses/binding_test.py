@@ -310,7 +310,7 @@ def test_each_cause_of_an_unbindable_account_says_its_own_sentence(tmp_path: Pat
     with pytest.raises(AccountError) as no_accounts:
         resolve_binding(home=tmp_path)
     assert no_accounts.value.user_facing_message == "No providers are signed in yet. Sign in to start this chat."
-    assert no_accounts.value.is_expected is True
+    assert no_accounts.value.is_routine is True
 
     _account(tmp_path, "a-lane-from-the-future", "Mystery")
     with pytest.raises(BindingError) as none_runnable:
@@ -318,9 +318,9 @@ def test_each_cause_of_an_unbindable_account_says_its_own_sentence(tmp_path: Pat
     assert none_runnable.value.user_facing_message == (
         "That account isn't available in this version of Imbue Studio. Pick another one."
     )
-    assert none_runnable.value.is_expected is True
+    assert none_runnable.value.is_routine is True
 
     with pytest.raises(AccountError) as gone:
         resolve_binding("acct-that-was-removed", tmp_path)
     assert gone.value.user_facing_message == "That account is signed out. Sign in to it again, or pick another one."
-    assert gone.value.is_expected is True
+    assert gone.value.is_routine is True

@@ -1963,7 +1963,7 @@ def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: 
     assert body["kind"] == "agent_start_failed"
     assert body["user_facing_message"] == "This chat's agent couldn't be started. Try again."
     # A start that failed is no ordinary refusal: the page offers help for it.
-    assert "expected" not in body
+    assert "routine" not in body
     assert "no such agent" in body["detail"]
     assert started == [agent_info.name]
 
@@ -5148,7 +5148,7 @@ def test_create_chat_with_nothing_signed_in_is_refused_as_needing_a_provider(
     assert response.get_json() == {
         "detail": "Connect an AI provider to start chatting.",
         "user_facing_message": "Connect an AI provider to start chatting.",
-        "expected": True,
+        "routine": True,
         "kind": "no_provider_account",
     }
 
@@ -5172,7 +5172,7 @@ def test_create_chat_naming_a_signed_out_account_is_refused_in_words(
     assert response.get_json() == {
         "detail": sentence,
         "user_facing_message": sentence,
-        "expected": True,
+        "routine": True,
         "kind": "account_signed_out",
     }
 
@@ -6143,7 +6143,7 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
         assert refused.get_json() == {
             "detail": sentence,
             "user_facing_message": sentence,
-            "expected": True,
+            "routine": True,
             "phase": "summarizing",
         }
     again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
@@ -6252,7 +6252,7 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert own_account.get_json()["user_facing_message"] == "This chat already runs on that account."
-    assert own_account.get_json()["expected"] is True
+    assert own_account.get_json()["routine"] is True
     assert unknown_account.get_json()["user_facing_message"] == (
         "That account is signed out. Sign in to it again, or pick another one."
     )
@@ -6330,7 +6330,7 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
         assert refused.get_json() == {
             "detail": sentence,
             "user_facing_message": sentence,
-            "expected": True,
+            "routine": True,
             "phase": "restarting",
         }
     cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
@@ -6828,7 +6828,7 @@ def test_a_refused_send_with_no_reason_keeps_mngrs_words_as_details_for_the_page
 
 
 @pytest.mark.parametrize(
-    ("kind", "sentence", "is_expected"),
+    ("kind", "sentence", "is_routine"),
     [
         ("input_blocked", "The agent is waiting on something in its terminal. Answer it there and try again.", True),
         ("agent_unreachable", "The agent isn't running and didn't start.", False),
@@ -6839,10 +6839,10 @@ def test_a_refused_send_with_no_reason_keeps_mngrs_words_as_details_for_the_page
     ],
 )
 def test_a_send_mngr_refused_says_what_its_kind_means_with_mngrs_words_as_details(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, sentence: str, is_expected: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, sentence: str, is_routine: bool
 ) -> None:
     """An agent waiting on its terminal or still starting is the chat working as it should; any other refusal owes
-    the person help, so it carries no ``expected``."""
+    the person help, so it carries no ``routine``."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     agent_id = "agent-00000000000000000000000000000742"
     messenger = RecordingMngrMessenger(succeeds=False, failure_reason="mngr's own words", failure_kind=kind)
@@ -6850,8 +6850,8 @@ def test_a_send_mngr_refused_says_what_its_kind_means_with_mngrs_words_as_detail
 
     body = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"}).get_json()
 
-    expected_flag = {"expected": True} if is_expected else {}
-    assert body == {"detail": "mngr's own words", "user_facing_message": sentence, "kind": kind} | expected_flag
+    routine_flag = {"routine": True} if is_routine else {}
+    assert body == {"detail": "mngr's own words", "user_facing_message": sentence, "kind": kind} | routine_flag
 
 
 def test_an_unconfirmed_send_leaves_the_wording_to_the_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6898,7 +6898,7 @@ def test_a_send_to_a_chat_that_is_gone_says_so_and_names_the_case() -> None:
             "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into "
             "a new chat."
         ),
-        "expected": True,
+        "routine": True,
         "kind": "chat_gone",
     }
 
@@ -6914,7 +6914,7 @@ def test_before_the_agent_list_is_read_a_send_is_told_the_workspace_is_still_sta
 
     assert body["kind"] == "chat_starting"
     assert body["user_facing_message"] == "This workspace is still starting up. Try again in a few seconds."
-    assert body["expected"] is True
+    assert body["routine"] is True
 
 
 def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up_wait(
@@ -6933,7 +6933,7 @@ def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up
     assert response.get_json()["user_facing_message"] == (
         "Chat couldn't load this workspace's chats. Restart the workspace."
     )
-    assert "expected" not in response.get_json()
+    assert "routine" not in response.get_json()
 
 
 def test_an_intake_before_the_agent_list_is_read_says_chat_is_still_starting() -> None:
@@ -6970,7 +6970,7 @@ def test_an_intake_sent_to_a_chat_whose_account_was_signed_out_says_so_rather_th
     assert body["user_facing_message"] == (
         "You signed out of the account this chat runs on. Choose a provider to continue it on."
     )
-    assert body["expected"] is True
+    assert body["routine"] is True
     assert messenger.sent == []
 
 
@@ -7000,7 +7000,7 @@ def test_a_refused_create_says_what_to_do_for_its_cause(
 
     assert unusable_name.status_code == 400
     assert unusable_name.get_json()["user_facing_message"] == "Pick a name with at least one letter or number."
-    assert unusable_name.get_json()["expected"] is True
+    assert unusable_name.get_json()["routine"] is True
     assert "no usable characters" in unusable_name.get_json()["detail"]
     assert gone_account.get_json()["user_facing_message"] == (
         "The account this chat was going to start on was signed out. Choose a provider to start it on."
@@ -7008,7 +7008,7 @@ def test_a_refused_create_says_what_to_do_for_its_cause(
     assert gone_account.get_json()["kind"] == "account_signed_out"
     assert relaunch_renamed.status_code == 400
     assert relaunch_renamed.get_json()["user_facing_message"] == "This chat couldn't be started. Try again."
-    assert "expected" not in relaunch_renamed.get_json()
+    assert "routine" not in relaunch_renamed.get_json()
     assert "a launch cannot rename" in relaunch_renamed.get_json()["detail"]
 
 
@@ -7028,7 +7028,7 @@ def test_a_delete_that_removed_the_agents_but_not_the_folder_says_the_chat_may_c
     assert response.status_code == 500
     assert response.get_json()["kind"] == "partly_deleted"
     assert "If the chat comes back later, delete it again." in response.get_json()["user_facing_message"]
-    assert "expected" not in response.get_json()
+    assert "routine" not in response.get_json()
 
 
 def test_a_tap_refused_while_a_permission_request_waits_says_to_answer_it(client: FlaskClient, tmp_path: Path) -> None:
@@ -7047,7 +7047,7 @@ def test_a_tap_refused_while_a_permission_request_waits_says_to_answer_it(client
     assert response.get_json()["user_facing_message"] == (
         "This chat is waiting on a permission request. Answer it, then try again."
     )
-    assert response.get_json()["expected"] is True
+    assert response.get_json()["routine"] is True
 
 
 def test_deleting_a_chat_whose_create_failed_drops_it(app: Flask) -> None:
@@ -7130,7 +7130,7 @@ def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
         assert response.get_json() == {
             "detail": "Nothing to compact yet.",
             "user_facing_message": "Nothing to compact yet.",
-            "expected": True,
+            "routine": True,
             "kind": "nothing_to_compact",
         }
         assert messenger.sent == []
@@ -7301,7 +7301,7 @@ def test_a_compact_command_with_nothing_to_compact_is_declined_without_asking_mn
         assert response.get_json() == {
             "detail": "Nothing to compact yet.",
             "user_facing_message": "Nothing to compact yet.",
-            "expected": True,
+            "routine": True,
             "kind": "nothing_to_compact",
         }
         assert messenger.compactions == []
@@ -7340,7 +7340,7 @@ def test_a_compact_command_while_the_agent_cannot_compact_is_declined_without_as
         assert response.get_json() == {
             "detail": detail,
             "user_facing_message": detail,
-            "expected": True,
+            "routine": True,
             "kind": COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
         }
         assert messenger.compactions == []
