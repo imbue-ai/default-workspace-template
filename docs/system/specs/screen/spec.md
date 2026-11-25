@@ -120,7 +120,9 @@ Over the share, the stream reaches them through the relay or through TURN (secti
 
 ### 4.7 When the stack is gone
 
-If memory pressure sheds the stack, or the user quits the app, the window shows "The screen was stopped" with the reason and a "Start" button, and every program that ran on it is gone with the X server.
+If the user quits the app, the window shows "The Screen was stopped." with a "Start" button; if a member of the stack exits on its own, "The Screen stopped unexpectedly." with "Start" and "Ask an agent to fix this"; and if the memory guard shed a member, the same sentence and buttons with a line saying the workspace ran low on memory.
+An ask that could not be sent says why under the buttons and offers "Draft it in a chat" and "Report a bug" in its place.
+The service's own reason sits behind "See details", and every program that ran on the stack is gone with the X server.
 The next open starts a fresh stack; Chromium comes back with its profile and tabs (section 16).
 
 ## 5. Connectivity
@@ -419,7 +421,8 @@ The `manage-desktop` skill documents the Screen window and the `FULLSCREEN` stat
 
 A new env.d unit, `2000-screen.sh`, with a fast satisfied check and no marker file, installs from the pinned apt snapshot: `xserver-xorg-core` (which carries `cvt`), `xserver-xorg-video-dummy`, `xfce4` (the metapackage without the goodies), `pulseaudio`, `gstreamer1.0-plugins-base|good|bad|ugly` (the x264 encoder is in `ugly`), `gstreamer1.0-x`, `gstreamer1.0-pulseaudio`, `xdotool`, `wmctrl`, `xclip`; the pinned neko v3 release binary for the architecture, checked against its SHA-256, at `/opt/neko/bin/neko`; and neko's Xorg input driver from the same image, at `/usr/lib/xorg/modules/input/neko_drv.so` (built against the same xorg-server the snapshot installs).
 Fortress moves into the same unit from `1000-playwright-fortress.sh`, which is deleted; the unit keeps `DWT_SKIP_BROWSER_UNIT`.
-The image bakes nothing new, so the first boot of an existing workspace installs the stack through `env-converge` and the service answers `starting` with "Installing the screen" until the unit is satisfied.
+The image bakes nothing new, so the first boot of an existing workspace installs the stack through `env-converge` and the service answers `installing`, which the viewer shows as "The Screen is still being set up in this workspace.", until the unit is satisfied.
+Once `env-converge` has recorded the unit failing in this boot, the viewer says "The Screen couldn't be set up in this workspace." instead, with "Ask an agent to fix this" carrying the unit's exit code and error output.
 The package `system/apps/screen` is a uv tool like every app, with `app.toml`:
 
 ```toml

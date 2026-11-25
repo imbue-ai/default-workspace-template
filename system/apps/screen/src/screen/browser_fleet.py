@@ -51,6 +51,7 @@ from screen.errors import DuplicateBrowserNameError
 from screen.errors import FleetFullError
 from screen.errors import InvalidBrowserNameError
 from screen.errors import UnknownBrowserError
+from screen.install_unit import describe_install_failure_this_boot
 from screen.primitives import AgentId
 from screen.primitives import BROWSER_HOME_URL
 from screen.primitives import BROWSER_PROFILE_DIR_PREFIX
@@ -393,6 +394,11 @@ class BrowserFleet(MutableModel):
     install_check: Callable[[], str | None] = Field(
         frozen=True, description="Why Chromium cannot launch yet (not installed), or None"
     )
+    install_failure_check: Callable[[], str | None] = Field(
+        default=describe_install_failure_this_boot,
+        frozen=True,
+        description="How the install unit failed in this boot, or None; read only while Chromium is missing",
+    )
     environment: Callable[[], dict[str, str]] = Field(frozen=True, description="The child's environment")
     is_sandbox_disabled: bool = Field(frozen=True, description="Whether Chromium runs with --no-sandbox")
     control: ScreenControl = Field(frozen=True, description="The Screen's lease, which the gate acts on")
@@ -422,6 +428,10 @@ class BrowserFleet(MutableModel):
 
     def install_reason(self) -> str | None:
         return self.install_check()
+
+    def install_failure(self) -> str | None:
+        """How the install unit failed in this boot, while Chromium is still missing; None otherwise."""
+        return self.install_failure_check() if self.install_check() is not None else None
 
     def get(self, name: BrowserName) -> Browser:
         with self._lock:

@@ -84,6 +84,14 @@ describe("Strip", () => {
   });
 });
 
+describe("Strip before any state", () => {
+  it("offers neither Take control nor Give control back", () => {
+    const { strip } = build();
+    expect(strip.element.querySelector<HTMLElement>("[data-screen-take-control]")?.hidden).toBe(true);
+    expect(strip.element.querySelector<HTMLElement>("[data-screen-return-control]")?.hidden).toBe(true);
+  });
+});
+
 describe("Strip after a handoff", () => {
   const handedOff: ControlDocument = { ...NOBODY, controller: "human", human_pinned: true, waiting: ["Alice"] };
 
