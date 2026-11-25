@@ -481,8 +481,9 @@ It lists:
 - **Also holding memory, not candidates**: every other chat or worker whose
   agent is `WAITING` or `RUNNING` (mid-turn, waiting on a background task,
   active within `IDLE_AFTER_SECONDS`, or the main chat), every running program
-  that is not a candidate's (a critical or internal app, the Screen's service,
-  a workspace service no app names, one row per program), and a running
+  that is not a candidate's (a critical or internal app, the Screen's service
+  less the browser processes it launches, a workspace service no app names,
+  one row per program), and a running
   browser while a window shows the Screen. Each row says why it is not a
   candidate and carries the same memory figure, so "what is using the memory"
   is answered by the same numbers as "what can I stop". In JSON each section

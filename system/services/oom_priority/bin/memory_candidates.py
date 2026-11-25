@@ -423,15 +423,17 @@ def read_free_memory(
 # Process memory
 
 
-def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
-    """Summed anonymous memory of the roots and all their descendants, each process counted once.
+def process_trees_anonymous_kib(
+    root_pids: Iterable[int],
+    proc_dir: Path,
+    excluded_root_pids: Iterable[int] = (),
+) -> int | None:
+    """Summed anonymous memory of the roots and all their descendants, each process counted once,
+    less the excluded roots' trees.
 
     None when no process in the trees could be read.
     """
-    pids: set[int] = set()
-    for root in root_pids:
-        pids.add(root)
-        pids.update(list_descendant_pids(root, proc_dir=proc_dir))
+    pids = _trees(root_pids, proc_dir) - _trees(excluded_root_pids, proc_dir)
     readings = [
         anonymous
         for anonymous in (
@@ -440,6 +442,14 @@ def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int
         if anonymous is not None
     ]
     return sum(readings) if readings else None
+
+
+def _trees(root_pids: Iterable[int], proc_dir: Path) -> set[int]:
+    pids: set[int] = set()
+    for root in root_pids:
+        pids.add(root)
+        pids.update(list_descendant_pids(root, proc_dir=proc_dir))
+    return pids
 
 
 # Agents
@@ -715,7 +725,21 @@ def read_window_index(inventory: Any) -> WindowIndex | None:
 def chromium_pids_for_browser(browser_name: str, proc_dir: Path) -> tuple[int, ...]:
     """Every process whose argv carries this browser's ``--user-data-dir`` (the whole token, so
     ``browser-1`` never matches ``browser-10``)."""
-    profile_suffix = f"/{BROWSER_PROFILE_DIR_PREFIX}{browser_name}"
+    profile_name = f"{BROWSER_PROFILE_DIR_PREFIX}{browser_name}"
+    return _pids_on_profiles(lambda name: name == profile_name, proc_dir)
+
+
+def browser_fleet_pids(proc_dir: Path) -> tuple[int, ...]:
+    """Every process whose argv carries a ``--user-data-dir`` of any of the Screen's browsers."""
+    return _pids_on_profiles(
+        lambda name: name.startswith(BROWSER_PROFILE_DIR_PREFIX), proc_dir
+    )
+
+
+def _pids_on_profiles(
+    is_profile: Callable[[str], bool], proc_dir: Path
+) -> tuple[int, ...]:
+    """Every process with a ``--user-data-dir`` whose last path component ``is_profile`` accepts."""
     try:
         entries = list(proc_dir.iterdir())
     except OSError:
@@ -729,12 +753,20 @@ def chromium_pids_for_browser(browser_name: str, proc_dir: Path) -> tuple[int, .
         except OSError:
             continue
         if any(
-            arg.startswith(USER_DATA_DIR_FLAG)
-            and arg.rstrip("/").endswith(profile_suffix)
-            for arg in argv
+            is_profile(name)
+            for name in (_user_data_dir_name(arg) for arg in argv)
+            if name is not None
         ):
             pids.append(int(entry.name))
     return tuple(sorted(pids))
+
+
+def _user_data_dir_name(arg: str) -> str | None:
+    """The last path component of a ``--user-data-dir=<path>`` argument, or None for any other."""
+    if not arg.startswith(USER_DATA_DIR_FLAG):
+        return None
+    _, slash, name = arg.rstrip("/").rpartition("/")
+    return name if slash else None
 
 
 def _browser_controller(browser: Mapping[str, Any]) -> str:
@@ -926,12 +958,25 @@ def held_programs(
     proc_dir: Path,
 ) -> list[HeldEntry]:
     """Every running program that is not a candidate's, largest memory first: the apps the workspace
-    may not stop (one row per program, since apps can share one), then the workspace's own services."""
+    may not stop (one row per program, since apps can share one), then the workspace's own services.
+
+    The Screen's service launches the browser's Chromium processes as its children, so its row
+    leaves them out: the browser section holds them."""
     critical_programs = {
         app["program"]
         for app in apps
         if app.get("critical") and isinstance(app.get("program"), str)
     }
+    screen_programs = {
+        app["program"]
+        for app in apps
+        if app.get("name") == SCREEN_APP_NAME and isinstance(app.get("program"), str)
+    }
+    browser_pids = (
+        browser_fleet_pids(proc_dir)
+        if screen_programs.intersection(pids_by_program)
+        else ()
+    )
     candidate_programs = {candidate.program for candidate in candidates}
     titles_by_program: dict[str, list[str]] = {}
     why_by_program: dict[str, str] = {}
@@ -967,7 +1012,13 @@ def held_programs(
                 if is_app
                 else "a workspace service, not the user's to stop",
                 pids=(pid,),
-                anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
+                anonymous_kib=process_trees_anonymous_kib(
+                    (pid,),
+                    proc_dir,
+                    excluded_root_pids=browser_pids
+                    if program in screen_programs
+                    else (),
+                ),
             )
         )
     return _largest_first(entries)

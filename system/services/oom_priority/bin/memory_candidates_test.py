@@ -610,7 +610,9 @@ def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running", tabs=[("https://a.test/", True)]))
     inventory = _inventory(
-        {"app": "screen", "path": "/"}, {"app": "chat", "path": "/?chat=chat-a"}
+        {"app": "screen", "path": "/"},
+        {"app": "chat", "path": "/?chat=chat-a"},
+        apps=[_app("screen", program="screen")],
     )
     http = _FakeHttp(
         {
@@ -619,17 +621,24 @@ def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
         }
     )
 
+    # The Screen's service launches the browser's Chromium (and an app on the Screen) as children.
+    _fake_process(proc, 200, 30 * 1024, children=[210, 300])
+    _fake_process(proc, 210, 10 * 1024)
     _fake_process(
         proc,
         300,
-        700 * 1024,
+        500 * 1024,
+        children=[301],
         argv=(
             "tilion",
             f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1",
         ),
     )
+    _fake_process(proc, 301, 200 * 1024, argv=("tilion", "--type=renderer"))
 
-    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([]), http))
+    report = memory_candidates.collect_report(
+        _sources(proc, _FakeMngr([]), http, supervised_pids={"screen": 200})
+    )
 
     assert report.browsers.candidates == ()
     # Not a candidate, but still the answer to "how much is the browser using".
@@ -643,9 +652,17 @@ def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
             anonymous_kib=700 * 1024,
         ),
     )
+    # The Screen's own row leaves its browser out, so the browser is not counted twice.
+    assert report.apps.others is not None
+    assert [(e.name, e.anonymous_kib) for e in report.apps.others] == [
+        ("screen", 40 * 1024)
+    ]
+    table = memory_candidates.render_table(report)
     assert (
-        "browser  browser-1  https://a.test/  a window shows the Screen it runs on  700 MiB"
-        in memory_candidates.render_table(report)
+        "  browser  browser-1  https://a.test/  a window shows the Screen it runs on"
+        "                    700 MiB\n"
+        "  app      screen     screen           the Screen's service: its browser is listed on its own"
+        "  40 MiB\n" in table
     )
 
 
