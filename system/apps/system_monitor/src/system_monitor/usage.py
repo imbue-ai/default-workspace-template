@@ -318,9 +318,9 @@ def exact_usage(
 
     Shared is the shared memory segments programs map (Chromium's buffers, the display's),
     counted once: the sum over processes of their proportional share, or under gVisor each
-    segment's resident size on the first process that maps it (``programs.read_smaps``). Scratch
-    space is the files in /tmp when it is held in memory (``scratch``, None when it is not).
-    System is the rest of the memory in use: what no process holds (the kernel) plus the
+    segment's largest resident size among the processes that map it (``programs.read_smaps``).
+    Scratch space is the files in /tmp when it is held in memory (``scratch``, None when it is
+    not). System is the rest of the memory in use: what no process holds (the kernel) plus the
     processes this app cannot inspect. It cannot go below zero.
     """
     groups = group_usage(

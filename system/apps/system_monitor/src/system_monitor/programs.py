@@ -100,36 +100,39 @@ def read_rollup(entry: Path) -> Rollup | None:
     )
 
 
-def read_smaps(pid: int, proc: Path, counted_segments: set[str]) -> Rollup | None:
+def read_smaps(
+    pid: int, proc: Path, counted_segment_kib: dict[str, int]
+) -> Rollup | None:
     """The figures gVisor allows, from ``/proc/<pid>/smaps`` where there is no smaps_rollup, or None
     when it cannot be read either.
 
     gVisor reports every page as private (``Pss`` equals ``Rss``), so only the anonymous memory and
     the shared memory segments are read: no private or proportional figure. A segment several
-    processes map is counted on the first of them to be read and recorded in ``counted_segments``,
-    so the Shared row holds it once.
+    processes map is counted once, at the largest resident size any of them reports (each one's
+    covers only the pages it touched): ``counted_segment_kib`` holds the size counted so far, and
+    this process's ``shmem`` is how far it raises those, so the Shared row's sum holds each once.
     """
     memory = read_smaps_memory(pid, proc)
     if memory is None:
         return None
-    new_segments = {
-        key: kib
-        for key, kib in memory.shared_segment_kib.items()
-        if key not in counted_segments
-    }
-    counted_segments.update(new_segments)
+    raised_kib = 0
+    for key, kib in memory.shared_segment_kib.items():
+        counted = counted_segment_kib.get(key, 0)
+        if kib > counted:
+            raised_kib += kib - counted
+            counted_segment_kib[key] = kib
     return Rollup(
         private=None,
         pss=None,
         anonymous=memory.anonymous_kib * KIB,
-        shmem=sum(new_segments.values()) * KIB,
+        shmem=raised_kib * KIB,
     )
 
 
 def read_processes(proc: Path = PROC) -> dict[int, Process]:
     out: dict[int, Process] = {}
-    counted_segments: set[str] = set()
-    # In pid order, so a shared segment lands on the same process on every read.
+    counted_segment_kib: dict[str, int] = {}
+    # In pid order, so a shared segment lands on the same processes on every read.
     entries = sorted(
         (entry for entry in proc.iterdir() if entry.name.isdigit()),
         key=lambda entry: int(entry.name),
@@ -147,7 +150,10 @@ def read_processes(proc: Path = PROC) -> dict[int, Process]:
             elif line.startswith("VmRSS:"):
                 rss = int(line.split()[1]) * KIB
         rollup = (
-            (read_rollup(entry) or read_smaps(int(entry.name), proc, counted_segments))
+            (
+                read_rollup(entry)
+                or read_smaps(int(entry.name), proc, counted_segment_kib)
+            )
             if rss
             else None
         )

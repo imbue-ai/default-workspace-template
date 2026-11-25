@@ -55,8 +55,9 @@ runs there.
   programs this app cannot inspect) is a System row. The rows add up to the
   memory in use (`usage.exact_usage`). gVisor reports every page as private,
   so its `Pss` equals its `Rss` and is not read; the Shared row there counts
-  each segment (a memfd, a `/dev/shm` file, a System V segment) once, at its
-  resident size, on the first process that maps it (`programs.read_smaps`).
+  each segment (a memfd, a `/dev/shm` file, a System V segment) once, at the
+  largest resident size any process that maps it reports
+  (`programs.read_smaps`).
 - Where neither file can be read, only resident sizes are available, and each is
   scaled down by one factor until the rows add up to what is in use less the
   scratch space, with a System row for whatever the programs do not account

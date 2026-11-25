@@ -298,7 +298,8 @@ def test_under_gvisor_each_process_holds_its_anonymous_memory_and_a_shared_segme
         _write_proc_entry(
             tmp_path, pid, 1, 409600 + anonymous_kib, ["/opt/fortress/chrome"]
         )
-    _write_gvisor_smaps(tmp_path, 100, 51200, [("00:05", "77", 20480)])
+    # Each process's resident size of the memfd covers only the pages it touched; 101 touched it all.
+    _write_gvisor_smaps(tmp_path, 100, 51200, [("00:05", "77", 16384)])
     _write_gvisor_smaps(
         tmp_path, 101, 30720, [("00:05", "77", 20480), ("00:05", "78", 4096)]
     )
@@ -316,5 +317,6 @@ def test_under_gvisor_each_process_holds_its_anonymous_memory_and_a_shared_segme
     by_id = {group["id"]: group["bytes"] for group in groups}
     # 100 MiB of Chromium's own memory, not the 1.2 GiB its resident sizes add up to.
     assert by_id["workspace"] == 100 * 1024 * 1024
-    # The memfd every process maps is held once (20 MiB), beside the one only 101 maps (4 MiB).
+    # The memfd every process maps is held once, at the largest resident size any reports (20 MiB),
+    # beside the one only 101 maps (4 MiB).
     assert by_id["shared"] == 24 * 1024 * 1024
