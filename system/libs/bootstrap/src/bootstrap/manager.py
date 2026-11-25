@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 
+from bootstrap.agent_upgrade import WORKSPACE_VENV, upgrade_stopped_agents
 from bootstrap.claude_state_migration import (
     LEGACY_ROOT_HOME,
     migrate_legacy_claude_state,
@@ -37,8 +38,6 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
-# The workspace venv, relative to the repo root like the config above.
-WORKSPACE_VENV = Path(".venv")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -97,32 +96,6 @@ _UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
 # boot-time rollback. Nothing downstream depends on the wake, so a wake that
 # takes longer than this is one that is already failing.
 _DRI_WAKE_TIMEOUT_SECONDS = 120.0
-
-# The workspace venv's mngr, which the boot converges to the tree's pin.
-WORKSPACE_MNGR = WORKSPACE_VENV / "bin" / "mngr"
-# Without it mngr refuses a settings key it does not know.
-_MNGR_ENV_OVERRIDES = {"MNGR_ALLOW_UNKNOWN_CONFIG": "1"}
-_MNGR_LIST_FIELD_SEPARATOR = "|"
-# The local agents as `id|state` rows; inside a workspace a template answers where `--format json` can fail.
-MNGR_LIST_AGENT_STATES_ARGV = (
-    "list",
-    "--provider",
-    "local",
-    "--on-error",
-    "continue",
-    "--format",
-    f"{{id}}{_MNGR_LIST_FIELD_SEPARATOR}{{state}}",
-)
-_STOPPED_STATE = "STOPPED"
-_MNGR_LIST_TIMEOUT_SECONDS = 60.0
-# The most a `mngr upgrade` that hangs (say, on another mngr's host lock) holds up the boot.
-_UPGRADE_AGENTS_TIMEOUT_SECONDS = 60.0
-# `mngr upgrade` skipped an agent and none failed.
-_MNGR_UPGRADE_EXIT_SKIPPED = 9
-# How `mngr upgrade` starts the line for an agent it failed to upgrade, such as `failed a: prepare (...); untouched`.
-_FAILED_OUTCOME_PREFIX = "failed "
-# What `mngr upgrade` appends to an agent it cannot upgrade, such as ``; re-create it with `mngr create a --reuse --update` ``.
-_RECREATE_HINT_PATTERN = re.compile(r"; re-create it with `[^`]*`")
 
 # Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
 # operation: running it on a later boot would commit whatever the user had in flight.
@@ -710,97 +683,6 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
-def _run_mngr(
-    mngr_binary: Path, args: Sequence[str], timeout: float
-) -> subprocess.CompletedProcess[str] | None:
-    """Run ``mngr_binary`` with ``args`` in the services' mngr environment; None, with a warning, when it could not run or timed out."""
-    try:
-        return subprocess.run(
-            [str(mngr_binary), *args],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env={**os.environ, **_MNGR_ENV_OVERRIDES},
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as e:
-        _log_mngr_output(args[0], _decoded_output(e.stdout))
-        logger.warning("mngr {} could not run ({})", args[0], e)
-        return None
-    except OSError as e:
-        logger.warning("mngr {} could not run ({})", args[0], e)
-        return None
-
-
-def _decoded_output(output: bytes | str | None) -> str:
-    """Captured output as text; a timed-out run leaves it as undecoded bytes."""
-    if isinstance(output, bytes):
-        return output.decode(errors="replace")
-    return output or ""
-
-
-def _log_mngr_output(subcommand: str, stdout: str) -> None:
-    """Log each line ``mngr <subcommand>`` printed, without the re-create command it suggests; a failed agent's line is a warning."""
-    for line in stdout.splitlines():
-        if line.strip():
-            log = (
-                logger.warning
-                if line.startswith(_FAILED_OUTCOME_PREFIX)
-                else logger.info
-            )
-            log("mngr {}: {}", subcommand, _RECREATE_HINT_PATTERN.sub("", line))
-
-
-def _list_stopped_agent_ids(mngr_binary: Path) -> list[str]:
-    """The ids of the local agents ``mngr list`` reports stopped, from whatever it listed."""
-    result = _run_mngr(
-        mngr_binary, MNGR_LIST_AGENT_STATES_ARGV, _MNGR_LIST_TIMEOUT_SECONDS
-    )
-    if result is None:
-        return []
-    if result.returncode != 0:
-        logger.warning(
-            "mngr list exited {}: {}", result.returncode, result.stderr.strip()[-500:]
-        )
-    rows = (
-        [column.strip() for column in line.split(_MNGR_LIST_FIELD_SEPARATOR)]
-        for line in result.stdout.splitlines()
-    )
-    return [
-        row[0] for row in rows if len(row) == 2 and row[0] and row[1] == _STOPPED_STATE
-    ]
-
-
-def _upgrade_stopped_agents(mngr_binary: Path = WORKSPACE_MNGR) -> None:
-    """Rewrite each stopped local agent's mngr-generated files with ``mngr_binary``, leaving it stopped. Best-effort.
-
-    A running agent is never named: `mngr upgrade` restarts an idle one, and restarts are the chat app's. The
-    boot log gets every outcome line without the re-create command mngr suggests, since re-creating restarts
-    the agent.
-    """
-    agent_ids = _list_stopped_agent_ids(mngr_binary)
-    if not agent_ids:
-        logger.info("No stopped agents to upgrade")
-        return
-    result = _run_mngr(
-        mngr_binary,
-        ["upgrade", *agent_ids, "--on-error", "continue"],
-        _UPGRADE_AGENTS_TIMEOUT_SECONDS,
-    )
-    if result is None:
-        return
-    _log_mngr_output("upgrade", result.stdout)
-    if result.returncode not in (0, _MNGR_UPGRADE_EXIT_SKIPPED):
-        stderr_tail = _RECREATE_HINT_PATTERN.sub("", result.stderr.strip()[-500:])
-        logger.warning(
-            "mngr upgrade exited {}{}",
-            result.returncode,
-            f": {stderr_tail}" if stderr_tail else "",
-        )
-
-
 def _read_update_marker_dri_agent() -> str:
     """The DRI agent recorded in the update-apply marker, or "" when unreadable.
 
@@ -1112,7 +994,7 @@ def main() -> None:
         elif not is_venv_converged:
             logger.warning("Not upgrading agents: the workspace venv did not converge")
         else:
-            _upgrade_stopped_agents()
+            upgrade_stopped_agents()
 
     # Re-engage the agent whose update the boot-time rollback undid. Held until
     # here on purpose: waking it starts a live agent running `uv run`, which

@@ -1,4 +1,4 @@
-"""Integration test: the boot's agent upgrade, run with the workspace venv's real mngr on Claude agents of its own.
+"""Integration test: the stopped-agent upgrade, run with the workspace venv's real mngr on Claude agents of its own.
 
 The agents run the pinned ``claude`` in an isolated host dir on a private tmux server, talking to a loopback
 ``StandInAnthropicApi``, so no credential or network is needed.
@@ -6,8 +6,10 @@ The agents run the pinned ``claude`` in an isolated host dir on a private tmux s
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,7 +23,11 @@ from imbue.chat.testing import (
 )
 from loguru import logger
 
-from bootstrap.manager import WORKSPACE_MNGR, _upgrade_stopped_agents
+from bootstrap.agent_upgrade import (
+    WORKSPACE_VENV,
+    installed_mngr,
+    upgrade_stopped_agents,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _STAND_IN_API_KEY = "sk-ant-api03-stand-in-boot-upgrade"
@@ -86,7 +92,7 @@ def _boot_log() -> Generator[list[str], None, None]:
 
 @pytest.mark.real_claude
 @pytest.mark.timeout(480)
-def test_the_boot_upgrades_a_stopped_agent_and_leaves_a_running_one_alone(
+def test_the_upgrade_leaves_running_agents_alone_and_records_its_mngr_once_every_agent_is_current(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
@@ -96,6 +102,8 @@ def test_the_boot_upgrades_a_stopped_agent_and_leaves_a_running_one_alone(
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(project_config_dir))
     project_dir = tmp_path / "project"
     log_path = tmp_path / "mngr.log"
+    venv = _REPO_ROOT / WORKSPACE_VENV
+    record = tmp_path / "coverage.json"
     with (
         stand_in_real_claude_agent(
             project_dir,
@@ -115,7 +123,7 @@ def test_the_boot_upgrades_a_stopped_agent_and_leaves_a_running_one_alone(
         monkeypatch.chdir(project_dir)
 
         with _boot_log() as first_run:
-            _upgrade_stopped_agents(_REPO_ROOT / WORKSPACE_MNGR)
+            upgrade_stopped_agents(venv, record)
 
         assert _pane_pids(running) == running_pids
         assert not (running.agent_state_dir / _GENERATED_FILE).exists()
@@ -127,11 +135,39 @@ def test_the_boot_upgrades_a_stopped_agent_and_leaves_a_running_one_alone(
         states = _states_by_name()
         assert states[stopped.name] == "STOPPED"
         assert states[running.name] == "WAITING"
+        assert not record.exists()
 
+        running_stop = _mngr("stop", running.name)
+        assert running_stop.returncode == 0, running_stop.stderr
         with _boot_log() as second_run:
-            _upgrade_stopped_agents(_REPO_ROOT / WORKSPACE_MNGR)
+            upgrade_stopped_agents(venv, record)
 
+        assert any(
+            f"mngr upgrade: upgraded {running.name} (stopped)" in line
+            for line in second_run
+        ), second_run
         assert any(
             f"mngr upgrade: current {stopped.name}" in line for line in second_run
         ), second_run
-        assert not any("mngr upgrade: upgraded" in line for line in second_run)
+        recorded = json.loads(record.read_text())["mngr"]
+        assert recorded == installed_mngr(venv)
+        assert recorded["imbue-mngr"].endswith(f"@{_pinned_mngr_rev()}")
+
+        (stopped.agent_state_dir / _GENERATED_FILE).unlink()
+        with _boot_log() as third_run:
+            upgrade_stopped_agents(venv, record)
+
+        assert any(
+            "Every agent is already current with this mngr" in line
+            for line in third_run
+        ), third_run
+        assert not any(
+            "mngr list" in line or "mngr upgrade" in line for line in third_run
+        ), third_run
+        assert not (stopped.agent_state_dir / _GENERATED_FILE).exists()
+
+
+def _pinned_mngr_rev() -> str:
+    """The mngr commit the workspace's pyproject pins."""
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    return pyproject["tool"]["uv"]["sources"]["imbue-mngr"]["rev"]
