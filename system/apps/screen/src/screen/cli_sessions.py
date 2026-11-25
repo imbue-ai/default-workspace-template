@@ -213,8 +213,7 @@ class CliSessionReaper(MutableModel):
 
     def sweep(self) -> list[tuple[AttachedCliSession, AbandonReason]]:
         """End every abandoned session; answers the ones ended and why."""
-        # Read before the tokens: a daemon found here was spawned with a token minted before this read, so a token
-        # minted meanwhile can only make it superseded, never let a live session be mistaken for one.
+        # Read before the tokens, so a token minted meanwhile can only make a found session superseded, never live.
         found = self.sessions.attached_through(self.fleet.proxy_server)
         if not found:
             return []

@@ -61,7 +61,6 @@ def _attach(harness: FleetHarness, browser: Browser) -> str:
 
 
 def test_a_session_whose_token_a_later_attach_replaced_is_ended_and_the_latest_is_kept(tmp_path: Path) -> None:
-    # Kanjun's case: each run of a sync script attached a fresh session and never detached it.
     harness = FleetHarness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
@@ -86,7 +85,7 @@ def test_the_current_session_is_ended_only_once_idle_past_the_limit_and_a_frame_
     sessions = _RecordingCliSessions(running=[_session("browser-1", url, harness.proxy_server, pid=201)])
     reaper = _reaper(harness, sessions)
     harness.clock.advance(IDLE_LIMIT_SECONDS - 60)
-    # A frame through the gate counts as use, even one the lease would refuse.
+    # A frame through the gate counts as use.
     assert harness.fleet.token_may_drive(browser, token) is True
     harness.control.release(_AGENT)
     harness.clock.advance(IDLE_LIMIT_SECONDS - 60)

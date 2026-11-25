@@ -81,8 +81,7 @@ from workspace_layout.identity import RequestIdentity
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
 SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)
-# The sweeper's cadence for the lease clocks and the title poll; the reaper's (human sessions and abandoned
-# playwright-cli sessions).
+# The sweeper's cadence for the lease clocks and the title poll; the reaper's.
 _TICK_SECONDS: Final[float] = 1.0
 _REAP_INTERVAL_SECONDS: Final[float] = 60.0
 _POLL_SECONDS: Final[float] = 0.2
