@@ -420,7 +420,7 @@ class ScreenService(MutableModel):
         while not self._stop.wait(_REAP_INTERVAL_SECONDS):
             if self.stack.lifecycle == Lifecycle.RUNNING:
                 self.reap_disconnected_sessions(datetime.now(timezone.utc))
-            # Whatever the stack's state: a stopped stack leaves every session it had superseded.
+            # Whatever the stack's state: a stopped stack's browsers are gone, and so is every use of their sessions.
             if self._cli_session_reaper is not None:
                 self._cli_session_reaper.sweep()
 
