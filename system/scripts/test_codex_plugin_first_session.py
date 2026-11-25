@@ -109,7 +109,6 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
         subprocess.run(
             ["codex", "plugin", "add", _ACCOUNT_PLUGIN],
             env=agent_env,
-            capture_output=True,
             check=True,
             timeout=45,
         )
