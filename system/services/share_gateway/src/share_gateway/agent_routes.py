@@ -1,21 +1,31 @@
-"""The gateway's ``/_agent/*`` surface on the auth origin: join, orientation, invites, and the grant list.
+"""The gateway's ``/_agent/*`` surface on the auth origin: join, orientation, invites, the grant list, and an
+agent's commands and files.
 
 These routes are served by the gateway's Flask app directly (caddy routes the
 auth origin's ``/_agent/*`` to it beside ``/_auth/*``), not through
 ``forward_auth``, so each does its own authentication: a session cookie
 yields a human identity (the owner or a visitor), a bearer admission token a
-visiting agent's. The join route is the one code-gated, otherwise
-unauthenticated entry, rate limited per client address.
+visiting agent's. A session cookie is ambient, so a request that relies on one
+is held to the Origin policy ``/_auth/verify`` applies to every other request.
+The join route is the one code-gated, otherwise
+unauthenticated entry, rate limited per client address. Running a command and
+reading or writing a file answer a bearer token alone, and only one whose grant
+has workspace scope.
 """
 
+import base64
 import hashlib
 import json
 import os
+import socket
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from collections.abc import Generator
+from collections.abc import Iterator
 from collections.abc import Sequence
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +56,17 @@ from share_gateway.agent_access import list_grants
 from share_gateway.agent_access import mint_invite
 from share_gateway.agent_access import revoke
 from share_gateway.agent_access import visible_grants
+from share_gateway.agent_exec import InvalidAgentRequestError
+from share_gateway.agent_exec import MAX_RUN_BODY_BYTES
+from share_gateway.agent_exec import MAX_WRITE_BODY_BYTES
+from share_gateway.agent_exec import RunningCommands
+from share_gateway.agent_exec import WorkspaceFileError
+from share_gateway.agent_exec import parse_read_file_request
+from share_gateway.agent_exec import parse_run_request
+from share_gateway.agent_exec import parse_write_file_request
+from share_gateway.agent_exec import read_workspace_file
+from share_gateway.agent_exec import stream_command
+from share_gateway.agent_exec import write_workspace_file
 from share_gateway.agent_orientation import HELPER_PATH
 from share_gateway.agent_orientation import LatchkeySummaryCache
 from share_gateway.agent_orientation import build_changes_feed
@@ -62,9 +83,11 @@ from share_gateway.agent_workspace import app_origins_for
 from share_gateway.agent_workspace import exec_origin_for
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.identity import RequesterIdentity
 from share_gateway.identity import bearer_token_from_headers
 from share_gateway.log import log
+from share_gateway.origin_policy import is_request_origin_allowed
 from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import verify_session_from_cookies
 
@@ -137,6 +160,7 @@ class AgentAccessContext:
         self.now = now
         self.join_rate_limiter = JoinRateLimiter()
         self.latchkey_summary = LatchkeySummaryCache()
+        self.running_commands = RunningCommands()
 
     def grant_for_token(self, token: str) -> AgentGrant | None:
         """The unexpired grant a bearer token names; None for an unknown token. Raises AgentGrantsError when the file is malformed."""
@@ -155,22 +179,38 @@ def _error(message: str, status: int) -> Response:
     return _json({"error": message}, status)
 
 
-def _parse_json_body() -> dict[str, object] | None:
-    """The request body as a JSON object, or None when it is not one or exceeds ``_MAX_BODY_BYTES``.
+def _read_body(max_bytes: int) -> bytes | None:
+    """The request body, or None when it exceeds ``max_bytes``.
 
-    The join route is unauthenticated, so the cap bounds the read itself rather
-    than the length of a body already buffered.
+    The cap bounds the read itself rather than the length of a body already
+    buffered: the join route is unauthenticated, and a file write is large.
     """
-    if (request.content_length or 0) > _MAX_BODY_BYTES:
+    if (request.content_length or 0) > max_bytes:
         return None
-    raw = request.stream.read(_MAX_BODY_BYTES + 1)
-    if len(raw) > _MAX_BODY_BYTES:
-        return None
+    raw = request.stream.read(max_bytes + 1)
+    return None if len(raw) > max_bytes else raw
+
+
+def _json_object(raw: bytes) -> dict[str, object] | None:
+    """``raw`` as a JSON object (an empty body is an empty one), or None when it is not one."""
     try:
         parsed = json.loads(raw or b"{}")
     except ValueError:
         return None
     return parsed if is_json_object(parsed) else None
+
+
+def _parse_json_body() -> dict[str, object] | None:
+    """The request body as a JSON object, or None when it is not one or exceeds ``_MAX_BODY_BYTES``."""
+    raw = _read_body(_MAX_BODY_BYTES)
+    return None if raw is None else _json_object(raw)
+
+
+def _ndjson(events: Generator[dict[str, object], None, None]) -> Iterator[bytes]:
+    """Each event as one JSON line. Closing this closes ``events``, which is what ends a command nobody reads."""
+    with closing(events):
+        for event in events:
+            yield json.dumps(event).encode("utf-8") + b"\n"
 
 
 class _HumanCaller:
@@ -208,6 +248,8 @@ def register_agent_routes(
     signing_secret: str,
     share_grants_path: Path,
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # The hosted chrome's origin, the one origin outside the workspace's own whose requests may carry a session.
+    chrome_origin: str,
 ) -> None:
     auth_origin = f"https://{auth_label}.{workspace_domain}"
 
@@ -240,6 +282,17 @@ def register_agent_routes(
         context.last_seen.touch(grant.agent_id, context.now(), time.monotonic())
         return _AgentCaller(grant)
 
+    def _is_origin_allowed() -> bool:
+        return is_request_origin_allowed(
+            request.method,
+            request.headers.get("Origin"),
+            False,
+            workspace_domain,
+            build_label_to_name(get_registered_apps()),
+            auth_label,
+            chrome_origin,
+        )
+
     def _caller() -> "_HumanCaller | _AgentCaller | Response":
         agent = _agent_caller()
         if agent is not None:
@@ -247,6 +300,12 @@ def register_agent_routes(
         human = _human_caller()
         if human is None:
             return _error("authentication required", 401)
+        # A browser attaches the session cookie to a request another site's page makes, so the cookie alone does
+        # not show the person meant it. A bearer token is never attached that way, and is not held to this.
+        if not _is_origin_allowed():
+            client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+            log(f"Denied {client_ip} -> {request.method} on the agent routes: request Origin is not allowed")
+            return _error("this request's Origin is not allowed", 403)
         return human
 
     def _agent_only() -> "_AgentCaller | Response":
@@ -255,6 +314,25 @@ def register_agent_routes(
         if agent is None:
             return _error("authentication required", 401)
         return agent
+
+    def _workspace_agent_body(max_body_bytes: int) -> "dict[str, object] | Response":
+        """The JSON body of a request that acts with the workspace's own authority, or the refusal to answer with.
+
+        Only a bearer token whose grant has workspace scope is admitted, and it
+        is checked before the body is read.
+        """
+        agent = _agent_only()
+        if isinstance(agent, Response):
+            return agent
+        if not agent.is_workspace_level:
+            return _error("running commands and reading or writing files needs access to the whole workspace", 403)
+        raw = _read_body(max_body_bytes)
+        if raw is None:
+            return _error("the body is too large", 413)
+        body = _json_object(raw)
+        if body is None:
+            return _error("the body must be a JSON object", 400)
+        return body
 
     def _access_document(grant: AgentGrant, token: str | None) -> dict[str, object]:
         apps = get_registered_apps()
@@ -498,3 +576,51 @@ def register_agent_routes(
             log(f"Agent access is misconfigured: {exc}")
             return _error("agent access is misconfigured", 503)
         return _json({"revoked": revoked.agent_id})
+
+    @app.post("/_agent/run")
+    def run_command() -> Response:
+        body = _workspace_agent_body(MAX_RUN_BODY_BYTES)
+        if isinstance(body, Response):
+            return body
+        try:
+            run_request = parse_run_request(body, context.repo_root)
+        except InvalidAgentRequestError as exc:
+            return _error(str(exc), 400)
+        # The connection this answer goes out on, where the server hands it over: its end is the only sign that
+        # the caller of a command that prints nothing has gone.
+        connection = request.environ.get("werkzeug.socket")
+        caller = connection if isinstance(connection, socket.socket) else None
+        events = stream_command(run_request, context.running_commands, caller)
+        return Response(_ndjson(events), mimetype="application/x-ndjson")
+
+    @app.post("/_agent/files/read")
+    def read_file() -> Response:
+        body = _workspace_agent_body(_MAX_BODY_BYTES)
+        if isinstance(body, Response):
+            return body
+        try:
+            read_request = parse_read_file_request(body, context.repo_root)
+        except InvalidAgentRequestError as exc:
+            return _error(str(exc), 400)
+        try:
+            content = read_workspace_file(read_request.path)
+        except WorkspaceFileError as exc:
+            return _error(f"could not read {read_request.raw_path}: {exc}", 400)
+        if content is None:
+            return _json({"exists": False}, 404)
+        return _json({"exists": True, "content_b64": base64.b64encode(content).decode("ascii")})
+
+    @app.post("/_agent/files/write")
+    def write_file() -> Response:
+        body = _workspace_agent_body(MAX_WRITE_BODY_BYTES)
+        if isinstance(body, Response):
+            return body
+        try:
+            write_request = parse_write_file_request(body, context.repo_root)
+        except InvalidAgentRequestError as exc:
+            return _error(str(exc), 400)
+        try:
+            write_workspace_file(write_request.path, write_request.content, write_request.mode)
+        except WorkspaceFileError as exc:
+            return _error(f"could not write {write_request.raw_path}: {exc}", 400)
+        return _json({"written": True})

@@ -1,113 +1,244 @@
-// The helper's signing profile against the owner-exec repo's shared vectors
-// (vendored beside it), plus its own contracts: argument parsing and the
-// skills-diff banner.
+// The helper's own contracts: argument parsing, the requests it sends for a
+// command and a file, how it reads a command's stream, the skills-diff banner,
+// and the self-heal.
 "use strict";
 
 const assert = require("node:assert/strict");
-const crypto = require("node:crypto");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const { test } = require("node:test");
 
 const helper = require("./wsvisit.cjs");
 
-const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, "owner_exec_vectors.json"), "utf8"));
-
-function headerValue(headers, name) {
-  const wanted = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) if (key.toLowerCase() === wanted) return value;
-  return "";
+// A writable that keeps what it is given, standing in for stdout or stderr.
+function sink() {
+  const written = [];
+  return { written, write: (text) => written.push(String(text)) };
 }
 
-// Rebuilds a request's signature base from its headers with the helper's own
-// builder and checks the vector's signature with the vector's key: the base
-// construction is what the daemon will verify, so it must match byte for byte.
-function requestSignatureVerifies(vector) {
-  const headers = vector.headers;
-  const { params } = helper.parseSignatureInputParams(headerValue(headers, "signature-input"));
-  const fullParams = headerValue(headers, "signature-input").slice("sig1=".length);
-  const body = Buffer.from(vector.body_b64, "base64");
-  const base = helper.requestSignatureBase(
-    vector.method,
-    new URL(vector.url).pathname,
-    headerValue(headers, "content-digest"),
-    headerValue(headers, "x-exec-audience"),
-    headerValue(headers, "x-exec-public-key"),
-    fullParams,
+function streamOf(...chunks) {
+  return Readable.from(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
+// A loopback server that records each request and answers with `respond(request, body)`:
+// a status and either a whole `body` or the `chunks` of a streamed one.
+async function withServer(respond, run) {
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    const parts = [];
+    request.on("data", (part) => parts.push(part));
+    request.on("end", () => {
+      const body = Buffer.concat(parts).toString("utf8");
+      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
+      const answer = respond(request, body);
+      response.writeHead(answer.status, { "Content-Type": answer.type || "application/json" });
+      for (const chunk of answer.chunks || []) response.write(chunk);
+      response.end(answer.body);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await run(`http://127.0.0.1:${server.address().port}`, seen);
+  } finally {
+    server.close();
+  }
+}
+
+function workspaceConfig(origin, scope = "workspace") {
+  return { token: "tok-123", scope, gateway_origin: origin, workspace: { auth_origin: "https://auth.example.com" } };
+}
+
+test("a freshly generated key is an OpenSSH Ed25519 line, and each one differs", () => {
+  const first = helper.generateKeypair();
+  assert.match(first.publicKeyLine, /^ssh-ed25519 [A-Za-z0-9+/=]+$/);
+  assert.match(first.privateKeyPem, /^-----BEGIN PRIVATE KEY-----/);
+  assert.notEqual(helper.generateKeypair().publicKeyLine, first.publicKeyLine);
+  const wire = Buffer.from(first.publicKeyLine.split(" ")[1], "base64");
+  assert.equal(wire.length, 4 + "ssh-ed25519".length + 4 + 32);
+  assert.equal(wire.subarray(4, 15).toString(), "ssh-ed25519");
+});
+
+test("a file is asked of the gateway with the admission token and nothing else", async () => {
+  await withServer(
+    () => ({ status: 200, body: JSON.stringify({ written: true }) }),
+    async (origin, seen) => {
+      const answer = await helper.workspaceJson(workspaceConfig(origin), "/_agent/files/write", { path: "data/a.txt", content_b64: "aGk=" });
+      assert.deepEqual(answer, { status: 200, isOk: true, body: { written: true }, detail: '{"written":true}' });
+      assert.deepEqual(seen, [
+        { method: "POST", url: "/_agent/files/write", authorization: "Bearer tok-123", body: '{"path":"data/a.txt","content_b64":"aGk="}' },
+      ]);
+    },
   );
-  const signatureB64 = /^sig1=:(.+):$/.exec(headerValue(headers, "signature"))[1];
-  const publicKey = helper.publicKeyObjectFromLine(headerValue(headers, "x-exec-public-key"));
-  const isSignatureValid = crypto.verify(null, Buffer.from(base, "utf8"), publicKey, Buffer.from(signatureB64, "base64"));
-  const isDigestValid = headerValue(headers, "content-digest") === helper.contentDigest(body);
-  const isInWindow = Math.abs(vector.verify_at - params.created) <= 60 && vector.verify_at < params.expires;
-  return { isSignatureValid, isDigestValid, isInWindow };
-}
-
-test("request vectors: the helper's signature base matches the profile", () => {
-  const byName = Object.fromEntries(vectors.requests.map((vector) => [vector.name, vector]));
-  assert.deepEqual(requestSignatureVerifies(byName["run-valid"]), { isSignatureValid: true, isDigestValid: true, isInWindow: true });
-  assert.deepEqual(requestSignatureVerifies(byName["read-file-valid"]), { isSignatureValid: true, isDigestValid: true, isInWindow: true });
-  assert.equal(requestSignatureVerifies(byName["run-tampered-body"]).isDigestValid, false);
-  assert.equal(requestSignatureVerifies(byName["run-expired"]).isInWindow, false);
 });
 
-test("fingerprints match the profile's keyid", () => {
-  const vector = vectors.requests[0];
-  const { params } = helper.parseSignatureInputParams(vector.headers["Signature-Input"]);
-  assert.equal(helper.fingerprintOfPublicKeyLine(vector.headers["X-Exec-Public-Key"]), params.keyid);
-  for (const response of vectors.responses) assert.equal(helper.fingerprintOfPublicKeyLine(response.host_key_line), response.host_key_id);
+test("a command is asked of the gateway with the admission token, and its stream is read as it is sent", async () => {
+  await withServer(
+    () => ({ status: 200, type: "application/x-ndjson", chunks: ['{"type":"stdout","data":"hi\\n"}\n', '{"type":"exit","code":0}\n'] }),
+    async (origin, seen) => {
+      const stdout = sink();
+      const stream = await helper.openRunStream(workspaceConfig(origin), { command: ["echo", "hi"], timeout_seconds: 5 }, 5000);
+      assert.equal(await helper.consumeRunStream(stream, stdout, sink()), 0);
+      assert.deepEqual(stdout.written, ["hi\n"]);
+      assert.deepEqual(seen, [
+        { method: "POST", url: "/_agent/run", authorization: "Bearer tok-123", body: '{"command":["echo","hi"],"timeout_seconds":5}' },
+      ]);
+    },
+  );
 });
 
-test("a freshly generated keypair signs a request the vector key's rules accept", () => {
-  const keypair = helper.generateKeypair();
-  assert.match(keypair.publicKeyLine, /^ssh-ed25519 [A-Za-z0-9+/=]+$/);
-  const body = Buffer.from('{"command":["echo","hi"]}');
-  const signed = helper.signRequest(keypair, "POST", "/run", body, "container:host-abcd", 1786928267, "nonce-0123456789abcdef");
-  const vectorLike = {
-    name: "fresh",
-    method: "POST",
-    url: "https://owner-exec-x.example.com/run",
-    body_b64: body.toString("base64"),
-    verify_at: 1786928267,
-    headers: signed.headers,
-  };
-  assert.deepEqual(requestSignatureVerifies(vectorLike), { isSignatureValid: true, isDigestValid: true, isInWindow: true });
-  assert.equal(signed.headers["Signature-Input"].includes('tag="imbue-owner-exec"'), true);
+test("an access to named apps is told it cannot run commands or move files before anything is sent", async () => {
+  await withServer(
+    () => ({ status: 200, body: "{}" }),
+    async (origin, seen) => {
+      const isUsageError = (error) => {
+        assert.ok(error instanceof helper.HelperError);
+        assert.equal(error.exitCode, 64);
+        assert.match(error.message, /named apps only/);
+        return true;
+      };
+      await assert.rejects(helper.openRunStream(workspaceConfig(origin, ["chat"]), { command: ["ls"] }, 5000), isUsageError);
+      await assert.rejects(helper.workspaceJson(workspaceConfig(origin, ["chat"]), "/_agent/files/read", { path: "a" }), isUsageError);
+      assert.deepEqual(seen, []);
+    },
+  );
 });
 
-test("response vectors: valid verifies, wrong-request fails closed", () => {
-  for (const vector of vectors.responses) {
-    const signedRequest = {
-      method: vector.request_method,
-      path: new URL(vector.request_url).pathname,
-      signatureB64: /^sig1=:(.+):$/.exec(vector.request_headers.Signature)[1],
-    };
-    const body = Buffer.from(vector.body_b64, "base64");
-    const verify = () => helper.verifyResponse(vector.status_code, vector.headers, body, signedRequest, vector.host_key_line, vector.verify_at);
-    if (vector.expect_valid) assert.doesNotThrow(verify, vector.name);
-    else assert.throws(verify, helper.HelperError, vector.name);
+test("a 403 from the gateway is a refused access, which the self-heal then checks", async () => {
+  await withServer(
+    () => ({ status: 403, body: JSON.stringify({ error: "this access token is not valid" }) }),
+    async (origin) => {
+      const isRefused = (error) => {
+        assert.ok(error instanceof helper.HelperError);
+        assert.equal(error.exitCode, 77);
+        assert.equal(error.isRetryable, true);
+        return true;
+      };
+      await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"] }, 5000), isRefused);
+      await assert.rejects(helper.workspaceJson(workspaceConfig(origin), "/_agent/files/read", { path: "a" }), isRefused);
+    },
+  );
+});
+
+test("a run the gateway calls wrong is a usage error that carries the gateway's words", async () => {
+  await withServer(
+    () => ({ status: 400, body: JSON.stringify({ error: "cwd must be a string" }) }),
+    async (origin) => {
+      await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"], cwd: 5 }, 5000), (error) => {
+        assert.ok(error instanceof helper.HelperError);
+        assert.equal(error.exitCode, 64);
+        assert.equal(error.message, "run answered 400: cwd must be a string");
+        return true;
+      });
+    },
+  );
+});
+
+test("a run that gets no answer is not retried, since the command may have started", async () => {
+  const server = http.createServer((request) => request.socket.destroy());
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"] }, 5000), (error) => {
+      assert.ok(error instanceof helper.HelperError);
+      assert.equal(error.isRetryable, false);
+      assert.match(error.message, /could not reach .*\/_agent\/run: .*may not be published right now/);
+      return true;
+    });
+  } finally {
+    server.close();
   }
 });
 
-test("stream vectors: valid verifies, tampered fails closed", () => {
-  for (const vector of vectors.streams) {
-    const streamSha256 = crypto.createHash("sha256").update(Buffer.from(vector.stream_bytes_b64, "base64")).digest();
-    const trailer = { type: "signature", created: vector.created, keyid: vector.host_key_id, tag: "imbue-owner-exec-stream", signature: vector.signature };
-    const verify = () => helper.verifyStreamTrailer(trailer, streamSha256, vector.request_signature, vector.host_key_line, vector.verify_at);
-    if (vector.expect_valid) assert.doesNotThrow(verify, vector.name);
-    else assert.throws(verify, helper.HelperError, vector.name);
+test("a run whose answer stays silent longer than it is allowed is given up on", async () => {
+  const server = http.createServer(() => {});
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await assert.rejects(helper.openRunStream(workspaceConfig(origin), { command: ["ls"] }, 50), /nothing arrived for 0 seconds/);
+  } finally {
+    server.closeAllConnections();
+    server.close();
   }
 });
 
-test("a response signed by another host key is refused", () => {
-  const vector = vectors.responses.find((entry) => entry.expect_valid);
-  const other = helper.generateKeypair();
-  const signedRequest = { method: vector.request_method, path: "/run", signatureB64: /^sig1=:(.+):$/.exec(vector.request_headers.Signature)[1] };
-  assert.throws(
-    () => helper.verifyResponse(vector.status_code, vector.headers, Buffer.from(vector.body_b64, "base64"), signedRequest, other.publicKeyLine, vector.verify_at),
-    /unexpected host key/,
+test("a refusal's detail is the gateway's error, or the text of an answer that is not the gateway's", () => {
+  assert.deepEqual(helper.jsonAnswer(400, JSON.stringify({ error: "path must be a non-empty string" })), {
+    status: 400,
+    isOk: false,
+    body: { error: "path must be a non-empty string" },
+    detail: "path must be a non-empty string",
+  });
+  assert.equal(helper.jsonAnswer(404, JSON.stringify({ exists: false })).body.exists, false);
+  assert.deepEqual(helper.jsonAnswer(404, "<h1>Not Found</h1>"), { status: 404, isOk: false, body: {}, detail: "<h1>Not Found</h1>" });
+  const read = helper.jsonAnswer(200, JSON.stringify({ exists: true, content_b64: "aGk=" }));
+  assert.equal(read.isOk, true);
+  assert.equal(read.body.content_b64, "aGk=");
+  assert.deepEqual(helper.jsonAnswer(502, '"a bare string"'), { status: 502, isOk: false, body: {}, detail: '"a bare string"' });
+});
+
+test("a request the gateway calls wrong is a usage error, and any other refusal may be retried", () => {
+  const wrong = helper.refusalError("write", { status: 400, detail: "mode must be octal" });
+  assert.equal(wrong.exitCode, 64);
+  assert.equal(wrong.message, "write answered 400: mode must be octal");
+  assert.equal(helper.refusalError("write", { status: 413, detail: "the body is too large" }).exitCode, 64);
+  const failed = helper.refusalError("run", { status: 502, detail: "bad gateway" });
+  assert.equal(failed.exitCode, 1);
+  assert.equal(failed.isRetryable, true);
+});
+
+test("a run's stream is written out as it arrives and ends with the command's exit code", async () => {
+  const stdout = sink();
+  const stderr = sink();
+  // The second line is split across two chunks, as a network read may split it.
+  const body = streamOf(
+    '{"type":"stdout","data":"one\\n"}\n{"type":"std',
+    'err","data":"oops\\n"}\n\n{"type":"stdout","data":"caf\u00e9\\n"}\n',
+    '{"type":"exit","code":3}\n',
   );
+  assert.equal(await helper.consumeRunStream(body, stdout, stderr), 3);
+  assert.deepEqual(stdout.written, ["one\n", "caf\u00e9\n"]);
+  assert.deepEqual(stderr.written, ["oops\n"]);
+});
+
+test("a run's stream that ends without the exit is an error the self-heal must not answer by running again", async () => {
+  const stdout = sink();
+  await assert.rejects(helper.consumeRunStream(streamOf('{"type":"stdout","data":"partial\\n"}\n'), stdout, sink()), (error) => {
+    assert.ok(error instanceof helper.HelperError);
+    assert.equal(error.isRetryable, false);
+    assert.match(error.message, /ended before the command's exit was reported/);
+    return true;
+  });
+  assert.deepEqual(stdout.written, ["partial\n"]);
+});
+
+test("a run's stream that breaks mid-way is an error that is not retried", async () => {
+  const body = new Readable({
+    read() {
+      this.destroy(new Error("socket hang up"));
+    },
+  });
+  await assert.rejects(helper.consumeRunStream(body, sink(), sink()), (error) => {
+    assert.ok(error instanceof helper.HelperError);
+    assert.equal(error.isRetryable, false);
+    assert.match(error.message, /connection dropped while the command was running: socket hang up/);
+    return true;
+  });
+});
+
+test("a command with no exit code of its own ends as 1 and says why", () => {
+  const quiet = sink();
+  assert.equal(helper.runExitCode({ type: "exit", code: 0 }, quiet), 0);
+  assert.equal(helper.runExitCode({ type: "exit", code: -1 }, quiet), -1);
+  assert.deepEqual(quiet.written, []);
+  const timedOut = sink();
+  assert.equal(helper.runExitCode({ type: "exit", code: null, timed_out: true }, timedOut), 1);
+  assert.deepEqual(timedOut.written, ["wsvisit: the command ran out of time and was stopped\n"]);
+  const notStarted = sink();
+  assert.equal(helper.runExitCode({ type: "exit", code: null, error: "No such file or directory: 'nope'" }, notStarted), 1);
+  assert.deepEqual(notStarted.written, ["wsvisit: the command could not be started: No such file or directory: 'nope'\n"]);
 });
 
 test("parseArgs splits options, positionals, and the command after --", () => {
@@ -178,7 +309,6 @@ test("a 503 is waited out for as long as Retry-After asks, bounded, and nothing 
 });
 
 test("get waits for an app that answers 503 while it starts, then returns its answer", async () => {
-  const http = require("node:http");
   let calls = 0;
   const server = http.createServer((request, response) => {
     calls += 1;
@@ -204,7 +334,6 @@ test("get waits for an app that answers 503 while it starts, then returns its an
 });
 
 test("get gives up on an app that keeps answering 503 after the bounded retries", async () => {
-  const http = require("node:http");
   let calls = 0;
   const server = http.createServer((request, response) => {
     calls += 1;
@@ -225,7 +354,6 @@ test("get gives up on an app that keeps answering 503 after the bounded retries"
 });
 
 test("get follows a redirect within the workspace's origins and refuses one that leaves them, before the bearer is sent", async () => {
-  const http = require("node:http");
   const elsewhereSaw = [];
   const elsewhere = http.createServer((request, response) => {
     elsewhereSaw.push(request.headers.authorization || "(no bearer)");
@@ -309,54 +437,55 @@ test("an unreachable workspace is reported with the publish hint", async () => {
   }
 });
 
-test("a refusal from a workspace whose clock is off names the skew", () => {
-  const now = Date.parse("2026-10-15T18:00:00Z") / 1000;
-  assert.equal(helper.clockSkewNote("Thu, 15 Oct 2026 18:00:30 GMT", now), "");
-  assert.equal(helper.clockSkewNote("", now), "");
-  assert.equal(helper.clockSkewNote("not a date", now), "");
-  assert.match(helper.clockSkewNote("Thu, 15 Oct 2026 18:05:00 GMT", now), /300s ahead of/);
-  assert.match(helper.clockSkewNote("Thu, 15 Oct 2026 17:50:00 GMT", now), /600s behind/);
-});
-
 test("the self-heal retries a retryable failure once and never re-runs a command that already ran", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wsvisit-heal-"));
   process.env.WSVISIT_STATE_DIR = root;
   const originalFetch = global.fetch;
   const me = {
-    exec: { origin: "https://exec-new.example.com", audience: "container:host-1", host_public_key: "ssh-ed25519 AAAA" },
-    apps: [],
+    apps: [{ name: "files", origin: "https://files-new.alpha.example.com" }],
     scope: "workspace",
     workspace: { domain: "alpha.example.com" },
   };
   global.fetch = async () => new Response(JSON.stringify(me), { status: 200 });
   try {
+    const staleApps = [{ name: "files", origin: "https://files-old.alpha.example.com" }];
     const config = {
       token: "t",
       gateway_origin: "https://auth.alpha.example.com",
       workspace: { domain: "alpha.example.com", auth_origin: "https://auth.alpha.example.com" },
-      exec: { origin: "https://exec-old.example.com" },
+      apps: staleApps,
       keypair: { privateKeyPem: "pem", publicKeyLine: "ssh-ed25519 AAAA" },
     };
     let attempts = 0;
     const answer = await helper.withRecovery(config, async (current) => {
       attempts += 1;
-      if (attempts === 1) throw new helper.HelperError("stale host key", 70);
-      return current.exec.origin;
+      if (attempts === 1) throw new helper.HelperError("the app moved");
+      return current.apps[0].origin;
     });
     assert.equal(attempts, 2);
-    assert.equal(answer, "https://exec-new.example.com");
+    assert.equal(answer, "https://files-new.alpha.example.com");
 
-    config.exec = { origin: "https://exec-old.example.com" };
+    config.apps = staleApps;
     let runs = 0;
     await assert.rejects(
       helper.withRecovery(config, async () => {
         runs += 1;
-        throw new helper.HelperError("stream signature does not verify", 70, false);
+        throw new helper.HelperError("the run's stream ended before the command's exit was reported", 1, false);
       }),
-      /stream signature does not verify/,
+      /ended before the command's exit was reported/,
     );
     assert.equal(runs, 1);
-    assert.equal(config.exec.origin, "https://exec-new.example.com");
+    assert.equal(config.apps[0].origin, "https://files-new.alpha.example.com");
+
+    let wrongRequests = 0;
+    await assert.rejects(
+      helper.withRecovery(config, async () => {
+        wrongRequests += 1;
+        throw helper.refusalError("read", { status: 400, detail: "could not read data: Is a directory" });
+      }),
+      /could not read data: Is a directory/,
+    );
+    assert.equal(wrongRequests, 1);
   } finally {
     global.fetch = originalFetch;
     delete process.env.WSVISIT_STATE_DIR;

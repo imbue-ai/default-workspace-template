@@ -5,9 +5,11 @@
 // (the invite names that address and the file's hash) and served by the
 // workspace itself at GET <auth origin>/_agent/helper as a fallback; the join
 // answer carries the hash too, and this file warns when its own differs. One
-// file, Node 18 or newer, no dependencies: `crypto` signs with the agent's
-// Ed25519 key per the owner-exec profile (RFC 9421 + RFC 9530, see
-// spec/profile.md in imbue-ai/owner-exec), global `fetch` talks to the share,
+// file, Node 18 or newer, no dependencies: global `fetch` (and `http` for a
+// command's stream) talks to the share with the admission token the join
+// answered as a bearer on every request,
+// `crypto` makes the Ed25519 key whose public half names this agent to the
+// workspace (joining again with the same key keeps the same agent id), and
 // `fs` keeps the key and the join answer under
 // ~/.config/imbue-workspace/<workspace domain>/.
 //
@@ -20,36 +22,33 @@
 //   wsvisit invite [--scope workspace|<app,app>] [--expires-in-days <n>] [--name-hint <text>]
 //   --workspace <domain> selects a workspace when several are joined.
 //
-// `get` sends the admission token as a bearer to an origin of this workspace
-// only, and waits out an app that answers 503 with Retry-After while it starts.
+// `run`, `read` and `write` are answered by the workspace's gateway (POST
+// /_agent/run, /_agent/files/read and /_agent/files/write on the auth origin)
+// and need access to the whole workspace. `get` sends the admission token to
+// an origin of this workspace only, and waits out an app that answers 503 with
+// Retry-After while it starts.
 //
 // Two behaviours are the helper's own contract with the agent: it refreshes the
 // skills index when its copy is older than a day and prints what changed to
-// stderr before the command runs, and it self-heals stale coordinates (a moved
-// exec origin, a rotated host key) by re-reading them from the `me` route and
-// retrying once.
+// stderr before the command runs, and when a request fails it re-reads its
+// access from the `me` route (which says whether the access was revoked, and
+// whether this copy is still the helper the workspace publishes) and retries
+// once, unless the request was a command that had already started.
 
 "use strict";
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 
-const SIGNATURE_LABEL = "sig1";
-const REQUEST_TAG = "imbue-owner-exec";
-const RESPONSE_TAG = "imbue-owner-exec-resp";
-const STREAM_TAG = "imbue-owner-exec-stream";
-const CREATED_WINDOW_SECONDS = 60;
-const RESPONSE_CREATED_WINDOW_SECONDS = 300;
-const REQUEST_COMPONENTS = ['"@method"', '"@path"', '"content-digest"', '"x-exec-audience"', '"x-exec-public-key"'];
-const RESPONSE_COMPONENTS = '("@status" "content-digest" "@method";req "@path";req "signature";key="sig1";req)';
-const STREAM_COMPONENTS = '("stream-digest" "request-signature")';
 const SKILLS_REFRESH_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RUN_TIMEOUT_SECONDS = 600;
 const MAX_RUN_TIMEOUT_SECONDS = 3600;
 const REQUEST_TIMEOUT_MS = 60 * 1000;
-const EXIT_VERIFICATION_FAILED = 70;
+const RUN_KEEPALIVE_DELAY_MS = 30 * 1000;
 // An idle app the shell stopped starts on its first request and answers 503
 // with Retry-After until it is up: a second or two, never minutes.
 const GET_MAX_RETRIES = 5;
@@ -58,9 +57,10 @@ const GET_MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const EXIT_REVOKED = 77;
 const EXIT_USAGE = 64;
+const REFUSED_MESSAGE = "the workspace refused this access (revoked, or the workspace moved)";
 
 // `isRetryable` is false for a failure the self-heal must not answer by running
-// the action again: a command whose output already streamed has already run.
+// the action again: a command whose stream had opened has already run.
 class HelperError extends Error {
   constructor(message, exitCode = 1, isRetryable = true) {
     super(message);
@@ -69,7 +69,7 @@ class HelperError extends Error {
   }
 }
 
-// Keys and the OpenSSH line
+// The agent's key and its OpenSSH line
 
 function sshString(bytes) {
   const length = Buffer.alloc(4);
@@ -88,176 +88,12 @@ function publicKeyLineFromRaw(raw) {
   return `ssh-ed25519 ${wire.toString("base64")}`;
 }
 
-function fingerprintOfPublicKeyLine(line) {
-  const wire = Buffer.from(line.trim().split(/\s+/)[1], "base64");
-  return "SHA256:" + crypto.createHash("sha256").update(wire).digest("base64").replace(/=+$/, "");
-}
-
-function publicKeyObjectFromLine(line) {
-  const parts = line.trim().split(/\s+/);
-  if (parts[0] !== "ssh-ed25519" || !parts[1]) throw new HelperError("not an ssh-ed25519 public key line");
-  const wire = Buffer.from(parts[1], "base64");
-  let offset = 0;
-  const readString = () => {
-    const length = wire.readUInt32BE(offset);
-    offset += 4;
-    const value = wire.subarray(offset, offset + length);
-    offset += length;
-    return value;
-  };
-  const type = readString().toString();
-  const raw = readString();
-  if (type !== "ssh-ed25519" || raw.length !== 32) throw new HelperError("malformed ssh-ed25519 public key");
-  return crypto.createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: raw.toString("base64url") }, format: "jwk" });
-}
-
 function generateKeypair() {
   const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
   return {
     privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
     publicKeyLine: publicKeyLineFromRaw(rawPublicKeyFromKeyObject(publicKey)),
   };
-}
-
-function privateKeyFromPem(pem) {
-  return crypto.createPrivateKey({ key: pem, format: "pem" });
-}
-
-// The signing profile
-
-function sfString(value) {
-  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-function contentDigest(body) {
-  return `sha-256=:${crypto.createHash("sha256").update(body).digest("base64")}:`;
-}
-
-function requestSignatureParams(created, expires, nonce, keyId) {
-  return (
-    `(${REQUEST_COMPONENTS.join(" ")});created=${created};expires=${expires};nonce=${sfString(nonce)}` +
-    `;tag=${sfString(REQUEST_TAG)};keyid=${sfString(keyId)}`
-  );
-}
-
-function requestSignatureBase(method, requestPath, digestValue, audience, publicKeyLine, params) {
-  return [
-    `"@method": ${method.toUpperCase()}`,
-    `"@path": ${requestPath}`,
-    `"content-digest": ${digestValue}`,
-    `"x-exec-audience": ${audience}`,
-    `"x-exec-public-key": ${publicKeyLine.trim()}`,
-    `"@signature-params": ${params}`,
-  ].join("\n");
-}
-
-function signRequest(keypair, method, requestPath, body, audience, nowUnix, nonce) {
-  const keyId = fingerprintOfPublicKeyLine(keypair.publicKeyLine);
-  const digestValue = contentDigest(body);
-  const created = nowUnix;
-  const expires = created + CREATED_WINDOW_SECONDS;
-  const chosenNonce = nonce !== undefined ? nonce : crypto.randomBytes(18).toString("base64");
-  const params = requestSignatureParams(created, expires, chosenNonce, keyId);
-  const base = requestSignatureBase(method, requestPath, digestValue, audience, keypair.publicKeyLine, params);
-  const signature = crypto.sign(null, Buffer.from(base, "utf8"), privateKeyFromPem(keypair.privateKeyPem));
-  const signatureB64 = signature.toString("base64");
-  return {
-    headers: {
-      "Content-Digest": digestValue,
-      "X-Exec-Audience": audience,
-      "X-Exec-Public-Key": keypair.publicKeyLine.trim(),
-      "Signature-Input": `${SIGNATURE_LABEL}=${params}`,
-      Signature: `${SIGNATURE_LABEL}=:${signatureB64}:`,
-      "Content-Type": "application/json",
-    },
-    method,
-    path: requestPath,
-    signatureB64,
-  };
-}
-
-function parseSignatureInputParams(signatureInput) {
-  // The value is `sig1=(...);created=...;...`; only the parameters are read, and
-  // the verifier rebuilds the whole string from the pinned expectations rather
-  // than trusting it.
-  const prefix = `${SIGNATURE_LABEL}=`;
-  if (!signatureInput || !signatureInput.startsWith(prefix)) throw new HelperError("missing sig1 Signature-Input", EXIT_VERIFICATION_FAILED);
-  const afterComponents = signatureInput.indexOf(")");
-  if (afterComponents < 0) throw new HelperError("malformed Signature-Input", EXIT_VERIFICATION_FAILED);
-  const components = signatureInput.slice(prefix.length, afterComponents + 1);
-  const params = {};
-  const pattern = /;([a-z]+)=("(?:[^"\\]|\\.)*"|\d+)/g;
-  let match;
-  while ((match = pattern.exec(signatureInput.slice(afterComponents + 1))) !== null) {
-    const raw = match[2];
-    params[match[1]] = raw.startsWith('"') ? raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\") : Number(raw);
-  }
-  return { components, params };
-}
-
-function parseSignatureHeader(signatureHeader) {
-  const match = /^sig1=:([A-Za-z0-9+/=]+):$/.exec((signatureHeader || "").trim());
-  if (!match) throw new HelperError("missing or malformed sig1 Signature", EXIT_VERIFICATION_FAILED);
-  return match[1];
-}
-
-function responseParams(created, keyId) {
-  return `${RESPONSE_COMPONENTS};created=${created};tag=${sfString(RESPONSE_TAG)};keyid=${sfString(keyId)}`;
-}
-
-function responseSignatureBase(statusCode, digestValue, requestMethod, requestPath, requestSignatureB64, created, keyId) {
-  return [
-    `"@status": ${statusCode}`,
-    `"content-digest": ${digestValue}`,
-    `"@method";req: ${requestMethod.toUpperCase()}`,
-    `"@path";req: ${requestPath}`,
-    `"signature";key="sig1";req: :${requestSignatureB64}:`,
-    `"@signature-params": ${responseParams(created, keyId)}`,
-  ].join("\n");
-}
-
-function verifyResponse(statusCode, headers, body, signedRequest, hostPublicKeyLine, nowUnix) {
-  const hostKeyId = fingerprintOfPublicKeyLine(hostPublicKeyLine);
-  const { components, params } = parseSignatureInputParams(headerValue(headers, "signature-input"));
-  if (components !== RESPONSE_COMPONENTS) throw new HelperError("response signature covers the wrong components", EXIT_VERIFICATION_FAILED);
-  if (params.tag !== RESPONSE_TAG) throw new HelperError("response signature tag mismatch", EXIT_VERIFICATION_FAILED);
-  if (params.keyid !== hostKeyId) throw new HelperError("response signed by an unexpected host key", EXIT_VERIFICATION_FAILED);
-  if (typeof params.created !== "number" || Math.abs(nowUnix - params.created) > RESPONSE_CREATED_WINDOW_SECONDS) {
-    throw new HelperError("response signature is outside its time window", EXIT_VERIFICATION_FAILED);
-  }
-  const digestValue = headerValue(headers, "content-digest");
-  if (digestValue !== contentDigest(body)) throw new HelperError("response body does not match its Content-Digest", EXIT_VERIFICATION_FAILED);
-  const signatureB64 = parseSignatureHeader(headerValue(headers, "signature"));
-  const base = responseSignatureBase(statusCode, digestValue, signedRequest.method, signedRequest.path, signedRequest.signatureB64, params.created, hostKeyId);
-  const isValid = crypto.verify(null, Buffer.from(base, "utf8"), publicKeyObjectFromLine(hostPublicKeyLine), Buffer.from(signatureB64, "base64"));
-  if (!isValid) throw new HelperError("response signature does not verify", EXIT_VERIFICATION_FAILED);
-}
-
-function streamTrailerBase(streamSha256, requestSignatureB64, keyId, created) {
-  return [
-    `"stream-digest": sha-256=:${streamSha256.toString("base64")}:`,
-    `"request-signature": :${requestSignatureB64}:`,
-    `"@signature-params": ${STREAM_COMPONENTS};created=${created};keyid=${sfString(keyId)};tag=${sfString(STREAM_TAG)}`,
-  ].join("\n");
-}
-
-function verifyStreamTrailer(trailer, streamSha256, requestSignatureB64, hostPublicKeyLine, nowUnix) {
-  const hostKeyId = fingerprintOfPublicKeyLine(hostPublicKeyLine);
-  if (!trailer || trailer.type !== "signature") throw new HelperError("the run stream ended without its signature", EXIT_VERIFICATION_FAILED);
-  if (trailer.tag !== STREAM_TAG || trailer.keyid !== hostKeyId) throw new HelperError("stream signature tag or key mismatch", EXIT_VERIFICATION_FAILED);
-  if (typeof trailer.created !== "number" || Math.abs(nowUnix - trailer.created) > RESPONSE_CREATED_WINDOW_SECONDS) {
-    throw new HelperError("stream signature is outside its time window", EXIT_VERIFICATION_FAILED);
-  }
-  const base = streamTrailerBase(streamSha256, requestSignatureB64, hostKeyId, trailer.created);
-  const isValid = crypto.verify(null, Buffer.from(base, "utf8"), publicKeyObjectFromLine(hostPublicKeyLine), Buffer.from(trailer.signature, "base64"));
-  if (!isValid) throw new HelperError("stream signature does not verify", EXIT_VERIFICATION_FAILED);
-}
-
-function headerValue(headers, name) {
-  if (typeof headers.get === "function") return headers.get(name) || "";
-  const wanted = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) if (key.toLowerCase() === wanted) return value;
-  return "";
 }
 
 // State on disk
@@ -354,59 +190,109 @@ async function gatewayJson(config, method, routePath, body, query) {
     REQUEST_TIMEOUT_MS,
   );
   const text = await response.text();
-  if (response.status === 403) throw new HelperError("the workspace refused this access (revoked, or the workspace moved)", EXIT_REVOKED);
+  if (response.status === 403) throw new HelperError(REFUSED_MESSAGE, EXIT_REVOKED);
   if (!response.ok) throw new HelperError(`${method} ${routePath} answered ${response.status}: ${text.slice(0, 300)}`);
   return text;
 }
 
-async function execRequest(config, routePath, payload, options = {}) {
-  if (!config.exec) throw new HelperError("this access covers named apps only; there is no exec authority", EXIT_USAGE);
-  const body = Buffer.from(JSON.stringify(payload), "utf8");
-  const signed = signRequest(config.keypair, "POST", routePath, body, config.exec.audience, nowUnix());
-  const response = await fetchWithTimeout(
-    `${config.exec.origin}${routePath}`,
-    { method: "POST", headers: { ...signed.headers, Authorization: `Bearer ${config.token}` }, body },
-    options.timeoutMs || REQUEST_TIMEOUT_MS,
-  );
-  if (response.status === 403) throw new HelperError("the workspace refused this access (revoked, or the workspace moved)", EXIT_REVOKED);
-  return { response, signed };
-}
-
-// A verified answer from owner-exec. A signed 404 is an answer too (a file that
-// does not exist), so it is returned rather than thrown: only the daemon's
-// refusals and failures are errors.
-async function verifiedExecJson(config, routePath, payload) {
-  const { response, signed } = await execRequest(config, routePath, payload);
-  const body = Buffer.from(await response.arrayBuffer());
-  verifyResponse(response.status, response.headers, body, signed, config.exec.host_public_key, nowUnix());
-  const parsed = body.length ? JSON.parse(body.toString("utf8")) : {};
-  if (!response.ok && response.status !== 404) {
-    const detail = parsed.error || body.toString("utf8").slice(0, 300);
-    throw new HelperError(`${routePath} answered ${response.status}: ${detail}${clockSkewNote(headerValue(response.headers, "date"), nowUnix())}`);
+// The gateway's routes that act with the workspace's own authority (a command,
+// a file) answer an access to the whole workspace, and the admission token is
+// the whole credential.
+function requireWorkspaceScope(config) {
+  if (config.scope && config.scope !== "workspace") {
+    throw new HelperError("this access covers named apps only; it cannot run commands or read and write files", EXIT_USAGE);
   }
-  return { status: response.status, body: parsed };
 }
 
-function nowUnix() {
-  return Math.floor(Date.now() / 1000);
+function workspaceRequestHeaders(config) {
+  return { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" };
 }
 
-// The daemon verifies each signature within a 60-second window, so a refusal
-// from a machine whose clock is off is explained by the Date header it answered with.
-function clockSkewNote(dateHeader, nowUnix) {
-  const answeredAt = Date.parse(dateHeader || "");
-  if (Number.isNaN(answeredAt)) return "";
-  const skewSeconds = Math.round(answeredAt / 1000 - nowUnix);
-  if (Math.abs(skewSeconds) <= CREATED_WINDOW_SECONDS) return "";
-  const direction = skewSeconds > 0 ? "ahead of" : "behind";
-  return ` (the workspace's clock is ${Math.abs(skewSeconds)}s ${direction} this machine's; signatures are only accepted within ${CREATED_WINDOW_SECONDS}s, so set this machine's clock)`;
+// An answer of the gateway as JSON; `detail` is what a refusal says: its
+// `error` or, from anything that is not the gateway's JSON, the start of the
+// text.
+function jsonAnswer(status, text) {
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch (_error) {
+    // not JSON; the raw text is the detail
+  }
+  const isObject = body !== null && typeof body === "object";
+  return {
+    status,
+    isOk: status >= 200 && status < 300,
+    body: isObject ? body : {},
+    detail: (isObject && typeof body.error === "string" && body.error) || text.slice(0, 300),
+  };
 }
 
-// Stale coordinates (a moved exec origin, a rotated host key, a re-registered
-// service) heal by re-reading `me` and retrying once; a 403 from `me` means the
-// grant itself is gone. A failure that is not retryable (a run whose output
-// already streamed) still refreshes the coordinates, so the next command
-// works, but is reported rather than run again.
+async function workspaceJson(config, routePath, payload) {
+  requireWorkspaceScope(config);
+  const response = await fetchWithTimeout(
+    new URL(routePath, gatewayOrigin(config)),
+    { method: "POST", headers: workspaceRequestHeaders(config), body: JSON.stringify(payload) },
+    REQUEST_TIMEOUT_MS,
+  );
+  if (response.status === 403) throw new HelperError(REFUSED_MESSAGE, EXIT_REVOKED);
+  return jsonAnswer(response.status, await response.text());
+}
+
+// Node's fetch abandons an answer that stays silent for five minutes, before
+// its headers or between two chunks, and a command may print nothing for
+// longer than that. A command's stream is therefore asked for with the http
+// module, which waits for as long as `idleTimeoutMs` says. Resolves with the
+// answer once its headers arrive; the answer is a stream of the body's chunks.
+function postForStream(url, headers, body, idleTimeoutMs) {
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === "https:" ? https : http;
+    const request = transport.request(url, { method: "POST", headers }, resolve);
+    request.setTimeout(idleTimeoutMs, () => request.destroy(new Error(`nothing arrived for ${Math.round(idleTimeoutMs / 1000)} seconds`)));
+    // Probes keep a network path that forgets idle connections from forgetting a quiet command's.
+    request.on("socket", (socket) => socket.setKeepAlive(true, RUN_KEEPALIVE_DELAY_MS));
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+async function streamText(stream) {
+  const parts = [];
+  for await (const part of stream) parts.push(part);
+  return Buffer.concat(parts).toString("utf8");
+}
+
+// The stream of a command the gateway has started, or the error its refusal is.
+async function openRunStream(config, payload, idleTimeoutMs) {
+  requireWorkspaceScope(config);
+  const url = new URL("/_agent/run", gatewayOrigin(config));
+  let response;
+  try {
+    response = await postForStream(url, workspaceRequestHeaders(config), JSON.stringify(payload), idleTimeoutMs);
+  } catch (error) {
+    // No answer does not show that the command never started, since the
+    // answer's headers travel with the command's first line.
+    throw new HelperError(`could not reach ${url}: ${error.message}${UNREACHABLE_HINT}`, 1, false);
+  }
+  if (response.statusCode === 200) return response;
+  const answer = jsonAnswer(response.statusCode, await streamText(response));
+  if (answer.status === 403) throw new HelperError(REFUSED_MESSAGE, EXIT_REVOKED);
+  throw refusalError("run", answer);
+}
+
+// A 400 or a 413 says the request itself was wrong, which is the caller's to
+// fix, so it ends as a usage error and is never retried.
+function refusalError(what, answer) {
+  const isCallersToFix = answer.status === 400 || answer.status === 413;
+  return new HelperError(`${what} answered ${answer.status}: ${answer.detail}`, isCallersToFix ? EXIT_USAGE : 1);
+}
+
+// A failed request heals by re-reading `me` and retrying once. The answer
+// refreshes what this helper holds about the workspace (its apps and their
+// origins, the scope of the access) and says whether this copy is still the
+// helper the workspace publishes; a 403 from `me` means the grant itself is
+// gone. A failure that is not retryable (a command that had already started)
+// still refreshes, so the next command works, but is reported rather than run
+// again.
 async function withRecovery(config, action) {
   try {
     return await action(config);
@@ -422,7 +308,6 @@ async function withRecovery(config, action) {
       throw error;
     }
     Object.assign(config, {
-      exec: me.exec,
       apps: me.apps,
       scope: me.scope,
       helper: me.helper,
@@ -431,10 +316,10 @@ async function withRecovery(config, action) {
     saveConfig(config);
     warnIfHelperDiffers(me.helper);
     if (!error.isRetryable) {
-      process.stderr.write("wsvisit: refreshed the workspace's addresses; the next command will use them\n");
+      process.stderr.write("wsvisit: refreshed what the workspace says about this access; the next command will use it\n");
       throw error;
     }
-    process.stderr.write("wsvisit: refreshed the workspace's addresses and retrying\n");
+    process.stderr.write("wsvisit: refreshed what the workspace says about this access and retrying\n");
     return await action(config);
   }
 }
@@ -602,48 +487,36 @@ async function commandRun(config, options, rest) {
   const payload = { command: rest, timeout_seconds: timeoutSeconds };
   if (options.cwd) payload.cwd = options.cwd;
   return withRecovery(config, async (current) => {
-    const { response, signed } = await execRequest(current, "/run", payload, { timeoutMs: (timeoutSeconds + 60) * 1000 });
-    if (!response.ok) {
-      const body = Buffer.from(await response.arrayBuffer());
-      verifyResponse(response.status, response.headers, body, signed, current.exec.host_public_key, nowUnix());
-      const note = clockSkewNote(headerValue(response.headers, "date"), nowUnix());
-      throw new HelperError(`run refused (${response.status}): ${body.toString("utf8").slice(0, 300)}${note}`);
-    }
-    const outcome = await consumeRunStream(response.body, current.exec.host_public_key, signed.signatureB64);
-    return outcome.exitCode;
+    // The gateway ends the command at its timeout, so silence for longer than that is a dead connection.
+    const stream = await openRunStream(current, payload, (timeoutSeconds + 60) * 1000);
+    return consumeRunStream(stream, process.stdout, process.stderr);
   });
 }
 
-async function consumeRunStream(body, hostPublicKeyLine, requestSignatureB64) {
-  // The trailer signs every byte before its own line, so the digest is kept
-  // over whole lines as they complete and the trailer line is never fed in.
-  const hash = crypto.createHash("sha256");
-  const reader = body.getReader();
+// The stream is one JSON line per line of the command's output and a last one
+// with its exit. Once it has opened the command has run, so nothing that goes
+// wrong from here on may be answered by running it again.
+async function consumeRunStream(stream, stdout, stderr) {
+  const chunks = stream[Symbol.asyncIterator]();
   let pending = Buffer.alloc(0);
-  let exitCode = null;
-  let trailer = null;
+  let exitEvent = null;
   const handleLine = (lineBuffer) => {
     const line = lineBuffer.toString("utf8");
-    if (!line.trim()) {
-      hash.update(lineBuffer);
-      hash.update("\n");
-      return;
-    }
+    if (!line.trim()) return;
     const event = JSON.parse(line);
-    if (event.type === "signature") {
-      trailer = event;
-      return;
-    }
-    hash.update(lineBuffer);
-    hash.update("\n");
-    if (event.type === "stdout") process.stdout.write(event.data || "");
-    else if (event.type === "stderr") process.stderr.write(event.data || "");
-    else if (event.type === "exit") exitCode = typeof event.code === "number" ? event.code : 1;
+    if (event.type === "stdout") stdout.write(event.data || "");
+    else if (event.type === "stderr") stderr.write(event.data || "");
+    else if (event.type === "exit") exitEvent = event;
   };
   for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    pending = Buffer.concat([pending, Buffer.from(value)]);
+    let step;
+    try {
+      step = await chunks.next();
+    } catch (error) {
+      throw new HelperError(`the connection dropped while the command was running: ${error.message}`, 1, false);
+    }
+    if (step.done) break;
+    pending = Buffer.concat([pending, Buffer.from(step.value)]);
     let newline;
     while ((newline = pending.indexOf(0x0a)) >= 0) {
       handleLine(pending.subarray(0, newline));
@@ -651,14 +524,20 @@ async function consumeRunStream(body, hostPublicKeyLine, requestSignatureB64) {
     }
   }
   if (pending.length) handleLine(pending);
-  try {
-    verifyStreamTrailer(trailer, hash.digest(), requestSignatureB64, hostPublicKeyLine, nowUnix());
-  } catch (error) {
-    if (!(error instanceof HelperError)) throw error;
-    // The command has run and its output is above; it must not run again.
-    throw new HelperError(`${error.message} (the command ran; its output above is unverified)`, error.exitCode, false);
+  if (exitEvent === null) {
+    throw new HelperError("the run's stream ended before the command's exit was reported; its output above may be incomplete", 1, false);
   }
-  return { exitCode: exitCode === null ? 1 : exitCode };
+  return runExitCode(exitEvent, stderr);
+}
+
+// The exit code this process ends with for a run's last event. A command that
+// has none of its own (it ran out of time, or never started) ends as 1, with
+// the reason on stderr.
+function runExitCode(exitEvent, stderr) {
+  if (typeof exitEvent.code === "number") return exitEvent.code;
+  if (exitEvent.timed_out) stderr.write("wsvisit: the command ran out of time and was stopped\n");
+  else if (exitEvent.error) stderr.write(`wsvisit: the command could not be started: ${exitEvent.error}\n`);
+  return 1;
 }
 
 async function commandRead(config, positional) {
@@ -666,10 +545,12 @@ async function commandRead(config, positional) {
   if (!filePath) throw new HelperError("usage: wsvisit read <path>", EXIT_USAGE);
   await refreshSkills(config, false);
   return withRecovery(config, async (current) => {
-    const answer = await verifiedExecJson(current, "/read-file", { path: filePath });
-    if (answer.status === 404 || answer.body.exists === false) {
+    const answer = await workspaceJson(current, "/_agent/files/read", { path: filePath });
+    // A 404 that does not say so is not about the file: it is a workspace that does not serve the route.
+    if (answer.status === 404 && answer.body.exists === false) {
       throw new HelperError(`no such file in the workspace: ${filePath}`, EXIT_USAGE);
     }
+    if (!answer.isOk) throw refusalError("read", answer);
     process.stdout.write(Buffer.from(answer.body.content_b64 || "", "base64"));
     return 0;
   });
@@ -683,8 +564,8 @@ async function commandWrite(config, positional, options) {
   const payload = { path: filePath, content_b64: content.toString("base64") };
   if (options.mode) payload.mode = String(options.mode);
   return withRecovery(config, async (current) => {
-    const answer = await verifiedExecJson(current, "/write-file", payload);
-    if (answer.status === 404) throw new HelperError(`could not write ${filePath}: ${answer.body.error || "not found"}`, EXIT_USAGE);
+    const answer = await workspaceJson(current, "/_agent/files/write", payload);
+    if (!answer.isOk) throw refusalError("write", answer);
     return 0;
   });
 }
@@ -797,7 +678,7 @@ async function commandGet(config, positional) {
       workspaceOrigins(current),
     );
     const body = Buffer.from(await response.arrayBuffer());
-    if (response.status === 403) throw new HelperError("the workspace refused this access (revoked, or the workspace moved)", EXIT_REVOKED);
+    if (response.status === 403) throw new HelperError(REFUSED_MESSAGE, EXIT_REVOKED);
     if (!response.ok) throw new HelperError(`GET ${url} answered ${response.status}: ${body.toString("utf8").slice(0, 300)}`);
     process.stdout.write(body);
     return 0;
@@ -806,7 +687,7 @@ async function commandGet(config, positional) {
 
 async function commandMe(config) {
   const me = JSON.parse(await gatewayJson(config, "GET", "/_agent/me"));
-  Object.assign(config, { exec: me.exec, apps: me.apps, scope: me.scope, workspace: { ...config.workspace, ...me.workspace } });
+  Object.assign(config, { apps: me.apps, scope: me.scope, workspace: { ...config.workspace, ...me.workspace } });
   saveConfig(config);
   process.stdout.write(JSON.stringify(me, null, 2) + "\n");
   return 0;
@@ -900,29 +781,25 @@ if (require.main === module) {
 
 module.exports = {
   HelperError,
-  clockSkewNote,
   commandInvite,
-  contentDigest,
+  consumeRunStream,
   describeSkillChanges,
+  fetchWaitingForTheApp,
   fetchWithTimeout,
-  fingerprintOfPublicKeyLine,
+  fetchWithinOrigins,
   generateKeypair,
   helperMismatchNotice,
   inviteGrantLifetimeDays,
+  jsonAnswer,
   loadConfig,
+  openRunStream,
   parseArgs,
-  parseSignatureInputParams,
   publicKeyLineFromRaw,
-  publicKeyObjectFromLine,
-  requestSignatureBase,
+  refusalError,
   resolveGetUrl,
   retryDelayMs,
-  fetchWaitingForTheApp,
-  fetchWithinOrigins,
+  runExitCode,
   runTimeoutSeconds,
-  signRequest,
-  streamTrailerBase,
-  verifyResponse,
-  verifyStreamTrailer,
   withRecovery,
+  workspaceJson,
 };
