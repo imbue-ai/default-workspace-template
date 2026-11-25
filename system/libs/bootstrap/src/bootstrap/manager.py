@@ -79,6 +79,12 @@ UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
 # written straight into /etc/cron.d at every boot.
 ROUTINES_TICK_CRON_NAME = "routines"
 ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
+# The entry that writes the update dispatcher's cron line (``update-self-dispatch``): its durable
+# copy under RUNTIME_CRON_DIR and its live copy. The line is the update library's own
+# (system/libs/workspace_update_control), which the shell's update routes write it through too.
+# own-process: other-tier -- the boot re-syncs the venv after this process started, and the entry needs none
+UPDATE_DISPATCHER_CRON_SCRIPT = Path("system/scripts/install_update_dispatcher_cron.py")
+_UPDATE_DISPATCHER_CRON_TIMEOUT_SECONDS = 60.0
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
 # /run/lock, so `flock` there fails and the guard never runs.
@@ -540,6 +546,37 @@ def _migrate_cron_entries_to_routines() -> None:
             logger.warning("routines migrate-cron: {}", line)
 
 
+def _write_update_dispatcher_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Have the update library write its dispatcher's cron line, at every boot.
+
+    The dispatcher's minute is what arms a workspace's own updates and starts a scheduled one. The
+    shell's update routes write the line when a client arms or starts an update, so until this ran
+    at boot a workspace no client had asked anything of never ran the dispatcher. It is the same
+    line under the same name, written by the same code, so there is one of it either way.
+
+    Best-effort like every entry here: the boot must reach supervisord.
+    """
+    try:
+        completed = subprocess.run(
+            ["python3", str(UPDATE_DISPATCHER_CRON_SCRIPT), str(target_dir)],
+            capture_output=True,
+            text=True,
+            timeout=_UPDATE_DISPATCHER_CRON_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("Skipped the update dispatcher's cron entry: {}", e)
+        return
+    if completed.returncode != 0:
+        logger.warning(
+            "The update dispatcher's cron entry was not installed (exit {}): {}",
+            completed.returncode,
+            (completed.stderr or completed.stdout).strip(),
+        )
+        return
+    logger.info("Installed the update dispatcher's cron entry into {}", target_dir)
+
+
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
 
@@ -998,6 +1035,7 @@ def main() -> None:
         _write_update_recovery_cron_entry()
         _migrate_cron_entries_to_routines()
         _write_routines_tick_cron_entry()
+        _write_update_dispatcher_cron_entry()
         _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this

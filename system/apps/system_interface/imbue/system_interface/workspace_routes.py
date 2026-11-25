@@ -72,6 +72,9 @@ from workspace_update_control.control import start_update
 from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.dispatcher import PROC_ROOT
 from workspace_update_control.protocol import OUTCOME_STARTING
+from workspace_update_control.settings import InvalidUpdateSettingsError
+from workspace_update_control.settings import UpdateSettings
+from workspace_update_control.settings import write_update_settings
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
@@ -91,6 +94,7 @@ from imbue.system_interface.workspace_api_models import CODE_INVALID_GRANTS
 from imbue.system_interface.workspace_api_models import CODE_INVALID_PROFILE
 from imbue.system_interface.workspace_api_models import CODE_INVALID_REQUEST
 from imbue.system_interface.workspace_api_models import CODE_INVALID_TIMEZONE
+from imbue.system_interface.workspace_api_models import CODE_INVALID_UPDATE_SETTINGS
 from imbue.system_interface.workspace_api_models import CODE_NOT_AT_WORKSPACE_ROOT
 from imbue.system_interface.workspace_api_models import CODE_PREVIEW
 from imbue.system_interface.workspace_api_models import CODE_SETUP_RUNNING
@@ -116,15 +120,18 @@ from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_READ
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_CANCEL
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_REFRESH
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SETTINGS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SKIP
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_START
 from imbue.system_interface.workspace_api_models import ProfileSnapshotRequest
 from imbue.system_interface.workspace_api_models import ProfileWrittenResponse
 from imbue.system_interface.workspace_api_models import ReplaceGrantsRequest
+from imbue.system_interface.workspace_api_models import ShareableApp
 from imbue.system_interface.workspace_api_models import SharingStateResponse
 from imbue.system_interface.workspace_api_models import TimezoneRequest
 from imbue.system_interface.workspace_api_models import TimezoneResponse
 from imbue.system_interface.workspace_api_models import UpdateBusyChat
+from imbue.system_interface.workspace_api_models import UpdateChannelVersion
 from imbue.system_interface.workspace_api_models import UpdateDismissalsRequest
 from imbue.system_interface.workspace_api_models import UpdateDismissalsResponse
 from imbue.system_interface.workspace_api_models import UpdateLivenessAgent
@@ -134,11 +141,13 @@ from imbue.system_interface.workspace_api_models import UpdateScheduleCancelledR
 from imbue.system_interface.workspace_api_models import UpdateScheduleRefreshRequest
 from imbue.system_interface.workspace_api_models import UpdateScheduleRefreshedResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleRequest
+from imbue.system_interface.workspace_api_models import UpdateSettingsModel
 from imbue.system_interface.workspace_api_models import UpdateSkipRequest
 from imbue.system_interface.workspace_api_models import UpdateSkippedResponse
 from imbue.system_interface.workspace_api_models import UpdateStartAttempt
 from imbue.system_interface.workspace_api_models import UpdateStartRequest
 from imbue.system_interface.workspace_api_models import UpdateStateResponse
+from imbue.system_interface.workspace_api_models import WORKSPACE_COMPATIBILITY
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
 from imbue.system_interface.workspace_api_models import WORKSPACE_STATUS_SCHEMA
 from imbue.system_interface.workspace_api_models import WorkspaceRouteError
@@ -159,6 +168,7 @@ UPDATE_SCHEDULE_ROUTE: Final[str] = f"{UPDATE_ROUTE}/schedule"
 UPDATE_SKIP_ROUTE: Final[str] = f"{UPDATE_ROUTE}/skip"
 UPDATE_DISMISSALS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/dismissals"
 UPDATE_LIVENESS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/liveness"
+UPDATE_SETTINGS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/settings"
 
 # The query parameter that asks the update read whether an account is signed in.
 CHECK_SIGN_IN_PARAMETER: Final[str] = "check_sign_in"
@@ -213,10 +223,12 @@ def _run_in_background(work: Callable[[], None]) -> None:
 
 
 def workspace_status() -> ResponseReturnValue:
-    """What this workspace serves: the version of its checkout, and the name of every operation it has a route for.
+    """What this workspace serves: the version of its checkout, the name of every operation it has a route for,
+    and the template's compatibility number.
 
     A client asks before the first operation it sends a workspace, and calls a route only for an operation named
-    here. A preview shell names none: it serves a copy, and cannot change the live workspace.
+    here. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads
+    a compatibility number higher than it knows opens the workspace and does nothing else inside it.
     """
     _admit(is_changing_the_workspace=False)
     return model_response(
@@ -224,6 +236,7 @@ def workspace_status() -> ResponseReturnValue:
             schema=WORKSPACE_STATUS_SCHEMA,
             template_ref=read_template_ref(_workspace_root()),
             operations=() if get_state().is_preview else WORKSPACE_OPERATIONS,
+            compatibility=WORKSPACE_COMPATIBILITY,
         )
     )
 
@@ -255,15 +268,30 @@ def _grant_entries(grant_list: GrantListModel) -> GrantEntries:
 
 
 def read_sharing() -> ResponseReturnValue:
-    """Whether the workspace holds share materials, and its grants: what a client reads before every edit of who
-    the workspace is shared with."""
+    """Whether the workspace holds share materials, its grants, and the apps that can be shared by themselves:
+    what a client reads before every edit of who the workspace is shared with.
+
+    The apps are the registered ones that are not internal, each with its name, its origin label and the name a
+    person reads for it.
+    """
     _admit(is_changing_the_workspace=False)
     state = read_sharing_state(_workspace_root())
+    rows = [entry.row for entry in get_state().shell.inventory.entries()]
     return model_response(
         SharingStateResponse(
             is_shared=state.is_shared,
             grants=_grants_document_model(state.grants) if state.grants is not None else None,
             grants_error=GRANTS_ERROR_UNREADABLE if state.is_grants_unreadable else "",
+            shareable_apps=tuple(
+                ShareableApp(
+                    name=str(row.name),
+                    label=row.label,
+                    display_name=str(row.display_name or ""),
+                    is_system=row.system,
+                )
+                for row in rows
+                if not row.internal
+            ),
         )
     )
 
@@ -326,19 +354,21 @@ def replace_sharing_grants() -> ResponseReturnValue:
 def write_profile() -> ResponseReturnValue:
     """Write the profile snapshot a client materialized from the workspace's account, as it is.
 
-    A snapshot of a format newer than this template knows is written all the same. The shell tells its pages when
-    the keybindings in it change.
+    A snapshot of a format newer than this template knows is written all the same. One that equals the stored
+    snapshot apart from when it was written leaves the file alone and answers ``is_written`` false, so a client
+    that sends the snapshot whenever it opens the workspace announces no change that did not happen. The shell
+    tells its pages when the keybindings in it change.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(ProfileSnapshotRequest)
     try:
-        write_workspace_profile_snapshot(_workspace_root(), body.model_dump(mode="json"))
+        is_written = write_workspace_profile_snapshot(_workspace_root(), body.model_dump(mode="json"))
     except InvalidProfileSnapshotError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_PROFILE, HTTP_BAD_REQUEST) from e
     except ProfileWriteError as e:
         logger.opt(exception=e).error("Could not write the profile snapshot")
         raise WorkspaceRouteRefusal(str(e), CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR) from e
-    return model_response(ProfileWrittenResponse(is_written=True))
+    return model_response(ProfileWrittenResponse(is_written=is_written))
 
 
 def write_timezone() -> ResponseReturnValue:
@@ -456,10 +486,49 @@ def _outcome_response(answer: dict[str, object]) -> UpdateOutcomeResponse:
     )
 
 
-def read_update() -> ResponseReturnValue:
-    """The schedule, the last run, the last dispatch, the last start, the skipped version and the dismissals.
+def _window_of(body: UpdateScheduleRefreshRequest) -> tuple[int, int] | None:
+    """The window a request named, or None when it left the window to the workspace; a request that names half
+    of one is refused."""
+    if body.window_start_minute_utc is None and body.window_length_minutes is None:
+        return None
+    if body.window_start_minute_utc is None or body.window_length_minutes is None:
+        raise WorkspaceRouteRefusal(
+            "window_start_minute_utc and window_length_minutes come together, or not at all.",
+            CODE_INVALID_REQUEST,
+            HTTP_BAD_REQUEST,
+        )
+    return body.window_start_minute_utc, body.window_length_minutes
 
-    Nothing in the workspace changes. ``?check_sign_in=1`` also asks whether an AI account is signed in.
+
+def write_update_settings_of_workspace() -> ResponseReturnValue:
+    """Store the update settings: the release channel the workspace follows, where that channel's file is read
+    from, whether the workspace arms its own updates, and the hours of the owner's day one may start in.
+
+    Answers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at
+    most once an hour, and while arming is on it arms an update to that version by itself. The hours are read in
+    the timezone the workspace records, and in UTC when it records none.
+    """
+    _admit(is_changing_the_workspace=True)
+    body = _body(UpdateSettingsModel)
+    _require_workspace_root_as_working_directory()
+    try:
+        stored = write_update_settings(UpdateSettings(**body.model_dump()))
+    except InvalidUpdateSettingsError as e:
+        raise WorkspaceRouteRefusal(str(e), CODE_INVALID_UPDATE_SETTINGS, HTTP_BAD_REQUEST) from e
+    except OSError as e:
+        logger.opt(exception=e).error("Could not write the update settings")
+        raise WorkspaceRouteRefusal(
+            f"The update settings could not be written: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
+        ) from e
+    return model_response(UpdateSettingsModel.model_validate(stored.document()))
+
+
+def read_update() -> ResponseReturnValue:
+    """The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the
+    update settings, and the version the settings' release channel is on as the workspace last read it.
+
+    Nothing in the workspace changes, and the feed is not read. ``?check_sign_in=1`` also asks whether an AI
+    account is signed in.
     """
     _admit(is_changing_the_workspace=False)
     _require_workspace_root_as_working_directory()
@@ -470,10 +539,16 @@ def read_update() -> ResponseReturnValue:
         read_agents=_observed_agents_reader(),
     )
     last_start = state["last_start"]
+    channel_version = state["channel_version"]
     return model_response(
         UpdateStateResponse.model_validate(
             {
                 **state,
+                "channel_version": UpdateChannelVersion.model_validate(
+                    {key: value for key, value in channel_version.items() if key in UpdateChannelVersion.model_fields}
+                )
+                if isinstance(channel_version, dict)
+                else None,
                 "last_start": UpdateStartAttempt.model_validate(
                     {key: value for key, value in last_start.items() if key in UpdateStartAttempt.model_fields}
                 )
@@ -491,6 +566,9 @@ def start_update_now() -> ResponseReturnValue:
     about to), and one that fails is answered 200 with its outcome. Otherwise the update's chat begins to be
     created and the answer is 202 with the outcome STARTING and an attempt id; the read route's ``last_start``
     holds the attempt's outcome once it has one.
+
+    A request that names no ``ceiling`` updates to the version the workspace's release channel is on, and is
+    answered NO_CHANNEL_VERSION when the workspace has read none and the user named none.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateStartRequest)
@@ -506,8 +584,13 @@ def start_update_now() -> ResponseReturnValue:
         read_agents=_observed_agents_reader(),
         run_in_background=_run_in_background,
         clock=time.time,
+        fetch_channel_file=get_state().channel_file_fetcher,
     )
-    logger.info("Asked to start an update to {}: {}", body.override_ref or body.ceiling, answer.get("outcome"))
+    logger.info(
+        "Asked to start an update to {}: {}",
+        body.override_ref or body.ceiling or "the channel's version",
+        answer.get("outcome"),
+    )
     response = _outcome_response(answer)
     return model_response(response, HTTP_ACCEPTED if response.outcome == OUTCOME_STARTING else HTTP_OK)
 
@@ -517,20 +600,27 @@ def arm_update_schedule() -> ResponseReturnValue:
 
     Answers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the schedule. Arming
     again starts the dispatcher's record of earlier attempts over.
+
+    A value the request leaves out is the workspace's own, which the dispatcher then keeps current in the
+    schedule: the version its release channel is on (NO_CHANNEL_VERSION when it has read none and the user named
+    none), the window of its update settings (NO_UPDATE_SETTINGS when it holds none), and whether it holds backup
+    credentials.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateScheduleRequest)
+    window = _window_of(body)
     _require_workspace_root_as_working_directory()
     answer = arm_schedule(
         ceiling=body.ceiling,
         override_ref=body.override_ref,
-        window_start_minute_utc=body.window_start_minute_utc,
-        window_length_minutes=body.window_length_minutes,
+        window_start_minute_utc=window[0] if window is not None else None,
+        window_length_minutes=window[1] if window is not None else None,
         is_backup_configured=body.is_backup_configured,
         is_auto_armed=body.is_auto_armed,
         now=time.time(),
         live_cron_dir=str(get_state().live_cron_directory),
         agent_environment=AgentEnvironment(),
+        fetch_channel_file=get_state().channel_file_fetcher,
     )
     logger.info("Asked to arm an update schedule: {}", answer.get("outcome"))
     return model_response(_outcome_response(answer))
@@ -538,16 +628,23 @@ def arm_update_schedule() -> ResponseReturnValue:
 
 def refresh_update_schedule() -> ResponseReturnValue:
     """Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are
-    configured), and nothing when none is armed. The version the user typed and the dispatcher's record stay."""
+    configured), and nothing when none is armed. The version the user typed and the dispatcher's record stay.
+
+    A value the request leaves out is rewritten with the workspace's own, and left as it is where the workspace
+    has none.
+    """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateScheduleRefreshRequest)
+    window = _window_of(body)
     _require_workspace_root_as_working_directory()
     answer = refresh_schedule(
         ceiling=body.ceiling,
-        window_start_minute_utc=body.window_start_minute_utc,
-        window_length_minutes=body.window_length_minutes,
+        window_start_minute_utc=window[0] if window is not None else None,
+        window_length_minutes=window[1] if window is not None else None,
         is_backup_configured=body.is_backup_configured,
+        now=time.time(),
         live_cron_dir=str(get_state().live_cron_directory),
+        fetch_channel_file=get_state().channel_file_fetcher,
     )
     return model_response(UpdateScheduleRefreshedResponse.model_validate(answer))
 
@@ -654,6 +751,7 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("POST", UPDATE_SKIP_ROUTE): _route(UpdateSkipRequest, UpdateSkippedResponse),
     ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissalsResponse),
     ("GET", UPDATE_LIVENESS_ROUTE): _route(None, UpdateLivenessResponse),
+    ("PUT", UPDATE_SETTINGS_ROUTE): _route(UpdateSettingsModel, UpdateSettingsModel),
 }
 
 # The operation each route serves, as the status route names it; the status route itself serves none.
@@ -674,6 +772,7 @@ WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
     ("POST", UPDATE_SKIP_ROUTE): OPERATION_UPDATE_SKIP,
     ("POST", UPDATE_DISMISSALS_ROUTE): OPERATION_UPDATE_DISMISS,
     ("GET", UPDATE_LIVENESS_ROUTE): OPERATION_UPDATE_LIVENESS_READ,
+    ("PUT", UPDATE_SETTINGS_ROUTE): OPERATION_UPDATE_SETTINGS_WRITE,
 }
 
 _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] = {
@@ -694,6 +793,7 @@ _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] 
     ("POST", UPDATE_SKIP_ROUTE): skip_update,
     ("POST", UPDATE_DISMISSALS_ROUTE): dismiss_update,
     ("GET", UPDATE_LIVENESS_ROUTE): read_update_liveness,
+    ("PUT", UPDATE_SETTINGS_ROUTE): write_update_settings_of_workspace,
 }
 
 

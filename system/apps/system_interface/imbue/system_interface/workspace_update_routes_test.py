@@ -6,19 +6,24 @@ from flask import Flask
 from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
+from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
+from workspace_update_control.testing import STAGED_FEED_BASE_URL
 from workspace_update_control.testing import StagedUpdateWorkspace
 from workspace_update_control.testing import full_state_line
 from workspace_update_control.testing import observed_agent
 from workspace_update_control.testing import observed_services_agent
 from workspace_update_control.testing import stage_update_workspace
+from workspace_update_control.testing import update_settings_document
 from workspace_update_control.testing import write_event_lines
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_context import state_of
 from imbue.system_interface.workspace_routes import UPDATE_DISMISSALS_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_LIVENESS_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SCHEDULE_ROUTE
+from imbue.system_interface.workspace_routes import UPDATE_SETTINGS_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SKIP_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_START_ROUTE
 
@@ -37,6 +42,13 @@ def _client(update_workspace_app: Flask) -> FlaskClient:
     return update_workspace_app.test_client()
 
 
+def _stand_in_for_the_feed(update_workspace_app: Flask, template_ref: str | None) -> RecordingFeed:
+    """Have the shell read its release channel's file from a feed that names ``template_ref``, or cannot be read."""
+    feed = RecordingFeed(template_ref)
+    state_of(update_workspace_app).channel_file_fetcher = feed
+    return feed
+
+
 def test_a_workspace_with_no_update_state_answers_nothing_and_writes_nothing(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
@@ -44,6 +56,8 @@ def test_a_workspace_with_no_update_state_answers_nothing_and_writes_nothing(
 
     assert response.status_code == 200
     assert response.get_json() == {
+        "settings": None,
+        "channel_version": None,
         "schedule": None,
         "run": None,
         "last_dispatch": None,
@@ -237,3 +251,201 @@ def test_a_shell_that_does_not_run_from_the_workspaces_root_refuses_to_act_on_it
 
     assert refused.status_code == 500
     assert refused.get_json()["code"] == "NOT_AT_WORKSPACE_ROOT"
+
+
+# The update settings, and a request that leaves its values to the workspace
+
+
+def test_the_update_settings_are_stored_and_answered_as_stored_and_the_read_answers_them(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    settings = update_settings_document(channel="beta", is_auto_update_enabled_here=False)
+
+    stored = client.put(UPDATE_SETTINGS_ROUTE, json=settings)
+
+    assert stored.status_code == 200
+    assert stored.get_json() == settings
+    assert staged_update_workspace.read_state("settings.json") == {"schema": 1, **settings}
+    # The schedule is a file of its own, which a desktop from before the settings reads and writes.
+    assert staged_update_workspace.read_state("schedule.json") is None
+    state = client.get(UPDATE_ROUTE).get_json()
+    assert (state["settings"], state["channel_version"]) == (settings, None)
+
+
+def test_settings_with_no_answer_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
+    settings = update_settings_document()
+    del settings["is_auto_update_enabled_here"]
+
+    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=settings)
+
+    assert stored.get_json()["is_auto_update_enabled_here"] is None
+
+
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"window_start_hour": 24}, "INVALID_REQUEST"),
+        ({"is_auto_update_enabled": "yes"}, "INVALID_REQUEST"),
+        ({"channel": "../stable"}, "INVALID_UPDATE_SETTINGS"),
+        ({"feed_base_url": "file:///etc/passwd"}, "INVALID_UPDATE_SETTINGS"),
+        ({"window_start_hour": 4, "window_end_hour": 4}, "INVALID_UPDATE_SETTINGS"),
+    ],
+)
+def test_settings_that_cannot_be_the_workspaces_are_refused_and_change_nothing(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace, fields: dict[str, object], code: str
+) -> None:
+    refused = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(**fields))
+
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == code
+    assert staged_update_workspace.read_state("settings.json") is None
+
+
+def test_a_schedule_armed_with_nothing_named_takes_the_channels_version_and_the_settings_window(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    feed = _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+
+    armed = client.put(UPDATE_SCHEDULE_ROUTE, json={})
+
+    assert armed.status_code == 200
+    assert armed.get_json()["outcome"] == "ARMED"
+    schedule = armed.get_json()["schedule"]
+    assert (
+        schedule["ceiling"],
+        schedule["window_start_minute_utc"],
+        schedule["window_length_minutes"],
+        schedule["is_backup_configured"],
+        schedule["is_auto_armed"],
+    ) == ("minds-v0.12.0", 2 * 60, 3 * 60, False, False)
+    assert feed.asked == [f"{STAGED_FEED_BASE_URL}/stable-web.json"]
+    channel_version = client.get(UPDATE_ROUTE).get_json()["channel_version"]
+    assert (channel_version["channel"], channel_version["template_ref"], channel_version["error"]) == (
+        "stable",
+        "minds-v0.12.0",
+        "",
+    )
+    assert channel_version["read_at"] == channel_version["checked_at"]
+
+    # A refresh that names nothing keeps the workspace's own values, and the feed is not asked again within the hour.
+    refreshed = client.patch(UPDATE_SCHEDULE_ROUTE, json={})
+
+    assert refreshed.get_json() == {"is_armed": True, "schedule": schedule}
+    assert len(feed.asked) == 1
+
+
+def test_a_schedule_armed_with_no_version_named_and_none_read_is_declined_with_that_reason(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+
+    with_no_settings = client.put(UPDATE_SCHEDULE_ROUTE, json={})
+
+    assert with_no_settings.status_code == 200
+    assert with_no_settings.get_json()["outcome"] == "NO_CHANNEL_VERSION"
+    assert "holds no update settings" in with_no_settings.get_json()["detail"]
+
+    _stand_in_for_the_feed(update_workspace_app, None)
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+    with_the_feed_down = client.put(UPDATE_SCHEDULE_ROUTE, json={})
+
+    assert with_the_feed_down.get_json()["outcome"] == "NO_CHANNEL_VERSION"
+    assert "the feed is down" in with_the_feed_down.get_json()["detail"]
+    assert staged_update_workspace.read_state("schedule.json") is None
+    channel_version = client.get(UPDATE_ROUTE).get_json()["channel_version"]
+    assert (channel_version["template_ref"], channel_version["read_at"], channel_version["error"]) == (
+        "",
+        None,
+        "the feed is down",
+    )
+
+
+def test_a_schedule_that_names_its_version_and_no_window_in_a_workspace_with_no_settings_is_declined(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    declined = _client(update_workspace_app).put(UPDATE_SCHEDULE_ROUTE, json={"ceiling": "minds-v0.11.0"})
+
+    assert declined.status_code == 200
+    assert declined.get_json()["outcome"] == "NO_UPDATE_SETTINGS"
+    assert staged_update_workspace.read_state("schedule.json") is None
+
+
+def test_a_window_named_by_half_is_refused(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    refused = _client(update_workspace_app).put(
+        UPDATE_SCHEDULE_ROUTE, json={"ceiling": "minds-v0.11.0", "window_start_minute_utc": 420}
+    )
+
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == "INVALID_REQUEST"
+    assert staged_update_workspace.read_state("schedule.json") is None
+
+
+def test_a_start_with_no_version_named_updates_to_the_channels_version(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+
+    started = client.post(UPDATE_START_ROUTE, json={})
+
+    assert started.status_code == 202
+    assert started.get_json()["outcome"] == "STARTING"
+    wait_for(
+        lambda: (client.get(UPDATE_ROUTE).get_json()["last_start"] or {}).get("outcome") is not None,
+        error_message="the start attempt never recorded an outcome",
+    )
+    assert client.get(UPDATE_ROUTE).get_json()["last_dispatch"]["target_ref"] == "minds-v0.12.0"
+    assert "- Target: minds-v0.12.0" in staged_update_workspace.chat_creates()[0][-1]
+
+
+def test_a_start_with_no_version_named_and_none_read_is_declined_and_creates_nothing(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    declined = _client(update_workspace_app).post(UPDATE_START_ROUTE, json={})
+
+    assert declined.status_code == 200
+    assert declined.get_json()["outcome"] == "NO_CHANNEL_VERSION"
+    assert staged_update_workspace.chat_creates() == []
+    assert staged_update_workspace.read_state("last-start.json") is None
+
+
+def test_a_start_at_a_version_the_user_named_needs_no_channel(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+
+    started = client.post(UPDATE_START_ROUTE, json={"override_ref": "minds-v0.11.3"})
+
+    assert started.status_code == 202
+    wait_for(
+        lambda: (client.get(UPDATE_ROUTE).get_json()["last_start"] or {}).get("outcome") is not None,
+        error_message="the start attempt never recorded an outcome",
+    )
+    assert client.get(UPDATE_ROUTE).get_json()["last_dispatch"]["target_ref"] == "minds-v0.11.3"
+
+
+def test_a_client_that_names_its_newest_version_is_served_as_before_and_recorded_as_holding_the_workspace_to_it(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    feed = _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+
+    armed = client.put(UPDATE_SCHEDULE_ROUTE, json=_SCHEDULE_REQUEST)
+
+    schedule = armed.get_json()["schedule"]
+    assert (schedule["ceiling"], schedule["window_start_minute_utc"], schedule["is_backup_configured"]) == (
+        "minds-v0.11.0",
+        420,
+        True,
+    )
+    assert feed.asked == []
+    recorded = staged_update_workspace.read_state("client-ceiling.json")
+    assert recorded is not None
+    assert recorded["ceiling"] == "minds-v0.11.0"

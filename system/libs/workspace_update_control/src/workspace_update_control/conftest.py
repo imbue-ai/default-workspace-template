@@ -1,11 +1,15 @@
 import subprocess
 import sys
+import threading
+from collections.abc import Generator
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 from workspace_update_control.agents import agent_events_path
 from workspace_update_control.testing import (
+    LocalFeedHandler,
     StagedUpdateWorkspace,
     stage_update_workspace,
 )
@@ -29,3 +33,17 @@ def exited_pid() -> int:
 def events_path(tmp_path: Path) -> Path:
     """Where the observer of a host dir under ``tmp_path`` writes its agents events; nothing is there yet."""
     return Path(agent_events_path({"MNGR_HOST_DIR": str(tmp_path / "host-dir")}))
+
+
+@pytest.fixture
+def local_feed() -> Generator[str, None, None]:
+    """The base address of a feed served from this machine, which publishes the stable channel's file alone."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LocalFeedHandler)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        serving.join()

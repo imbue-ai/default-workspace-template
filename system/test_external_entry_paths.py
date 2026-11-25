@@ -38,12 +38,13 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (UPDATE_SELF_SCRIPTS / "run_in_background.py", ("--help",)),
 )
 
-# Imported without letting the __main__ block act (a run would collect a real bug report, or be a
-# minute of the update dispatcher in the workspace running the suite), which still resolves every
-# import a real run makes at startup.
+# Imported without letting the __main__ block act (a run would collect a real bug report, be a
+# minute of the update dispatcher in the workspace running the suite, or write that dispatcher's
+# cron line), which still resolves every import a real run makes at startup.
 _BARE_IMPORTS = (
     SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",
     SYSTEM_SCRIPTS / "update_dispatcher_tick.py",
+    SYSTEM_SCRIPTS / "install_update_dispatcher_cron.py",
 )
 
 _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (

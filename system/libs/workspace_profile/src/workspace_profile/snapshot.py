@@ -129,10 +129,29 @@ def load_workspace_profile_snapshot(
     return parse_workspace_profile_snapshot(text)
 
 
+def _is_same_apart_from_when_written(
+    stored_text: str, document: Mapping[str, object]
+) -> bool:
+    """Whether the stored snapshot holds what ``document`` does, the time each was written aside."""
+    try:
+        stored = json.loads(stored_text)
+    except ValueError:
+        return False
+    if not isinstance(stored, dict):
+        return False
+    return {key: value for key, value in stored.items() if key != "written_at"} == {
+        key: value for key, value in document.items() if key != "written_at"
+    }
+
+
 def write_workspace_profile_snapshot(
     workspace_root: Path, document: Mapping[str, object]
-) -> None:
-    """Replace the snapshot with the document a client sent, atomically.
+) -> bool:
+    """Replace the snapshot with the document a client sent, atomically; whether it was written.
+
+    A document that equals the stored snapshot apart from ``written_at`` is not written: a client sends the
+    snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a
+    change that did not happen.
 
     Only its shape is asked of it, an object with a whole-number ``snapshot_format``
     (``InvalidProfileSnapshotError`` otherwise): a format newer than this build knows is written
@@ -144,4 +163,14 @@ def write_workspace_profile_snapshot(
         raise InvalidProfileSnapshotError(
             "a profile snapshot carries a whole-number snapshot_format"
         )
-    write_flat_value_map(workspace_root / SNAPSHOT_RELATIVE_PATH, document)
+    path = workspace_root / SNAPSHOT_RELATIVE_PATH
+    try:
+        stored_text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        stored_text = None
+    if stored_text is not None and _is_same_apart_from_when_written(
+        stored_text, document
+    ):
+        return False
+    write_flat_value_map(path, document)
+    return True
