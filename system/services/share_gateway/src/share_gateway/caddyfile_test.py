@@ -332,24 +332,30 @@ def _caddy_binary() -> str | None:
     return shutil.which("caddy")
 
 
-def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
-    """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
-    would start it. Skipped where no caddy is installed; the workspace image and CI's both install the pinned one."""
-    caddy = _caddy_binary()
-    if caddy is None:
-        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+def _adapted_by_caddy(caddy: str, rendered: str, tmp_path: Path) -> dict:
+    """``rendered`` as ``caddy adapt`` reads it: the configuration the gateway's caddy would run."""
     caddyfile = tmp_path / "Caddyfile"
-    caddyfile.write_text(_render())
-
+    caddyfile.write_text(rendered)
     adapted = subprocess.run(
         [caddy, "adapt", "--config", str(caddyfile), "--adapter", "caddyfile"],
         capture_output=True,
         text=True,
         timeout=60,
     )
-
     assert adapted.returncode == 0, adapted.stderr
-    logs = json.loads(adapted.stdout)["logging"]["logs"]
+    return json.loads(adapted.stdout)
+
+
+def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
+    """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
+    would start it. Skipped where no caddy is installed; the workspace image and CI's both install the pinned one."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+
+    adapted = _adapted_by_caddy(caddy, _render(), tmp_path)
+
+    logs = adapted["logging"]["logs"]
     (access_log,) = [log for name, log in logs.items() if name != "default"]
     assert access_log["writer"] == {
         "filename": "/state/share_gateway/access.log",
@@ -359,7 +365,7 @@ def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_
         "roll_size_mb": 8,
     }
     assert access_log["encoder"]["format"] == "filter" and access_log["encoder"]["wrap"] == {"format": "json"}
-    (server,) = json.loads(adapted.stdout)["apps"]["http"]["servers"].values()
+    (server,) = adapted["apps"]["http"]["servers"].values()
     encoders = [
         handler for route in server["routes"] for handler in _handlers_of(route) if handler["handler"] == "encode"
     ]
@@ -526,16 +532,24 @@ def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(
         backend.shutdown()
 
 
-_APPS_TOML_WITH_AN_INTERNAL_APP = (
-    _APPS_TOML
-    + """
+# The apps of ``_APPS_TOML``, with the shell registered as a workspace registers it: internal.
+_APPS_TOML_WITH_AN_INTERNAL_APP = """
 [[apps]]
 name = "system_interface"
 url = "http://localhost:8000"
 label = "shell-dddd4444"
 internal = true
+
+[[apps]]
+name = "terminal"
+url = "http://localhost:7681"
+label = "terminal-bbbb2222"
+
+[[apps]]
+name = "my-app"
+url = "http://127.0.0.1:5000"
+label = "my-app-cccc3333"
 """
-)
 _INTERNAL_HOST = f"shell-dddd4444.{_DOMAIN}"
 _GRANTABLE_HOST = f"my-app-cccc3333.{_DOMAIN}"
 _AUTH_HOST = f"{_AUTH_LABEL}.{_DOMAIN}"
@@ -558,6 +572,49 @@ def test_caddyfile_lets_the_web_client_call_the_workspace_routes_of_internal_app
     assert rendered.index("handle @web_client_workspace_routes_permission_check") < rendered.index(
         "forward_auth 127.0.0.1"
     )
+
+
+def _web_client_permission_check(host: str, path: str) -> dict:
+    """The matcher caddy adapts for the web client's permission check of ``path`` on ``host``."""
+    return {"header": {"Origin": [_CHROME_ORIGIN]}, "host": [host], "method": ["OPTIONS"], "path": [path]}
+
+
+def test_caddy_orders_the_web_clients_permission_checks_and_the_identity_strip_ahead_of_the_auth_step(
+    tmp_path: Path,
+) -> None:
+    """Caddy orders a site block's directives by its own rules, so where the rendered file states one decides
+    nothing. In the whole file as caddy adapts it, the permission check of each set of routes the web client
+    calls is answered ahead of the auth label's routes and of the step that asks for a session, and an identity
+    header that arrives is deleted ahead of that step, which is what keeps a client from setting the web client's
+    mark. Skipped where no caddy is installed, as the adapt test is."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+
+    adapted = _adapted_by_caddy(caddy, _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP), tmp_path)
+
+    (server,) = adapted["apps"]["http"]["servers"].values()
+    (site,) = server["routes"]
+    (site_handler,) = site["handle"]
+    # The site's handle blocks are one group, of which the first whose matcher fits a request is the only one run.
+    handle_routes = [route for route in site_handler["routes"] if "group" in route]
+    assert len({route["group"] for route in handle_routes}) == 1
+    matchers = [route.get("match") for route in handle_routes]
+    workspace_check = [_web_client_permission_check(_INTERNAL_HOST, "/api/workspace/*")]
+    agent_check = [_web_client_permission_check(_AUTH_HOST, "/_agent/*")]
+    auth_label = [{"host": [_AUTH_HOST]}]
+    assert matchers[-1] is None
+    assert matchers.index(workspace_check) < matchers.index(auth_label)
+    assert matchers.index(agent_check) < matchers.index(auth_label)
+    for check in (workspace_check, agent_check):
+        answer = _handlers_of(handle_routes[matchers.index(check)])[-1]
+        assert answer == {"handler": "static_response", "status_code": 204}
+
+    (behind_the_auth_step,) = handle_routes[-1]["handle"]
+    first_handlers = behind_the_auth_step["routes"][0]["handle"]
+    assert first_handlers[0] == {"handler": "headers", "request": {"delete": ["X-Imbue-Identity"]}}
+    assert first_handlers[1]["handler"] == "reverse_proxy"
+    assert first_handlers[1]["rewrite"]["uri"] == "/_auth/verify"
 
 
 def test_caddyfile_lets_the_web_client_call_the_agent_routes_on_the_auth_label() -> None:
