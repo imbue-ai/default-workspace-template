@@ -591,6 +591,10 @@ def classify_agents(
         root_pids = set(registry_pids.get(agent.agent_id, ()))
         if agent.pid is not None:
             root_pids.add(agent.pid)
+        pids = tuple(sorted(root_pids))
+        anonymous_kib = (
+            process_trees_anonymous_kib(root_pids, proc_dir) if root_pids else None
+        )
         idle_seconds = (
             None
             if agent.last_activity is None
@@ -604,10 +608,8 @@ def classify_agents(
                     name=agent.name,
                     title=agent.display_name,
                     why=why,
-                    pids=tuple(sorted(root_pids)),
-                    anonymous_kib=process_trees_anonymous_kib(root_pids, proc_dir)
-                    if root_pids
-                    else None,
+                    pids=pids,
+                    anonymous_kib=anonymous_kib,
                 )
             )
             continue
@@ -622,10 +624,8 @@ def classify_agents(
                 state=agent.state,
                 last_activity=agent.last_activity,
                 idle_seconds=idle_seconds,
-                pids=tuple(sorted(root_pids)),
-                anonymous_kib=process_trees_anonymous_kib(root_pids, proc_dir)
-                if root_pids
-                else None,
+                pids=pids,
+                anonymous_kib=anonymous_kib,
             )
         )
     return (
