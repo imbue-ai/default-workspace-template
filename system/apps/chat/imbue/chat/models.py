@@ -1064,7 +1064,10 @@ class IntakeTarget(LowerCaseStrEnum):
     CHAT_SELECTOR = auto()
     # The chat about an app (the multiplayer spec, section 9.2): the one labelled ``app_chat`` with the app's
     # registered name, else the one titled "<display name> Chat" (by the create's name-conflict rule), made with
-    # both on the default account when there is none.
+    # both on the default account when there is none. With a text (an ask from a page of the app), that chat takes
+    # the text as a message and is created with it as its first message when there is none; the ``main_chat`` rules
+    # apply when that chat cannot take a message (a room, or a chat that is neither an agent nor becoming one) or
+    # cannot be created.
     APP_CHAT = auto()
     # The chat ``chat_id`` names.
     CHAT = auto()
@@ -1099,7 +1102,9 @@ class IntakeRequest(FrozenModel):
     )
     app: str = Field(default="", description="The registered name of the app an ``app_chat`` intake is about")
     app_display_name: str = Field(
-        default="", description="The display name of that app, which titles its chat and words the composer's hint"
+        default="",
+        description="The display name of that app, which titles its chat, words the composer's hint, and names the "
+        "app in front of an ask's text",
     )
 
 

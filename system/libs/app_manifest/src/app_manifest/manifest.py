@@ -175,7 +175,8 @@ class LaunchPath(FrozenModel):
     text_param: LaunchParamName | None = Field(
         default=None,
         description="The declared param the launcher fills with typed text; a launch path with one is a free-text "
-        "row of the launcher (launcher-and-getting-started plan section 3.1)",
+        "row of the launcher (launcher-and-getting-started plan section 3.1), unless it declares app_params too, when "
+        "it is the param an ask from a page of that app fills with the ask's text",
     )
     draft_param: LaunchParamName | None = Field(
         default=None,
@@ -190,7 +191,8 @@ class LaunchPath(FrozenModel):
     app_params: AppParams | None = Field(
         default=None,
         description="The declared params the shell fills with the name and display name of the app whose window's "
-        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2); never a launcher row',
+        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2), or that a page asked an agent '
+        "about, the ask's text then going in text_param; never a launcher row",
     )
 
     @model_validator(mode="after")
@@ -214,15 +216,21 @@ class LaunchPath(FrozenModel):
                 raise InvalidManifestValueError(
                     f"{field_name} {str(chosen)!r} is not one of the launch path's params {param_names}"
                 )
+        # An app_params path may also name a text_param: the param an ask about the app carries its text in.
         chosen_fields = (
-            self.text_param,
+            self.text_param if self.app_params is None else None,
             self.draft_param,
             self.mention_param,
             self.app_params,
         )
         if sum(chosen is not None for chosen in chosen_fields) > 1:
             raise InvalidManifestValueError(
-                "a launch path declares at most one of text_param, draft_param, mention_param, and app_params"
+                "a launch path declares at most one of text_param, draft_param, mention_param, and app_params, "
+                "though app_params may come with a text_param"
+            )
+        if self.app_params is not None and self.text_param in (self.app_params.name, self.app_params.display_name):
+            raise InvalidManifestValueError(
+                f"text_param {str(self.text_param)!r} is also one of app_params; an ask's text needs its own param"
             )
         for preset_name in self.presets:
             if preset_name in param_names:

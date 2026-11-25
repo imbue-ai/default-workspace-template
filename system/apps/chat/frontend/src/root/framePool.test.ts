@@ -21,6 +21,7 @@ const HANDSHAKE: ShellHandshake = {
   opensWorkspaceSettings: false,
   showsCoachMarks: false,
   isViewing: false,
+  shellId: "shell-1",
 };
 
 let container: HTMLElement;

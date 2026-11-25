@@ -26,6 +26,8 @@ export const TEXT_TOO_LONG_REASON = "Too long to send from here";
 export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
 export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
+/** What an ask answers when its request could not be left in a chat's message box. */
+export const ASK_NOT_DRAFTED_REASON = "The request couldn't be drafted in a chat";
 
 /** The launch paths of the openable apps that ``isWanted`` picks, in registry and manifest order. */
 function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: LaunchPath) => boolean): AppLaunch[] {
@@ -40,8 +42,8 @@ function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: Launch
 }
 
 /** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
- *  person or are about an app: those are the tray's and the title bar's to run (the multiplayer spec, sections 7.5
- *  and 9.2), never a row of anything. */
+ *  person or are about an app: those are the tray's, the title bar's, and a page's ask's to run (the multiplayer
+ *  spec, sections 7.5 and 9.2), never a row of anything. */
 export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
   return launchesWhere(apps, (launchPath) => launchPath.mention_param === null && launchPath.app_params === null);
 }
@@ -56,6 +58,22 @@ export function appChatLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
 export function appChatParams(launchPath: LaunchPath, about: AppRecord): Record<string, string> {
   if (launchPath.app_params === null) return {};
   return { [launchPath.app_params.name]: about.name, [launchPath.app_params.display_name]: about.display_name };
+}
+
+/** The launch path an ask from a page of an app runs (``shell:ask-agent``): the first of the machine that declares
+ *  ``app_params`` and a ``text_param`` for the ask's text, in launcher order (the chat app's ``app-chat`` on a stock
+ *  machine, which "Chat about this app" runs with no text); null when no app declares one. */
+export function appAskLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
+  const takesAsk = (launchPath: LaunchPath): boolean =>
+    launchPath.app_params !== null && launchPath.text_param !== null;
+  return orderAppLaunches(launchesWhere(apps, takesAsk))[0] ?? null;
+}
+
+/** The params an ask launch runs with: the app's name and display name, and the ask's text in the path's
+ *  ``text_param``. */
+export function appAskParams(launchPath: LaunchPath, about: AppRecord, text: string): Record<string, string> {
+  if (launchPath.text_param === null) return {};
+  return { ...appChatParams(launchPath, about), [launchPath.text_param]: text };
 }
 
 /** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's

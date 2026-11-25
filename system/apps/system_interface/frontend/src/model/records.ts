@@ -152,7 +152,8 @@ export interface LaunchPath {
   readonly params: readonly string[];
   /** The fixed name-value pairs the shell sends with every launch of the path. */
   readonly presets: Readonly<Record<string, string>>;
-  /** The param the launcher fills with typed text, which makes this a free-text row; null for none. */
+  /** The param the launcher fills with typed text, which makes this a free-text row, or, on a path with
+   *  ``app_params``, the one an ask about the app fills with its text; null for none. */
   readonly text_param: string | null;
   /** The param the shell fills with text to be drafted rather than sent (a free-text row too, and what the avatar
    *  dialog's draft goes through); null for none. */
@@ -161,7 +162,8 @@ export interface LaunchPath {
    *  section 7.5); never a launcher row; null for none. */
   readonly mention_param: string | null;
   /** The params the shell fills with the name and display name of the app whose window's "Chat about this app"
-   *  button was pressed (the multiplayer spec, section 9.2); never a launcher row; null for none. */
+   *  button was pressed (the multiplayer spec, section 9.2), or that a page asked an agent about; never a launcher
+   *  row; null for none. */
   readonly app_params: AppParams | null;
 }
 

@@ -67,7 +67,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "seeds_shortcuts = false\n"
         'priority = "files"\n'
         'default_shortcuts = [{launch = "new", mode = "focus"}, {launch = "recent", mode = "new"}]\n'
-        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
+        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name", "message"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}, text_param = "message"}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
@@ -105,7 +105,8 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("new", "Files", "/", ("path",), "path"),
         ("recent", "Recent", "/recent", (), None),
         ("draft", "Draft", "/api/intake", ("message",), None),
-        ("app-chat", "Chat about this app", "/api/intake", ("app", "app_display_name"), None),
+        # The path about an app carries an ask's text in its text_param.
+        ("app-chat", "Chat about this app", "/api/intake", ("app", "app_display_name", "message"), "message"),
     ]
     # A row without a method is a GET launch path.
     assert [

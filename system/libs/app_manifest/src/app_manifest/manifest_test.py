@@ -577,7 +577,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
     None
 ):
     """The ``app_params`` pair (the multiplayer spec, section 9.2) names two distinct params of the launch path, and
-    stands alone like a text, draft, or mention param."""
+    stands alone like a draft or mention param."""
     data = _full_manifest_data()
     params = [
         {"name": "app", "label": "App", "required": True},
@@ -612,7 +612,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
         match="at most one of text_param, draft_param, mention_param, and app_params",
     ):
         AppManifest.model_validate(
-            {**data, "launch_paths": [{**about_an_app, "text_param": "app"}]}
+            {**data, "launch_paths": [{**about_an_app, "draft_param": "app"}]}
         )
     with pytest.raises(
         ValidationError,
@@ -629,6 +629,35 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
                 ],
             }
         )
+
+
+def test_a_launch_path_about_an_app_may_take_an_asks_text_in_a_param_of_its_own() -> None:
+    """A path with ``app_params`` may also name a ``text_param``: the param an ask from a page of that app carries
+    its text in. It is one of the path's params and neither of the app params."""
+    data = _full_manifest_data()
+    params = [
+        {"name": "app", "label": "App", "required": True},
+        {"name": "app_display_name", "label": "App name", "required": True},
+        {"name": "message", "label": "Message", "required": False},
+    ]
+    about_an_app = {
+        **_launch_path_data(),
+        "params": params,
+        "app_params": {"name": "app", "display_name": "app_display_name"},
+        "text_param": "message",
+    }
+    manifest = AppManifest.model_validate({**data, "launch_paths": [about_an_app]})
+    assert manifest.launch_paths[0].text_param == "message"
+    assert manifest.launch_paths[0].app_params is not None
+    for text_param, refusal in (
+        ("body", "text_param 'body' is not one of the launch path's params"),
+        ("app", "text_param 'app' is also one of app_params"),
+        ("app_display_name", "text_param 'app_display_name' is also one of app_params"),
+    ):
+        with pytest.raises(ValidationError, match=refusal):
+            AppManifest.model_validate(
+                {**data, "launch_paths": [{**about_an_app, "text_param": text_param}]}
+            )
 
 
 def test_a_preset_may_not_shadow_a_param() -> None:

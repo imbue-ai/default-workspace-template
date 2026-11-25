@@ -393,7 +393,7 @@ closes every window of the app and stops it at once; critical apps offer
 nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
-`shell:capabilities`, `shell:start-with-text`,
+`shell:capabilities`, `shell:start-with-text`, `shell:ask-agent`,
 `shell:report-bug`, ...); a page that reports the path it is showing gets it
 stored on its window and reopens there, one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere, and one
@@ -629,7 +629,20 @@ renamed app keeps its chat), else the one titled "<App display name> Chat", made
 with both on the default provider when there is none (so the chat app's own
 windows open "Chat Chat"), with a pending intake whose `hint` the chat root puts
 on the composer as its placeholder, "How do you want to change <App>?", and
-focuses. The shell names no app in any of this.
+focuses. A page's ask (`shell:ask-agent`, `store/DesktopStore.ts` `askAgent`;
+a failure's "Ask an agent to fix this" sends it) reaches that same chat: for a
+page in a window of an app that is not internal, the shell runs the first
+launch path of the machine that declares `app_params` and a `text_param` (the
+chat app's `app-chat` again) with the app's name, its display name, and the
+ask's text in that `text_param`,
+through the same `show` target beside the page's window, and the chat app sends
+the text to the chat about the app as a message (making that chat with it when
+there is none, and sending it to the main chat when that chat cannot take it).
+With no such launch path, an internal app, or no window (the shell's own ask),
+the ask runs the primary free-text row instead, as `shell:start-with-text`
+does, with the text behind `/assist ` (`assistRequest`), so the agent runs the
+workspace's assist flow either way (the chat app puts the command in front of
+its own lead-in on the other path). The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a
@@ -708,8 +721,14 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it), and drafts a text into the chat on screen
-through `shell:draft-text`, which the shell answers by running the pinned
+intents and templates use it) and then
+telling the page how it went with `shell:start-with-text-result`, asks an
+agent about its own app through `shell:ask-agent` (see "App chat" above; a
+failure's "Ask an agent to fix this" uses it), which the shell answers with
+`shell:ask-agent-result` (the chat's window opened, or the failure
+for the page to show where it was pressed; the shell toasts a failure itself
+unless the request says `showsOutcome`, as an "Ask an agent" button's does),
+and drafts a text into the chat on screen through `shell:draft-text`, which the shell answers by running the pinned
 app's launch path with a `draft_param` into the pinned window, as the avatar
 dialog's "Design your own..." does (the element context menu's "Explain..."
 uses it). The shell names no app in any of this. A

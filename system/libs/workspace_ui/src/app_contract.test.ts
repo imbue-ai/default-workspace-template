@@ -24,15 +24,23 @@ import {
   SHELL_AGENT_WORKING,
   SHELL_FIRST_CONVERSATION_STEP,
   SHELL_KEYBINDINGS_CHANGED,
+  SHELL_ASK_AGENT,
+  SHELL_ASK_AGENT_RESULT,
+  assistRequest,
+  SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
+  CHANGE_NOT_ANSWERED_SENTENCE,
   SHELL_THEME,
   ShellContractError,
+  askAgentToFix,
   bugReportText,
   coachCardPlaceOf,
+  withAskFailure,
   connectToShell,
   followShellTheme,
   reportedFailureOf,
 } from "./app_contract";
-import type { ShellConnection } from "./app_contract";
+import type { ShellConnection, StartOutcome } from "./app_contract";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -41,6 +49,7 @@ const HANDSHAKE = {
   desktopId: "home",
   app: "chat",
   path: "/?chat=agent-1",
+  shellId: "shell-1",
 };
 
 let connection: ShellConnection | null = null;
@@ -105,6 +114,7 @@ describe("connectToShell", () => {
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
       isViewing: false,
+      shellId: "shell-1",
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -136,6 +146,7 @@ describe("connectToShell", () => {
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
       isViewing: false,
+      shellId: "",
     });
   });
 
@@ -232,29 +243,33 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, draftText, showCoachCard, agentWorking, firstConversationStep, sendMessage, and openLink to the parent with the contract shapes", () => {
-    const parent = framed();
-    connection = connectToShell({});
+  it("posts focused, location, openPath, the text start, the ask, draftText, showCoachCard, agentWorking, firstConversationStep, sendMessage, and openLink with the contract shapes", () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
 
-    connection.focused();
-    connection.location("/docs", "Docs");
-    connection.openPath("/?chat=agent-3", "focus");
-    connection.openPath("/new", "new");
-    connection.draftText("Explain this element:");
-    connection.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
-    connection.showCoachCard("Tell the agent what to build.", { target: "avatar" });
-    connection.agentWorking(true);
-    connection.agentWorking(false);
-    connection.firstConversationStep(true);
-    connection.firstConversationStep(false);
-    connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
-    connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
+    live.focused();
+    live.location("/docs", "Docs");
+    live.openPath("/?chat=agent-3", "focus");
+    live.openPath("/new", "new");
+    live.startWithText("Free up space.");
+    live.askAgent("Fix this.");
+    live.draftText("Explain this element:");
+    live.showCoachCard("Your connections live here.", { chromeAnchor: "permissions" });
+    live.showCoachCard("Tell the agent what to build.", { target: "avatar" });
+    live.agentWorking(true);
+    live.agentWorking(false);
+    live.firstConversationStep(true);
+    live.firstConversationStep(false);
+    live.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
+    live.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
+      [{ type: SHELL_START_WITH_TEXT, text: "Free up space.", requestId: expect.any(String) }, "*"],
+      [{ type: SHELL_ASK_AGENT, text: "Fix this.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" }, "*"],
       [{ type: SHELL_SHOW_COACH_CARD, text: "Tell the agent what to build.", target: "avatar" }, "*"],
@@ -643,6 +658,246 @@ describe("a framed page's scripted popups", () => {
     connection.disconnect();
     connection = null;
     expect(window.open).toBe(nativeOpen);
+  });
+});
+
+describe("askAgentToFix", () => {
+  /** The task the shell was asked to give an agent. */
+  function askedText(parent: { postMessage: ReturnType<typeof vi.fn> }): string {
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.type).toBe(SHELL_ASK_AGENT);
+    return message.text as string;
+  }
+
+  it("asks the shell with a task that says what failed and carries the details as they are", () => {
+    const parent = shellFramed();
+    const details = "HTTP 502\ndocs answered the launch with 500: boom\n  at render (``` in a template)";
+    askAgentToFix(connection as ShellConnection, { whatFailed: "Docs couldn't open that", details });
+
+    const text = askedText(parent);
+    expect(text.startsWith("Imbue Studio showed the user this failure: Docs couldn't open that.\n\n")).toBe(true);
+    // Imbue Studio wrote it, so it never speaks as the user.
+    expect(text).toMatch(/tell the user what was wrong/);
+    expect(text).not.toMatch(/\b(me|my|I)\b/);
+    // The details sit whole inside a fence the backticks among them cannot close.
+    const fenced = text.match(/^(`{4,})\n([\s\S]*?)\n\1$/m);
+    expect(fenced?.[2]).toBe(details);
+  });
+
+  it("gives a failure without details as its sentence and the task alone", () => {
+    const parent = shellFramed();
+    askAgentToFix(connection as ShellConnection, { whatFailed: "This window couldn't be closed.", details: "  " });
+    const text = askedText(parent);
+    expect(text.startsWith("Imbue Studio showed the user this failure: This window couldn't be closed.\n\n")).toBe(
+      true,
+    );
+    expect(text).not.toContain("`");
+    expect(text).not.toContain("closed..");
+  });
+
+  it("ends the task with the instruction the ask names in place of the default, and says where the ask goes", () => {
+    const parent = shellFramed();
+    const instruction = "Start it again, then tell the user what was wrong.";
+    askAgentToFix(
+      connection as ShellConnection,
+      { whatFailed: "Terminal isn't running.", details: null, instruction },
+      undefined,
+      "main-chat",
+    );
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.text).toBe(`Imbue Studio showed the user this failure: Terminal isn't running.\n\n${instruction}`);
+    expect(message.delivery).toBe("main-chat");
+
+    // An ask about a notice that reports no failure leads with that.
+    askAgentToFix(connection as ShellConnection, {
+      whatFailed: "The previous version is restored.",
+      details: null,
+      instruction,
+      shown: "notice",
+    });
+    const [notice] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(notice.text).toBe(
+      `Imbue Studio showed the user this notice: The previous version is restored.\n\n${instruction}`,
+    );
+
+    // The default delivery is left off the wire.
+    askAgentToFix(connection as ShellConnection, { whatFailed: "Terminal isn't running.", details: null });
+    const [plain] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect("delivery" in plain).toBe(false);
+  });
+});
+
+describe("assistRequest", () => {
+  it("puts the assist command first, then the app and the window an ask was pressed in", () => {
+    expect(assistRequest("Fix this.")).toBe("/assist Fix this.");
+    expect(assistRequest("Fix this.", { appName: "files", appDisplayName: "Files", windowId: "win-3" })).toBe(
+      "/assist This is about the Files app (`files`, window `win-3`).\n\nFix this.",
+    );
+    expect(assistRequest("Fix this.", { appName: "files", appDisplayName: "Files", windowId: null })).toBe(
+      "/assist This is about the Files app (`files`).\n\nFix this.",
+    );
+  });
+});
+
+describe("askAgent's answer", () => {
+  /** The request id of the last ``shell:ask-agent`` the page sent. */
+  function lastRequestId(parent: { postMessage: ReturnType<typeof vi.fn> }): string {
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.type).toBe(SHELL_ASK_AGENT);
+    return message.requestId as string;
+  }
+
+  /** Whether ``promise`` has settled by the time the microtasks queued now have run. */
+  async function settledValue<T>(promise: Promise<T>): Promise<T | "pending"> {
+    return Promise.race([promise, new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0))]);
+  }
+
+  it("settles on the shell's answer to its own request, and on no other", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    const first = live.askAgent("Fix this.");
+    const firstId = lastRequestId(parent);
+    const second = live.askAgent("Fix that.");
+    const secondId = lastRequestId(parent);
+    expect(secondId).not.toBe(firstId);
+
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: firstId, isOpened: true }, {});
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: "someone-else", isOpened: true }, parent);
+    expect(await settledValue(first)).toBe("pending");
+
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isHelpOwed: false };
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: secondId, isOpened: false, failure }, parent);
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: firstId, isOpened: true }, parent);
+    expect(await first).toEqual({ isOpened: true });
+    expect(await second).toEqual({ isOpened: false, failure });
+  });
+
+  it("tells the shell a request's outcome is shown by the page only when the caller says so", () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    void live.startWithText("Add a routine: water the plants");
+    void live.askAgent("Fix this.");
+    void live.askAgent("Fix that.", { showsOutcome: true });
+    const sent = (parent.postMessage.mock.calls as [Record<string, unknown>, string][]).slice(-3).map(([m]) => m);
+    expect(sent.map((message) => "showsOutcome" in message)).toEqual([false, false, true]);
+    expect(sent[2].showsOutcome).toBe(true);
+  });
+
+  it("keeps a request pending through the same shell's handshakes, and settles it on the answer", async () => {
+    const parent = shellFramed();
+    const pending = (connection as ShellConnection).askAgent("Fix this.");
+    const requestId = lastRequestId(parent);
+    // The shell greets a page again when the embedder says it opens a bug report, a window moves, viewing changes.
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    deliver({ ...HANDSHAKE, desktopId: "work", isViewing: true }, parent);
+    expect(await settledValue(pending)).toBe("pending");
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId, isOpened: true }, parent);
+    expect(await pending).toEqual({ isOpened: true });
+  });
+
+  it("answers startWithText the same way, through shell:start-with-text-result, late answers included", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    const late: StartOutcome[] = [];
+    const asked = live.startWithText("Free up space.", {
+      showsOutcome: true,
+      onLateAnswer: (outcome) => late.push(outcome),
+    });
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message).toMatchObject({ type: SHELL_START_WITH_TEXT, text: "Free up space.", showsOutcome: true });
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    expect(await settledValue(asked)).toBe("pending");
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await asked).isOpened).toBe(false);
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400", isHelpOwed: false };
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: message.requestId, isOpened: false, failure }, parent);
+    expect(late).toEqual([{ isOpened: false, failure }]);
+
+    const second = live.startWithText("Free up space.");
+    const [again] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: again.requestId, isOpened: true }, parent);
+    expect(await second).toEqual({ isOpened: true });
+  });
+
+  it("settles a request as not answered once a shell that started again greets the page", async () => {
+    const parent = shellFramed();
+    const pending = (connection as ShellConnection).askAgent("Fix this.");
+    expect(await settledValue(pending)).toBe("pending");
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect(await pending).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
+    });
+  });
+
+  it("hands a late answer to a request already settled as not answered to its late-answer callback", async () => {
+    const parent = shellFramed();
+    const late: StartOutcome[] = [];
+    const pending = (connection as ShellConnection).askAgent("Fix this.", {
+      showsOutcome: true,
+      onLateAnswer: (outcome) => late.push(outcome),
+    });
+    const requestId = lastRequestId(parent);
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await pending).isOpened).toBe(false);
+    expect(late).toEqual([]);
+
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId, isOpened: true }, parent);
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId, isOpened: true }, parent);
+    expect(late).toEqual([{ isOpened: true }]);
+  });
+
+  it("settles a pending request as not answered once the page disconnects", async () => {
+    shellFramed();
+    const live = connection as ShellConnection;
+    const pending = live.askAgent("Fix this.");
+    expect(await settledValue(pending)).toBe("pending");
+    live.disconnect();
+    expect(await pending).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
+    });
+  });
+
+  it("settles at once as not answered, asking nothing of the shell, once the page has disconnected", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    live.disconnect();
+    const sentBefore = parent.postMessage.mock.calls.length;
+    expect(await settledValue(live.askAgent("Fix this."))).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
+    });
+    expect(parent.postMessage.mock.calls.length).toBe(sentBefore);
+  });
+
+  it("settles at once as not answered on a page no shell frames", async () => {
+    connection = connectToShell({});
+    expect(await connection.askAgent("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isHelpOwed: false },
+    });
+  });
+
+  it("is what askAgentToFix answers", async () => {
+    const parent = shellFramed();
+    const asked = askAgentToFix(connection as ShellConnection, {
+      whatFailed: "Docs couldn't open that",
+      details: null,
+    });
+    deliver({ type: SHELL_ASK_AGENT_RESULT, requestId: lastRequestId(parent), isOpened: true }, parent);
+    expect(await asked).toEqual({ isOpened: true });
+  });
+});
+
+describe("withAskFailure", () => {
+  it("adds a refused ask's failure under the page's details, labelled, and leaves the page's failure alone without one", () => {
+    const page = { message: "The terminal couldn't start.", details: null };
+    expect(withAskFailure(page, null)).toEqual(page);
+    expect(withAskFailure(page, { message: "No app in this workspace can start a chat.", details: null })).toEqual({
+      message: "The terminal couldn't start.",
+      details: "Asking an agent to fix this failed too:\nNo app in this workspace can start a chat.",
+    });
   });
 });
 

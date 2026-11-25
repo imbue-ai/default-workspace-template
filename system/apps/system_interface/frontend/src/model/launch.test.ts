@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_WINDOW_PATH_LENGTH,
+  appAskLaunchOf,
+  appAskParams,
   appChatLaunchOf,
   appChatParams,
   appLaunchesOf,
@@ -15,7 +17,7 @@ import {
   orderAppLaunches,
   textRowDisabledReason,
 } from "./launch";
-import { appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
+import { appChatLaunchPathRecord, appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
 
 const docs = appRecord("docs", {
   launcher_rank: 20,
@@ -217,5 +219,35 @@ describe("the app-chat launch", () => {
     expect(appChatLaunchOf([docs])).toBeNull();
     expect(appChatParams(aboutAnApp, docs)).toEqual({ app: "docs", app_display_name: "Docs" });
     expect(appChatParams(launchPathRecord(), docs)).toEqual({});
+  });
+
+  it("runs an ask through the first path about an app that also takes text, which still lists as no row", () => {
+    const chatAboutAnApp = appChatLaunchPathRecord();
+    const chat = appRecord("chat", {
+      launcher_rank: 20,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), chatAboutAnApp],
+    });
+    // Ahead of the chat in launcher order, but its path takes no text: the button's, never an ask's.
+    const notes = appRecord("notes", {
+      launcher_rank: 10,
+      launch_paths: [
+        launchPathRecord({ id: "about", params: ["a", "d"], app_params: { name: "a", display_name: "d" } }),
+      ],
+    });
+    const docs = appRecord("docs", { display_name: "Docs" });
+    const named = (launch: ReturnType<typeof appAskLaunchOf>): string | null =>
+      launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`;
+
+    expect(named(appChatLaunchOf([notes, chat]))).toBe("notes:about");
+    expect(named(appAskLaunchOf([notes, chat]))).toBe("chat:app-chat");
+    expect(appAskLaunchOf([notes])).toBeNull();
+    expect(appAskParams(chatAboutAnApp, docs, "Fix this.")).toEqual({
+      app: "docs",
+      app_display_name: "Docs",
+      message: "Fix this.",
+    });
+    // Its text_param makes it neither a launcher row nor a free-text row.
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
+    expect(freeTextRowsOf([notes, chat])).toEqual([]);
   });
 });

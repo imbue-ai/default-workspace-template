@@ -5,6 +5,9 @@
  * (a status, the server's own text) behind "See details" rather than on the visible line.
  */
 
+import { CHANGE_NOT_ANSWERED_SENTENCE } from "../app_contract";
+import type { ShownFailure } from "../app_contract";
+
 /** Whether a failed request only read something (nothing it did can have changed) or asked for a change, which an
  *  unanswered request may have carried out anyway. */
 export type RequestKind = "read" | "change";
@@ -50,25 +53,14 @@ interface FailureFields {
   readonly body: Readonly<Record<string, unknown>> | null;
 }
 
-/** A failure as a surface shows it: its sentence, what goes behind "See details" (null when nothing), and whether it
- *  owes the person more help than its own words give. */
-export interface FailureMessage {
-  readonly message: string;
-  readonly details: string | null;
-  /** False where trying again is the whole remedy (nothing answered), where the server refused by a rule of its own
-   *  and wrote no sentence about it (a 4xx with a reason), and where it called its refusal routine. A surface keeps
-   *  a failure that owes help on screen. */
-  readonly isHelpOwed: boolean;
-}
+/** A failure as a surface shows it. */
+export type FailureMessage = ShownFailure;
 
 /** What Imbue Studio's forward proxy and the workspace's own front door answer when the server behind them did not.
  *  Neither tells whether the request reached the server first. */
 const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 const READ_NOT_ANSWERED = "The workspace didn't answer. Try again in a moment.";
-// Never "nothing was changed": a gateway status can arrive after the request was carried out, and a connection that
-// dropped after the request was sent looks the same as one that never opened.
-const CHANGE_NOT_ANSWERED = "The workspace didn't answer. This may not have gone through.";
 
 /** What failed, for a surface that has not said in its own words yet. */
 export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
@@ -83,11 +75,11 @@ const RAW_BODY_LIMIT = 2000;
 
 /** The sentence for a request nothing answered (a gateway status, a dropped connection, a timeout). */
 export function notAnsweredSentence(kind: RequestKind): string {
-  return kind === "read" ? READ_NOT_ANSWERED : CHANGE_NOT_ANSWERED;
+  return kind === "read" ? READ_NOT_ANSWERED : CHANGE_NOT_ANSWERED_SENTENCE;
 }
 
 /** The fallback for a failure with no explanation of its own: what failed, then to try again. */
-function fallbackSentence(whatFailed: string): string {
+export function fallbackSentence(whatFailed: string): string {
   return `${whatFailed}. ${TRY_AGAIN_ENDING}`;
 }
 

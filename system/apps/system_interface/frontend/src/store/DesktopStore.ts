@@ -27,13 +27,19 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { DEFAULT_WHAT_FAILED, failureSentence } from "@imbue/workspace-ui/src/models/failure";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import type { AskDelivery, AskOrigin } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
+  ASK_NOT_DRAFTED_REASON,
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appAskLaunchOf,
+  appAskParams,
   appChatLaunchOf,
   appChatParams,
   appShortcutsOf,
@@ -424,6 +430,9 @@ const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_reattached",
 ]);
 
+/** Where a launch's failure goes instead of a toast: the caller shows it where the press was. */
+type LaunchFailureSink = (failure: FailureMessage) => void;
+
 export interface StoreDependencies {
   readonly clientId: string;
   readonly api: DesktopApi;
@@ -708,9 +717,22 @@ export class DesktopStore {
   private toastFailure(
     whatFailed: string,
     error: unknown,
+    options: { readonly isLasting: boolean; readonly causedBy?: string },
+  ): void {
+    this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
+  }
+
+  /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
+   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
+  showStartFailure(failure: FailureMessage): void {
+    this.showFailure(failure, { isLasting: failure.details !== null || failure.isHelpOwed });
+  }
+
+  /** ``toastFailure`` for a failure already worded. */
+  private showFailure(
+    told: FailureMessage,
     { isLasting, causedBy }: { readonly isLasting: boolean; readonly causedBy?: string },
   ): void {
-    const told = failureSentence(describeRequestFailure(error), whatFailed);
     if (!isLasting && !told.isHelpOwed) {
       this.toasts.show(told.message, { isLasting: false, details: told.details });
       return;
@@ -1858,7 +1880,14 @@ export class DesktopStore {
   async openAgentChat(): Promise<boolean> {
     if (this.refuseWhileViewing("show the agent's chat")) return false;
     const pinned = avatarPinnedEntryOf(this.state);
-    if (pinned === null) return this.startWithText("");
+    if (pinned === null) {
+      const [primary] = freeTextRowsOf(openableApps(this.state));
+      if (primary === undefined) {
+        this.toast(NO_TEXT_APP_REASON);
+        return false;
+      }
+      return this.runFreeText(primary.app.name, primary.launchPath.id, "");
+    }
     this.showWindow(pinned.window.id);
     return true;
   }
@@ -2847,16 +2876,27 @@ export class DesktopStore {
    *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
    *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
    *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
-   *  path bound) or the shell refused, each told to the user. */
-  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
+   *  path bound) or the shell refused, each toasted or, given ``onFailure``, handed to it to show. */
+  async runFreeText(
+    appName: string,
+    launchId: string,
+    text: string,
+    onFailure: LaunchFailureSink | null = null,
+  ): Promise<boolean> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return false;
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
-      this.toast(disabledReason);
+      if (onFailure === null) this.toast(disabledReason);
+      else onFailure({ message: `${disabledReason}.`, details: null, isHelpOwed: false });
       return false;
     }
-    return this.launchPinnedFirst(found.app.name, found.launchPath.id, freeTextParams(found.launchPath, text));
+    return this.launchPinnedFirst(
+      found.app.name,
+      found.launchPath.id,
+      freeTextParams(found.launchPath, text),
+      onFailure,
+    );
   }
 
   /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
@@ -2865,14 +2905,21 @@ export class DesktopStore {
     appName: string,
     launchId: string,
     params: Record<string, string>,
+    onFailure: LaunchFailureSink | null = null,
   ): Promise<boolean> {
     const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
-      const launched = await this.launchAt(appName, launchId, params, { kind: "window", windowId: pinned.id });
+      const launched = await this.launchAt(
+        appName,
+        launchId,
+        params,
+        { kind: "window", windowId: pinned.id },
+        onFailure,
+      );
       this.restoreWindow(pinned.id);
       return launched !== null;
     }
-    return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" }, onFailure)) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
@@ -2887,15 +2934,88 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
-   *  with no free-text row on the machine the user is told. */
-  async startWithText(text: string): Promise<boolean> {
-    const [primary] = freeTextRowsOf(openableApps(this.state));
-    if (primary === undefined) {
-      this.toast(NO_TEXT_APP_REASON);
-      return false;
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and where an ask goes that has no chat about
+   *  an app to take it: the primary text action runs with the text (the main chat on a stock machine). Settles once
+   *  the window is on the desktop, or with the failure for the caller to show where the press was: nothing is
+   *  toasted. */
+  async startWithText(text: string): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const [row] = freeTextRowsOf(openableApps(this.state));
+    if (row === undefined) {
+      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isHelpOwed: false } };
     }
-    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
+    return this.startOutcomeOf(row.app, (onFailure) =>
+      this.runFreeText(row.app.name, row.launchPath.id, text, onFailure),
+    );
+  }
+
+  /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
+   *  an ask of the shell's own). The one place an ask becomes the message an agent reads: the assist command and
+   *  the app and window it came from go in front of ``text`` (``assistRequest``). It is sent to the chat about that
+   *  window's app, through the first launch path of the machine about an app that takes text (``appAskLaunchOf``),
+   *  whose page is put on screen by the show rule and laid out beside the window, as "Chat about this app" lays it
+   *  out. With no such
+   *  window, a window of an internal app, no such launch path, or the ``main-chat`` delivery, the primary text action
+   *  runs with it instead; the ``draft`` delivery leaves it unsent in a chat's message box. Settles as
+   *  ``startWithText`` does. */
+  async askAgent(text: string, windowId: string | null, delivery: AskDelivery = "app-chat"): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const asking = windowId === null ? null : findWindow(this.state, windowId);
+    const about = asking === null ? undefined : appByName(this.state, asking.window.app);
+    const origin: AskOrigin | null =
+      asking === null || about === undefined
+        ? null
+        : { appName: about.name, appDisplayName: about.display_name, windowId: asking.window.id };
+    const message = assistRequest(text, origin);
+    if (delivery === "draft") {
+      // ``draftText`` tells a draft that could not be made itself.
+      if (await this.draftText(message)) return { isOpened: true };
+      return { isOpened: false, failure: { message: `${ASK_NOT_DRAFTED_REASON}.`, details: null, isHelpOwed: false } };
+    }
+    const launch =
+      delivery === "main-chat" || about === undefined || about.internal
+        ? null
+        : appAskLaunchOf(openableApps(this.state));
+    if (asking === null || about === undefined || launch === null) return this.startWithText(message);
+    const params = appAskParams(launch.launchPath, about, message);
+    return this.startOutcomeOf(launch.app, async (onFailure) => {
+      const target: LaunchTarget = { kind: "show", besideWindowId: asking.window.id };
+      return (await this.launchAt(launch.app.name, launch.launchPath.id, params, target, onFailure)) !== null;
+    });
+  }
+
+  /** The refusal a start gets while this client views somebody else's desktop, for the caller to show; null on a
+   *  desktop of its own. Read before anything launches, since a refused launch toasts. */
+  private startRefusalWhileViewing(): StartOutcome | null {
+    if (this.viewedDesktop() === null) return null;
+    console.info("[si] refused to start a chat while viewing somebody else's desktop");
+    return {
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isHelpOwed: false },
+    };
+  }
+
+  /** How ``launch`` went, as a start answers it: opened, or the failure the launch handed its sink, else the
+   *  fallback that names ``app``, the app the launch ran. */
+  private async startOutcomeOf(
+    app: AppRecord,
+    launch: (onFailure: LaunchFailureSink) => Promise<boolean>,
+  ): Promise<StartOutcome> {
+    let failure: FailureMessage | null = null;
+    const isOpened = await launch((told) => {
+      failure = told;
+    });
+    if (isOpened) return { isOpened: true };
+    return {
+      isOpened: false,
+      failure: failure ?? {
+        message: fallbackSentence(`${app.display_name} couldn't open that`),
+        details: null,
+        isHelpOwed: true,
+      },
+    };
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight
@@ -2947,12 +3067,14 @@ export class DesktopStore {
    *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
    *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
    *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
-   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused, told to the user in a
+   *  toast or, given ``onFailure``, handed to it to show. */
   async launchAt(
     app: string,
     launchId: string,
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
+    onFailure: LaunchFailureSink | null = null,
   ): Promise<string | null> {
     if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
@@ -2978,12 +3100,14 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
+      const told = failureSentence(
+        describeRequestFailure(error),
+        `${appDisplayName(this.state, app)} couldn't open that`,
+      );
       // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
       // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
-      this.toastFailure(`${appDisplayName(this.state, app)} couldn't open that`, error, {
-        isLasting: true,
-        causedBy: app,
-      });
+      if (onFailure === null) this.showFailure(told, { isLasting: true, causedBy: app });
+      else onFailure(told);
       return null;
     }
     if (target.kind === "window") {

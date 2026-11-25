@@ -714,6 +714,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [param.name for param in by_name["chat"].launch_paths[6].params] == [
         "app",
         "app_display_name",
+        "message",
     ]
     # The intake's presets (post-launch-paths plan section 3.5): how each launch path chooses the receiving chat.
     assert by_name["chat"].launch_paths[0].presets == {}
@@ -729,7 +730,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "target": "lounge",
         "is_draft": "true",
     }
-    # A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat about the named app.
+    # A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat about the named app, which a
+    # page's ask (``shell:ask-agent``) sends its text to through the path's text param.
     assert by_name["chat"].launch_paths[6].presets == {"target": "app_chat"}
     app_params = by_name["chat"].launch_paths[6].app_params
     assert app_params is not None
@@ -738,7 +740,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # launcher's Enter) sends the typed text to the main chat, its ``new`` takes it as a new chat's first message,
     # its ``send`` as a message to an existing chat, and its ``draft`` as text for a composer; the ``lounge`` path
     # declares the mention param alone (the multiplayer spec, section 7.5), the ``app-chat`` path the app params
-    # alone (section 9.2), and nothing else declares a text, draft, mention, or app param.
+    # (section 9.2) with the text param an ask fills, and nothing else declares a text, draft, mention, or app param.
     assert by_name["chat"].launch_paths[0].text_param is None
     assert by_name["chat"].launch_paths[1].text_param == "message"
     assert by_name["chat"].launch_paths[2].text_param == "message"
@@ -754,7 +756,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["chat"].launch_paths[6].mention_param is None
     assert [entry.text_param for entry in by_name["chat"].launch_paths[5:]] == [
         None,
-        None,
+        "message",
     ]
     assert [entry.draft_param for entry in by_name["chat"].launch_paths[5:]] == [
         None,

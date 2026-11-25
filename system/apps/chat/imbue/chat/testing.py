@@ -1498,6 +1498,23 @@ def seed_failed_chat(
     return proto
 
 
+def seed_creating_chat(
+    agent_manager: AgentManager, chat_id: ChatId, name: str, labels: Mapping[str, str] | None = None
+) -> ProvisionalChat:
+    """Plant a provisional chat whose create is still running, as the manager holds one from the moment a create is
+    accepted until its agent is listed."""
+    proto = ProvisionalChat(
+        chat_id=chat_id,
+        name=name,
+        account_id="acct-1",
+        labels=dict(labels or {}),
+        phase=ProvisionalChatPhase.CREATING,
+    )
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = proto
+    return proto
+
+
 def get_json(url: str) -> Any:
     """GET ``url`` and decode its JSON body, for assertions against a served app's API."""
     with urllib.request.urlopen(url, timeout=5) as response:
@@ -1598,7 +1615,7 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # the POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
     # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
@@ -1623,9 +1640,9 @@ def running_workspace(
                 "send": ("message",),
                 "draft": ("message",),
                 "lounge": ("message",),
-                "app-chat": ("app", "app_display_name"),
+                "app-chat": ("app", "app_display_name", "message"),
             },
-            launch_text_params={"main": "message", "new": "message", "send": "message"},
+            launch_text_params={"main": "message", "new": "message", "send": "message", "app-chat": "message"},
             launch_draft_params={"draft": "message"},
             launch_mention_params={"lounge": "message"},
             launch_app_params={"app-chat": ("app", "app_display_name")},

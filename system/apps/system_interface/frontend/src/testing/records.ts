@@ -1,6 +1,7 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it (and one shaped like the
- * chat's manifest), a desktop, a shortcut, a window, a placement, a launch path, a client record, a layout,
+ * chat's manifest), a desktop, a shortcut, a window, a placement, a launch path (and the one about an app), a
+ * client record, a layout,
  * the avatar state, the theme metrics, a connected user, and the update notice as the shell sends it.
  * Each takes overrides so a test spells only what it is about.
  */
@@ -120,6 +121,22 @@ export function chatLikeAppRecord(name: string, overrides: Partial<AppRecord> = 
         draft_param: "message",
       }),
     ],
+    ...overrides,
+  });
+}
+
+/** A POST launch path shaped like the chat manifest's ``app-chat``: about an app, which a window's "Chat about this
+ *  app" runs with no text and a page's ``shell:ask-agent`` runs with the ask's text as ``message``. */
+export function appChatLaunchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
+  return launchPathRecord({
+    id: "app-chat",
+    label: "Chat about this app",
+    path: "/api/chats/intake",
+    method: "POST",
+    params: ["app", "app_display_name", "message"],
+    presets: { target: "app_chat" },
+    text_param: "message",
+    app_params: { name: "app", display_name: "app_display_name" },
     ...overrides,
   });
 }
