@@ -73,7 +73,7 @@ Before declaring anything complete, exercise it as a real user would, with real 
 
 Formal tests are the background harden pass's job (`crystallize-creation`, `update-creation`), unless the user asked for them. But **a change to code a harden pass already covered extends its tests in the same commit**: code a change leaves untested is a regression even when it works.
 
-Once a change is committed and on the user's screen, start its test gate last and reply without waiting: run what `uv run --no-sync app-manifest select-tests --diff-base <the commit before the change>` prints through `run_in_background.py`, never in the foreground, even for a change a harden worker will take later. What it finds is a follow-up fix. Test marks and suite flags: `.agents/shared/references/web-frontend-testing.md`.
+A worker runs its test gate as its own guide says. A chat, once a change is committed and on the user's screen, starts the gate last and replies without waiting: run what `uv run --no-sync app-manifest select-tests --diff-base <the commit before the change>` prints through `run_in_background.py`, never in the foreground, even for a change a harden worker will take later. It checks the change against the tests it already has, and what it finds is a follow-up fix. Test marks and suite flags: `.agents/shared/references/web-frontend-testing.md`.
 
 # Communication
 
