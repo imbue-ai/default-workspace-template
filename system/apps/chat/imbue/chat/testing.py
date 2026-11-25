@@ -1360,6 +1360,16 @@ def codex_image_generation_rollout_lines() -> list[dict[str, Any]]:
     ]
 
 
+def write_codex_rollout(agent_state_dir: Path, lines: Sequence[Mapping[str, Any]]) -> Path:
+    """Write a codex rollout plus the ``codex_transcript_path`` marker naming it, exactly as a live agent would."""
+    sessions_dir = agent_state_dir / "plugin" / "codex" / "home" / "sessions" / "2026" / "08" / "03"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    rollout = sessions_dir / "rollout-2026-08-03T00-00-00-test.jsonl"
+    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    (agent_state_dir / "codex_transcript_path").write_text(str(rollout), encoding="utf-8")
+    return rollout
+
+
 def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point mngr's config loader at a project settings file holding ``settings``, with a host dir under tmp_path."""
     config_dir = tmp_path / ".mngr"

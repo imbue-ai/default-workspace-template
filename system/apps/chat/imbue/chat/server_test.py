@@ -178,6 +178,7 @@ from imbue.chat.testing import serve_app
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import write_codex_rollout
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
@@ -798,12 +799,9 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
 
 def test_event_image_route_serves_a_codex_generated_image_and_404s(client: FlaskClient, app: Flask) -> None:
     """The bytes behind a tool result's ``image_count``: inline, as a download, and 404 past the end."""
-    state_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / "agent-456"
-    sessions_dir = state_dir / "plugin" / "codex" / "home" / "sessions" / "2026" / "11" / "25"
-    sessions_dir.mkdir(parents=True)
-    rollout = sessions_dir / "rollout-2026-11-25T00-00-00-test.jsonl"
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in codex_image_generation_rollout_lines()))
-    (state_dir / "codex_transcript_path").write_text(str(rollout))
+    write_codex_rollout(
+        Path(os.environ["MNGR_HOST_DIR"]) / "agents" / "agent-456", codex_image_generation_rollout_lines()
+    )
     seed_agent_state(state_of(app).agent_manager, "agent-456", name="codex-agent", harness=HarnessType.CODEX)
 
     events = client.get("/api/chats/agent-456/events").get_json()["events"]
