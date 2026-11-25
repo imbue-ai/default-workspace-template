@@ -34,6 +34,7 @@ from playwright.sync_api import (
 from terminal_app.dispatch import (
     ENDED_MISSING_FOLDER,
     ENDED_NOT_STARTED,
+    ENDED_WITH_ERROR,
     load_ttyd_web_client,
 )
 from terminal_app.errors import TerminalAppError, TerminalStoreError, TmuxCommandError
@@ -235,6 +236,74 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_and_an_age
     expect(wrapper.locator("#pty")).to_be_visible()
 
 
+def test_a_terminal_that_closed_with_an_error_offers_a_new_terminal_and_an_agent_then_a_draft_and_a_bug_report_once_refused(
+    desktop_context: BrowserContext,
+) -> None:
+    launched = _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
+    page, wrapper, pty = _open(desktop_context)
+
+    _print_end(pty, ENDED_WITH_ERROR, "lost server")
+
+    ended = wrapper.locator("#ended")
+    expect(ended.locator("#ended-message")).to_have_text("This terminal closed.")
+    # The surface's own way out leads, then the agent; no Report a bug stands beside it.
+    expect(ended.locator("button:visible")).to_have_text(
+        ["Start a new terminal", "Ask an agent to fix this"]
+    )
+
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:ask-agent')"
+    )
+    [asked] = shell_messages(page, "shell:ask-agent")
+    assert asked["showsOutcome"] is True
+    task = str(asked["text"])
+    assert task.startswith(
+        "Imbue Studio showed the user this failure: The terminal terminal-1 closed with an error.\n\n"
+    )
+    assert "\n\nDetails:\n```\nlost server\n```" in task
+    _expect_asking_then_told_why(page, ended)
+
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+    page.wait_for_function(
+        "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 2"
+    )
+    answer_ask_agent(
+        page,
+        {
+            "isOpened": False,
+            "failure": {
+                "message": "Chat couldn't open that.",
+                "details": "HTTP 500",
+                "isHelpOwed": True,
+            },
+        },
+    )
+    told = ended.get_by_role("alert")
+    expect(told.locator("button:visible")).to_have_text(
+        ["Draft it in a chat", "Report a bug"]
+    )
+    told.get_by_role("button", name="Draft it in a chat").click()
+    page.wait_for_function(
+        "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 3"
+    )
+    drafted = shell_messages(page, "shell:ask-agent")[-1]
+    assert (drafted["text"], drafted["delivery"]) == (task, "draft")
+    told.get_by_role("button", name="Report a bug").click()
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:report-bug')"
+    )
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert reported["message"] == "This terminal closed."
+    assert reported["details"] == (
+        "lost server\n\nAsking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 500"
+    )
+
+    ended.get_by_role("button", name="Start a new terminal").click()
+    expect(ended).to_be_hidden()
+    assert launched == ["POST"]
+
+
 def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_same_window(
     desktop_context: BrowserContext,
 ) -> None:
@@ -314,7 +383,9 @@ def test_an_unknown_kind_from_the_pty_reads_as_a_terminal_that_closed(
 
     ended = wrapper.locator("#ended")
     expect(ended.locator("#ended-message")).to_have_text("This terminal closed.")
-    expect(ended.get_by_role("button", name="Start a new terminal")).to_be_visible()
+    expect(ended.locator("button:visible")).to_have_text(
+        ["Start a new terminal", "Ask an agent to fix this"]
+    )
 
 
 def _expect_asking_then_told_why(page: Page, surface: Locator) -> None:

@@ -74,9 +74,11 @@ running one of this package's entry points from the workspace venv
   to ttyd's page posts it to the wrapper as `{type: "terminal:ended", kind, detail}`,
   and the wrapper shows the reason in place of ttyd's "Connection Closed", with Try
   again and "Ask an agent to fix this" (the contract's `askAgentToFix`, with tmux's
-  text) for a terminal that could not start, or Start a new terminal (a `POST /new`
+  text) for a terminal that could not start, Start a new terminal (a `POST /new`
   from the page, then the window moves to it, with "Ask an agent to fix this" if that
-  fails) for one that closed, and tmux's text behind "See details"; a refused ask
+  fails) and "Ask an agent to fix this" for one tmux ended with an error (and for a
+  kind the wrapper does not know), Start a new terminal alone for one whose folder
+  is gone, and tmux's text behind "See details"; a refused ask
   brings "Draft it in a chat" and "Report a bug" as on the failure page above. The user's
   own exit prints nothing, so ttyd's overlay, which reconnects, stays its answer.
   `terminal-pty` decompresses the OSC 52-capable

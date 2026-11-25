@@ -265,7 +265,13 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   };
   const ENDINGS = {
     "__ENDED_NOT_STARTED__": NOT_STARTED,
-    "__ENDED_WITH_ERROR__": { message: "This terminal closed.", cause: "", actions: ["new"], isHelpOwed: false },
+    "__ENDED_WITH_ERROR__": {
+      message: "This terminal closed.",
+      cause: "",
+      actions: ["new"],
+      isHelpOwed: true,
+      whatFailed: () => `The terminal ${current} closed with an error`,
+    },
     "__ENDED_MISSING_FOLDER__": {
       message: "This terminal closed.",
       cause: "This terminal's folder no longer exists, so it can't open.",
