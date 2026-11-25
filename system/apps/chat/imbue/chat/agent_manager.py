@@ -6196,7 +6196,7 @@ class AgentManager:
                 "Stopping agent {}: its chat has moved on from it, but it is still running", agent_info.name
             )
             self.stop_agent_process(agent_info)
-        except AgentStopError as e:
+        except (AgentStopError, OSError) as e:
             _loguru_logger.warning("Could not stop retired agent {}: {}", agent_id, e)
         finally:
             with self._lock:
