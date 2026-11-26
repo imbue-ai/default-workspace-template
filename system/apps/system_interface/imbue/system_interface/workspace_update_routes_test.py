@@ -242,6 +242,43 @@ def test_a_version_that_is_not_valid_unicode_is_refused_and_arms_nothing(
     assert not (staged_update_workspace.live_cron_dir / DISPATCHER_CRON_NAME).exists()
 
 
+# ``1e999`` is how JSON itself spells a number too large to be finite; ``NaN`` is what Python's parser also takes.
+@pytest.mark.parametrize("time_as_sent", ["1e999", "NaN", "true", '"200.0"'])
+@pytest.mark.parametrize(
+    ("route", "body_template", "state_file"),
+    [
+        (UPDATE_SKIP_ROUTE, '{"target_ref": "minds-v0.11.0", "skipped_at": %s}', "skipped-target.json"),
+        (UPDATE_DISMISSALS_ROUTE, '{"note_run_started_at": %s}', "dismissals.json"),
+        (UPDATE_DISMISSALS_ROUTE, '{"outcome_run_started_at": %s}', "dismissals.json"),
+    ],
+)
+def test_a_time_that_is_not_a_finite_number_is_refused_and_records_nothing(
+    update_workspace_app: Flask,
+    staged_update_workspace: StagedUpdateWorkspace,
+    route: str,
+    body_template: str,
+    state_file: str,
+    time_as_sent: str,
+) -> None:
+    refused = _client(update_workspace_app).post(
+        route, data=body_template % time_as_sent, content_type="application/json"
+    )
+
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == "INVALID_REQUEST"
+    assert staged_update_workspace.read_state(state_file) is None
+
+
+def test_a_time_sent_as_a_whole_number_is_taken(update_workspace_app: Flask) -> None:
+    client = _client(update_workspace_app)
+
+    skipped = client.post(UPDATE_SKIP_ROUTE, json={"target_ref": "minds-v0.11.0", "skipped_at": 200})
+    dismissed = client.post(UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": 200})
+
+    assert skipped.get_json()["skipped_target"]["skipped_at"] == 200.0
+    assert dismissed.get_json()["dismissals"]["note_run_started_at"] == 200.0
+
+
 @pytest.mark.parametrize(
     ("method", "route", "body"),
     [

@@ -14,6 +14,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
 from pydantic import StrictBool
+from pydantic import StrictFloat
 from pydantic import StrictInt
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -262,19 +263,24 @@ class UpdateSkipRequest(FrozenModel):
     """The version the user chose to skip for this workspace."""
 
     target_ref: str = Field(min_length=1, description="The version skipped")
-    skipped_at: float = Field(
-        description="When the user chose it, seconds since the epoch; of two skips the later is kept"
+    skipped_at: StrictFloat = Field(
+        allow_inf_nan=False,
+        description="When the user chose it, seconds since the epoch; of two skips the later is kept",
     )
 
 
 class UpdateDismissalsRequest(FrozenModel):
     """Which run's note or outcome the user dismissed, by the run's start."""
 
-    note_run_started_at: float | None = Field(
-        default=None, description="The start of the run whose note was dismissed, seconds since the epoch"
+    note_run_started_at: StrictFloat | None = Field(
+        default=None,
+        allow_inf_nan=False,
+        description="The start of the run whose note was dismissed, seconds since the epoch",
     )
-    outcome_run_started_at: float | None = Field(
-        default=None, description="The start of the run whose outcome was dismissed, seconds since the epoch"
+    outcome_run_started_at: StrictFloat | None = Field(
+        default=None,
+        allow_inf_nan=False,
+        description="The start of the run whose outcome was dismissed, seconds since the epoch",
     )
 
 
