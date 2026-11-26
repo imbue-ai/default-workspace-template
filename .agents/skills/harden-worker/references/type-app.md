@@ -12,6 +12,7 @@ run and test a web frontend in isolation, see
 - Where the source lives
 - Running and testing
 - Working in isolation
+- Stored data that changes shape
 - Phone and sharing checks
 - Critical apps
 
@@ -36,7 +37,8 @@ record.
   `test_<package>_ratchets.py`. This is the first entry of the scope file's
   `primary`; an app with a record also lists its record and its skill links
   there.
-- A skill the app owns lives at `system/apps/<package>/skills/<skill>/` and is
+- A skill the app carries (one it took in when it was published, or was
+  installed with) lives at `system/apps/<package>/skills/<skill>/` and is
   part of the app by where it is: it is in the app's footprint because it is
   in the app's directory, with nothing to declare. Harden it in the app's
   pass, never as a creation of its own. `.agents/skills/<skill>` is a link to
@@ -46,11 +48,11 @@ record.
   reports the link as one path, never a change through it. `skill:<skill>`
   resolves through the link to the app, so a pass names the app once, as
   `app:<name>`, and one that names both is refused as one creation named
-  twice. A skill you add to the app goes in the same place; run
-  `uv run --no-sync app-install regenerate <name>` to have its link written,
-  and commit the link with the skill. The app's
+  twice. Never add a skill there yourself: a skill you build for the app is
+  made under `.agents/skills/` and registered as a reference (below), and
+  publishing the app is what moves it in. The app's
   routines (`routines/`) and environment units (`env.d/`) live in its
-  directory the same way.
+  directory.
 - The app's program entry at `system/supervisord.conf.d/<name>.conf` -- you
   do not touch it. For an app with a record it is generated from `app.toml`
   and the record: change the manifest and run `uv run --no-sync app-install
@@ -136,6 +138,16 @@ App specifics:
 
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout
 open` / `refresh` / `list` against the served tree.
+
+## Stored data that changes shape
+
+When the pass changes the shape of what the app stores under
+`data/.apps/<name>/` (a renamed field, a file split in two, a new required
+key), the app brings older data forward itself when it starts, before it
+serves a request, and a test covers the conversion. Never convert the data by
+hand and leave the app unable to read the old shape: a published app is
+updated in workspaces where its data outlives its code, and nobody there
+knows what the old shape was.
 
 ## Phone and sharing checks
 

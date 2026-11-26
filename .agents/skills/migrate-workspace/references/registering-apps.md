@@ -50,9 +50,9 @@ uv run --no-sync app-install migrate <package> --dry-run
 uv run --no-sync app-install migrate <package>
 ```
 
-`migrated` moved the skills and routines the app owns into its directory,
-wrote its record with the port its program file registered, and replaced that
-file with the generated one. `unconverted` changed nothing and lists why
+`migrated` moved the app's routines into its directory, wrote its record with
+the port its program file registered and what its manifest named under
+`[[references]]`, and replaced that file with the generated one. `unconverted` changed nothing and lists why
 under `problems`:
 
 - a name the app shares with something already here: a collision the lead

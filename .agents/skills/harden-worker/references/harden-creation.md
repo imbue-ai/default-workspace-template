@@ -89,9 +89,8 @@ the lead runs before merging reads the same footprints
 (`.agents/shared/references/harden-contention.md`). Regenerate the file
 whenever a footprint moves under you -- when you register a reference (a
 `[[references]]` entry in a built-in app's manifest, or
-`app-install reference add` for an app with a record), when you add a skill
-to an app's own `skills/`, or when you add a supervisord section -- and once
-more immediately
+`app-install reference add` for an app with a record), or when you add a
+supervisord section -- and once more immediately
 before your final report, after committing everything, so the `diff` it carries
 includes every commit you made (the diff reads commits only; an uncommitted
 edit is invisible to it).

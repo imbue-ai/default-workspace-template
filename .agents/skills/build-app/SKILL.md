@@ -192,10 +192,10 @@ one.
   document.
 - `.agents/shared/references/apps/code.md` has the other rules: state under
   `DATA_DIR`, the content-security policy, a "view raw" control on derived
-  data, finding another app by name, data migrations, calling Claude.
+  data, using another app, calling Claude.
 - `.agents/shared/references/apps/manifest.md` says when an app that works
-  between requests needs `stop_when_no_windows = false`, where its skills,
-  routines and environment units go, and how it runs.
+  between requests needs `stop_when_no_windows = false`, what goes in the
+  app's directory, what is recorded as a reference, and how it runs.
 
 **The mock frame stays until the app is really hooked up.** Confirming the mock
 does not take it down. The app stays framed while any of it is not real, above

@@ -49,20 +49,7 @@ space-separated: `app:<registered name>`, `skill:<directory>`,
 script or reference (e.g. `skill:migrate-config`, or `app:roadmap
 skill:sync-roadmap`). Use `$SLUG` for the pass: the creation's own name when
 there is one, otherwise a short kebab-case name for the failure
-(`roadmap-sync`).
-
-A skill an app carries is part of that app, not a creation of its own: its
-`.agents/skills/<name>` entry is a link into the app's own directory
-(`system/apps/<package>/skills/<name>/`). Name the app, `app:<registered
-name>`. `skill:<name>` for such a skill resolves through the link to the app,
-and a pass that names both is refused as one creation named twice.
-
-A failure in a skill an app carries is therefore healed as the app's. When
-the root cause is something outside an app that uses it without the app's
-record saying so, the worker records it with `app-install reference add` as
-part of the fix.
-
-Then:
+(`roadmap-sync`). Then:
 
 - Worker agent name and branch: `heal-$SLUG` / `mngr/heal-$SLUG`
 - Runtime dir / task file: `data/.tasks/harden/heal-$SLUG/` /

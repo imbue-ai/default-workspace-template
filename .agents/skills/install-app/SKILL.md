@@ -152,10 +152,19 @@ app was already installed).
    A `Secret declined:` message leaves the app unstarted; say so, and why.
 3. **A model.** When `needs.llm` is present, the app calls a model. Follow the
    `use-ai-integration` skill to give it what its `method` needs.
-4. **Other apps.** `needs.missing_dependencies` names apps this one expects to
-   find here. Nothing installs them for you. Tell the user which are missing;
-   when the app's manifest gives one a `repo_url` under `[[dependencies]]`,
-   offer to install it the same way.
+4. **Other apps, and the data they collect.** `needs.missing_dependencies`
+   names apps this one expects to find here, usually because they collect or
+   process the data it shows. Nothing installs them for you, and getting the
+   data to flow, so that every app here works, is yours to work out:
+   - offer to install a missing one that has a `repo_url` under
+     `[[dependencies]]`, the same way, and set it up before this app;
+   - one with no `repo_url` is built in or was never published: the app's
+     `[[adaptation]]` notes and its README say what it needs from it;
+   - when an app already here collects the same data, have one of them
+     collect it and the other ask that one (an ordinary change, the
+     `update-app` skill) rather than run the same collection twice.
+
+   Tell the user what you set up and what is still missing.
 5. **System packages.** `needs.unresolved_environment` lists what could not be
    installed, with the reason. An apt package that does not exist at this
    workspace's pinned snapshot can be reached with

@@ -29,19 +29,6 @@ Crystallize creates one of:
   lead with `type=skill` and a `source_artifacts_dir` of staged scripts +
   `sample.json`.
 
-**A skill that exists only to drive one app the workspace built or installed
-belongs to that app.** It is written into the app's own directory
-(`system/apps/<package>/skills/<name>/`), where it is part of the app's
-footprint and goes wherever the app goes, and
-`uv run --no-sync app-install regenerate <app>` writes the
-`.agents/skills/<name>` link it is found by. Such a skill is not crystallized
-as a creation of its own: it is a change to the app, so hand it to
-`update-creation` as `app:<app name>`. Crystallize a standalone skill here
-when it is useful without the app or spans several; when it calls an app,
-say which in the task body, and the worker records that in the app's record
-with `app-install reference add <app> .agents/skills/<name>`, so a later
-change to the app reaches the skill.
-
 The type drives two things: which **gates** the worker emits (skill →
 `outline-approval` then `final-creation`; app → none, since the user
 confirmed the live site already) and the **go-live** step after merge (skill →

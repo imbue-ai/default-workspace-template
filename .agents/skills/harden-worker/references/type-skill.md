@@ -63,10 +63,12 @@ SKILL.md.
 
 ## Skills an app owns
 
-A skill that exists only as part of one app lives in that app's directory, at
+A skill an app carries lives in that app's directory, at
 `system/apps/<package>/skills/<name>/`, and `.agents/skills/<name>` is a link
-to it that `app-install` generates. Such a skill is part of the app, not a
-creation of its own:
+to it that `app-install` generates. An app comes to carry a skill when it is
+published, which gathers in the skills it needs, or by being installed with
+one; a skill you write is never put there. Such a skill is part of the app,
+not a creation of its own:
 
 - It is in the app's footprint by where it is, with no reference to declare.
   `skill:<name>` resolves through the link to the app: the scope file carries

@@ -14,10 +14,9 @@ is what `install-app` installs from. This skill makes the first version and
 every later one.
 
 A background worker prepares the version on a branch; you run the
-conversation, the checks and the push. The steps that need no judgement are
-subcommands of `uv run --no-sync app-install publish`, each ending in one JSON
-line whose `result` says what happened (`system/libs/app_install/README.md`,
-"Publishing an app").
+conversation, the checks and the push. Each step that needs no judgement is a
+`uv run --no-sync app-install publish` subcommand ending in one JSON line
+with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 
 ## Standing instructions
 
@@ -46,8 +45,8 @@ line whose `result` says what happened (`system/libs/app_install/README.md`,
 - **Keep git and file words out of what you say**
   (`.agents/shared/references/user-facing-language.md`): the user is sharing
   an app, and the one technical noun they need is the address of its page.
-  Their progress view shows a few plain steps ("Decide what to share", "Get
-  the app ready (in the background)", "Publish it"), not the list below.
+  Their progress view shows a few plain steps ("Decide what to share",
+  "Publish it"), not the list below.
 
 ## Other tasks
 
@@ -84,17 +83,21 @@ uv run --no-sync app-install publish compare <name>
 
 - `owned`: this workspace built it. Go on.
 - `modified`: it was installed from someone else's repository (`upstream_url`)
-  and changed here. It can be published, to a repository of the user's own:
-  its first version records what it was derived from, and the scope gate says
-  so.
+  and changed here. It is published to a repository of the user's own, and
+  its first version records what it was derived from.
 - `installed`, or not listed: stop. "An app that cannot be published" in
   `references/results.md` says what to tell the user.
 
-`compare` says what a publish would hold and what changed since the last one:
-`is_published`, `published_version`, `changed_paths` (each `added`,
-`modified` or `deleted`), `paths` (every file a publish would hold) and
-`excluded_paths` (what `[publish] exclude` leaves out). It reads the
-committed app: commit anything uncommitted in the app's directory first.
+`compare` says what a publish would hold (`paths`, `excluded_paths`), what
+changed since the last one (`is_published`, `published_version`,
+`changed_paths`), and each line that names a skill the app does not carry
+(`outside_skill_uses`). It reads the committed app: commit anything
+uncommitted in the app's directory first.
+
+When `outside_skill_uses` is not empty, or the app's record lists a skill
+under `[[references]]`, read `references/skills-the-app-needs.md` before
+step 3: the app takes such a skill in, which changes the scope gate, the
+worker's task and step 8.
 
 Then look for a publish an earlier attempt left between its steps:
 `cat data/.state/app_install/publish/<name>.json`. No such file means nothing
@@ -104,11 +107,10 @@ is ALREADY PUBLIC.
 
 ## Step 2: Get somewhere to publish to
 
-Follow "Somewhere to publish to" in `references/github-access.md`. On a first
-publish it asks the user whether they have a GitHub account, before anything
-else, and files the permission requests so the approval waits in Imbue Studio
-while you settle the scope. On a later publish it probes the access and files
-only what is missing.
+Follow "Somewhere to publish to" in `references/github-access.md`: a first
+publish starts by asking the user whether they have a GitHub account, and
+files the permission requests so the approval waits while you settle the
+scope.
 
 ## Step 3: The scope gate
 
@@ -181,6 +183,7 @@ and follow it.
 - last published: <published_version, or "never: this is the first publish">
 - repository: https://github.com/<owner>/<repo_name>
 - leave out of what is published: <one glob per line, relative to the app's directory, or "nothing more">
+- skills to take in: <each skill, then the paths that also use it, or "none">
 - derived from: <upstream_url, for a modified app, or "nothing">
 - context: <what the app does for its user, the accounts and services it
   depends on, known gaps -- what the worker needs to write good guidance for
@@ -212,13 +215,12 @@ uv run --no-sync app-install publish assemble <name> --commit mngr/<slug>
 ```
 
 It builds what would be published (the app's directory at the worker's commit,
-less what `[publish] exclude` names) in a directory outside the workspace,
-runs the secret scan over it, and for a Python app checks that the app locks
-with no workspace around it. Nothing is pushed.
+less what `[publish] exclude` names) outside the workspace, runs the secret
+scan over it, and checks that the app stands alone there. Nothing is pushed.
 
 On `assembled`, go on: keep `version`, `paths`, `excluded_paths` and `needs`
 for the publish gate. On any other `result` (`secrets_found`,
-`lock_check_failed`, `refused`) nothing was published: read "When assembling
+`outside_skills_found`, `lock_check_failed`, `refused`) nothing was published: read "When assembling
 stops" in `references/results.md`, have the worker fix what it names, wait
 for its next report, and assemble again.
 
@@ -255,15 +257,14 @@ user calls it off" in `references/results.md`, and say nothing was published.
 uv run --no-sync app-install publish push <name> --repo-name <repo_name>
 ```
 
-(`--repo-name` matters only on a first publish, and only when it is not the
-app's name.) On a first publish this creates the public repository. It then
-pushes the assembled tree as ONE commit on top of the last published one, and
-the tag `v<version>`. It never forces anything.
+(`--repo-name` only on a first publish under another name.) A first publish
+creates the public repository. The assembled tree is then pushed as ONE
+commit on top of the last published one, with the tag `v<version>`, never
+forced.
 
 On `pushed` the version is public: keep `published_repo_url`, and check
 `is_tag_pushed` and `problems` before step 8, as "After a push" in
-`references/results.md` says. A version with no tag is not what people who
-install the app are given, and step 8 ends the publish. On any other `result`
+`references/results.md` says. On any other `result`
 (`name_taken`, `push_refused`, `not_assembled`, `refused`), read "When the
 push stops" there.
 
@@ -275,10 +276,11 @@ Merge the worker's branch (`git merge --no-ff mngr/<slug>`), then:
 uv run --no-sync app-install publish record <name>
 ```
 
-It writes the repository, the published commit and the version into the app's
-record and saves that one change. If this step is interrupted, or its result
+It writes what was published into the app's record and saves that one change. If this step is interrupted, or its result
 is not `recorded` with no `problems`, the app IS published: never push again,
-and read "When recording stops" in `references/results.md`.
+and read "When recording stops" in `references/results.md`. When the app
+took in a skill, finish with "After the version is published" in
+`references/skills-the-app-needs.md`.
 
 Then destroy the worker and its branch:
 
@@ -291,7 +293,7 @@ git branch -d "mngr/<slug>"
 If you are stopping after a failure instead, leave the worker and its branch
 for a retry.
 
-Give the user the app's address (`published_repo_url`) in your final message,
-and the two ways someone can take it: the "Open in Imbue Studio" button on
-that page, or pasting the address to their own workspace's chat. Mention any
-follow-up from step 7.
+In your final message give the user the app's address (`published_repo_url`)
+and the two ways to take it: the "Open in Imbue Studio" button on that page,
+or pasting the address into a workspace's chat. Mention any follow-up from
+step 7.

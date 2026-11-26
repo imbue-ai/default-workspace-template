@@ -2,7 +2,8 @@
 
 You are the worker `publish-app` dispatched. Your task file names the app
 (`app`, `package`), the `version` agreed with the user, the `repository` it
-will be published to, what to leave out, and what the app was derived from.
+will be published to, what to leave out, the skills the app takes in, and
+what the app was derived from.
 Do all of this in one run on your branch, with no back-and-forth unless you
 are genuinely stuck.
 
@@ -14,10 +15,11 @@ time these fields are written, so read the app properly.
 
 - Before anything else
 - 1. Leave out what the user asked to leave out
-- 2. Read the app and write what an adopter needs to know
-- 3. Settle the version and write it
-- 4. Bring the README up to date
-- 5. Check, commit, report
+- 2. Take in the skills the app needs
+- 3. Read the app and write what an adopter needs to know
+- 4. Settle the version and write it
+- 5. Bring the README up to date
+- 6. Check, commit, report
 
 ## Before anything else
 
@@ -33,9 +35,9 @@ Note both values: every command runs in a fresh shell.
 
 Three limits:
 
-- Change only files inside `system/apps/<package>/`. The app's record
-  (`system/config/apps/<name>.toml`) and its generated program file are not
-  yours to edit.
+- Change only files inside `system/apps/<package>/`, and what step 2 moves
+  or repoints. The app's record (`system/config/apps/<name>.toml`) and its
+  generated files are not yours to edit by hand.
 - Never run `app-install publish assemble`, `push` or `record`: those are the
   lead's, after the user has looked at what you prepared.
 - Never write a secret's value anywhere. A manifest names the variables a
@@ -55,7 +57,74 @@ exclude = ["docs/internal/**"]
 `app.toml` and the icon it names can never be left out: without them the
 repository is not an app.
 
-## 2. Read the app and write what an adopter needs to know
+## 2. Take in the skills the app needs
+
+Skip this step when your task's "skills to take in" says `none`.
+
+Whoever installs the app has nothing of this workspace, so a skill the app
+needs is published inside it. Each skill your task names lives under
+`.agents/skills/<skill>/` and moves into the app. An app's skill is named
+after the app: `<carried>` below is `<name>-<skill>`, or `<skill>` itself when
+it already starts with the app's name. For each one:
+
+1. **Take it out of the record, move it, rename it.**
+
+   ```bash
+   uv run --no-sync app-install reference remove <name> .agents/skills/<skill>   # only when the record lists it
+   git mv .agents/skills/<skill> system/apps/<package>/skills/<carried>
+   ```
+
+   Set `name: <carried>` in its `SKILL.md` frontmatter, and bring what the
+   skill says about itself (its heading, its own paths, its command) in line.
+2. **Move its code into the app's package.** A skill an app carries has no
+   `python/` project of its own. For a skill that has one:
+   - move the modules and their tests from
+     `skills/<carried>/python/<skill_with_underscores>_skill/` into the app's
+     package, under `src/<package>/` in a module named for what it does, and
+     delete `skills/<carried>/python/`;
+   - add what its `pyproject.toml` depended on with `uv add`, run in the
+     app's directory, and give each entry point a console script under
+     `[project.scripts]` in the app's `pyproject.toml`;
+   - have the skill's steps run
+     `uv run --no-sync --project system/apps/<package> <script> ...`, and the
+     app's own code import the modules directly;
+   - take the skill's package out of the app's dependencies, and out of the
+     root `pyproject.toml`'s `[tool.uv.sources]` when it is named there, then
+     run `uv lock` at the repo root so the workspace's lock lets it go, and
+     commit that lock.
+
+   An app with no `pyproject.toml` cannot take in a skill that has a
+   `python/` project: report `stuck` and say so.
+3. **Keep its data with the app's.** Where the code reads or writes
+   `data/.skills/<skill>/`, have it use a directory under the app's own data
+   directory instead (`DATA_DIR`, which is `data/.apps/<name>/`), named for
+   what it holds. Move no data yourself: it is not in your worktree. Name
+   each pair of directories in your report, for the lead to move.
+4. **Repoint everything else that named it.** Your task lists what else uses
+   the skill. Make only the change that keeps each working:
+   - a routine that runs the skill names `<carried>`;
+   - another app, or a skill that stays outside the app, that imported its
+     package or ran its scripts calls this app instead: its console script,
+     or its HTTP API, found by name (`resolve_app_url("<name>")`, never a
+     port);
+   - another app that now calls this one gets a `[[dependencies]]` entry for
+     it in its own `app.toml`, and a skill that does is recorded with
+     `uv run --no-sync app-install reference add <name> .agents/skills/<other> --note "<the surface it uses>"`.
+5. **Have the link written.**
+
+   ```bash
+   uv run --no-sync app-install regenerate <name>
+   ```
+
+   It writes the `.agents/skills/<carried>` link the skill is found by;
+   commit it with the move. `collision` means another skill already has that
+   name: pick another that starts with the app's name.
+
+When you are done,
+`git grep -n -e '.agents/skills/<skill>' -e 'data/.skills/<skill>'` prints
+nothing, and the app's tests pass with the modules where they now are.
+
+## 3. Read the app and write what an adopter needs to know
 
 Read the app's code, its skills, its routines and its environment units, and
 write or refresh these tables in `system/apps/<package>/app.toml`. Remove an
@@ -68,8 +137,8 @@ that kind.
 | `[[secrets]]` | Every `data/.secrets/<file>.env` the app or one of its services runs under, and every variable it reads from one. The table already exists when the app's program runs under a secret file; check the variables are all listed. | `file`, `variables`, `note` (what the value is and where to get it) |
 | `[llm]` | Whether the app calls a model. | `method` (`keyed` for an API key through the workspace's proxy, `keyless` for a subscription-backed CLI), `note` (what it uses the model for) |
 | `[environment]` | System packages and global tools the app shells out to or imports from outside its own project. Not its Python dependencies (its `pyproject.toml` has those) and not its environment units (the files under `env.d/` are the list). | `apt` (names), `npm_global`, `uv_tools`, `cargo_crates` (name to version), `cargo_default_toolchain` |
-| `[[dependencies]]` | Other apps this one calls (`resolve_app_url("<other>")`, a link to another app's page, another app's data). | `name`, and `repo_url` when that app is published (its record's `published_repo_url`, or `upstream_url` for an installed one) |
-| `[[adaptation]]` | What will not fit someone else's workspace as it is: a hardcoded channel, account, folder or name, an assumption about data that only this user has. | `summary` (what does not carry over), `resolution` (what to ask or change) |
+| `[[dependencies]]` | Other apps this one calls or gets its data from (`resolve_app_url("<other>")`, a link to another app's page, another app's data, what the Datalib app mirrors). | `name`, and `repo_url` when that app is published (its record's `published_repo_url`, or `upstream_url` for an installed one; a built-in app such as `datalib` has none) |
+| `[[adaptation]]` | What will not fit someone else's workspace as it is: a hardcoded channel, account, folder or name, an assumption about data that only this user has, data another app or Datalib has to be set up to collect first (which sources, how far back). | `summary` (what does not carry over), `resolution` (what to ask, change or set up) |
 
 Use the permission and scope names latchkey really has (the
 `connect-external-service` skill lists them), not ones that sound right: an
@@ -80,10 +149,10 @@ account id) is better removed than described. If it is quick and safe, make it
 a setting the app reads and note it under `[[adaptation]]`; if it is not, note
 it and say so in your report.
 
-## 3. Settle the version and write it
+## 4. Settle the version and write it
 
 Your task carries the version agreed with the user. A **major** version tells
-everyone who installed the app that they must act. If what you read in step 2
+everyone who installed the app that they must act. If what you read in step 3
 means they must (the shape of the app's stored data changed since the last
 published version, or it needs a secret or a permission it did not need
 before) and the agreed version is not a major one, use the next major version
@@ -103,14 +172,15 @@ template release this workspace is on, and for a Python app into
   `uv lock --project system/apps/<package>` yourself and fix what it reports.
 - `refused`: `detail` says why (the version is not newer than the last
   published one, or the manifest does not pass its check after your edits in
-  steps 1 and 2: fix the manifest and run it again).
+  steps 1 and 3: fix the manifest and run it again).
 
 If the new version changes the shape of the app's stored data, the app must
-carry its own migration: code that brings data written by the earlier version
-forward when the new one first runs. Whoever installs the update has only
-their own data and this app's code.
+carry its own migration: code that brings data written by an earlier version
+forward when the new one first runs, with a test of it. Whoever installs the
+update has only their own data and this app's code, and can skip versions, so
+the app keeps a migration for every shape a published version ever wrote.
 
-## 4. Bring the README up to date
+## 5. Bring the README up to date
 
 `system/apps/<package>/README.md` is the repository's landing page: the first
 thing a person sees, and what convinces them to install the app. Write it for
@@ -139,7 +209,7 @@ a person, in this order:
 4. **How to use it.** What someone does with it once it is running: its
    screens, what it does on a schedule, the skills it adds. Short, with a
    worked example where one helps.
-5. **What it needs.** From the tables you wrote in step 2, in plain words:
+5. **What it needs.** From the tables you wrote in step 3, in plain words:
    the accounts it connects to, the keys it asks for and where to get them,
    whether it uses an AI model.
 6. **Ideas for making it yours.** Three to five concrete changes someone
@@ -152,7 +222,7 @@ a person, in this order:
 Mock data only: no real names, addresses, messages or screenshots of the
 user's own data. Do not show the README to the user; the lead does that.
 
-## 5. Check, commit, report
+## 6. Check, commit, report
 
 Commit your work on your branch, then run all three, fixing what they report
 and committing again until they are clean:
@@ -179,6 +249,9 @@ Valid `name:` values: `question` (a gate, at any point), `done`, `stuck`. A
 
 - the branch (`mngr/<slug>`) and its commit (`git rev-parse HEAD`);
 - the version you wrote, and why if it is not the one in your task;
+- each skill the app took in: its new name, each pair of data directories the
+  lead has to move (from under `data/.skills/`, to under
+  `data/.apps/<name>/`), and what else you repointed;
 - what whoever installs the app will be asked for, in one plain line per
   table you wrote;
 - anything you could not determine, or left hardcoded and noted instead of

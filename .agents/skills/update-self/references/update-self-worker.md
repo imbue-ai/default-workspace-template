@@ -369,7 +369,8 @@ in your report.
     tree: `git cat-file -e "$TARGET_REF:system/apps/<package>/app.toml"` fails)
     is converted with `uv run --no-sync app-install migrate <package>`, after
     its `--dry-run`, whose output goes in your report. `migrated` moved the
-    skills and routines the app owns into its directory and wrote its record;
+    app's routines into its directory and wrote its record, which lists what
+    the app's manifest named under `[[references]]`, skills included;
     commit what it changed (`update-self: convert the <name> app`).
     `unconverted` changed nothing and lists why under `problems`; the app keeps
     running as it was, so report it under the update's follow-ups with those

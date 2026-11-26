@@ -124,19 +124,16 @@ refuses to assemble a program that runs under a file no block declares.
 
 For an app with a record, `system/apps/<package>/` is the whole app: one
 directory that can be shared (the `publish-app` skill), installed in another
-workspace (`install-app`), and removed in one piece. Put everything that
-belongs to the app inside it:
+workspace (`install-app`), and removed in one piece.
 
-- **A skill that belongs to the app** (one whose job is to drive this app) goes
-  at `system/apps/<package>/skills/<skill-name>/SKILL.md`. Then run
-  `uv run --no-sync app-install regenerate <name>`, which links it into
-  `.agents/skills/<skill-name>` so it is discovered like any other skill; the
-  link is generated, so never create or edit it by hand. Such a skill carries
-  no `python/` project of its own. Code it needs lives in the app's package
-  and is reached as one of the app's console scripts (`[project.scripts]` in
-  the app's `pyproject.toml`, run with
-  `uv run --no-sync --project system/apps/<package> <command>`) or over the
-  app's HTTP API.
+- **A skill built for the app is made like any other skill**, under
+  `.agents/skills/<skill-name>/`, by the flow that builds it, and is one of
+  the app's references (below). Never move it into the app yourself.
+  Publishing the app is what gathers the skills it needs into
+  `system/apps/<package>/skills/`, and an installed app arrives with the
+  skills it carries there. `app-install` generates the
+  `.agents/skills/<skill-name>` link each carried skill is found by; never
+  create or edit one by hand.
 - **A routine that belongs to the app** is added with
   `uv run --no-sync routines add <id> --app <name> ...` (the `manage-routines`
   skill) and lands in `system/apps/<package>/routines/<id>.toml`.
@@ -153,10 +150,11 @@ belongs to the app inside it:
 A skill name, a routine id and an environment unit's file name are each unique
 across the workspace. `uv run --no-sync app-install check` reports a clash.
 
-Something elsewhere in the workspace that uses the app without belonging to it
-(another creation's skill, a script, a doc) is one of the app's references,
-each with a `note` naming the surface it uses. That is how it travels with the
-app through hardening and testing.
+Something elsewhere in the workspace that was built for the app or uses it (a
+skill, a script, a doc) is one of the app's references, each with a `note`
+naming the surface it uses. That is how it travels with the app through
+hardening and testing, and how a publish finds a skill the app should take
+with it.
 
 - **A built-in app** registers them in its manifest, under `[[references]]`.
 - **An app with a record** keeps them in the record, and the manifest check

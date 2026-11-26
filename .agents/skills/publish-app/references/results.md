@@ -65,13 +65,21 @@ assemble is what gets pushed.
   value was ever saved in the app's history, tell them it is still in the
   app's private dev repository, when it has one, and that a real key should
   be replaced with a new one.
+- `outside_skills_found`: `uses` names each line of the app that still names
+  a skill of this workspace the app does not carry
+  (`.agents/skills/<skill>/...`, `data/.skills/<skill>/...`). Decide what
+  becomes of the skill as `skills-the-app-needs.md` says ("Which skills"),
+  and have the worker take it in or take the line out. A skill the app takes
+  in changes what the user agreed to at the scope gate, so tell them before
+  the publish gate.
 - `lock_check_failed`: the app's dependencies do not resolve on their own.
   Have the worker make the lock again in the app's directory (`uv lock`) and
   commit it. If it still fails, the app depends on something that exists only
-  inside a workspace (the usual case is a `path = "../../libs/..."` entry
-  under `[tool.uv.sources]` in its `pyproject.toml`, which resolves nowhere
-  else): stop, and tell the user the app cannot be published until that is
-  changed.
+  inside a workspace: a skill's package (have the worker take the skill in,
+  as for `outside_skills_found`), or a `path = "../../libs/..."` entry under
+  `[tool.uv.sources]` in its `pyproject.toml`, which resolves nowhere else.
+  For the second, stop, and tell the user the app cannot be published until
+  that is changed.
 - `refused`: `detail` says why (no version in the manifest, a version not
   newer than the last published, a manifest that fails its check). Have the
   worker fix it.
