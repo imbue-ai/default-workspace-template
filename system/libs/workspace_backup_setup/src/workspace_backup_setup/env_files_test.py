@@ -17,6 +17,7 @@ from workspace_backup_setup.env_files import (
     read_pending_env,
     render_restic_env,
     repository_without_credentials,
+    write_atomically,
     write_pending_env,
 )
 from workspace_backup_setup.testing import IMBUE_CLOUD_REPOSITORY, WORKSPACE_ID
@@ -129,6 +130,17 @@ def test_pending_credentials_are_private_and_read_back_only_for_their_own_reques
     )
     assert read_pending_env(workspace_root, "request-1") == _IMBUE_CLOUD_ENV
     assert read_pending_env(workspace_root, "request-2") is None
+
+
+def test_a_write_that_fails_leaves_no_scratch_file_behind(tmp_path: Path) -> None:
+    target = tmp_path / "restic.env.pending"
+    target.mkdir()
+
+    with pytest.raises(IsADirectoryError):
+        write_atomically(target, "RESTIC_REST_PASSWORD=token-a\n", 0o600)
+
+    assert list(tmp_path.iterdir()) == [target]
+    assert list(target.iterdir()) == []
 
 
 def test_installing_the_same_restic_env_again_leaves_the_file_untouched(

@@ -62,12 +62,29 @@ def env_digest(env_text: str) -> str:
 
 
 def write_atomically(path: Path, text: str, mode: int) -> None:
+    """Put ``text`` at ``path`` in one step, not returning before it is on disk.
+
+    A password is kept this way before a repository is initialised with it, so a file a crash could lose would
+    leave a repository nothing can read. Raises ``OSError`` when it cannot be written, and leaves no scratch
+    file, which would hold the credentials.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, scratch = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(handle, "w", encoding="utf-8") as out:
-        out.write(text)
-    os.chmod(scratch, mode)
-    os.replace(scratch, path)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(scratch, mode)
+        os.replace(scratch, path)
+    except OSError:
+        Path(scratch).unlink(missing_ok=True)
+        raise
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def read_restic_env_text(workspace_root: Path) -> str | None:
