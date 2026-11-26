@@ -789,4 +789,3 @@ def test_files_write_refuses_a_body_it_cannot_act_on_and_writes_nothing(tmp_path
         assert response.status_code == 400 and response.get_json() == {"error": error}, body
     assert not (harness.repo / "refused.txt").exists()
     assert sorted(entry.name for entry in harness.repo.iterdir()) == [".agents", ".git"]
-
