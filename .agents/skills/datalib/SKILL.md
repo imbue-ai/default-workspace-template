@@ -92,8 +92,7 @@ mkdir -p "$DATA_ROOT"
    ```
 
    Tell the user the sync is running and that you will answer when it is
-   done, and open the Datalib app beside the chat (item 8) so they can watch
-   it there rather than in your messages. When it ends, a message with
+   done; they can watch it in the Datalib app. When it ends, a message with
    each request's outcome (`done`, `failed` and the step it failed at, or
    `stopped` and by whom) starts your next turn. `open` with no step syncs
    every source. With no chat to be woken in (`MINDS_CHAT_ID` and
