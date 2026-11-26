@@ -277,6 +277,16 @@ def test_the_program_takes_reads_renews_and_gives_back(lease_path: Path) -> None
     assert (lapsed.returncode, json.loads(lapsed.stdout)) == (EXIT_NOT_HELD, None)
 
 
+def test_a_lease_outlasts_the_process_that_took_it(lease_path: Path) -> None:
+    assert _run_program(lease_path, "take", "--holder", "restore").returncode == 0
+
+    lease = read_lease(
+        lease_path, json.loads(_run_program(lease_path, "read").stdout)["taken_at"]
+    )
+
+    assert lease is not None and lease.holder == "restore"
+
+
 def test_the_program_holds_the_lease_around_a_command_and_answers_its_exit_code(
     lease_path: Path,
 ) -> None:

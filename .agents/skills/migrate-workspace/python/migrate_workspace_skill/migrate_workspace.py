@@ -494,11 +494,11 @@ def classify_branches(
 # behind: a backup repository keyed by the old workspace's own random password
 # (the credentials in use, those of a setup it had not finished, and every copy
 # it kept aside, any of which this workspace's own backup setup would otherwise
-# install as its own), a tunnel minted per agent id, and the published share's whole identity (its
-# relay materials, auth label, gateway signing key, grants document, grantee
-# identities, TLS material, and the visiting-agent registry). Copying any of
-# the share files would make this workspace present the old one's hostname
-# and certificate and have two machines claim one share.
+# install as its own), a tunnel minted per agent id, and the published share's
+# whole identity (its relay materials, auth label, gateway signing key, grants
+# document, grantee identities, TLS material, and the visiting-agent registry).
+# Copying any of the share files would make this workspace present the old
+# one's hostname and certificate and have two machines claim one share.
 DATA_SECRETS_EXCLUDED_FROM_COPY = (
     "restic.env",
     "restic.env.*",

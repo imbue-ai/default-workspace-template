@@ -196,6 +196,7 @@ class BackupSetupProgram:
         self._make_password = make_password
         self._is_started = False
         self._next_credentials_check_at = clock()
+        self._awaited_holder = ""
 
     def run_pass(self) -> None:
         """Do whatever is due now: a setup asked for or due another try, a turn-off, or the check of the
@@ -236,6 +237,14 @@ class BackupSetupProgram:
             ):
                 self._check_credentials_in_use(record, in_use)
 
+    def _note_waiting_for(self, holder: str) -> None:
+        """Say once, not every pass, that the work waits for whoever holds the backup lease."""
+        if holder != self._awaited_holder:
+            logger.info(
+                "The backup setup waits for {} to give the backup lease back", holder
+            )
+            self._awaited_holder = holder
+
     def _write_if_still_asked(
         self, record: SetupRecord, new_record: SetupRecord
     ) -> bool:
@@ -252,8 +261,9 @@ class BackupSetupProgram:
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, now)
         except BackupLeaseHeldError as e:
-            logger.info("Backups are to be turned off once {} is done", e.lease.holder)
+            self._note_waiting_for(e.lease.holder)
             return
+        self._awaited_holder = ""
         try:
             with setup_lock(self._workspace_root):
                 if (
@@ -287,8 +297,9 @@ class BackupSetupProgram:
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, now)
         except BackupLeaseHeldError as e:
-            logger.info("The backup setup waits for {} to be done", e.lease.holder)
+            self._note_waiting_for(e.lease.holder)
             return
+        self._awaited_holder = ""
         try:
             self._attempt_holding_the_lease(record, pending)
         finally:

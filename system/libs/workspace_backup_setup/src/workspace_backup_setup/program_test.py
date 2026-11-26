@@ -124,9 +124,6 @@ def _set_up_imbue_cloud(workspace: _Workspace, token: str) -> BackupSetupProgram
     return program
 
 
-# Each starting point, against a real restic and a repository in a directory
-
-
 @needs_restic
 @pytest.mark.timeout(_RESTIC_TEST_TIMEOUT_SECONDS)
 def test_a_repository_that_is_not_there_is_initialised_with_a_password_the_workspace_makes(
@@ -260,9 +257,6 @@ def test_a_kept_password_that_does_not_open_the_repository_fails_and_installs_no
     assert pending is not None and pending["RESTIC_PASSWORD"] == "not-the-key"
 
 
-# The retry
-
-
 def test_a_failed_setup_is_tried_again_after_a_minute_then_twice_as_long_up_to_an_hour(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -302,9 +296,6 @@ def test_a_failed_setup_is_tried_again_after_a_minute_then_twice_as_long_up_to_a
     )
     assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-1"
     assert read_setup_record(workspace.root).failed_attempts == 0
-
-
-# The resume
 
 
 class _ProgramStopped(BaseException):
@@ -359,9 +350,6 @@ def test_a_failed_setup_is_tried_as_soon_as_the_program_starts(
 
     assert workspace.state().setup.state is BackupSetupState.READY
     assert workspace.passwords.made == made_before == ["made-password-1"]
-
-
-# The check of the credentials in use
 
 
 def test_the_credentials_in_use_are_checked_when_the_program_starts_and_once_an_hour(
@@ -429,9 +417,6 @@ def test_a_check_that_fails_for_any_other_reason_changes_nothing(
     assert workspace.state() == before
 
 
-# One token to a repository
-
-
 def test_storage_offered_for_the_repository_in_use_is_let_go_while_the_storage_accepts_what_is_held(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -496,9 +481,6 @@ def test_storage_the_storage_refuses_leaves_the_setup_awaiting_storage_until_it_
     program.run_pass()
     assert workspace.state().setup.state is BackupSetupState.READY
     assert workspace.installed()["RESTIC_REST_PASSWORD"] == "token-a"
-
-
-# Turning backups off, and changing where they go
 
 
 def test_none_moves_restic_env_aside_and_a_destination_named_again_is_installed_from_what_was_kept(
@@ -577,9 +559,6 @@ def test_the_previous_destination_stays_in_use_until_the_new_one_is_ready_and_is
     )
     assert workspace.installed()["RESTIC_REPOSITORY"] == "s3:https://s3.example/bucket"
     assert held in workspace.kept_aside()
-
-
-# A restic.env the program did not write
 
 
 def test_a_restic_env_another_writer_put_in_place_is_taken_as_the_destination(
@@ -682,9 +661,6 @@ def test_a_restic_env_another_writer_moved_aside_is_backups_turned_off(
     )
     assert len(fake_restic_calls(fake_restic_control)) == calls_before
     assert read_setup_record(workspace.root).destination is BackupDestinationKind.NONE
-
-
-# The backup lease
 
 
 def test_the_setup_waits_while_someone_else_holds_the_backup_lease(
