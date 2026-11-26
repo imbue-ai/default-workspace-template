@@ -42,6 +42,32 @@ the window, never the path, the title, or what was typed or clicked). The
 gateway's per-request access log in `data/.state/share_gateway/access.log` is
 yours alone and is never collected.
 
+The script also reads how hard the machine is working, from what this
+template's System Monitor sampler and memory guard already record
+(`system/services/oom_priority/README.md`), plus a reading it takes itself:
+
+- the per-minute CPU and memory averages in
+  `data/.state/system-monitor/history.jsonl`;
+- the busy-CPU and high-memory stretches and the ten-minute snapshots of
+  which chats and programs hold the most memory
+  (`data/.state/system-monitor/events/`), each with only its own figures. A
+  chat is named by its agent id. A program is named only when this template
+  provides it (its supervisord program exists in the template commit the
+  workspace was created from or updated to; a template a user published does
+  not count, only the commit of this template it was built on) or when it is
+  a registered app, whose name the workspace-state snapshot already carries;
+  any other program is reported only as "a user program";
+- the memory guard's record of each process it stopped
+  (`data/.state/oom_priority/events/shed.jsonl`): when, how much memory it
+  held, its shedding priority, and whether it was an agent (and if so,
+  whether that agent was a background worker). The process name is reported
+  only when it is a common runtime (`claude`, `node`, `python3`, `chromium`,
+  and the like), otherwise as `other`; the process id and the agent's name
+  are never collected;
+- one reading per collection run: CPU cores, memory total and available (as
+  the machine and as the container see them), disk quota and free space,
+  `/tmp` usage, uptime, and the kernel version.
+
 What is collected and how it is redacted is specified in the mngr repo:
 `specs/minds-analytics/disclosure.md` (the plain-language description) and
 `specs/minds-analytics/redaction-contract.md` (the exact per-field

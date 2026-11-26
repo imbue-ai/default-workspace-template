@@ -1,0 +1,1 @@
+`docs/system/analytics-collection.md` lists the machine readings explorer-plan collection now takes: the System Monitor sampler's minute history, CPU and memory stretches and memory holders, the memory guard's stops, and one reading of cores, memory, disk and uptime per run. The System Monitor spec describes the sampler's new memory holders and memory stretches.
