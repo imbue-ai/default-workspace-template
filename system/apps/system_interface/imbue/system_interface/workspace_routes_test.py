@@ -30,6 +30,7 @@ from workspace_backup_setup.testing import own_storage_request
 from workspace_backup_setup.testing import refuse_fake_restic_token
 from workspace_backup_setup.testing import set_fake_restic_mode
 from workspace_backup_setup.verification import BACKUP_TOML_RELATIVE_PATH
+from workspace_bare_scripts.backup_lease import HOLDER_SETUP
 from workspace_bare_scripts.backup_lease import release_lease
 from workspace_bare_scripts.backup_lease import take_lease
 from workspace_initial_data.status import InitialDataStatus
@@ -668,6 +669,21 @@ def test_a_change_of_destination_is_refused_while_a_backup_operation_runs_and_na
     release_lease(lease_path, "restore", time.time())
     assert client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"}).status_code == 202
     assert _backups(client)["lease"] is None
+
+
+def test_backups_are_turned_off_while_the_workspaces_own_setup_holds_the_backup_lease(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    taken = take_lease(state_of(app).backup_lease_path, HOLDER_SETUP, time.time())
+
+    answered = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"})
+
+    assert answered.status_code == 202
+    off = answered.get_json()
+    assert (off["destination"], off["setup"]["state"]) == ("NONE", "NONE")
+    assert off["lease"] == {"holder": "setup", "taken_at": taken.taken_at, "expires_at": taken.expires_at}
 
 
 def test_the_backup_credentials_are_answered_to_the_owner_with_the_digest_the_state_answers(

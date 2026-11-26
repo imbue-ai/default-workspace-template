@@ -462,9 +462,11 @@ def write_backup_destination() -> ResponseReturnValue:
     and awaits storage when it kept none. Storage offered for the repository already in use is taken only once
     the workspace finds that the storage refuses what it holds. NONE moves restic.env aside and keeps it.
 
-    A request that would change something while a backup operation runs is refused with 409
-    BACKUP_OPERATION_RUNNING, naming who holds the backup lease. A destination the workspace does not know, and
-    a password among the variables of the user's own storage, are refused with 400 INVALID_DESTINATION.
+    A request that would change something while another backup operation runs (a restore, an update of the
+    backup service, a migration of the backup store) is refused with 409 BACKUP_OPERATION_RUNNING, naming who
+    holds the backup lease. The workspace's own setup holding it refuses nothing: the request replaces what the
+    setup was asked. A destination the workspace does not know, and a password among the variables of the user's
+    own storage, are refused with 400 INVALID_DESTINATION.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(BackupDestinationRequest)

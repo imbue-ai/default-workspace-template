@@ -3,13 +3,15 @@ from pathlib import Path
 
 import pytest
 from host_backup.config import RESTIC_ENV_PATH, parse_restic_env_file
-from workspace_bare_scripts.backup_lease import release_lease, take_lease
+from workspace_bare_scripts.backup_lease import HOLDER_SETUP, release_lease, take_lease
 
 from workspace_backup_setup.destination import request_backup_destination
 from workspace_backup_setup.env_files import (
     PENDING_ENV_RELATIVE_PATH,
     BackupDestinationKind,
+    kept_envs,
     read_pending_env,
+    write_pending_env,
 )
 from workspace_backup_setup.errors import (
     BackupOperationRunningError,
@@ -254,7 +256,7 @@ def test_a_destination_the_workspace_cannot_take_is_refused_and_changes_nothing(
     assert not (workspace_root / "data").exists()
 
 
-def test_a_request_that_differs_is_refused_while_anyone_holds_the_backup_lease(
+def test_a_request_that_differs_is_refused_while_another_backup_operation_holds_the_backup_lease(
     workspace_root: Path, lease_path: Path
 ) -> None:
     _request(workspace_root, lease_path, imbue_cloud_request("token-a"))
@@ -283,6 +285,63 @@ def test_a_request_that_differs_is_refused_while_anyone_holds_the_backup_lease(
         None,
     )
     assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+
+
+def _begin_an_attempt(workspace_root: Path, lease_path: Path) -> dict[str, str]:
+    """Leave the workspace as ``backup-setup`` has it in the middle of an attempt at Imbue Cloud under
+    ``token-a``: holding the lease, with the password it made kept beside the storage. Answers what it keeps."""
+    _request(workspace_root, lease_path, imbue_cloud_request("token-a"))
+    request_id = read_setup_record(workspace_root).request_id
+    attempting = {
+        **(read_pending_env(workspace_root, request_id) or {}),
+        "RESTIC_PASSWORD": "made-password",
+    }
+    write_pending_env(workspace_root, request_id, attempting)
+    take_lease(lease_path, HOLDER_SETUP, _NOW + 1.0)
+    return attempting
+
+
+def test_backups_are_turned_off_while_the_workspaces_own_setup_holds_the_backup_lease(
+    workspace_root: Path, lease_path: Path
+) -> None:
+    attempting = _begin_an_attempt(workspace_root, lease_path)
+
+    off, _ = _request(
+        workspace_root, lease_path, {"destination": "NONE"}, now=_NOW + 2.0
+    )
+
+    assert (off.destination, off.setup.state) == (
+        BackupDestinationKind.NONE,
+        BackupSetupState.NONE,
+    )
+    assert off.lease is not None and off.lease.holder == HOLDER_SETUP
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    # The repository may already be initialised with the password the attempt made, so it is kept.
+    assert kept_envs(workspace_root) == [attempting]
+
+
+def test_another_destination_replaces_the_one_the_workspaces_own_setup_is_attempting(
+    workspace_root: Path, lease_path: Path
+) -> None:
+    attempting = _begin_an_attempt(workspace_root, lease_path)
+
+    state, is_setup_begun = _request(
+        workspace_root,
+        lease_path,
+        own_storage_request("s3:https://s3.example/bucket", {"AWS_ACCESS_KEY_ID": "k"}),
+        now=_NOW + 2.0,
+    )
+
+    assert is_setup_begun is True
+    assert (state.destination, state.setup.state, state.repository) == (
+        BackupDestinationKind.OWN_STORAGE,
+        BackupSetupState.INITIALIZING,
+        "s3:https://s3.example/bucket",
+    )
+    assert read_pending_env(
+        workspace_root, read_setup_record(workspace_root).request_id
+    ) == {"RESTIC_REPOSITORY": "s3:https://s3.example/bucket", "AWS_ACCESS_KEY_ID": "k"}
+    assert kept_envs(workspace_root) == [attempting]
 
 
 def test_a_failed_setup_named_again_is_tried_at_once(

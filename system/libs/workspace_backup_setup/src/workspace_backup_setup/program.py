@@ -350,7 +350,14 @@ class BackupSetupProgram:
                 else self._make_password(),
             }
             # Kept before it is used: a repository initialised with a password that was then lost cannot be read.
-            write_pending_env(self._workspace_root, record.request_id, pending)
+            # Another destination named since has its own storage in that file, which this attempt leaves alone.
+            with setup_lock(self._workspace_root):
+                if (
+                    read_setup_record(self._workspace_root).request_id
+                    != record.request_id
+                ):
+                    return
+                write_pending_env(self._workspace_root, record.request_id, pending)
         self._renew()
         failure = _initialize_repository(pending)
         if failure is not None:

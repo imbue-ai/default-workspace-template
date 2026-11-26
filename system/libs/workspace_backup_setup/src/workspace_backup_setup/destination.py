@@ -16,7 +16,7 @@ from host_backup.config import parse_restic_env_file
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from pydantic import Field, SecretStr, ValidationError
-from workspace_bare_scripts.backup_lease import read_lease
+from workspace_bare_scripts.backup_lease import HOLDER_SETUP, read_lease
 
 from workspace_backup_setup.env_files import (
     PASSWORD_KEY,
@@ -325,7 +325,11 @@ def request_backup_destination(
 
     Raises ``InvalidBackupDestinationError`` for a destination the workspace does not know or storage it cannot
     take (a password among the variables of the user's own storage is one), and ``BackupOperationRunningError``
-    for a request that would change something while anyone holds the backup lease.
+    for a request that would change something while another backup operation holds the backup lease.
+
+    The workspace's own setup holding the lease refuses nothing: the request replaces what ``backup-setup`` was
+    asked, and an attempt under way ends without installing anything. Backups can therefore be turned off, or
+    sent elsewhere, while an attempt hangs.
     """
     destination = _checked_destination(body)
     with setup_lock(workspace_root):
@@ -338,7 +342,7 @@ def request_backup_destination(
             is_setup_begun = False
         else:
             lease = read_lease(lease_path, now)
-            if lease is not None:
+            if lease is not None and lease.holder != HOLDER_SETUP:
                 raise BackupOperationRunningError(lease)
             new_record = (
                 _started_afresh(record)

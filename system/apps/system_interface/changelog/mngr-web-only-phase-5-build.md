@@ -24,7 +24,7 @@ The backup routes are reshaped for a workspace that sets up its own backups. `PU
 
 - `GET /api/workspace/backups` (`backups.read`) answers the destination, how the setup stands (with `AWAITING_STORAGE`, and `retry_at` after a failure), whether `restic.env` is in place, the verification flag, the repository, the digest of the credentials in use, and who holds the backup lease.
 
-- `PUT /api/workspace/backups/destination` (`backups.destination.write`) names `IMBUE_CLOUD`, `OWN_STORAGE` or `NONE`, with the storage where the client has some, and answers the state under 202 or 200. It is refused with `INVALID_DESTINATION` for a typed password or an unknown destination, and with 409 `BACKUP_OPERATION_RUNNING`, naming the holder, while the backup lease is held.
+- `PUT /api/workspace/backups/destination` (`backups.destination.write`) names `IMBUE_CLOUD`, `OWN_STORAGE` or `NONE`, with the storage where the client has some, and answers the state under 202 or 200. It is refused with `INVALID_DESTINATION` for a typed password or an unknown destination, and with 409 `BACKUP_OPERATION_RUNNING`, naming the holder, while another backup operation holds the backup lease.
 
 - `GET /api/workspace/backups/credentials` (`backups.credentials.read`) answers the text of the `restic.env` in use and its digest to the owner alone, and 403 `OWNER_ONLY` to anyone else.
 

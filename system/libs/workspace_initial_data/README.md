@@ -57,7 +57,7 @@ adopted, before its services are started again.
   `data/.state/initial_data/state.json` and answered by the shell's
   `GET /api/workspace/status` as its `initial_data` member: `NONE` (no document was
   found and none has been applied), `APPLIED` with when, or `FAILED` with why. No
-  detail quotes a value of the document.
+  detail quotes a credential of the document.
 - `cli` -- the `apply-initial-data` entry point. It hands the backup part to the
   workspace's own backup setup (`request_backup_destination` of
   `workspace_backup_setup`), exactly as `PUT /api/workspace/backups/destination`

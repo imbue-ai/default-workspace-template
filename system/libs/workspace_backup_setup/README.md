@@ -29,9 +29,12 @@ the user's own storage is refused.
   state. It is what the shell's route calls and what the workspace's initial data
   calls. It raises `InvalidBackupDestinationError` for a destination it cannot
   take, and `BackupOperationRunningError` for a request that would change
-  something while anyone holds the backup lease. A request for what the workspace
-  already holds changes nothing, except that a setup that had failed is tried
-  again at once. Recording a request never touches the `restic.env` in use.
+  something while another backup operation holds the backup lease. The
+  workspace's own setup holding it refuses nothing: the request replaces what
+  the setup was asked, and an attempt under way ends without installing
+  anything. A request for what the workspace already holds changes nothing,
+  except that a setup that had failed is tried again at once. Recording a
+  request never touches the `restic.env` in use.
 - `program` -- `backup-setup`, a supervised program
   (`system/supervisord.conf.d/backup_setup.conf`, where supervisord knows it as
   `backup_setup`). For a destination with storage it

@@ -382,7 +382,7 @@ The body of `PUT /api/workspace/backups/destination` is `{"destination"}` with t
 | `NONE` | Nothing: backups are off |
 
 - A request for what the workspace already holds changes nothing and answers the state, except that a setup that had failed is tried again at once.
-- A request that would change something is refused with `409` and the code `BACKUP_OPERATION_RUNNING`, naming the holder, while anyone holds the backup lease.
+- A request that would change something is refused with `409` and the code `BACKUP_OPERATION_RUNNING`, naming the holder, while another backup operation holds the backup lease. The workspace's own setup holding it refuses nothing: the request replaces what the setup was asked, and an attempt under way ends without installing anything, so backups can be turned off or sent elsewhere while an attempt hangs.
 - A destination named with no storage is set up from what the workspace kept for it, and reads `AWAITING_STORAGE` when it kept nothing.
 - Storage offered for the repository the workspace already uses is taken only once the workspace finds that the storage refuses what it holds: a repository at the backup store has one token, and a client that asks the connector for another ends the first.
 - `NONE` moves `restic.env` aside to `restic.env.<timestamp>`, which the workspace keeps, and the backup service goes idle. Until the new destination is ready, a change of destination leaves the previous one in use.
@@ -459,7 +459,8 @@ Each part has the shape of the request of the route that writes the same thing (
 The boot sequence applies it each time the workspace's services are started, after the workspace's Python packages are in place and before the clock is set (`apply-initial-data`, `system/libs/workspace_initial_data`), by handing each part to the writer its route calls; the timezone is recorded only where none is, and is in force from that very start.
 The trigger is the file being there, not a first boot: a pool machine's first boot is over when it is baked, and its document is written when it is adopted, before its services are started again.
 When every part is written the step records that in `data/.state/initial_data/state.json` and deletes the document, which holds storage credentials.
-A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, the boot goes on, and the next start applies it again whole; no reason quotes a value of the document.
+A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, the boot goes on, and the next start applies it again whole; a part its writer refuses does not stop the others, and no reason quotes a credential of the document.
+The backup part is handed to the function `PUT /api/workspace/backups/destination` calls, under that route's rules: the destination and its storage are recorded for `backup-setup`, and a destination named while another backup operation holds the backup lease fails the part until the next start.
 The status route answers how it stands, as `initial_data` (above).
 
 **Suggestions.**

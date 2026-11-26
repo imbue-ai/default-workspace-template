@@ -335,6 +335,77 @@ def test_a_setup_the_program_was_stopped_in_is_taken_up_when_it_starts(
     assert fake_restic_calls(fake_restic_control) == [f"{IMBUE_CLOUD_REPOSITORY}|init"]
 
 
+def test_a_destination_named_during_an_attempt_ends_the_attempt_and_is_set_up_next(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    def _name_other_storage_then_make_a_password() -> str:
+        workspace.request(imbue_cloud_request("token-b"))
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_name_other_storage_then_make_a_password,
+    )
+    workspace.request(imbue_cloud_request("token-a"))
+
+    program.run_pass()
+
+    # The attempt at token-a stops short of the repository, and leaves the storage named since where it is.
+    superseding = workspace.state()
+    assert (superseding.setup.state, superseding.is_configured, superseding.lease) == (
+        BackupSetupState.INITIALIZING,
+        False,
+        None,
+    )
+    assert fake_restic_calls(fake_restic_control) == []
+    assert read_pending_env(
+        workspace.root, read_setup_record(workspace.root).request_id
+    ) == {
+        "RESTIC_REPOSITORY": IMBUE_CLOUD_REPOSITORY,
+        "RESTIC_REST_USERNAME": WORKSPACE_ID,
+        "RESTIC_REST_PASSWORD": "token-b",
+    }
+
+    program.run_pass()
+
+    assert workspace.state().setup.state is BackupSetupState.READY
+    assert workspace.installed()["RESTIC_REST_PASSWORD"] == "token-b"
+    assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-2"
+
+
+def test_backups_turned_off_during_an_attempt_end_it_with_nothing_installed(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    def _turn_backups_off_then_make_a_password() -> str:
+        workspace.request({"destination": "NONE"})
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_turn_backups_off_then_make_a_password,
+    )
+    workspace.request(imbue_cloud_request("token-a"))
+
+    program.run_pass()
+    program.run_pass()
+
+    state = workspace.state()
+    assert (state.destination, state.setup.state, state.is_configured, state.lease) == (
+        BackupDestinationKind.NONE,
+        BackupSetupState.NONE,
+        False,
+        None,
+    )
+    assert fake_restic_calls(fake_restic_control) == []
+    assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
+
+
 def test_a_failed_setup_is_tried_as_soon_as_the_program_starts(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:

@@ -10,7 +10,7 @@ class InvalidBackupDestinationError(BackupSetupError, ValueError):
 
 
 class BackupOperationRunningError(BackupSetupError):
-    """Someone holds the backup lease, so the destination cannot change now."""
+    """Another backup operation holds the backup lease, so the destination cannot change now."""
 
     def __init__(self, lease: BackupLease) -> None:
         super().__init__(
