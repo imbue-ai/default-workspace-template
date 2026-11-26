@@ -494,7 +494,8 @@ def write_backup_destination() -> ResponseReturnValue:
             HTTP_CONFLICT,
         )
     except OSError as e:
-        logger.opt(exception=e).error("Could not record the backup destination")
+        # No traceback: its frames hold the storage credentials.
+        logger.error("Could not record the backup destination: {}", e)
         raise WorkspaceRouteRefusal(
             f"The backup destination could not be recorded: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
         ) from e

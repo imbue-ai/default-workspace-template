@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from host_backup.config import RESTIC_ENV_PATH, parse_restic_env_file
 from host_backup.restic import init_repo, run_restic
+from loguru import logger
 from workspace_bare_scripts.backup_lease import read_lease, release_lease, take_lease
 
 from workspace_backup_setup.destination import request_backup_destination
@@ -18,6 +19,7 @@ from workspace_backup_setup.env_files import (
 from workspace_backup_setup.program import (
     CREDENTIALS_CHECK_INTERVAL_SECONDS,
     BackupSetupProgram,
+    _run_pass_and_log,
 )
 from workspace_backup_setup.state import (
     BackupSetupState,
@@ -771,3 +773,44 @@ def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     workspace.clock.advance(600.0)
     program.run_pass()
     assert not workspace.restic_env.exists()
+
+
+def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
+    workspace: _Workspace,
+) -> None:
+    pending_path = workspace.root / PENDING_ENV_RELATIVE_PATH
+
+    def _put_a_directory_in_the_pending_envs_place_then_make_a_password() -> str:
+        pending_path.unlink()
+        pending_path.mkdir()
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_put_a_directory_in_the_pending_envs_place_then_make_a_password,
+    )
+    # A traceback that shows the values on its frames cuts each one short, so these are short enough to be shown.
+    workspace.request(
+        own_storage_request("s3:b/r", {"AWS_SECRET_ACCESS_KEY": "frame-secret"})
+    )
+    logged: list[str] = []
+    sink_id = logger.add(
+        lambda message: logged.append(str(message)),
+        level="ERROR",
+        diagnose=True,
+        backtrace=True,
+    )
+    try:
+        _run_pass_and_log(program)
+    finally:
+        logger.remove(sink_id)
+
+    assert workspace.passwords.made == ["made-password-1"]
+    assert len(logged) == 1
+    assert "A pass of backup-setup failed" in logged[0]
+    assert "Is a directory" in logged[0]
+    assert "frame-secret" not in logged[0]
+    assert "made-password-1" not in logged[0]

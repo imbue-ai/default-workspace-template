@@ -505,4 +505,5 @@ def _run_pass_and_log(program: BackupSetupProgram) -> None:
     try:
         program.run_pass()
     except OSError as e:
-        logger.opt(exception=e).error("A pass of backup-setup failed")
+        # No traceback: its frames hold the storage credentials and the repository's password.
+        logger.error("A pass of backup-setup failed: {}", e)
