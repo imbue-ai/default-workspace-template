@@ -1,11 +1,15 @@
 """Test utilities shared across the gateway's test modules."""
 
 import json
+import os
+import select
+import socket
 import subprocess
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 from wsgiref.types import WSGIApplication
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -17,6 +21,9 @@ from werkzeug.serving import make_server
 from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
+from share_gateway.agent_exec import RunRequest
+from share_gateway.agent_exec import RunningCommands
+from share_gateway.agent_exec import stream_command
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
 from share_gateway.caddyfile import RegisteredApp
@@ -35,10 +42,14 @@ def set_cookies_by_name(response: Response) -> dict[str, str]:
 
 @contextmanager
 def serve_wsgi(
-    app: WSGIApplication, request_handler: type[WSGIRequestHandler] | None = None
+    app: WSGIApplication, request_handler: type[WSGIRequestHandler] | None = None, is_threaded: bool = False
 ) -> Generator[str, None, None]:
-    """Serve ``app`` on a loopback port through ``request_handler`` until the block ends; yields its base URL."""
-    server = make_server("127.0.0.1", 0, app, request_handler=request_handler)
+    """Serve ``app`` on a loopback port through ``request_handler`` until the block ends; yields its base URL.
+
+    ``is_threaded`` serves each request on its own thread, as the runner does, which is also what makes the server
+    answer in HTTP/1.1 and so send a streamed answer in chunks.
+    """
+    server = make_server("127.0.0.1", 0, app, threaded=is_threaded, request_handler=request_handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -124,6 +135,7 @@ def build_agent_test_app(
     workspace_domain: str,
     auth_label: str,
     signing_secret: str,
+    chrome_origin: str = "",
 ) -> Flask:
     """The gateway app with bearer admission and the /_agent/* routes wired to ``context``, as the runner builds it."""
     materials = ShareMaterials(
@@ -131,7 +143,7 @@ def build_agent_test_app(
         relay_token="tok",
         connector_url=f"https://connector.{workspace_domain}",
         broker_url=f"https://accounts.{workspace_domain}",
-        chrome_origin="",
+        chrome_origin=chrome_origin,
     )
     app = build_gateway_app(
         materials=materials,
@@ -153,5 +165,53 @@ def build_agent_test_app(
         signing_secret=signing_secret,
         share_grants_path=share_grants_path,
         get_registered_apps=lambda: apps,
+        chrome_origin=chrome_origin,
     )
     return app
+
+
+class ProcessLifeline:
+    """A FIFO a command holds open, so a test can wait for every process of that command to be gone.
+
+    The command's shell opens ``path`` for writing on a spare descriptor
+    (``exec 3>path``), which everything it starts inherits. The read end
+    reports the end of the file only once the last of them has exited, and a
+    test waits on that rather than on a timer. Ask only after the command has
+    said it opened the FIFO: one no process has opened yet reads as released.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.path = directory / f"lifeline-{uuid4().hex}"
+        os.mkfifo(self.path)
+        self._reader = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+
+    def close(self) -> None:
+        os.close(self._reader)
+
+    def holding_command(self) -> list[str]:
+        """A shell that opens the FIFO, says ``started``, starts a child that holds the FIFO too, and waits on it."""
+        return ["sh", "-c", f"exec 3>{self.path}; echo started; sleep 600 & wait"]
+
+    def is_released_within(self, timeout_seconds: float) -> bool:
+        """Whether every process holding the FIFO open exits within ``timeout_seconds``."""
+        readable, _writable, _exceptional = select.select([self._reader], [], [], timeout_seconds)
+        return bool(readable) and os.read(self._reader, 1) == b""
+
+
+def run_to_completion(command: list[str], cwd: Path, timeout_seconds: float = 5.0) -> list[dict[str, object]]:
+    """Every event of ``command``, run in ``cwd`` to its end."""
+    return list(stream_command(RunRequest(command, cwd, timeout_seconds), RunningCommands()))
+
+
+def start_holding(
+    lifeline: ProcessLifeline,
+    cwd: Path,
+    timeout_seconds: float,
+    running: RunningCommands,
+    caller: socket.socket | None = None,
+) -> Generator[dict[str, object], None, None]:
+    """Start ``lifeline``'s holding command, and answer its events from after its first line, which it prints once
+    the FIFO is open."""
+    events = stream_command(RunRequest(lifeline.holding_command(), cwd, timeout_seconds), running, caller)
+    assert next(events) == {"type": "stdout", "data": "started\n"}
+    return events

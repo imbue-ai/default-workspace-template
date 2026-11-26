@@ -52,6 +52,7 @@ from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
 from share_gateway.agent_audit import events_dir_from_environ
+from share_gateway.agent_exec import RunningCommands
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
@@ -191,8 +192,8 @@ def _reload_frpc(config_path: Path) -> bool:
 
 
 class ShareStack:
-    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, and the relay
-    credential brokered for the Screen."""
+    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, the relay
+    credential brokered for the Screen, and the commands visiting agents have in flight."""
 
     def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
         self.materials = materials
@@ -200,6 +201,7 @@ class ShareStack:
         self.assignment = assignment
         self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
+        self.running_commands: RunningCommands | None = None
         self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
@@ -319,6 +321,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     agent_access = _build_agent_access_context(materials.workspace_domain)
+    stack.running_commands = agent_access.running_commands
     request_counter = RequestCounter(request_counts_events_path(os.environ))
     app = build_gateway_app(
         materials=materials,
@@ -343,6 +346,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         signing_secret=signing_secret,
         share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        chrome_origin=materials.chrome_origin,
     )
     stack.gateway_server = make_server(
         "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
@@ -413,6 +417,10 @@ def _stop_stack(stack: ShareStack | None) -> None:
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
+    # A command runs in a process group of its own, so stopping this service does not reach it, and once the
+    # gateway is gone nothing would enforce its timeout.
+    if stack.running_commands is not None:
+        stack.running_commands.kill_all()
     if stack.request_count_flusher is not None:
         stack.request_count_flusher.stop()
     _log("Share stack stopped")
