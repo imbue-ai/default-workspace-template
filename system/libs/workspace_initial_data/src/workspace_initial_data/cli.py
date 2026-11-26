@@ -8,15 +8,37 @@ says how the initial data stands.
 
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
+from workspace_backup_setup.destination import request_backup_destination
+from workspace_backup_setup.state import (
+    backup_lease_path,
+    workspace_id_from_environment,
+)
 
 from workspace_initial_data.apply import apply_initial_data
 
 # Where mngr keeps the machine's own state, which is where whoever creates the workspace leaves the document.
 HOST_DIR_ENV_VAR: Final[str] = "MNGR_HOST_DIR"
+
+
+def record_backup_destination(
+    workspace_root: Path, request: Mapping[str, object]
+) -> object:
+    """Hand the document's backup part to the workspace's own backup setup, as the destination's route does.
+
+    Nothing is set up here: the request is recorded, and ``backup-setup`` acts on it once the services run.
+    """
+    return request_backup_destination(
+        workspace_root,
+        request,
+        lease_path=backup_lease_path(),
+        now=time.time(),
+        workspace_id=workspace_id_from_environment(os.environ),
+    )
 
 
 def main() -> None:
@@ -30,7 +52,7 @@ def main() -> None:
     status = apply_initial_data(
         Path(host_dir),
         Path.cwd(),
-        record_backup_destination=None,
+        record_backup_destination=record_backup_destination,
         now=time.time(),
     )
     logger.info("The workspace's initial data: {}", status.state.value)

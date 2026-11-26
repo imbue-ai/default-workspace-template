@@ -467,14 +467,12 @@ def write_backup_destination() -> ResponseReturnValue:
     a password among the variables of the user's own storage, are refused with 400 INVALID_DESTINATION.
     """
     _admit(is_changing_the_workspace=True)
-    _body(BackupDestinationRequest)
-    # The model masks its secrets when it is dumped, so the library reads the body as it was sent.
-    sent = request.get_json(force=True, silent=True)
-    body = {str(name): value for name, value in sent.items()} if isinstance(sent, dict) else {}
+    body = _body(BackupDestinationRequest)
     try:
         outcome = request_backup_destination(
             _workspace_root(),
-            body,
+            # Dumped to Python's own values, which keeps each secret as it was sent; a JSON dump would mask them.
+            body.model_dump(),
             lease_path=get_state().backup_lease_path,
             now=time.time(),
             workspace_id=workspace_id_from_environment(os.environ),

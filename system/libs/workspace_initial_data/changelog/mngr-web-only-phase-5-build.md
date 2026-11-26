@@ -6,4 +6,4 @@ New library: the document a workspace is handed when it is created, and the step
 
 - `status` keeps how it stands in `data/.state/initial_data/state.json` (`NONE`, `APPLIED` with when, `FAILED` with why), which the shell's status route answers. No reason quotes a value of the document.
 
-- The backup destination is handed to a function of `workspace_backup_setup` that the caller passes in. With none passed, a document that names a destination fails rather than being skipped.
+- The backup destination is handed to the workspace's own backup setup (`request_backup_destination` of `workspace_backup_setup`), as the destination's route hands it one: it is recorded with the storage that came with it, and `backup-setup` sets it up once the services run. A destination the setup refuses fails that part, and so does one named while a backup operation holds the backup lease.

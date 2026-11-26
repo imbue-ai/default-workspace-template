@@ -119,11 +119,13 @@ def test_a_part_left_out_or_null_writes_nothing(
 
 
 def test_a_document_with_no_parts_is_applied_and_deleted(
-    workspace_root: Path, host_dir: Path
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
     document_path = write_initial_data_document(host_dir, {"schema": 1})
 
-    assert apply_initial_data(host_dir, workspace_root, None, _NOW) == _APPLIED
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == _APPLIED
     assert not document_path.exists()
 
 
@@ -235,22 +237,8 @@ def test_every_part_a_writer_refuses_is_named_and_no_value_of_the_document_is_qu
     assert len(backup_destination.requests) == 1
 
 
-def test_a_backup_destination_with_nothing_to_take_it_fails_and_is_not_skipped(
-    workspace_root: Path, host_dir: Path
-) -> None:
-    document_path = write_initial_data_document(host_dir, initial_data_document())
-
-    status = apply_initial_data(host_dir, workspace_root, None, _NOW)
-
-    assert status.state is InitialDataState.FAILED
-    assert status.detail.startswith(
-        "backups: nothing in this workspace takes a backup destination"
-    )
-    assert document_path.exists()
-
-
 def test_the_update_settings_keep_what_the_workspace_holds_of_its_own(
-    workspace_root: Path, host_dir: Path
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
     write_initial_data_document(
         host_dir,
@@ -263,7 +251,7 @@ def test_the_update_settings_keep_what_the_workspace_holds_of_its_own(
             },
         },
     )
-    apply_initial_data(host_dir, workspace_root, None, _NOW)
+    apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
 
     # A second document, as another create of the same machine would leave, names none of the workspace's own.
     write_initial_data_document(
@@ -273,7 +261,7 @@ def test_the_update_settings_keep_what_the_workspace_holds_of_its_own(
             "update_settings": {**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"},
         },
     )
-    apply_initial_data(host_dir, workspace_root, None, _NOW + 60)
+    apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 60)
 
     stored = read_update_settings()
     assert stored is not None
@@ -281,7 +269,10 @@ def test_the_update_settings_keep_what_the_workspace_holds_of_its_own(
 
 
 def test_the_update_settings_are_refused_from_anywhere_but_the_workspaces_root(
-    workspace_root: Path, host_dir: Path, tmp_path: Path
+    workspace_root: Path,
+    host_dir: Path,
+    tmp_path: Path,
+    backup_destination: RecordingBackupDestination,
 ) -> None:
     write_initial_data_document(
         host_dir, {"schema": 1, "update_settings": UPDATE_SETTINGS_PART_DOCUMENT}
@@ -289,7 +280,7 @@ def test_the_update_settings_are_refused_from_anywhere_but_the_workspaces_root(
     elsewhere = tmp_path / "another-workspace"
     elsewhere.mkdir()
 
-    status = apply_initial_data(host_dir, elsewhere, None, _NOW)
+    status = apply_initial_data(host_dir, elsewhere, backup_destination, _NOW)
 
     assert status.state is InitialDataState.FAILED
     assert "not the working directory" in status.detail

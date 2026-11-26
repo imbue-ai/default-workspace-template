@@ -51,11 +51,17 @@ adopted, before its services are started again.
   credentials. A document that does not parse, whose `schema` is above the one this
   template knows, or a part of which its writer refuses, is left where it is with
   the reason recorded, and the next start applies it again whole: every writer is
-  safe to run twice. The backup part is taken by a function of
-  `workspace_backup_setup` that the caller passes in.
+  safe to run twice. The backup part is taken by the function the caller passes
+  in.
 - `status` -- how the initial data stands, kept in
   `data/.state/initial_data/state.json` and answered by the shell's
   `GET /api/workspace/status` as its `initial_data` member: `NONE` (no document was
   found and none has been applied), `APPLIED` with when, or `FAILED` with why. No
   detail quotes a value of the document.
-- `cli` -- the `apply-initial-data` entry point.
+- `cli` -- the `apply-initial-data` entry point. It hands the backup part to the
+  workspace's own backup setup (`request_backup_destination` of
+  `workspace_backup_setup`), exactly as `PUT /api/workspace/backups/destination`
+  does: the destination and the storage that came with it are recorded, and the
+  `backup-setup` program sets them up once the services run. A destination that
+  function refuses fails the part, and so does one named while a backup operation
+  holds the backup lease, which the next start then records.

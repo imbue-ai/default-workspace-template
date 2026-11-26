@@ -57,7 +57,8 @@ UPDATE_SETTINGS_PART: Final[str] = "update_settings"
 BACKUPS_PART: Final[str] = "backups"
 
 # Records where a workspace's backups go, from the request ``PUT /api/workspace/backups/destination`` takes: the
-# workspace's root, then the request. It raises ``BackupSetupError`` for a request it refuses.
+# workspace's root, then the request. It raises ``BackupSetupError`` for a request it refuses, which a request made
+# while a backup operation runs also is, and ``OSError`` when it cannot write what it was asked.
 BackupDestinationRecorder = Callable[[Path, Mapping[str, object]], object]
 
 _PartWriter = Callable[[Path, Mapping[str, object]], None]
@@ -96,13 +97,9 @@ def _write_update_settings(workspace_root: Path, part: Mapping[str, object]) -> 
 
 
 def _backup_destination_writer(
-    record_backup_destination: BackupDestinationRecorder | None,
+    record_backup_destination: BackupDestinationRecorder,
 ) -> _PartWriter:
     def write(workspace_root: Path, part: Mapping[str, object]) -> None:
-        if record_backup_destination is None:
-            raise InitialDataPartRefusedError(
-                "nothing in this workspace takes a backup destination, so the one it was handed is not set up"
-            )
         try:
             record_backup_destination(workspace_root, part)
         except (BackupSetupError, OSError) as e:
@@ -174,7 +171,7 @@ def _failed(
 def apply_initial_data(
     host_dir: Path,
     workspace_root: Path,
-    record_backup_destination: BackupDestinationRecorder | None,
+    record_backup_destination: BackupDestinationRecorder,
     now: float,
 ) -> InitialDataStatus:
     """Apply the document in ``host_dir`` when there is one, and answer how the initial data stands.
@@ -185,7 +182,9 @@ def apply_initial_data(
     with the reason recorded, so the next start applies it again whole; the parts that could be written are
     written all the same.
 
-    ``record_backup_destination`` takes the backup part. With none, a document that carries a backup part fails.
+    ``record_backup_destination`` takes the backup part: the workspace's own backup setup, which records the
+    destination and acts on it once the services run. A destination it refuses, and one named while a backup
+    operation holds the backup lease, fail that part as any writer's refusal does.
     """
     document_path = host_dir / INITIAL_DATA_FILE_NAME
     try:
