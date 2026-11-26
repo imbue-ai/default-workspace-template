@@ -12,9 +12,9 @@ from typing import Final
 from app_schema.api_schema import ErrorResponse
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import SecretStr
 from pydantic import StrictBool
 from pydantic import StrictInt
+from workspace_backup_setup.state import BackupLeaseHolder
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -34,9 +34,9 @@ OPERATION_SHARING_READ: Final[str] = "sharing.read"
 OPERATION_SHARING_GRANTS_WRITE: Final[str] = "sharing.grants.write"
 OPERATION_PROFILE_WRITE: Final[str] = "profile.write"
 OPERATION_TIMEZONE_WRITE: Final[str] = "timezone.write"
-OPERATION_BACKUPS_CREDENTIALS_WRITE: Final[str] = "backups.credentials.write"
-OPERATION_BACKUPS_CREDENTIALS_REMOVE: Final[str] = "backups.credentials.remove"
-OPERATION_BACKUPS_SETUP_READ: Final[str] = "backups.setup.read"
+OPERATION_BACKUPS_READ: Final[str] = "backups.read"
+OPERATION_BACKUPS_DESTINATION_WRITE: Final[str] = "backups.destination.write"
+OPERATION_BACKUPS_CREDENTIALS_READ: Final[str] = "backups.credentials.read"
 OPERATION_BACKUPS_VERIFICATION_WRITE: Final[str] = "backups.verification.write"
 OPERATION_UPDATE_READ: Final[str] = "update.read"
 OPERATION_UPDATE_START: Final[str] = "update.start"
@@ -53,9 +53,9 @@ WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_SHARING_GRANTS_WRITE,
     OPERATION_PROFILE_WRITE,
     OPERATION_TIMEZONE_WRITE,
-    OPERATION_BACKUPS_CREDENTIALS_WRITE,
-    OPERATION_BACKUPS_CREDENTIALS_REMOVE,
-    OPERATION_BACKUPS_SETUP_READ,
+    OPERATION_BACKUPS_READ,
+    OPERATION_BACKUPS_DESTINATION_WRITE,
+    OPERATION_BACKUPS_CREDENTIALS_READ,
     OPERATION_BACKUPS_VERIFICATION_WRITE,
     OPERATION_UPDATE_READ,
     OPERATION_UPDATE_START,
@@ -75,8 +75,9 @@ CODE_INVALID_GRANTS: Final[str] = "INVALID_GRANTS"
 CODE_GRANTS_UNREADABLE: Final[str] = "GRANTS_UNREADABLE"
 CODE_INVALID_PROFILE: Final[str] = "INVALID_PROFILE"
 CODE_INVALID_TIMEZONE: Final[str] = "INVALID_TIMEZONE"
-CODE_INVALID_CREDENTIALS: Final[str] = "INVALID_CREDENTIALS"
-CODE_SETUP_RUNNING: Final[str] = "SETUP_RUNNING"
+CODE_INVALID_DESTINATION: Final[str] = "INVALID_DESTINATION"
+CODE_BACKUP_OPERATION_RUNNING: Final[str] = "BACKUP_OPERATION_RUNNING"
+CODE_OWNER_ONLY: Final[str] = "OWNER_ONLY"
 CODE_INVALID_UPDATE_SETTINGS: Final[str] = "INVALID_UPDATE_SETTINGS"
 CODE_WRITE_FAILED: Final[str] = "WRITE_FAILED"
 CODE_NOT_AT_WORKSPACE_ROOT: Final[str] = "NOT_AT_WORKSPACE_ROOT"
@@ -242,18 +243,10 @@ class TimezoneResponse(FrozenModel):
     is_written: bool = Field(description="Whether this request wrote it")
 
 
-class BackupCredentialsRequest(FrozenModel):
-    """The backup credentials: the whole of ``restic.env``."""
+class BackupOperationRunningRefusal(WorkspaceRouteError):
+    """A change of the backup destination refused because a backup operation is running."""
 
-    env_text: SecretStr = Field(
-        description="The contents of restic.env: the repository, its password, the backend keys"
-    )
-
-
-class BackupCredentialsRemovedResponse(FrozenModel):
-    """What removing the backup credentials answers."""
-
-    is_removed: bool = Field(description="Whether there was a restic.env to move aside")
+    lease: BackupLeaseHolder = Field(description="Who holds the backup lease, and until when")
 
 
 class BackupVerificationModel(FrozenModel):

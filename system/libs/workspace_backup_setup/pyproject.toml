@@ -1,15 +1,21 @@
 [project]
 name = "workspace-backup-setup"
 version = "0.1.0"
-description = "A workspace's backup configuration as a client sets it up: its restic credentials, the initialisation of its repository, and the verification flag"
+description = "A workspace's own setup of its backups: the destination a client names, the backup-setup program that initialises the repository and installs restic.env, and the verification flag"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # The parser of restic.env and the restic wrapper the backup service itself uses.
     "host-backup",
     "imbue-common",
+    "loguru>=0.7.0",
     "pydantic>=2.0",
+    # The backup lease (workspace_bare_scripts.backup_lease), which the Imbue Studio desktop runs with no venv.
+    "workspace-scripts",
 ]
+
+[project.scripts]
+backup-setup = "workspace_backup_setup.program:main"
 
 [build-system]
 requires = ["hatchling"]

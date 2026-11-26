@@ -147,8 +147,8 @@ CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
-# then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the Screen service (the stack it starts sits far above,
+# then the runtime-state sync (github-sync, opt-in), the host backup and the
+# backups' own setup, then the job scheduler, then the Screen service (the stack it starts sits far above,
 # at SCREEN_STACK), then the Files app, then the two single-page apps (Getting
 # Started, then System Monitor), and last the System Monitor's resource sampler.
 # ``user`` is the single band every *user-created* service shares;
@@ -204,6 +204,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # Opt-in runtime/ sync (added by the github-sync skill).
     "github-sync": 40,
     "host-backup": 50,
+    # The workspace's own setup of its backups: a small process that is idle but for a setup and an hourly
+    # check. A shed costs nothing kept: what it was asked is on disk, and it takes it up when it comes back.
+    "backup-setup": 52,
     # The cron daemon behind the workspace's scheduled jobs. A shed defers those
     # jobs rather than losing them -- the every-minute checkers fire at the due
     # hour when the container is up, or the first minute it is back up after a

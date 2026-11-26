@@ -74,6 +74,7 @@ RESERVED_NAMES = frozenset(
         "bootstrap",
         "github-sync",
         "host-backup",
+        "backup-setup",
         "terminal",
         "deferred-install",
         "imbue-common",

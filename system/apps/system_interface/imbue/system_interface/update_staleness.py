@@ -110,6 +110,8 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/workspace_profile/",
     "system/libs/workspace_themes/",
     "system/libs/workspace_update_control/",
+    # The backup lease, which workspace_backup_setup reads for the backup routes.
+    "system/scripts/workspace_bare_scripts/backup_lease.py",
     "system/services/host_backup/",
     "system/services/oom_priority/",
 )

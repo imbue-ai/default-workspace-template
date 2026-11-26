@@ -7,17 +7,17 @@ backup configuration in ``workspace_backup_setup``, and the updates in ``workspa
 
 A route asks for no more than the request guard already does: it reads the requester's identity, so a header that
 does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to this internal app
-already reaches the terminal, and with it every file a route writes.
+already reaches the terminal, and with it every file a route writes. The one exception is the read of the backup
+credentials, which answers a secret to a client outside the workspace, and so answers the owner alone.
 
 A refusal is ``{"detail", "code"}`` under a 4xx, a route that could not do what it was asked is the same under a
 5xx, and an answer that describes what the workspace did, including that it declined, is a 200 with an ``outcome``.
 """
 
+import os
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Final
 from typing import TypeVar
@@ -44,13 +44,16 @@ from share_grants.document import read_sharing_state
 from share_grants.document import replace_grants
 from share_grants.grants import GrantList
 from share_grants.grants import Grants
-from workspace_backup_setup.errors import BackupSetupRunningError
-from workspace_backup_setup.errors import InvalidBackupCredentialsError
-from workspace_backup_setup.setup import BackupSetupState
-from workspace_backup_setup.setup import BackupSetupStatus
-from workspace_backup_setup.setup import begin_setup
-from workspace_backup_setup.setup import read_setup_status
-from workspace_backup_setup.setup import remove_credentials
+from workspace_backup_setup.destination import BackupDestinationRequest
+from workspace_backup_setup.destination import request_backup_destination
+from workspace_backup_setup.errors import BackupOperationRunningError
+from workspace_backup_setup.errors import InvalidBackupDestinationError
+from workspace_backup_setup.state import BackupCredentials
+from workspace_backup_setup.state import BackupLeaseHolder
+from workspace_backup_setup.state import BackupState
+from workspace_backup_setup.state import read_backup_credentials
+from workspace_backup_setup.state import read_backup_state
+from workspace_backup_setup.state import workspace_id_from_environment
 from workspace_backup_setup.verification import read_verification_disabled
 from workspace_backup_setup.verification import write_verification_disabled
 from workspace_profile.errors import InvalidProfileSnapshotError
@@ -85,19 +88,19 @@ from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.template_ref import read_template_ref
-from imbue.system_interface.workspace_api_models import BackupCredentialsRemovedResponse
-from imbue.system_interface.workspace_api_models import BackupCredentialsRequest
+from imbue.system_interface.workspace_api_models import BackupOperationRunningRefusal
 from imbue.system_interface.workspace_api_models import BackupVerificationModel
+from imbue.system_interface.workspace_api_models import CODE_BACKUP_OPERATION_RUNNING
 from imbue.system_interface.workspace_api_models import CODE_GRANTS_UNREADABLE
-from imbue.system_interface.workspace_api_models import CODE_INVALID_CREDENTIALS
+from imbue.system_interface.workspace_api_models import CODE_INVALID_DESTINATION
 from imbue.system_interface.workspace_api_models import CODE_INVALID_GRANTS
 from imbue.system_interface.workspace_api_models import CODE_INVALID_PROFILE
 from imbue.system_interface.workspace_api_models import CODE_INVALID_REQUEST
 from imbue.system_interface.workspace_api_models import CODE_INVALID_TIMEZONE
 from imbue.system_interface.workspace_api_models import CODE_INVALID_UPDATE_SETTINGS
 from imbue.system_interface.workspace_api_models import CODE_NOT_AT_WORKSPACE_ROOT
+from imbue.system_interface.workspace_api_models import CODE_OWNER_ONLY
 from imbue.system_interface.workspace_api_models import CODE_PREVIEW
-from imbue.system_interface.workspace_api_models import CODE_SETUP_RUNNING
 from imbue.system_interface.workspace_api_models import CODE_WRITE_FAILED
 from imbue.system_interface.workspace_api_models import GRANTS_ERROR_UNREADABLE
 from imbue.system_interface.workspace_api_models import GRANTS_PER_APP_KEY
@@ -106,9 +109,9 @@ from imbue.system_interface.workspace_api_models import GrantRefusalEntry
 from imbue.system_interface.workspace_api_models import GrantsDocumentModel
 from imbue.system_interface.workspace_api_models import GrantsStoredResponse
 from imbue.system_interface.workspace_api_models import InvalidGrantsError
-from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_REMOVE
-from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_WRITE
-from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_SETUP_READ
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_READ
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_DESTINATION_WRITE
+from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_READ
 from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_VERIFICATION_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_PROFILE_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_SHARING_GRANTS_WRITE
@@ -159,9 +162,10 @@ SHARING_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/sharing"
 SHARING_GRANTS_ROUTE: Final[str] = f"{SHARING_ROUTE}/grants"
 PROFILE_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/profile"
 TIMEZONE_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/timezone"
-BACKUP_CREDENTIALS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/backups/credentials"
-BACKUP_SETUP_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/backups/setup"
-BACKUP_VERIFICATION_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/backups/verification"
+BACKUPS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/backups"
+BACKUP_DESTINATION_ROUTE: Final[str] = f"{BACKUPS_ROUTE}/destination"
+BACKUP_CREDENTIALS_ROUTE: Final[str] = f"{BACKUPS_ROUTE}/credentials"
+BACKUP_VERIFICATION_ROUTE: Final[str] = f"{BACKUPS_ROUTE}/verification"
 UPDATE_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/update"
 UPDATE_START_ROUTE: Final[str] = f"{UPDATE_ROUTE}/start"
 UPDATE_SCHEDULE_ROUTE: Final[str] = f"{UPDATE_ROUTE}/schedule"
@@ -174,6 +178,7 @@ UPDATE_SETTINGS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/settings"
 CHECK_SIGN_IN_PARAMETER: Final[str] = "check_sign_in"
 
 _PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
+_OWNER_ONLY_REFUSAL_DETAIL: Final[str] = "Only the workspace's owner may read its backup credentials."
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
@@ -392,58 +397,88 @@ def write_timezone() -> ResponseReturnValue:
 # Backups
 
 
-def write_backup_credentials() -> ResponseReturnValue:
-    """Take the backup credentials (the contents of restic.env) and start initialising the repository they name.
+def _backup_state() -> BackupState:
+    return read_backup_state(
+        _workspace_root(),
+        lease_path=get_state().backup_lease_path,
+        now=time.time(),
+        workspace_id=workspace_id_from_environment(os.environ),
+    )
 
-    Answers 202 with the setup's state, without waiting: restic.env is written when the repository is ready, and
-    not before, so the backup service never sees credentials for a repository that is not initialised. Read the
-    setup route until the state is READY or FAILED. Credentials already in place and ready change nothing and
-    answer 200 with READY. A second request while one initialisation runs is refused with 409 SETUP_RUNNING.
+
+def read_backups() -> ResponseReturnValue:
+    """Everything a client reads about the workspace's backups: where they go, how the setup of that destination
+    stands (with what failed and when the workspace tries again), whether restic.env is in place, the
+    verification flag, the repository, the digest of the credentials in use, and who holds the backup lease."""
+    _admit(is_changing_the_workspace=False)
+    return model_response(_backup_state())
+
+
+def write_backup_destination() -> ResponseReturnValue:
+    """Name where the workspace's backups go, with the storage that destination needs where the client has some.
+
+    The workspace sets the destination up itself: it makes the repository's password, initialises the repository,
+    installs restic.env, and tries again when that fails. Answers the backup state, under 202 when the request
+    left the workspace something to do and under 200 when it did not: a request for what the workspace already
+    holds changes nothing. A destination named with no storage is set up from what the workspace kept for it,
+    and awaits storage when it kept none. Storage offered for the repository already in use is taken only once
+    the workspace finds that the storage refuses what it holds. NONE moves restic.env aside and keeps it.
+
+    A request that would change something while a backup operation runs is refused with 409
+    BACKUP_OPERATION_RUNNING, naming who holds the backup lease. A destination the workspace does not know, and
+    a password among the variables of the user's own storage, are refused with 400 INVALID_DESTINATION.
     """
     _admit(is_changing_the_workspace=True)
-    body = _body(BackupCredentialsRequest)
+    _body(BackupDestinationRequest)
+    # The model masks its secrets when it is dumped, so the library reads the body as it was sent.
+    sent = request.get_json(force=True, silent=True)
+    body = {str(name): value for name, value in sent.items()} if isinstance(sent, dict) else {}
     try:
-        status = begin_setup(
+        outcome = request_backup_destination(
             _workspace_root(),
-            body.env_text.get_secret_value(),
-            proc_root=Path(PROC_ROOT),
-            run_in_background=_run_in_background,
-            clock=time.time,
+            body,
+            lease_path=get_state().backup_lease_path,
+            now=time.time(),
+            workspace_id=workspace_id_from_environment(os.environ),
         )
-    except InvalidBackupCredentialsError as e:
-        raise WorkspaceRouteRefusal(str(e), CODE_INVALID_CREDENTIALS, HTTP_BAD_REQUEST) from e
-    except BackupSetupRunningError as e:
-        raise WorkspaceRouteRefusal(str(e), CODE_SETUP_RUNNING, HTTP_CONFLICT) from e
+    except InvalidBackupDestinationError as e:
+        raise WorkspaceRouteRefusal(str(e), CODE_INVALID_DESTINATION, HTTP_BAD_REQUEST) from e
+    except BackupOperationRunningError as e:
+        return model_response(
+            BackupOperationRunningRefusal(
+                detail=str(e),
+                code=CODE_BACKUP_OPERATION_RUNNING,
+                lease=BackupLeaseHolder(
+                    holder=e.lease.holder, taken_at=e.lease.taken_at, expires_at=e.lease.expires_at
+                ),
+            ),
+            HTTP_CONFLICT,
+        )
     except OSError as e:
-        logger.opt(exception=e).error("Could not start the backup setup")
+        logger.opt(exception=e).error("Could not record the backup destination")
         raise WorkspaceRouteRefusal(
-            f"The backup setup could not be started: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
+            f"The backup destination could not be recorded: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
         ) from e
-    logger.info("Took backup credentials; the setup is {}", status.state.value)
-    return model_response(status, HTTP_ACCEPTED if status.state is BackupSetupState.INITIALIZING else HTTP_OK)
+    logger.info(
+        "Asked for the backup destination {}; the setup is {}",
+        outcome.state.destination.value,
+        outcome.state.setup.state.value,
+    )
+    return model_response(outcome.state, HTTP_ACCEPTED if outcome.is_setup_begun else HTTP_OK)
 
 
-def read_backup_setup() -> ResponseReturnValue:
-    """How the initialisation of the backup repository stands: NONE, INITIALIZING, READY, or FAILED with restic's
-    own words. An initialisation whose process is gone reads as FAILED; sending the credentials again is safe."""
+def read_backup_credentials_of_workspace() -> ResponseReturnValue:
+    """The whole text of the restic.env in use and its digest, both '' when there is none, to the owner alone.
+
+    The workspace makes the repository's password, so this is how an owner's client comes to hold a copy of it:
+    it reads the credentials when the digest the backup state answers differs from its own copy's. Anyone but the
+    owner is refused with 403 OWNER_ONLY.
+    """
     _admit(is_changing_the_workspace=False)
-    return model_response(read_setup_status(_workspace_root(), Path(PROC_ROOT)))
-
-
-def remove_backup_credentials() -> ResponseReturnValue:
-    """Move restic.env aside to restic.env.<timestamp>, so the backup service goes idle; refused with 409
-    SETUP_RUNNING while a repository is being initialised."""
-    _admit(is_changing_the_workspace=True)
-    try:
-        is_removed = remove_credentials(_workspace_root(), datetime.now(timezone.utc), proc_root=Path(PROC_ROOT))
-    except BackupSetupRunningError as e:
-        raise WorkspaceRouteRefusal(str(e), CODE_SETUP_RUNNING, HTTP_CONFLICT) from e
-    except OSError as e:
-        logger.opt(exception=e).error("Could not move the backup credentials aside")
-        raise WorkspaceRouteRefusal(
-            f"The backup credentials could not be moved aside: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
-        ) from e
-    return model_response(BackupCredentialsRemovedResponse(is_removed=is_removed))
+    identity = request_identity()
+    if not identity.owner or identity.agent_id is not None:
+        raise WorkspaceRouteRefusal(_OWNER_ONLY_REFUSAL_DETAIL, CODE_OWNER_ONLY, HTTP_FORBIDDEN)
+    return model_response(read_backup_credentials(_workspace_root()))
 
 
 def write_backup_verification() -> ResponseReturnValue:
@@ -730,14 +765,17 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ),
     ("PUT", PROFILE_ROUTE): _route(ProfileSnapshotRequest, ProfileWrittenResponse),
     ("PUT", TIMEZONE_ROUTE): _route(TimezoneRequest, TimezoneResponse),
-    ("PUT", BACKUP_CREDENTIALS_ROUTE): _route(
-        BackupCredentialsRequest,
-        BackupSetupStatus,
+    ("GET", BACKUPS_ROUTE): _route(None, BackupState),
+    ("PUT", BACKUP_DESTINATION_ROUTE): _route(
+        BackupDestinationRequest,
+        BackupState,
         success_status=HTTP_ACCEPTED,
-        other_answers=(AlternateResponse(status=HTTP_OK, model=BackupSetupStatus),),
+        other_answers=(
+            AlternateResponse(status=HTTP_OK, model=BackupState),
+            AlternateResponse(status=HTTP_CONFLICT, model=BackupOperationRunningRefusal),
+        ),
     ),
-    ("DELETE", BACKUP_CREDENTIALS_ROUTE): _route(None, BackupCredentialsRemovedResponse),
-    ("GET", BACKUP_SETUP_ROUTE): _route(None, BackupSetupStatus),
+    ("GET", BACKUP_CREDENTIALS_ROUTE): _route(None, BackupCredentials),
     ("PUT", BACKUP_VERIFICATION_ROUTE): _route(BackupVerificationModel, BackupVerificationModel),
     ("GET", UPDATE_ROUTE): _route(None, UpdateStateResponse),
     ("POST", UPDATE_START_ROUTE): _route(
@@ -760,9 +798,9 @@ WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
     ("PUT", SHARING_GRANTS_ROUTE): OPERATION_SHARING_GRANTS_WRITE,
     ("PUT", PROFILE_ROUTE): OPERATION_PROFILE_WRITE,
     ("PUT", TIMEZONE_ROUTE): OPERATION_TIMEZONE_WRITE,
-    ("PUT", BACKUP_CREDENTIALS_ROUTE): OPERATION_BACKUPS_CREDENTIALS_WRITE,
-    ("DELETE", BACKUP_CREDENTIALS_ROUTE): OPERATION_BACKUPS_CREDENTIALS_REMOVE,
-    ("GET", BACKUP_SETUP_ROUTE): OPERATION_BACKUPS_SETUP_READ,
+    ("GET", BACKUPS_ROUTE): OPERATION_BACKUPS_READ,
+    ("PUT", BACKUP_DESTINATION_ROUTE): OPERATION_BACKUPS_DESTINATION_WRITE,
+    ("GET", BACKUP_CREDENTIALS_ROUTE): OPERATION_BACKUPS_CREDENTIALS_READ,
     ("PUT", BACKUP_VERIFICATION_ROUTE): OPERATION_BACKUPS_VERIFICATION_WRITE,
     ("GET", UPDATE_ROUTE): OPERATION_UPDATE_READ,
     ("POST", UPDATE_START_ROUTE): OPERATION_UPDATE_START,
@@ -781,9 +819,9 @@ _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] 
     ("PUT", SHARING_GRANTS_ROUTE): replace_sharing_grants,
     ("PUT", PROFILE_ROUTE): write_profile,
     ("PUT", TIMEZONE_ROUTE): write_timezone,
-    ("PUT", BACKUP_CREDENTIALS_ROUTE): write_backup_credentials,
-    ("DELETE", BACKUP_CREDENTIALS_ROUTE): remove_backup_credentials,
-    ("GET", BACKUP_SETUP_ROUTE): read_backup_setup,
+    ("GET", BACKUPS_ROUTE): read_backups,
+    ("PUT", BACKUP_DESTINATION_ROUTE): write_backup_destination,
+    ("GET", BACKUP_CREDENTIALS_ROUTE): read_backup_credentials_of_workspace,
     ("PUT", BACKUP_VERIFICATION_ROUTE): write_backup_verification,
     ("GET", UPDATE_ROUTE): read_update,
     ("POST", UPDATE_START_ROUTE): start_update_now,

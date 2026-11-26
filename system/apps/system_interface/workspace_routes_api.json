@@ -1,44 +1,138 @@
 {
   "components": {
     "schemas": {
-      "BackupCredentialsRemovedResponse": {
+      "BackupCredentials": {
         "additionalProperties": false,
-        "description": "What removing the backup credentials answers.",
+        "description": "The credentials the workspace backs up with.",
         "properties": {
-          "is_removed": {
-            "description": "Whether there was a restic.env to move aside",
-            "title": "Is Removed",
-            "type": "boolean"
+          "digest": {
+            "description": "The SHA-256, in hex, of that text, which the backup state answers as credentials_digest; '' when there is none",
+            "title": "Digest",
+            "type": "string"
+          },
+          "env_text": {
+            "description": "The whole text of the restic.env in use; '' when there is none",
+            "title": "Env Text",
+            "type": "string"
           }
         },
         "required": [
-          "is_removed"
+          "env_text",
+          "digest"
         ],
-        "title": "BackupCredentialsRemovedResponse",
+        "title": "BackupCredentials",
         "type": "object"
       },
-      "BackupCredentialsRequest": {
+      "BackupDestinationKind": {
+        "description": "Where a workspace's backups go.",
+        "enum": [
+          "NONE",
+          "IMBUE_CLOUD",
+          "OWN_STORAGE"
+        ],
+        "title": "BackupDestinationKind",
+        "type": "string"
+      },
+      "BackupDestinationRequest": {
         "additionalProperties": false,
-        "description": "The backup credentials: the whole of ``restic.env``.",
+        "description": "Where the workspace's backups are to go, with the storage that destination needs where the caller has some.",
         "properties": {
-          "env_text": {
-            "description": "The contents of restic.env: the repository, its password, the backend keys",
-            "format": "password",
-            "title": "Env Text",
-            "type": "string",
-            "writeOnly": true
+          "destination": {
+            "description": "NONE, IMBUE_CLOUD or OWN_STORAGE. NONE turns backups off",
+            "title": "Destination",
+            "type": "string"
+          },
+          "imbue_cloud_storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImbueCloudStorage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With IMBUE_CLOUD: the storage the connector issued. Left out, the workspace uses what it kept for the destination, and awaits storage when it kept none"
+          },
+          "own_storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OwnStorage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With OWN_STORAGE: the repository and the variables of its storage. Left out, the workspace uses what it kept for the destination, and awaits storage when it kept none"
           }
         },
         "required": [
-          "env_text"
+          "destination"
         ],
-        "title": "BackupCredentialsRequest",
+        "title": "BackupDestinationRequest",
+        "type": "object"
+      },
+      "BackupLeaseHolder": {
+        "additionalProperties": false,
+        "description": "Who holds the backup lease, which keeps two backup operations apart.",
+        "properties": {
+          "expires_at": {
+            "description": "When it runs out unless renewed, seconds since the epoch",
+            "title": "Expires At",
+            "type": "number"
+          },
+          "holder": {
+            "description": "'setup' for the workspace's own setup, or the name of a program of the Imbue Studio desktop ('restore', 'backup-service-update', 'store-migration')",
+            "title": "Holder",
+            "type": "string"
+          },
+          "taken_at": {
+            "description": "When it was taken, seconds since the epoch",
+            "title": "Taken At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "holder",
+          "taken_at",
+          "expires_at"
+        ],
+        "title": "BackupLeaseHolder",
+        "type": "object"
+      },
+      "BackupOperationRunningRefusal": {
+        "additionalProperties": false,
+        "description": "A change of the backup destination refused because a backup operation is running.",
+        "properties": {
+          "code": {
+            "description": "An upper-case code naming the refusal or failure, for a caller that acts on it",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What went wrong, in words for the caller",
+            "title": "Detail",
+            "type": "string"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/BackupLeaseHolder",
+            "description": "Who holds the backup lease, and until when"
+          }
+        },
+        "required": [
+          "detail",
+          "code",
+          "lease"
+        ],
+        "title": "BackupOperationRunningRefusal",
         "type": "object"
       },
       "BackupSetupState": {
-        "description": "How the initialisation of the workspace's backup repository stands.",
+        "description": "How the setup of the workspace's backups stands.",
         "enum": [
           "NONE",
+          "AWAITING_STORAGE",
           "INITIALIZING",
           "READY",
           "FAILED"
@@ -48,11 +142,11 @@
       },
       "BackupSetupStatus": {
         "additionalProperties": false,
-        "description": "The setup's state as a client reads it: no credential, and nothing about the process behind it.",
+        "description": "How the setup stands, as a client reads it.",
         "properties": {
           "detail": {
             "default": "",
-            "description": "Why the initialisation failed, in restic's own words; '' otherwise",
+            "description": "What failed, or why storage is awaited, with no credential in it; '' otherwise",
             "title": "Detail",
             "type": "string"
           },
@@ -69,6 +163,19 @@
             "description": "When it ended, seconds since the epoch; null while it runs or when there was none",
             "title": "Finished At"
           },
+          "retry_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When the workspace tries a failed setup again, seconds since the epoch; null otherwise",
+            "title": "Retry At"
+          },
           "started_at": {
             "anyOf": [
               {
@@ -79,18 +186,74 @@
               }
             ],
             "default": null,
-            "description": "When the initialisation began, seconds since the epoch; null when there was none",
+            "description": "When the last attempt began, seconds since the epoch; null when there was none",
             "title": "Started At"
           },
           "state": {
             "$ref": "#/components/schemas/BackupSetupState",
-            "description": "NONE until credentials are sent, then INITIALIZING, then READY or FAILED"
+            "description": "NONE when no destination is chosen; AWAITING_STORAGE when one is and the workspace holds no storage credentials that work for it; INITIALIZING while an attempt runs; READY once restic.env is in place for the destination; FAILED when the last attempt failed"
           }
         },
         "required": [
           "state"
         ],
         "title": "BackupSetupStatus",
+        "type": "object"
+      },
+      "BackupState": {
+        "additionalProperties": false,
+        "description": "Everything a client reads about a workspace's backups.",
+        "properties": {
+          "credentials_digest": {
+            "description": "The SHA-256, in hex, of the text of the restic.env in use; '' when there is none",
+            "title": "Credentials Digest",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/BackupDestinationKind",
+            "description": "Where the backups go: NONE, IMBUE_CLOUD or OWN_STORAGE"
+          },
+          "is_configured": {
+            "description": "Whether restic.env is in place, which is what the backup service runs on",
+            "title": "Is Configured",
+            "type": "boolean"
+          },
+          "is_verification_enabled": {
+            "description": "Whether a client checks this workspace's backups",
+            "title": "Is Verification Enabled",
+            "type": "boolean"
+          },
+          "lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupLeaseHolder"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who holds the backup lease; null when nobody does"
+          },
+          "repository": {
+            "description": "The address of the destination's repository, with any credential in it taken out; '' when there is none or the workspace does not know it yet",
+            "title": "Repository",
+            "type": "string"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/BackupSetupStatus",
+            "description": "How the setup of that destination stands"
+          }
+        },
+        "required": [
+          "destination",
+          "setup",
+          "is_configured",
+          "is_verification_enabled",
+          "repository",
+          "credentials_digest",
+          "lease"
+        ],
+        "title": "BackupState",
         "type": "object"
       },
       "BackupVerificationModel": {
@@ -263,6 +426,36 @@
         "title": "GrantsStoredResponse",
         "type": "object"
       },
+      "ImbueCloudStorage": {
+        "additionalProperties": false,
+        "description": "The storage Imbue Cloud issued for this workspace: what the connector's ``POST /backups/repositories``\nanswers.",
+        "properties": {
+          "repository_url": {
+            "description": "The repository's address at the backup store, a rest: address",
+            "title": "Repository Url",
+            "type": "string"
+          },
+          "rest_password": {
+            "description": "The store's token for the repository",
+            "format": "password",
+            "title": "Rest Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "rest_username": {
+            "description": "The user name restic signs in to the store with",
+            "title": "Rest Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_url",
+          "rest_username",
+          "rest_password"
+        ],
+        "title": "ImbueCloudStorage",
+        "type": "object"
+      },
       "InvalidGrantsError": {
         "additionalProperties": false,
         "description": "A grants document whose shape is wrong: every entry refused, so a client can mark each row.",
@@ -292,6 +485,32 @@
           "refusals"
         ],
         "title": "InvalidGrantsError",
+        "type": "object"
+      },
+      "OwnStorage": {
+        "additionalProperties": false,
+        "description": "Storage of the user's own.",
+        "properties": {
+          "backend_env": {
+            "additionalProperties": {
+              "format": "password",
+              "type": "string",
+              "writeOnly": true
+            },
+            "description": "The variables of the storage as the user typed them (its access keys and the like). The repository's password is not among them: the workspace makes it",
+            "title": "Backend Env",
+            "type": "object"
+          },
+          "repository": {
+            "description": "The repository's address, as restic takes one",
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "title": "OwnStorage",
         "type": "object"
       },
       "ProfileSnapshotRequest": {
@@ -1388,16 +1607,16 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/workspace/backups/credentials": {
-      "delete": {
-        "description": "Move restic.env aside to restic.env.<timestamp>, so the backup service goes idle; refused with 409\nSETUP_RUNNING while a repository is being initialised.",
-        "operationId": "delete_api_workspace_backups_credentials",
+    "/api/workspace/backups": {
+      "get": {
+        "description": "Everything a client reads about the workspace's backups: where they go, how the setup of that destination\nstands (with what failed and when the workspace tries again), whether restic.env is in place, the\nverification flag, the repository, the digest of the credentials in use, and who holds the backup lease.",
+        "operationId": "get_api_workspace_backups",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupCredentialsRemovedResponse"
+                  "$ref": "#/components/schemas/BackupState"
                 }
               }
             },
@@ -1454,17 +1673,89 @@
             "description": "Error"
           }
         },
-        "summary": "Move restic.env aside to restic.env.<timestamp>, so the backup service goes idle; refused with 409 SETUP_RUNNING while a repository is being initialised.",
-        "x-workspace-operation": "backups.credentials.remove"
-      },
+        "summary": "Everything a client reads about the workspace's backups: where they go, how the setup of that destination stands (with what failed and when the workspace tries again), whether restic.env is in place, the verification flag, the repository, the digest of the credentials in use, and who holds the backup lease.",
+        "x-workspace-operation": "backups.read"
+      }
+    },
+    "/api/workspace/backups/credentials": {
+      "get": {
+        "description": "The whole text of the restic.env in use and its digest, both '' when there is none, to the owner alone.\n\nThe workspace makes the repository's password, so this is how an owner's client comes to hold a copy of it:\nit reads the credentials when the digest the backup state answers differs from its own copy's. Anyone but the\nowner is refused with 403 OWNER_ONLY.",
+        "operationId": "get_api_workspace_backups_credentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCredentials"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The whole text of the restic.env in use and its digest, both '' when there is none, to the owner alone.",
+        "x-workspace-operation": "backups.credentials.read"
+      }
+    },
+    "/api/workspace/backups/destination": {
       "put": {
-        "description": "Take the backup credentials (the contents of restic.env) and start initialising the repository they name.\n\nAnswers 202 with the setup's state, without waiting: restic.env is written when the repository is ready, and\nnot before, so the backup service never sees credentials for a repository that is not initialised. Read the\nsetup route until the state is READY or FAILED. Credentials already in place and ready change nothing and\nanswer 200 with READY. A second request while one initialisation runs is refused with 409 SETUP_RUNNING.",
-        "operationId": "put_api_workspace_backups_credentials",
+        "description": "Name where the workspace's backups go, with the storage that destination needs where the client has some.\n\nThe workspace sets the destination up itself: it makes the repository's password, initialises the repository,\ninstalls restic.env, and tries again when that fails. Answers the backup state, under 202 when the request\nleft the workspace something to do and under 200 when it did not: a request for what the workspace already\nholds changes nothing. A destination named with no storage is set up from what the workspace kept for it,\nand awaits storage when it kept none. Storage offered for the repository already in use is taken only once\nthe workspace finds that the storage refuses what it holds. NONE moves restic.env aside and keeps it.\n\nA request that would change something while a backup operation runs is refused with 409\nBACKUP_OPERATION_RUNNING, naming who holds the backup lease. A destination the workspace does not know, and\na password among the variables of the user's own storage, are refused with 400 INVALID_DESTINATION.",
+        "operationId": "put_api_workspace_backups_destination",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BackupCredentialsRequest"
+                "$ref": "#/components/schemas/BackupDestinationRequest"
               }
             }
           },
@@ -1475,7 +1766,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupSetupStatus"
+                  "$ref": "#/components/schemas/BackupState"
                 }
               }
             },
@@ -1485,7 +1776,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupSetupStatus"
+                  "$ref": "#/components/schemas/BackupState"
                 }
               }
             },
@@ -1515,7 +1806,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupOperationRunningRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkspaceRouteError"
+                    }
+                  ]
                 }
               }
             },
@@ -1542,78 +1840,8 @@
             "description": "Error"
           }
         },
-        "summary": "Take the backup credentials (the contents of restic.env) and start initialising the repository they name.",
-        "x-workspace-operation": "backups.credentials.write"
-      }
-    },
-    "/api/workspace/backups/setup": {
-      "get": {
-        "description": "How the initialisation of the backup repository stands: NONE, INITIALIZING, READY, or FAILED with restic's\nown words. An initialisation whose process is gone reads as FAILED; sending the credentials again is safe.",
-        "operationId": "get_api_workspace_backups_setup",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupSetupStatus"
-                }
-              }
-            },
-            "description": "Success"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "How the initialisation of the backup repository stands: NONE, INITIALIZING, READY, or FAILED with restic's own words. An initialisation whose process is gone reads as FAILED; sending the credentials again is safe.",
-        "x-workspace-operation": "backups.setup.read"
+        "summary": "Name where the workspace's backups go, with the storage that destination needs where the client has some.",
+        "x-workspace-operation": "backups.destination.write"
       }
     },
     "/api/workspace/backups/verification": {
