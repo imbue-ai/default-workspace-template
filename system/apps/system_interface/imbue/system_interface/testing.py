@@ -417,13 +417,13 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = find_free_port()
-    server = make_threaded_server(host, port, app)
+    # Bound to port 0 by the server itself: a port picked first and given back could be taken before the bind.
+    server = make_threaded_server(host, 0, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        _wait_until_serving(host, port)
-        yield ServedApp(host, port)
+        _wait_until_serving(host, server.port)
+        yield ServedApp(host, server.port)
     finally:
         server.shutdown()
         thread.join(timeout=5.0)

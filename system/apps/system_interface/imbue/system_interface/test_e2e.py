@@ -64,9 +64,9 @@ from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
+from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -199,131 +199,133 @@ def _running_e2e_server(
     POST launch paths taking typed and drafted text, so the launcher has its free-text rows and the avatar dialog
     its draft.
     """
-    port = find_free_port()
-    base_url = f"http://127.0.0.1:{port}"
     registry_path = tmp_path / "registry" / "apps.toml"
+    # Held until the shell's server adopts it: the stubs below bind ports of their own first, and a port picked
+    # and given back could be handed to one of them.
+    with listening_loopback_socket() as shell_listener:
+        port = shell_listener.getsockname()[1]
+        base_url = f"http://127.0.0.1:{port}"
 
-    # The stubs serve first, so the registry can name where their pages are framed from.
-    second_serving = (
-        serve_app(_stub_app(base_url, is_terminal_like=is_second_app_terminal_like))
-        if is_second_app_offered
-        else contextlib.nullcontext()
-    )
-    pinned_serving = serve_app(_stub_app(base_url)) if pin is not None else contextlib.nullcontext()
-    with (
-        pytest.MonkeyPatch.context() as monkeypatch,
-        serve_app(_stub_app(base_url)) as stub_served,
-        second_serving as second_served,
-        pinned_serving as pinned_served,
-    ):
-        stub_url = stub_served.http_url
-        rows = [
-            registry_row_toml(
-                _STUB_APP_NAME,
-                stub_url,
-                default_shortcuts=[(_STUB_LAUNCH_ID, stub_shortcut_mode)],
-                display_name=_STUB_APP_DISPLAY_NAME,
-                launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
-            )
-        ]
-        if second_served is not None:
-            rows.append(
-                registry_row_toml(
-                    _SECOND_APP_NAME,
-                    second_served.http_url,
-                    default_shortcuts=[(_STUB_LAUNCH_ID, "focus")],
-                    display_name=_SECOND_APP_DISPLAY_NAME,
-                    launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
-                )
-            )
-        if pinned_served is not None and pin is not None:
-            rows.append(
-                registry_row_toml(
-                    _PINNED_APP_NAME,
-                    pinned_served.http_url,
-                    display_name=_PINNED_APP_DISPLAY_NAME,
-                    pin=(_PINNED_HOME_PATH, *pin),
-                    # The pin's home path is a plain page, as the chat's root is; the other four are POST launch
-                    # paths as the chat's, two taking typed text, one a draft, and one about an app.
-                    launch_paths=(
-                        ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
-                        (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
-                        (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
-                        (_PINNED_DRAFT_LAUNCH_ID, f"Draft into {_PINNED_APP_DISPLAY_NAME.lower()}", "/draft"),
-                        (_PINNED_APP_CHAT_LAUNCH_ID, "Chat about this app", f"/{_PINNED_APP_CHAT_LAUNCH_ID}"),
-                    ),
-                    launch_params={
-                        _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
-                        _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
-                        _PINNED_DRAFT_LAUNCH_ID: [_PINNED_TEXT_PARAM],
-                        _PINNED_APP_CHAT_LAUNCH_ID: [_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM],
-                    },
-                    launch_text_params={
-                        _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
-                        _PINNED_SEND_LAUNCH_ID: _PINNED_TEXT_PARAM,
-                    },
-                    launch_draft_params={_PINNED_DRAFT_LAUNCH_ID: _PINNED_TEXT_PARAM},
-                    launch_app_params={
-                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM)
-                    },
-                    launch_methods={
-                        _PINNED_NEW_LAUNCH_ID: "POST",
-                        _PINNED_SEND_LAUNCH_ID: "POST",
-                        _PINNED_DRAFT_LAUNCH_ID: "POST",
-                        _PINNED_APP_CHAT_LAUNCH_ID: "POST",
-                    },
-                )
-            )
-        write_registry(registry_path, *rows, *extra_rows)
-        monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
-        state_dir = tmp_path / "shell-state"
-        config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
-        repo_root = tmp_path / "repo"
-        if theme is not None:
-            shutil.copytree(_TEMPLATE_ROOT / BUILTIN_THEMES_DIRECTORY, repo_root / BUILTIN_THEMES_DIRECTORY)
-        agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
-        agent_events_path.parent.mkdir()
-        state = build_test_state(
-            config=config,
-            shell_state_directory=state_dir,
-            repo_root=repo_root,
-            agent_events_path=agent_events_path,
+        # The stubs serve first, so the registry can name where their pages are framed from.
+        second_serving = (
+            serve_app(_stub_app(base_url, is_terminal_like=is_second_app_terminal_like))
+            if is_second_app_offered
+            else contextlib.nullcontext()
         )
-        app = create_application(state)
-        # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
-        # first (a stub whose port is taken never leaves a bound shell socket behind).
-        server = make_threaded_server("127.0.0.1", port, app)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            wait_for(
-                lambda: is_server_answering(base_url),
-                timeout=10.0,
-                poll_interval=0.1,
-                error_message=f"workspace server did not come up at {base_url}",
-            )
-            # Started only once the apps are serving: the first liveness probe must find them answering.
-            state.shell.start()
-            if theme is not None:
-                _post_json(f"{base_url}/api/themes/default", {"theme": theme})
-            try:
-                yield E2EServer(
-                    base_url=base_url,
-                    state_dir=state_dir,
-                    repo_root=repo_root,
-                    stub_url=stub_url,
-                    pinned_url=pinned_served.http_url if pinned_served is not None else "",
-                    registry_path=registry_path,
-                    agent_events_path=agent_events_path,
-                    theme=theme,
+        pinned_serving = serve_app(_stub_app(base_url)) if pin is not None else contextlib.nullcontext()
+        with (
+            pytest.MonkeyPatch.context() as monkeypatch,
+            serve_app(_stub_app(base_url)) as stub_served,
+            second_serving as second_served,
+            pinned_serving as pinned_served,
+        ):
+            stub_url = stub_served.http_url
+            rows = [
+                registry_row_toml(
+                    _STUB_APP_NAME,
+                    stub_url,
+                    default_shortcuts=[(_STUB_LAUNCH_ID, stub_shortcut_mode)],
+                    display_name=_STUB_APP_DISPLAY_NAME,
+                    launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
                 )
+            ]
+            if second_served is not None:
+                rows.append(
+                    registry_row_toml(
+                        _SECOND_APP_NAME,
+                        second_served.http_url,
+                        default_shortcuts=[(_STUB_LAUNCH_ID, "focus")],
+                        display_name=_SECOND_APP_DISPLAY_NAME,
+                        launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
+                    )
+                )
+            if pinned_served is not None and pin is not None:
+                rows.append(
+                    registry_row_toml(
+                        _PINNED_APP_NAME,
+                        pinned_served.http_url,
+                        display_name=_PINNED_APP_DISPLAY_NAME,
+                        pin=(_PINNED_HOME_PATH, *pin),
+                        # The pin's home path is a plain page, as the chat's root is; the other four are POST launch
+                        # paths as the chat's, two taking typed text, one a draft, and one about an app.
+                        launch_paths=(
+                            ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
+                            (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
+                            (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
+                            (_PINNED_DRAFT_LAUNCH_ID, f"Draft into {_PINNED_APP_DISPLAY_NAME.lower()}", "/draft"),
+                            (_PINNED_APP_CHAT_LAUNCH_ID, "Chat about this app", f"/{_PINNED_APP_CHAT_LAUNCH_ID}"),
+                        ),
+                        launch_params={
+                            _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                            _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                            _PINNED_DRAFT_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                            _PINNED_APP_CHAT_LAUNCH_ID: [_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM],
+                        },
+                        launch_text_params={
+                            _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
+                            _PINNED_SEND_LAUNCH_ID: _PINNED_TEXT_PARAM,
+                        },
+                        launch_draft_params={_PINNED_DRAFT_LAUNCH_ID: _PINNED_TEXT_PARAM},
+                        launch_app_params={
+                            _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM)
+                        },
+                        launch_methods={
+                            _PINNED_NEW_LAUNCH_ID: "POST",
+                            _PINNED_SEND_LAUNCH_ID: "POST",
+                            _PINNED_DRAFT_LAUNCH_ID: "POST",
+                            _PINNED_APP_CHAT_LAUNCH_ID: "POST",
+                        },
+                    )
+                )
+            write_registry(registry_path, *rows, *extra_rows)
+            monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+            monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
+            state_dir = tmp_path / "shell-state"
+            config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
+            repo_root = tmp_path / "repo"
+            if theme is not None:
+                shutil.copytree(_TEMPLATE_ROOT / BUILTIN_THEMES_DIRECTORY, repo_root / BUILTIN_THEMES_DIRECTORY)
+            agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
+            agent_events_path.parent.mkdir()
+            state = build_test_state(
+                config=config,
+                shell_state_directory=state_dir,
+                repo_root=repo_root,
+                agent_events_path=agent_events_path,
+            )
+            app = create_application(state)
+            # Started here, inside the stubs' contexts, so the shutdown below owns it whatever fails first.
+            server = make_threaded_server("127.0.0.1", port, app, fd=shell_listener.fileno())
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                wait_for(
+                    lambda: is_server_answering(base_url),
+                    timeout=10.0,
+                    poll_interval=0.1,
+                    error_message=f"workspace server did not come up at {base_url}",
+                )
+                # Started only once the apps are serving: the first liveness probe must find them answering.
+                state.shell.start()
+                if theme is not None:
+                    _post_json(f"{base_url}/api/themes/default", {"theme": theme})
+                try:
+                    yield E2EServer(
+                        base_url=base_url,
+                        state_dir=state_dir,
+                        repo_root=repo_root,
+                        stub_url=stub_url,
+                        pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                        registry_path=registry_path,
+                        agent_events_path=agent_events_path,
+                        theme=theme,
+                    )
+                finally:
+                    state.shell.stop()
             finally:
-                state.shell.stop()
-        finally:
-            server.shutdown()
-            thread.join(timeout=5.0)
-            server.server_close()
+                server.shutdown()
+                thread.join(timeout=5.0)
+                server.server_close()
 
 
 @pytest.fixture
@@ -3680,8 +3682,8 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
             message_handlers=[(_FOCUS_CHAT_TYPE, _FOCUS_CHAT_HANDLER_PATH)],
         )
         with _running_e2e_server(tmp_path, extra_rows=(handler_row,)) as server:
-            port = find_free_port()
-            chrome_server = make_threaded_server("127.0.0.1", port, _chrome_app(server.base_url))
+            chrome_server = make_threaded_server("127.0.0.1", 0, _chrome_app(server.base_url))
+            port = chrome_server.port
             chrome_thread = threading.Thread(target=chrome_server.serve_forever, daemon=True)
             chrome_thread.start()
             try:

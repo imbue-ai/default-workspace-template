@@ -26,6 +26,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
+from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.wsgi import make_threaded_server
 
 _STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
@@ -50,32 +51,35 @@ def themed_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[st
     """The shell on a free port over a copy of the template's theme folders, answering its base URL."""
     repo_root = tmp_path / "repo"
     shutil.copytree(_REPO_ROOT / BUILTIN_THEMES_DIRECTORY, repo_root / BUILTIN_THEMES_DIRECTORY)
-    port = find_free_port()
-    base_url = f"http://127.0.0.1:{port}"
-    registry = tmp_path / "apps.toml"
-    write_registry(registry, registry_row_toml("files", f"http://127.0.0.1:{find_free_port()}", display_name="Files"))
-    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
-    state = build_test_state(
-        config=Config(system_interface_host="127.0.0.1", system_interface_port=port),
-        shell_state_directory=tmp_path / "shell-state",
-        repo_root=repo_root,
-        # Not beside the registry: on macOS a second watch of one folder in a process is refused and stays dead.
-        agent_events_path=tmp_path / "mngr-events" / "events.jsonl",
-    )
-    server = make_threaded_server("127.0.0.1", port, create_application(state))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        wait_for(lambda: is_server_answering(base_url), timeout=10.0, poll_interval=0.1)
-        state.shell.start()
+    with listening_loopback_socket() as listener:
+        port = listener.getsockname()[1]
+        base_url = f"http://127.0.0.1:{port}"
+        registry = tmp_path / "apps.toml"
+        write_registry(
+            registry, registry_row_toml("files", f"http://127.0.0.1:{find_free_port()}", display_name="Files")
+        )
+        monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+        state = build_test_state(
+            config=Config(system_interface_host="127.0.0.1", system_interface_port=port),
+            shell_state_directory=tmp_path / "shell-state",
+            repo_root=repo_root,
+            # Not beside the registry: on macOS a second watch of one folder in a process is refused and stays dead.
+            agent_events_path=tmp_path / "mngr-events" / "events.jsonl",
+        )
+        server = make_threaded_server("127.0.0.1", port, create_application(state), fd=listener.fileno())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
-            yield base_url
+            wait_for(lambda: is_server_answering(base_url), timeout=10.0, poll_interval=0.1)
+            state.shell.start()
+            try:
+                yield base_url
+            finally:
+                state.shell.stop()
         finally:
-            state.shell.stop()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5.0)
-        server.server_close()
+            server.shutdown()
+            thread.join(timeout=5.0)
+            server.server_close()
 
 
 def _computed(page: Page, selector: str, property_name: str) -> str:
