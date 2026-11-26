@@ -293,6 +293,9 @@ def build_gateway_app(
             # to reach individual services -- most importantly owner-exec. Only
             # the owner gets the map; a visitor sees just liveness + backend.
             detail["services"] = {name: label for label, name in label_to_name.items()}
+            # The gateway's own agent routes answer only at its auth address, which the owner's
+            # page of another origin has no other way to learn.
+            detail["auth_label"] = auth_label
         return _apply_health_cors(Response(_json_body(detail), mimetype="application/json"))
 
     @app.get("/connect-info")
