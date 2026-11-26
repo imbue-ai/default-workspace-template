@@ -95,6 +95,13 @@ _JOIN_WINDOW_SECONDS = 60.0
 _MAX_TRACKED_ADDRESSES = 1024
 _MAX_BODY_BYTES = 16 * 1024
 
+# CLEANUP: remove this, and the ``exec`` member of the access document, once no ``wsvisit`` helper from before the
+# gateway ran an agent's commands itself (one that signs its requests to the owner-exec daemon) is left in use.
+# Such a helper reads an access document with no ``exec`` as a grant for named apps, and then says nothing about
+# reinstalling. With these empty values its ``run``, ``read`` and ``write`` fail on an address it cannot reach,
+# which sends it to ``/_agent/me``, where it finds that it is not the helper the workspace publishes and says so.
+_RETIRED_EXEC_COORDINATES = {"origin": "", "audience": "", "host_public_key": ""}
+
 
 class JoinRateLimiter:
     """At most N join attempts per client address per minute.
@@ -356,6 +363,8 @@ def register_agent_routes(
             "primer_url": f"{auth_origin}/_agent/primer",
             "helper": _helper_document(),
         }
+        if grant.is_workspace_scope:
+            document["exec"] = dict(_RETIRED_EXEC_COORDINATES)
         if token is not None:
             document["token"] = token
         return document

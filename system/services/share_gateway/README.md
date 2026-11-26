@@ -453,6 +453,18 @@ the same gateway:
   lock every other writer of the file (the desktop's cross-workspace SSH
   grant) takes around its own read-and-write, so neither can overwrite the
   other's lines.
+- **The empty `exec` member.** For a grant of the whole workspace, the join and
+  `me` answers carry `"exec": {"origin": "", "audience": "", "host_public_key":
+  ""}`; for a grant of named apps they carry no `exec`. Nothing reads the
+  values. They are there for a copy of the helper from a release that ran the
+  owner-exec daemon, which signs its `run`, `read` and `write` to the address
+  `exec` names. With the empty values each of those fails on an address it
+  cannot reach, so that copy re-reads `me`, finds that it is not the helper the
+  workspace publishes, and prints its notice to reinstall, every time. With no
+  `exec` at all it reads its grant as covering named apps only and says
+  nothing. The helper this release publishes ignores the member, which goes
+  when no such copy is left in use (`_RETIRED_EXEC_COORDINATES` in
+  `agent_routes`).
 - **The CLI's answers.** `agent-access <command> --json` prints one JSON
   document on stdout; a refusal or a misconfiguration is one JSON object on
   stderr, `{"error": ..., "kind": "refused" | "misconfigured"}`, with exit code

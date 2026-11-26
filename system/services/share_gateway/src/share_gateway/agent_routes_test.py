@@ -187,6 +187,7 @@ def test_join_answers_the_access_document_for_workspace_scope(tmp_path: Path) ->
         "apps",
         "primer_url",
         "helper",
+        "exec",
         "token",
     }
     assert len(load_agent_grants(harness.context.paths.grants_path)) == 1
@@ -196,6 +197,27 @@ def test_join_for_an_app_scope_carries_only_the_named_apps(tmp_path: Path) -> No
     harness = make_harness(tmp_path)
     document = join_as(harness, ["files"])
     assert [app["name"] for app in document["apps"]] == ["files"]
+
+
+def test_a_grant_of_the_whole_workspace_is_answered_an_empty_exec_member_at_join_and_at_me(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path)
+
+    document = join_as(harness, "workspace")
+    me = harness.client.get("/_agent/me", headers=bearer(document)).get_json()
+
+    # What a helper from before the gateway ran commands itself needs in order to print its notice to reinstall.
+    assert document["exec"] == me["exec"] == {"origin": "", "audience": "", "host_public_key": ""}
+
+
+def test_a_grant_for_named_apps_is_answered_no_exec_member_at_join_or_at_me(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path)
+
+    document = join_as(harness, ["files"])
+    me = harness.client.get("/_agent/me", headers=bearer(document)).get_json()
+
+    assert "exec" not in document
+    assert "exec" not in me
+    assert set(me) == set(document) - {"token"}
 
 
 def test_join_refuses_malformed_bodies_bad_codes_and_bad_keys(tmp_path: Path) -> None:
@@ -432,7 +454,11 @@ def test_verify_admits_a_workspace_scope_agent_everywhere_with_the_agent_identit
     harness.client.set_cookie(SESSION_COOKIE_NAME, "stale")
     harness.client.set_cookie("theme", "dark")
     headers = {"Authorization": f"Bearer {document['token']}"}
-    for host in (f"terminal-pty-tp111111.{_DOMAIN}", f"system_interface-sh111111.{_DOMAIN}", f"chat-ch111111.{_DOMAIN}"):
+    for host in (
+        f"terminal-pty-tp111111.{_DOMAIN}",
+        f"system_interface-sh111111.{_DOMAIN}",
+        f"chat-ch111111.{_DOMAIN}",
+    ):
         response = verify(harness, host, headers)
         assert response.status_code == 200, host
         identity = json.loads(response.headers[IDENTITY_HEADER])
