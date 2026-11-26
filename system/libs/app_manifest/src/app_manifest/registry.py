@@ -173,6 +173,11 @@ class RegistryRow(FrozenModel):
         default=None,
         description="Where the shell posts a closed window of the app; absent means no post",
     )
+    suggestion_settings_path: LaunchPathValue | None = Field(
+        default=None,
+        description="Where the app reads and changes the workspace's suggestion switches; absent on every app "
+        "but the one that holds them",
+    )
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(),
         description="The messages the app takes and where the shell posts each; absent means none",

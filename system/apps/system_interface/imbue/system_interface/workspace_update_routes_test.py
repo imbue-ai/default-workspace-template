@@ -6,6 +6,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
+from workspace_update_control.settings import OWN_SETTING_NAMES
 from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import STAGED_FEED_BASE_URL
@@ -273,13 +274,52 @@ def test_the_update_settings_are_stored_and_answered_as_stored_and_the_read_answ
     assert (state["settings"], state["channel_version"]) == (settings, None)
 
 
-def test_settings_with_no_answer_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
-    settings = update_settings_document()
-    del settings["is_auto_update_enabled_here"]
+def _the_accounts_settings(**fields: object) -> dict[str, object]:
+    """Update settings as a client sends them when it writes the account's: none of the workspace's own."""
+    return {name: value for name, value in update_settings_document(**fields).items() if name not in OWN_SETTING_NAMES}
 
-    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=settings)
 
-    assert stored.get_json()["is_auto_update_enabled_here"] is None
+def test_settings_with_none_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
+    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=_the_accounts_settings())
+
+    assert stored.get_json() == update_settings_document()
+
+
+def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_and_cleared_by_a_null(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    of_the_workspace = {
+        "is_auto_update_enabled_here": False,
+        "window_start_hour_here": 22,
+        "window_end_hour_here": 23,
+    }
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(**of_the_workspace))
+
+    # A client that writes the account's settings names none of the three, and so does one from before the hours.
+    kept = client.put(UPDATE_SETTINGS_ROUTE, json=_the_accounts_settings(channel="beta"))
+
+    assert kept.status_code == 200
+    assert kept.get_json() == update_settings_document(channel="beta", **of_the_workspace)
+    assert client.get(UPDATE_ROUTE).get_json()["settings"] == kept.get_json()
+
+    cleared = client.put(
+        UPDATE_SETTINGS_ROUTE,
+        json={**_the_accounts_settings(channel="beta"), "window_start_hour_here": None, "window_end_hour_here": None},
+    )
+
+    assert cleared.get_json() == update_settings_document(channel="beta", is_auto_update_enabled_here=False)
+    assert staged_update_workspace.read_state("settings.json") == {"schema": 1, **cleared.get_json()}
+
+
+def test_an_armed_schedule_takes_the_workspaces_own_hours_where_it_has_them(update_workspace_app: Flask) -> None:
+    client = _client(update_workspace_app)
+    _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(window_start_hour_here=22, window_end_hour_here=1))
+
+    schedule = client.put(UPDATE_SCHEDULE_ROUTE, json={}).get_json()["schedule"]
+
+    assert (schedule["window_start_minute_utc"], schedule["window_length_minutes"]) == (22 * 60, 3 * 60)
 
 
 @pytest.mark.parametrize(
@@ -290,6 +330,9 @@ def test_settings_with_no_answer_of_the_workspaces_own_follow_the_accounts(updat
         ({"channel": "../stable"}, "INVALID_UPDATE_SETTINGS"),
         ({"feed_base_url": "file:///etc/passwd"}, "INVALID_UPDATE_SETTINGS"),
         ({"window_start_hour": 4, "window_end_hour": 4}, "INVALID_UPDATE_SETTINGS"),
+        ({"window_start_hour_here": 24, "window_end_hour_here": 4}, "INVALID_REQUEST"),
+        ({"window_start_hour_here": 22}, "INVALID_UPDATE_SETTINGS"),
+        ({"window_start_hour_here": 4, "window_end_hour_here": 4}, "INVALID_UPDATE_SETTINGS"),
     ],
 )
 def test_settings_that_cannot_be_the_workspaces_are_refused_and_change_nothing(

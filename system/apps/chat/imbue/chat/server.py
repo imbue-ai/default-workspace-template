@@ -1599,6 +1599,16 @@ def _put_settings_endpoint() -> Response:
     return model_response(ChatSettingsResponse(settings=settings))
 
 
+def _get_suggestion_settings_endpoint() -> Response:
+    """``GET /api/settings/suggestions``: the settings, the suggestion switches among them, read at the path
+    that changes them.
+
+    The app's manifest names this path as where the workspace's suggestion switches are read and changed
+    (``suggestion_settings_path``), which is how the shell's workspace routes find them.
+    """
+    return model_response(ChatSettingsResponse(settings=get_state().chat_settings.read()))
+
+
 def _put_suggestion_settings_endpoint() -> Response:
     """``PUT /api/settings/suggestions``: change the suggestion switches the body names and leave every other
     setting as it is; answers the settings as they then stand."""
@@ -3317,6 +3327,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
+    ("GET", "/api/settings/suggestions"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings/suggestions"): RouteModels(
         request_model=SuggestionSettingsUpdate, response_model=ChatSettingsResponse
     ),
@@ -3515,6 +3526,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule(
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
     )
+    application.add_url_rule("/api/settings/suggestions", view_func=_get_suggestion_settings_endpoint, methods=["GET"])
     application.add_url_rule("/api/settings/suggestions", view_func=_put_suggestion_settings_endpoint, methods=["PUT"])
     application.add_url_rule(
         "/api/suggestions/new-chat", view_func=_get_new_chat_suggestions_endpoint, methods=["GET"]

@@ -32,6 +32,10 @@ from workspace_backup_setup.testing import set_fake_restic_mode
 from workspace_backup_setup.verification import BACKUP_TOML_RELATIVE_PATH
 from workspace_bare_scripts.backup_lease import release_lease
 from workspace_bare_scripts.backup_lease import take_lease
+from workspace_initial_data.status import InitialDataStatus
+from workspace_initial_data.status import applied_status
+from workspace_initial_data.status import failed_status
+from workspace_initial_data.status import write_initial_data_status
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
 from workspace_layout.identity import RequestIdentity
@@ -143,8 +147,27 @@ def test_the_status_names_every_operation_and_no_version_for_a_tree_that_names_n
         "template_ref": "",
         "operations": list(WORKSPACE_OPERATIONS),
         "compatibility": 1,
+        "initial_data": {"state": "NONE", "detail": "", "applied_at": None},
     }
     assert WORKSPACE_COMPATIBILITY == 1
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        applied_status(1_795_000_000.5),
+        failed_status("timezone: 'Mars/Olympus' is not a timezone"),
+    ],
+)
+def test_the_status_says_how_the_initial_data_the_boot_found_stands(
+    client: FlaskClient, app: Flask, recorded: InitialDataStatus
+) -> None:
+    write_initial_data_status(_workspace_root(app), recorded)
+
+    answered = client.get(STATUS_ROUTE, headers=OWNER_IDENTITY_HEADERS).get_json()
+
+    assert answered["initial_data"] == recorded.model_dump(mode="json")
+    assert answered["schema"] == 1
 
 
 def test_every_operation_named_is_named_once() -> None:

@@ -456,6 +456,49 @@
         "title": "ImbueCloudStorage",
         "type": "object"
       },
+      "InitialDataState": {
+        "enum": [
+          "NONE",
+          "APPLIED",
+          "FAILED"
+        ],
+        "title": "InitialDataState",
+        "type": "string"
+      },
+      "InitialDataStatus": {
+        "additionalProperties": false,
+        "description": "How the workspace's initial data stands.",
+        "properties": {
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was applied, seconds since the epoch; null unless APPLIED",
+            "title": "Applied At"
+          },
+          "detail": {
+            "description": "Why, for FAILED; '' otherwise",
+            "title": "Detail",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InitialDataState",
+            "description": "NONE when the workspace found no document and has applied none, APPLIED when every part of one was written, FAILED when the last attempt could not apply one, which the next start of the workspace's services tries again"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "applied_at"
+        ],
+        "title": "InitialDataStatus",
+        "type": "object"
+      },
       "InvalidGrantsError": {
         "additionalProperties": false,
         "description": "A grants document whose shape is wrong: every entry refused, so a client can mark each row.",
@@ -643,6 +686,62 @@
           "shareable_apps"
         ],
         "title": "SharingStateResponse",
+        "type": "object"
+      },
+      "SuggestionSettingsRequest": {
+        "additionalProperties": false,
+        "description": "The suggestion switches to change. One left out, or null, stays as it is.",
+        "properties": {
+          "is_new_chat_suggestions_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether things to try are offered on a chat with no message yet",
+            "title": "Is New Chat Suggestions Enabled"
+          },
+          "is_next_step_suggestions_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether suggested replies are offered under an agent's reply",
+            "title": "Is Next Step Suggestions Enabled"
+          }
+        },
+        "title": "SuggestionSettingsRequest",
+        "type": "object"
+      },
+      "SuggestionSettingsResponse": {
+        "additionalProperties": false,
+        "description": "The workspace's two suggestion switches, as they stand.",
+        "properties": {
+          "is_new_chat_suggestions_enabled": {
+            "description": "Whether things to try are offered on a chat with no message yet",
+            "title": "Is New Chat Suggestions Enabled",
+            "type": "boolean"
+          },
+          "is_next_step_suggestions_enabled": {
+            "description": "Whether suggested replies are offered under an agent's reply",
+            "title": "Is Next Step Suggestions Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_next_step_suggestions_enabled",
+          "is_new_chat_suggestions_enabled"
+        ],
+        "title": "SuggestionSettingsResponse",
         "type": "object"
       },
       "TimezoneRequest": {
@@ -1181,7 +1280,7 @@
       },
       "UpdateSettingsModel": {
         "additionalProperties": false,
-        "description": "The update settings a workspace holds: the release channel it follows, and when it arms its own updates.",
+        "description": "The update settings a workspace holds: the release channel it follows, and when it arms its own updates.\n\nThree are the workspace's own, which its owner sets in the workspace's settings: its own answer on arming, and\nits own hours. A request that leaves one of them out keeps the stored value, and one that sends null clears it,\nso a client that writes the account's settings, or one from before a setting existed, cannot wipe an answer the\nowner gave in another client. An answer carries every one of them.",
         "properties": {
           "channel": {
             "description": "The release channel the workspace follows",
@@ -1209,7 +1308,7 @@
               }
             ],
             "default": null,
-            "description": "This workspace's own answer, which wins over the account's; null when it has none",
+            "description": "This workspace's own answer, which wins over the account's; null when it has none. Left out of a request, the stored answer is kept",
             "title": "Is Auto Update Enabled Here"
           },
           "window_end_hour": {
@@ -1219,12 +1318,42 @@
             "title": "Window End Hour",
             "type": "integer"
           },
+          "window_end_hour_here": {
+            "anyOf": [
+              {
+                "maximum": 23,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This workspace's own end hour; set or null with its start hour. Left out of a request, the stored hour is kept",
+            "title": "Window End Hour Here"
+          },
           "window_start_hour": {
-            "description": "The hour of the owner's day an armed update may start from",
+            "description": "The hour of the owner's day an armed update may start from, as the account sets it",
             "maximum": 23,
             "minimum": 0,
             "title": "Window Start Hour",
             "type": "integer"
+          },
+          "window_start_hour_here": {
+            "anyOf": [
+              {
+                "maximum": 23,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This workspace's own start hour, which with its end hour wins over the account's; both are set, or both null when it has none. Left out of a request, the stored hour is kept",
+            "title": "Window Start Hour Here"
           }
         },
         "required": [
@@ -1539,6 +1668,65 @@
         "title": "UpdateStateResponse",
         "type": "object"
       },
+      "WorkspaceApp": {
+        "additionalProperties": false,
+        "description": "One app of the workspace, as a client lists it and draws it.",
+        "properties": {
+          "display_name": {
+            "description": "What a person reads for the app; '' when it registered without one",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "icon": {
+            "description": "The SVG markup the app registered as its icon, as it registered it; '' when it has none. It is the app's own markup, so a client draws it as an image and never as part of its page",
+            "title": "Icon",
+            "type": "string"
+          },
+          "is_system": {
+            "description": "Whether the app is part of the workspace itself rather than built on it, which a sharing panel lists apart from the apps it offers up front",
+            "title": "Is System",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "The app's origin label, the first part of its share address; '' for an app that has none yet",
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "description": "The app's registered name, which its grants are keyed by",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "display_name",
+          "is_system",
+          "icon"
+        ],
+        "title": "WorkspaceApp",
+        "type": "object"
+      },
+      "WorkspaceAppsResponse": {
+        "additionalProperties": false,
+        "description": "The workspace's apps.",
+        "properties": {
+          "apps": {
+            "description": "The registered apps that are not internal, in the registry's order: the apps the sharing read lists as shareable. Those with is_system false are the apps built on the workspace, which a client lists as the workspace's own",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceApp"
+            },
+            "title": "Apps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "apps"
+        ],
+        "title": "WorkspaceAppsResponse",
+        "type": "object"
+      },
       "WorkspaceRouteError": {
         "additionalProperties": false,
         "description": "What a workspace route answers when it refuses a request (4xx) or could not do what it was asked (5xx).",
@@ -1563,12 +1751,16 @@
       },
       "WorkspaceStatusResponse": {
         "additionalProperties": false,
-        "description": "What the workspace serves: the version of its checkout, the operations it has a route for, and the\ncompatibility number a client checks before it acts inside the workspace.",
+        "description": "What the workspace serves: the version of its checkout, the operations it has a route for, the\ncompatibility number a client checks before it acts inside the workspace, and how the initial data it was\nhanded at create stands.",
         "properties": {
           "compatibility": {
             "description": "The template's compatibility number, raised only by a change an older client could not work with; an answer without it means 1. A client that knows a lower number opens the workspace and runs its lifecycle, and does nothing else inside it",
             "title": "Compatibility",
             "type": "integer"
+          },
+          "initial_data": {
+            "$ref": "#/components/schemas/InitialDataStatus",
+            "description": "How the document the workspace was handed when it was created stands: whether its boot found and applied one. An answer without it is a template from before the initial data, which ignores the document"
           },
           "operations": {
             "description": "The name of every operation this workspace serves a route for",
@@ -1593,7 +1785,8 @@
           "schema",
           "template_ref",
           "operations",
-          "compatibility"
+          "compatibility",
+          "initial_data"
         ],
         "title": "WorkspaceStatusResponse",
         "type": "object"
@@ -1601,12 +1794,82 @@
     }
   },
   "info": {
-    "description": "The state a workspace owns, read and changed over HTTP by a client outside it: its sharing grants, its profile snapshot and timezone, its backup configuration, and its updates.",
+    "description": "The state a workspace owns, read and changed over HTTP by a client outside it: its sharing grants, its profile snapshot and timezone, its backup configuration, its updates, its suggestion switches, its apps and its wallpaper.",
     "title": "Workspace routes",
     "version": "1"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/workspace/apps": {
+      "get": {
+        "description": "The workspace's apps: every registered app that is not internal, in the registry's order, each with its\nname, its origin label, the name a person reads for it, whether it is part of the workspace itself, and the\nSVG markup of its icon.\n\nThey are the apps the sharing read lists as shareable. Those that are not part of the workspace itself are\nthe apps built on it, which a client lists as the workspace's own. An icon is the app's own markup: a client\ndraws it as an image, so nothing in it runs.",
+        "operationId": "get_api_workspace_apps",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceAppsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The workspace's apps: every registered app that is not internal, in the registry's order, each with its name, its origin label, the name a person reads for it, whether it is part of the workspace itself, and the SVG markup of its icon.",
+        "x-workspace-operation": "apps.read"
+      }
+    },
     "/api/workspace/backups": {
       "get": {
         "description": "Everything a client reads about the workspace's backups: where they go, how the setup of that destination\nstands (with what failed and when the workspace tries again), whether restic.env is in place, the\nverification flag, the repository, the digest of the credentials in use, and who holds the backup lease.",
@@ -2163,7 +2426,7 @@
     },
     "/api/workspace/status": {
       "get": {
-        "description": "What this workspace serves: the version of its checkout, the name of every operation it has a route for,\nand the template's compatibility number.\n\nA client asks before the first operation it sends a workspace, and calls a route only for an operation named\nhere. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads\na compatibility number higher than it knows opens the workspace and does nothing else inside it.",
+        "description": "What this workspace serves: the version of its checkout, the name of every operation it has a route for,\nthe template's compatibility number, and how its initial data stands.\n\nA client asks before the first operation it sends a workspace, and calls a route only for an operation named\nhere. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads\na compatibility number higher than it knows opens the workspace and does nothing else inside it.\n\n``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:\n``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case\nthe next start of the workspace's services tries again. Whoever creates a workspace waits for ``APPLIED``.",
         "operationId": "get_api_workspace_status",
         "responses": {
           "200": {
@@ -2227,7 +2490,195 @@
             "description": "Error"
           }
         },
-        "summary": "What this workspace serves: the version of its checkout, the name of every operation it has a route for, and the template's compatibility number."
+        "summary": "What this workspace serves: the version of its checkout, the name of every operation it has a route for, the template's compatibility number, and how its initial data stands."
+      }
+    },
+    "/api/workspace/suggestions": {
+      "get": {
+        "description": "The workspace's two suggestion switches: whether suggested replies are offered under an agent's reply, and\nwhether things to try are offered on a chat with no message yet.\n\nThe switches are the settings of one of the workspace's apps, and the read is passed to it. When that app is\nnot running or does not answer, the answer is 503 SUGGESTIONS_UNAVAILABLE, and asking again later is right.\nWhen no app of the workspace holds switches that can be read here, which is an app from before it could, the\nanswer is 501 SUGGESTIONS_UNSUPPORTED.",
+        "operationId": "get_api_workspace_suggestions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionSettingsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The workspace's two suggestion switches: whether suggested replies are offered under an agent's reply, and whether things to try are offered on a chat with no message yet.",
+        "x-workspace-operation": "suggestions.read"
+      },
+      "put": {
+        "description": "Change the suggestion switches the request names, leave one it does not name, and answer both.\n\nThe write is passed to the app that holds the switches, which tells its own open pages of the change. It is\nrefused as the read is: 503 SUGGESTIONS_UNAVAILABLE, or 501 SUGGESTIONS_UNSUPPORTED.",
+        "operationId": "put_api_workspace_suggestions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionSettingsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the suggestion switches the request names, leave one it does not name, and answer both.",
+        "x-workspace-operation": "suggestions.write"
       }
     },
     "/api/workspace/timezone": {
@@ -2758,7 +3209,7 @@
     },
     "/api/workspace/update/settings": {
       "put": {
-        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.",
+        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.",
         "operationId": "put_api_workspace_update_settings",
         "requestBody": {
           "content": {
@@ -3004,6 +3455,30 @@
         },
         "summary": "Start an update now.",
         "x-workspace-operation": "update.start"
+      }
+    },
+    "/api/workspace/wallpaper": {
+      "get": {
+        "description": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own\ncontent type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop\nyet.\n\nThe image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again\nand is answered 304 while it has not changed. A page of another origin reads it with a credentialed request\nof its own code, as it reads every workspace route; an image element of another site is refused.",
+        "operationId": "get_api_workspace_wallpaper",
+        "responses": {
+          "200": {
+            "description": "The image of the first desktop's wallpaper, under its own content type; 204 with no body when that desktop wears its theme's default"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own content type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop yet.",
+        "x-no-schema": "The image of the first desktop's wallpaper, under its own content type; 204 with no body when that desktop wears its theme's default",
+        "x-workspace-operation": "wallpaper.read"
       }
     }
   }

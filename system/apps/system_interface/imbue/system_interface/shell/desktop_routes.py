@@ -208,7 +208,7 @@ def _shell() -> ShellState:
     return get_state().shell
 
 
-def _wallpaper_directories() -> WallpaperDirectories:
+def wallpaper_directories() -> WallpaperDirectories:
     return WallpaperDirectories(
         bundled=get_state().static_directory / BUNDLED_WALLPAPERS_DIRNAME, files=_shell().wallpaper_files_directory
     )
@@ -222,7 +222,7 @@ def _validated_target(shell: ShellState, target: ShortcutTarget) -> ShortcutTarg
 
 def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
     """The wallpaper reference when an image file backs it (or None for the default); a 404 otherwise."""
-    if wallpaper is not None and resolve_wallpaper_file(wallpaper, _wallpaper_directories()) is None:
+    if wallpaper is not None and resolve_wallpaper_file(wallpaper, wallpaper_directories()) is None:
         raise WallpaperNotFoundError(f"No {wallpaper.kind.value} wallpaper named {str(wallpaper.name)!r}")
     return wallpaper
 
@@ -447,7 +447,7 @@ def arrive_client(client_id: str) -> ResponseReturnValue:
 
 def list_wallpapers_route() -> ResponseReturnValue:
     """The wallpapers a desktop can wear: the bundled ones and the images in the workspace's wallpaper folder."""
-    return model_response(WallpapersListing(wallpapers=tuple(list_wallpapers(_wallpaper_directories()))))
+    return model_response(WallpapersListing(wallpapers=tuple(list_wallpapers(wallpaper_directories()))))
 
 
 def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
@@ -457,7 +457,7 @@ def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
     except ValueError as e:
         logger.debug("Refused a wallpaper request for kind {!r} and name {!r}: {}", kind, name, e)
         return detail_response(f"No wallpaper of kind {kind!r} named {name!r}", HTTP_NOT_FOUND)
-    path = resolve_wallpaper_file(wallpaper, _wallpaper_directories())
+    path = resolve_wallpaper_file(wallpaper, wallpaper_directories())
     if path is None:
         return detail_response(f"No {wallpaper.kind.value} wallpaper named {str(wallpaper.name)!r}", HTTP_NOT_FOUND)
     return send_file(path)

@@ -3,7 +3,9 @@ client outside it, where a client used to run a command in the workspace.
 
 This module holds only what turns a request into a call and an answer into a response. What each route does lives
 in a library: the grants in ``share_grants``, the profile snapshot and the timezone in ``workspace_profile``, the
-backup configuration in ``workspace_backup_setup``, and the updates in ``workspace_update_control``.
+backup configuration in ``workspace_backup_setup``, and the updates in ``workspace_update_control``. What the shell
+itself holds comes from the shell: the workspace's apps and its first desktop's wallpaper, and the suggestion
+switches, which it passes to the app that keeps them.
 
 A route asks for no more than the request guard already does: it reads the requester's identity, so a header that
 does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to this internal app
@@ -22,14 +24,17 @@ from pathlib import Path
 from typing import Final
 from typing import TypeVar
 
+from app_manifest.registry import RegistryRow
 from app_schema.api_schema import AlternateResponse
 from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
+from app_schema.api_schema import SchemalessRoute
 from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import request
+from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import BaseModel
@@ -56,6 +61,7 @@ from workspace_backup_setup.state import read_backup_state
 from workspace_backup_setup.state import workspace_id_from_environment
 from workspace_backup_setup.verification import read_verification_disabled
 from workspace_backup_setup.verification import write_verification_disabled
+from workspace_initial_data.status import read_initial_data_status
 from workspace_profile.errors import InvalidProfileSnapshotError
 from workspace_profile.errors import InvalidTimezoneError
 from workspace_profile.errors import ProfileWriteError
@@ -76,17 +82,25 @@ from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.dispatcher import PROC_ROOT
 from workspace_update_control.protocol import OUTCOME_STARTING
 from workspace_update_control.settings import InvalidUpdateSettingsError
-from workspace_update_control.settings import UpdateSettings
-from workspace_update_control.settings import write_update_settings
+from workspace_update_control.settings import take_update_settings
 
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.desktop_routes import wallpaper_directories
+from imbue.system_interface.shell.errors import SuggestionSettingsUnavailableError
+from imbue.system_interface.shell.errors import SuggestionSettingsUnsupportedError
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
 from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
 from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
+from imbue.system_interface.shell.route_helpers import HTTP_NOT_IMPLEMENTED
+from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
+from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.route_helpers import request_identity
+from imbue.system_interface.shell.suggestion_settings import change_suggestion_switches
+from imbue.system_interface.shell.suggestion_settings import read_suggestion_switches
+from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
 from imbue.system_interface.template_ref import read_template_ref
 from imbue.system_interface.workspace_api_models import BackupOperationRunningRefusal
 from imbue.system_interface.workspace_api_models import BackupVerificationModel
@@ -101,6 +115,8 @@ from imbue.system_interface.workspace_api_models import CODE_INVALID_UPDATE_SETT
 from imbue.system_interface.workspace_api_models import CODE_NOT_AT_WORKSPACE_ROOT
 from imbue.system_interface.workspace_api_models import CODE_OWNER_ONLY
 from imbue.system_interface.workspace_api_models import CODE_PREVIEW
+from imbue.system_interface.workspace_api_models import CODE_SUGGESTIONS_UNAVAILABLE
+from imbue.system_interface.workspace_api_models import CODE_SUGGESTIONS_UNSUPPORTED
 from imbue.system_interface.workspace_api_models import CODE_WRITE_FAILED
 from imbue.system_interface.workspace_api_models import GRANTS_ERROR_UNREADABLE
 from imbue.system_interface.workspace_api_models import GRANTS_PER_APP_KEY
@@ -109,6 +125,7 @@ from imbue.system_interface.workspace_api_models import GrantRefusalEntry
 from imbue.system_interface.workspace_api_models import GrantsDocumentModel
 from imbue.system_interface.workspace_api_models import GrantsStoredResponse
 from imbue.system_interface.workspace_api_models import InvalidGrantsError
+from imbue.system_interface.workspace_api_models import OPERATION_APPS_READ
 from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_CREDENTIALS_READ
 from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_DESTINATION_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_READ
@@ -116,6 +133,8 @@ from imbue.system_interface.workspace_api_models import OPERATION_BACKUPS_VERIFI
 from imbue.system_interface.workspace_api_models import OPERATION_PROFILE_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_SHARING_GRANTS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_SHARING_READ
+from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_READ
+from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_TIMEZONE_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_DISMISS
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_LIVENESS_READ
@@ -126,11 +145,14 @@ from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDUL
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SETTINGS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SKIP
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_START
+from imbue.system_interface.workspace_api_models import OPERATION_WALLPAPER_READ
 from imbue.system_interface.workspace_api_models import ProfileSnapshotRequest
 from imbue.system_interface.workspace_api_models import ProfileWrittenResponse
 from imbue.system_interface.workspace_api_models import ReplaceGrantsRequest
 from imbue.system_interface.workspace_api_models import ShareableApp
 from imbue.system_interface.workspace_api_models import SharingStateResponse
+from imbue.system_interface.workspace_api_models import SuggestionSettingsRequest
+from imbue.system_interface.workspace_api_models import SuggestionSettingsResponse
 from imbue.system_interface.workspace_api_models import TimezoneRequest
 from imbue.system_interface.workspace_api_models import TimezoneResponse
 from imbue.system_interface.workspace_api_models import UpdateBusyChat
@@ -153,6 +175,8 @@ from imbue.system_interface.workspace_api_models import UpdateStateResponse
 from imbue.system_interface.workspace_api_models import WORKSPACE_COMPATIBILITY
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
 from imbue.system_interface.workspace_api_models import WORKSPACE_STATUS_SCHEMA
+from imbue.system_interface.workspace_api_models import WorkspaceApp
+from imbue.system_interface.workspace_api_models import WorkspaceAppsResponse
 from imbue.system_interface.workspace_api_models import WorkspaceRouteError
 from imbue.system_interface.workspace_api_models import WorkspaceStatusResponse
 
@@ -173,12 +197,19 @@ UPDATE_SKIP_ROUTE: Final[str] = f"{UPDATE_ROUTE}/skip"
 UPDATE_DISMISSALS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/dismissals"
 UPDATE_LIVENESS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/liveness"
 UPDATE_SETTINGS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/settings"
+SUGGESTIONS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/suggestions"
+APPS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/apps"
+WALLPAPER_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/wallpaper"
 
 # The query parameter that asks the update read whether an account is signed in.
 CHECK_SIGN_IN_PARAMETER: Final[str] = "check_sign_in"
 
 _PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 _OWNER_ONLY_REFUSAL_DETAIL: Final[str] = "Only the workspace's owner may read its backup credentials."
+
+# What the wallpaper is answered under: a browser may keep it for the one user and asks again before each use, so a
+# changed wallpaper is seen at once and an unchanged one is not sent twice.
+_WALLPAPER_CACHE_CONTROL: Final[str] = "private, no-cache"
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
@@ -229,19 +260,25 @@ def _run_in_background(work: Callable[[], None]) -> None:
 
 def workspace_status() -> ResponseReturnValue:
     """What this workspace serves: the version of its checkout, the name of every operation it has a route for,
-    and the template's compatibility number.
+    the template's compatibility number, and how its initial data stands.
 
     A client asks before the first operation it sends a workspace, and calls a route only for an operation named
     here. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads
     a compatibility number higher than it knows opens the workspace and does nothing else inside it.
+
+    ``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:
+    ``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case
+    the next start of the workspace's services tries again. Whoever creates a workspace waits for ``APPLIED``.
     """
     _admit(is_changing_the_workspace=False)
+    workspace_root = _workspace_root()
     return model_response(
         WorkspaceStatusResponse(
             schema=WORKSPACE_STATUS_SCHEMA,
-            template_ref=read_template_ref(_workspace_root()),
+            template_ref=read_template_ref(workspace_root),
             operations=() if get_state().is_preview else WORKSPACE_OPERATIONS,
             compatibility=WORKSPACE_COMPATIBILITY,
+            initial_data=read_initial_data_status(workspace_root),
         )
     )
 
@@ -272,6 +309,17 @@ def _grant_entries(grant_list: GrantListModel) -> GrantEntries:
     return grant_entries(grant_list.users, grant_list.emails, grant_list.email_domains)
 
 
+def _shareable_rows() -> list[RegistryRow]:
+    """The registered apps that are not internal, in the registry's order."""
+    return [entry.row for entry in get_state().shell.inventory.entries() if not entry.row.internal]
+
+
+def _shareable_app(row: RegistryRow) -> ShareableApp:
+    return ShareableApp(
+        name=str(row.name), label=row.label, display_name=str(row.display_name or ""), is_system=row.system
+    )
+
+
 def read_sharing() -> ResponseReturnValue:
     """Whether the workspace holds share materials, its grants, and the apps that can be shared by themselves:
     what a client reads before every edit of who the workspace is shared with.
@@ -281,22 +329,12 @@ def read_sharing() -> ResponseReturnValue:
     """
     _admit(is_changing_the_workspace=False)
     state = read_sharing_state(_workspace_root())
-    rows = [entry.row for entry in get_state().shell.inventory.entries()]
     return model_response(
         SharingStateResponse(
             is_shared=state.is_shared,
             grants=_grants_document_model(state.grants) if state.grants is not None else None,
             grants_error=GRANTS_ERROR_UNREADABLE if state.is_grants_unreadable else "",
-            shareable_apps=tuple(
-                ShareableApp(
-                    name=str(row.name),
-                    label=row.label,
-                    display_name=str(row.display_name or ""),
-                    is_system=row.system,
-                )
-                for row in rows
-                if not row.internal
-            ),
+            shareable_apps=tuple(_shareable_app(row) for row in _shareable_rows()),
         )
     )
 
@@ -542,12 +580,15 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
     Answers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at
     most once an hour, and while arming is on it arms an update to that version by itself. The hours are read in
     the timezone the workspace records, and in UTC when it records none.
+
+    The workspace's own answer on arming and its own hours win over the account's. A request that leaves one of
+    those three out keeps the stored value, and one that sends null clears it.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateSettingsModel)
     _require_workspace_root_as_working_directory()
     try:
-        stored = write_update_settings(UpdateSettings(**body.model_dump()))
+        stored = take_update_settings(body.model_dump(exclude_unset=True))
     except InvalidUpdateSettingsError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_UPDATE_SETTINGS, HTTP_BAD_REQUEST) from e
     except OSError as e:
@@ -737,6 +778,98 @@ def read_update_liveness() -> ResponseReturnValue:
     )
 
 
+# Suggestions
+
+
+def _suggestions_unavailable(error: SuggestionSettingsUnavailableError) -> WorkspaceRouteRefusal:
+    return WorkspaceRouteRefusal(str(error), CODE_SUGGESTIONS_UNAVAILABLE, HTTP_SERVICE_UNAVAILABLE)
+
+
+def _suggestions_unsupported(error: SuggestionSettingsUnsupportedError) -> WorkspaceRouteRefusal:
+    return WorkspaceRouteRefusal(str(error), CODE_SUGGESTIONS_UNSUPPORTED, HTTP_NOT_IMPLEMENTED)
+
+
+def read_suggestions() -> ResponseReturnValue:
+    """The workspace's two suggestion switches: whether suggested replies are offered under an agent's reply, and
+    whether things to try are offered on a chat with no message yet.
+
+    The switches are the settings of one of the workspace's apps, and the read is passed to it. When that app is
+    not running or does not answer, the answer is 503 SUGGESTIONS_UNAVAILABLE, and asking again later is right.
+    When no app of the workspace holds switches that can be read here, which is an app from before it could, the
+    answer is 501 SUGGESTIONS_UNSUPPORTED.
+    """
+    _admit(is_changing_the_workspace=False)
+    try:
+        switches = read_suggestion_switches(get_state().shell.inventory.entries())
+    except SuggestionSettingsUnavailableError as e:
+        raise _suggestions_unavailable(e) from e
+    except SuggestionSettingsUnsupportedError as e:
+        raise _suggestions_unsupported(e) from e
+    return model_response(SuggestionSettingsResponse.model_validate(switches))
+
+
+def write_suggestions() -> ResponseReturnValue:
+    """Change the suggestion switches the request names, leave one it does not name, and answer both.
+
+    The write is passed to the app that holds the switches, which tells its own open pages of the change. It is
+    refused as the read is: 503 SUGGESTIONS_UNAVAILABLE, or 501 SUGGESTIONS_UNSUPPORTED.
+    """
+    _admit(is_changing_the_workspace=True)
+    body = _body(SuggestionSettingsRequest)
+    changes = {name: value for name, value in body.model_dump().items() if value is not None}
+    try:
+        switches = change_suggestion_switches(get_state().shell.inventory.entries(), changes)
+    except SuggestionSettingsUnavailableError as e:
+        raise _suggestions_unavailable(e) from e
+    except SuggestionSettingsUnsupportedError as e:
+        raise _suggestions_unsupported(e) from e
+    logger.info("Changed the suggestion switches {}", sorted(changes))
+    return model_response(SuggestionSettingsResponse.model_validate(switches))
+
+
+# The apps and the wallpaper
+
+
+def read_apps() -> ResponseReturnValue:
+    """The workspace's apps: every registered app that is not internal, in the registry's order, each with its
+    name, its origin label, the name a person reads for it, whether it is part of the workspace itself, and the
+    SVG markup of its icon.
+
+    They are the apps the sharing read lists as shareable. Those that are not part of the workspace itself are
+    the apps built on it, which a client lists as the workspace's own. An icon is the app's own markup: a client
+    draws it as an image, so nothing in it runs.
+    """
+    _admit(is_changing_the_workspace=False)
+    return model_response(
+        WorkspaceAppsResponse(
+            apps=tuple(
+                WorkspaceApp(**_shareable_app(row).model_dump(), icon=row.icon or "") for row in _shareable_rows()
+            )
+        )
+    )
+
+
+def read_wallpaper() -> ResponseReturnValue:
+    """The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own
+    content type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop
+    yet.
+
+    The image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again
+    and is answered 304 while it has not changed. A page of another origin reads it with a credentialed request
+    of its own code, as it reads every workspace route; an image element of another site is refused.
+    """
+    _admit(is_changing_the_workspace=False)
+    shell = get_state().shell
+    desktops = shell.desktops.list_desktops()
+    wallpaper = desktops[0].wallpaper if desktops else None
+    path = resolve_wallpaper_file(wallpaper, wallpaper_directories()) if wallpaper is not None else None
+    if path is None:
+        return "", HTTP_NO_CONTENT
+    response = send_file(path, conditional=True, etag=True)
+    response.headers["Cache-Control"] = _WALLPAPER_CACHE_CONTROL
+    return response
+
+
 def _route(
     request_model: type[BaseModel] | None,
     response_model: type[BaseModel],
@@ -754,6 +887,12 @@ def _route(
         ),
     )
 
+
+# What the suggestion routes answer when the app that holds the switches cannot be asked, or holds none.
+_SUGGESTIONS_FAILURES: Final[tuple[AlternateResponse, ...]] = (
+    AlternateResponse(status=HTTP_NOT_IMPLEMENTED, model=WorkspaceRouteError),
+    AlternateResponse(status=HTTP_SERVICE_UNAVAILABLE, model=WorkspaceRouteError),
+)
 
 WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("GET", STATUS_ROUTE): _route(None, WorkspaceStatusResponse),
@@ -790,6 +929,15 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissalsResponse),
     ("GET", UPDATE_LIVENESS_ROUTE): _route(None, UpdateLivenessResponse),
     ("PUT", UPDATE_SETTINGS_ROUTE): _route(UpdateSettingsModel, UpdateSettingsModel),
+    ("GET", SUGGESTIONS_ROUTE): _route(None, SuggestionSettingsResponse, other_answers=_SUGGESTIONS_FAILURES),
+    ("PUT", SUGGESTIONS_ROUTE): _route(
+        SuggestionSettingsRequest, SuggestionSettingsResponse, other_answers=_SUGGESTIONS_FAILURES
+    ),
+    ("GET", APPS_ROUTE): _route(None, WorkspaceAppsResponse),
+    ("GET", WALLPAPER_ROUTE): SchemalessRoute(
+        reason="The image of the first desktop's wallpaper, under its own content type; 204 with no body when "
+        "that desktop wears its theme's default"
+    ),
 }
 
 # The operation each route serves, as the status route names it; the status route itself serves none.
@@ -811,6 +959,10 @@ WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
     ("POST", UPDATE_DISMISSALS_ROUTE): OPERATION_UPDATE_DISMISS,
     ("GET", UPDATE_LIVENESS_ROUTE): OPERATION_UPDATE_LIVENESS_READ,
     ("PUT", UPDATE_SETTINGS_ROUTE): OPERATION_UPDATE_SETTINGS_WRITE,
+    ("GET", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_READ,
+    ("PUT", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_WRITE,
+    ("GET", APPS_ROUTE): OPERATION_APPS_READ,
+    ("GET", WALLPAPER_ROUTE): OPERATION_WALLPAPER_READ,
 }
 
 _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] = {
@@ -832,6 +984,10 @@ _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] 
     ("POST", UPDATE_DISMISSALS_ROUTE): dismiss_update,
     ("GET", UPDATE_LIVENESS_ROUTE): read_update_liveness,
     ("PUT", UPDATE_SETTINGS_ROUTE): write_update_settings_of_workspace,
+    ("GET", SUGGESTIONS_ROUTE): read_suggestions,
+    ("PUT", SUGGESTIONS_ROUTE): write_suggestions,
+    ("GET", APPS_ROUTE): read_apps,
+    ("GET", WALLPAPER_ROUTE): read_wallpaper,
 }
 
 

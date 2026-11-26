@@ -42,6 +42,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
+| `suggestion_settings_path` | string | no | absent | A path shaped like a launch path, declared by the one app that holds the workspace's suggestion switches. `GET` there answers `{"settings": {...}}` holding `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`, and `PUT` there with either switch or both changes those and answers the same. The shell's workspace routes pass a client's read and write to it (section 5.7), and ask the first registered app that declares one. |
 | `message_handlers` | array of tables | no | `[]` | Each `{type, path}` or `{type, show, showing?, reload_when_raised?}`: `type` is a message type the app takes, a lowercase prefix, `:`, and a lowercase kebab-case name (at most 64 characters; `minds:focus-chat`, `open:file`), unique within the manifest and never `shell:` (the app contract's own prefix). A type names what the message means, not who sends it: the minds chrome and apps' pages send them alike (section 5.6). With `path`, a route under the app's origin shaped like a launch path, the shell posts every message of that type there. With `show`, a page template, the shell shows the page of the app it builds from the message; `showing`, a list of page templates, names the app's other pages that count as already showing it; `reload_when_raised` (boolean, default `false`) has a window the show raises at the `show` page itself reloaded, while one at a `showing` page is only raised (section 5.6). A page template is a path with `{field}` placeholders (a field name: a letter, then letters, digits, and `_`) naming the message's fields, optionally ending in a fixed query string; it starts with a single `/` or a placeholder (whose value is itself a rooted path), carries no fragment, and holds nothing a URL would escape outside its placeholders. A handler gives exactly one of `path` and `show`, and `showing` and `reload_when_raised` only beside `show`. |
 | `keybindings` | array of tables | no | `[]` | Each `{id, label, default_chords?}`: an action the keyboard can trigger in the app, which the Keyboard shortcuts dialog lists for re-binding (section 5.1). `id` matches `^[a-z0-9][a-z0-9_-]{0,63}$`, unique within the manifest, and is the key a person's chosen chords are stored under, so it stays stable across releases; `label` is one line of at most 80 characters saying what the action does; `default_chords` (default `[]`, unbound) are the chords that trigger it out of the box, in the `workspace_profile` library's canonical grammar (modifiers in ctrl/alt/shift/meta order), which the app's own resolved-chords route and the shell's catalog both check. |
 | `references`, `scope`, `wiring` | | | | Unchanged. |
@@ -75,7 +76,7 @@ The critical built-ins declare their `[preview]` tables (the workspace app model
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `description`, `api_schema_path`, `critical`, `stop_when_no_windows`, `uses_microphone`, `system`, `priority`, `default_shortcuts` (array of inline tables `{launch, mode}`; a row an older registration wrote may carry one `default_shortcut` inline table instead, read as a list of one), `seeds_shortcuts` (written when the manifest gives it; absent reads as `true`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?, mention_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?, reload_when_raised?}`, as the manifest gives them), and `keybindings` (array of inline tables `{id, label, default_chords}`, `default_chords` written as `[]` for an unbound action) from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `description`, `api_schema_path`, `critical`, `stop_when_no_windows`, `uses_microphone`, `system`, `priority`, `default_shortcuts` (array of inline tables `{launch, mode}`; a row an older registration wrote may carry one `default_shortcut` inline table instead, read as a list of one), `seeds_shortcuts` (written when the manifest gives it; absent reads as `true`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?, mention_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, `suggestion_settings_path`, `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?, reload_when_raised?}`, as the manifest gives them), and `keybindings` (array of inline tables `{id, label, default_chords}`, `default_chords` written as `[]` for an unbound action) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -321,7 +322,7 @@ The shell also sends `minds:highlight-chrome {anchor}` (contract version 9) whil
 The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app, through mngr's forward, and the hosted web client), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
 `system/apps/system_interface/workspace_routes_api.json` is their full description (every request and answer, as an OpenAPI document, each route naming its operation under `x-workspace-operation`), and is what a client is checked against; this section says what holds across them.
 
-`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...], "compatibility": 1}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty), the name of every operation the shell has a route for, and the template's compatibility number.
+`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...], "compatibility": 1, "initial_data": {...}}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty), the name of every operation the shell has a route for, the template's compatibility number, and how the workspace's initial data stands.
 A client asks before the first operation it sends a workspace and calls a route only for an operation named there, so a workspace whose shell names fewer is still served by the client's older path.
 A preview shell names none, and answers every route that changes the workspace `403` with the code `PREVIEW`: it serves a copy, and cannot change the live workspace.
 
@@ -329,6 +330,10 @@ A preview shell names none, and answers every route that changes the workspace `
 It is raised only by a change a client built before it could not work with: a route that changes in a way the frozen descriptions forbid, a format a client's own programs write, or a page the embed contract cannot carry.
 A change every supported client still works with leaves it alone, and it is never lowered.
 A client is built with the highest number it knows. One that reads a higher number still opens the workspace and stops, starts and destroys it, and refuses everything else it would do inside it rather than read a missing operation as a template too old to have it and run its older command.
+
+`initial_data` is `{"state", "detail", "applied_at"}`: whether the workspace's boot applied the document it was handed when it was created (below).
+`state` is `NONE` when the boot found no document and has applied none, `APPLIED`, or `FAILED`; `detail` says why for `FAILED` and is empty otherwise; `applied_at` is when it was applied, in seconds since the epoch, and null unless `APPLIED`.
+A status without the member is a template from before the initial data, which ignores the document. The status keeps its schema, since the member is an addition.
 
 | Operation | Route |
 |---|---|
@@ -349,10 +354,14 @@ A client is built with the highest number it knows. One that reads a higher numb
 | `update.dismiss` | `POST /api/workspace/update/dismissals` |
 | `update.liveness.read` | `GET /api/workspace/update/liveness` |
 | `update.settings.write` | `PUT /api/workspace/update/settings` |
+| `suggestions.read` | `GET /api/workspace/suggestions` |
+| `suggestions.write` | `PUT /api/workspace/suggestions` |
+| `apps.read` | `GET /api/workspace/apps` |
+| `wallpaper.read` | `GET /api/workspace/wallpaper` |
 
 A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
 The one exception is `GET /api/workspace/backups/credentials`, which answers a secret to a client outside the workspace and so answers the owner alone (`403` with the code `OWNER_ONLY` otherwise).
-A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_DESTINATION`, `BACKUP_OPERATION_RUNNING`, `OWNER_ONLY`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
+A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_DESTINATION`, `BACKUP_OPERATION_RUNNING`, `OWNER_ONLY`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`, `SUGGESTIONS_UNAVAILABLE`, `SUGGESTIONS_UNSUPPORTED`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
 A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry, and a `BACKUP_OPERATION_RUNNING` carries `lease`, who holds the backup lease.
 
 Two routes answer before their work is done, and a client reads on:
@@ -415,9 +424,14 @@ Each prints one JSON line, the lease as it stands or `null`. `take` and `renew` 
 `PUT /api/workspace/profile` leaves the stored snapshot alone when the one sent equals it apart from `written_at`, and answers `is_written: false` then: a client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a change that did not happen.
 
 **The workspace arms its own updates.**
-`PUT /api/workspace/update/settings` stores the update settings and answers them as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), and `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in).
+`PUT /api/workspace/update/settings` stores the update settings and answers them as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in, as the account sets them), and `window_start_hour_here` and `window_end_hour_here` (this workspace's own hours, which win over the account's: both set, or both null when it has none).
 Settings that cannot be the workspace's are refused with `INVALID_UPDATE_SETTINGS`.
 The hours are read in the timezone the workspace records (`data/.state/user_timezone`), and in UTC when it records none.
+
+The three settings that are the workspace's own (`is_auto_update_enabled_here`, `window_start_hour_here`, `window_end_hour_here`) are optional in a request.
+One a request leaves out keeps its stored value, and one sent as null is cleared.
+A client that writes the account's settings into a workspace leaves all three out, so it cannot wipe an answer the owner gave in another client, and neither can a client from before a setting existed.
+Every other setting is required, and an answer carries them all.
 
 The update dispatcher, which cron runs every minute, reads `<feed_base_url>/<channel>-web.json` at most once an hour and keeps the version it names (`templateRef`). That is the channel's version: the newest version the workspace may take.
 While arming is on, nothing is armed or running, and no decision waits for the user, the dispatcher arms a schedule for the channel's version when the workspace is behind it, unless the user skipped that version or a run already went out for it.
@@ -438,6 +452,27 @@ A request that names `ceiling` is from a desktop app built before the workspace 
 
 A read route changes nothing in the workspace, and reads no feed.
 The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
+
+**The initial data.**
+Whoever creates a workspace leaves one JSON file of mode 0600 in the machine's host directory, `$MNGR_HOST_DIR/initial_data.json`: `{"schema": 1, "profile", "timezone", "update_settings", "backups"}`.
+Each part has the shape of the request of the route that writes the same thing (`PUT /api/workspace/profile`, `PUT /api/workspace/timezone`, `PUT /api/workspace/update/settings`, and `PUT /api/workspace/backups/destination`, which names where the workspace's backups go), and a part that is left out, or null, writes nothing.
+The boot sequence applies it each time the workspace's services are started, after the workspace's Python packages are in place and before the clock is set (`apply-initial-data`, `system/libs/workspace_initial_data`), by handing each part to the writer its route calls; the timezone is recorded only where none is, and is in force from that very start.
+The trigger is the file being there, not a first boot: a pool machine's first boot is over when it is baked, and its document is written when it is adopted, before its services are started again.
+When every part is written the step records that in `data/.state/initial_data/state.json` and deletes the document, which holds storage credentials.
+A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, the boot goes on, and the next start applies it again whole; no reason quotes a value of the document.
+The status route answers how it stands, as `initial_data` (above).
+
+**Suggestions.**
+The workspace's two suggestion switches are the settings of one of its apps, which names where they are read and changed in its manifest (`suggestion_settings_path`, section 2).
+`GET /api/workspace/suggestions` answers `{"is_next_step_suggestions_enabled", "is_new_chat_suggestions_enabled"}`, and `PUT /api/workspace/suggestions` changes the switches its body names, leaves one it does not name (or names as null), and answers both.
+The shell passes each request to that app over loopback, sending a write exactly the switches the client named, so the app keeps the one lock on its settings and tells its own open pages of a change.
+When the app is not running, does not answer within 10 seconds, or answers something other than its settings, the answer is `503` with the code `SUGGESTIONS_UNAVAILABLE`, and asking again later is right.
+When no registered app declares the path, or the one that does has no such route or answers settings without the switches, which is an app from before it could, the answer is `501` with the code `SUGGESTIONS_UNSUPPORTED`.
+
+**Apps and the wallpaper.**
+`GET /api/workspace/apps` answers `{"apps": [...]}`: every registered app that is not internal, in the registry's order, each `{"name", "label", "display_name", "is_system", "icon"}`. They are the apps `shareable_apps` lists, each with the SVG markup of its registry row as `icon`, or `''` when it has none. The apps with `is_system` false are the ones built on the workspace, which a client lists as the workspace's own. An icon is the app's own markup, so a client draws it as an image (a `data:` address), where nothing in it runs.
+`GET /api/workspace/wallpaper` answers the image the workspace's first desktop wears, as `GET /api/desktops` orders them, under the image's own content type, and `204` with no body when that desktop wears its theme's default, the workspace has no desktop yet, or the image is gone. The image carries an `ETag` and `Cache-Control: private, no-cache`, so a browser that holds it asks again and is answered `304` while it has not changed, with no header of the page's own. The read creates no desktop.
+Neither loosens the request guard: each is a workspace route, called from the web client's own code with the workspace's session, and an image element of another site is refused the wallpaper as it is refused `/wallpapers/<kind>/<name>`.
 
 ## 6. The WebSocket
 

@@ -55,7 +55,8 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# The user's timezone, written once by the client that created the workspace
+# The user's timezone, written once: by the boot itself from the initial data
+# the workspace was handed at create, or by a client's request to the shell
 # (the user-profile-state spec, section 8.4; the old boot-time fetch cached the
 # same file). /etc/localtime lives on the container rootfs and is lost when the
 # container is recreated, so each boot re-applies this instead of leaving the
@@ -409,9 +410,10 @@ def _set_container_timezone(
 ) -> None:
     """Apply the user timezone the file under ``data/.state`` names, when there is one.
 
-    The creating client writes the file exactly once, when the workspace is made
-    (the user-profile-state spec, section 8.4); a workspace created by an older
-    client holds whatever the old boot-time fetch last cached there. Best-effort
+    The file is written exactly once, when the workspace is made: by this boot's
+    ``_apply_initial_data`` from the document the creator left, or by a client's
+    request (the user-profile-state spec, section 8.4); a workspace created by an
+    older client holds whatever the old boot-time fetch last cached there. Best-effort
     throughout: an absent or unreadable file leaves the container on its
     current zone, never raises.
     """
@@ -675,6 +677,50 @@ def _sync_workspace_venv() -> None:
         )
         return
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+
+
+# Bound on applying the initial data: a handful of small files written from one document.
+_INITIAL_DATA_TIMEOUT_SECONDS = 120.0
+
+
+def _apply_initial_data() -> None:
+    """Apply the document whoever created the workspace left in the host dir, when there is one.
+
+    The entry (``apply-initial-data``, system/libs/workspace_initial_data) writes the profile snapshot,
+    the timezone, the update settings and the backup destination the document carries, records how
+    that went under ``data/.state/initial_data/``, and deletes the document once it is applied.
+
+    Every start, not the first boot: a pool host's first boot is over when it is baked, before it
+    has an owner, and its document is written when it is adopted, before its services are started
+    again. The document being there is the whole trigger, so a boot with none costs one process.
+
+    Runs after the venv converge, since the entry needs the workspace's packages, and before
+    ``_set_container_timezone``, so a timezone the document carries is in force from this very boot.
+    Best-effort: the entry records why a document could not be applied and leaves it for the next
+    boot, and the shell's status route says so to whoever is waiting on the create.
+    """
+    try:
+        # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
+        completed = subprocess.run(
+            ["uv", "run", "--no-sync", "apply-initial-data"],
+            capture_output=True,
+            text=True,
+            timeout=_INITIAL_DATA_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("The initial data could not be applied ({}); continuing boot", e)
+        return
+    if completed.returncode != 0:
+        logger.error(
+            "Applying the initial data failed (rc={}); continuing boot: {}",
+            completed.returncode,
+            (completed.stderr or completed.stdout).strip()[-500:],
+        )
+        return
+    for line in completed.stderr.splitlines():
+        if line.strip():
+            logger.info("apply-initial-data: {}", line)
 
 
 def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
@@ -1024,6 +1070,12 @@ def main() -> None:
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
         _sync_workspace_venv()
+
+    # Apply what the workspace was handed when it was created, on whichever boot
+    # finds it. After the venv converge, which the entry needs, and before the
+    # clock is set, so the timezone it carries is the one this boot applies.
+    with _bootstrap_step("apply_initial_data", "Applying the workspace's settings"):
+        _apply_initial_data()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the

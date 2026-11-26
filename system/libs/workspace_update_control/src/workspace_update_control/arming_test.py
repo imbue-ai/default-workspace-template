@@ -242,6 +242,34 @@ def test_the_armed_window_is_the_settings_hours_in_the_workspaces_recorded_timez
     assert schedule["is_backup_configured"] is True
 
 
+def test_the_armed_window_is_the_workspaces_own_hours_where_it_has_them(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(
+        staged, window_start_hour_here=22, window_end_hour_here=1
+    )
+
+    _tick(staged, feed, _NOW)
+
+    schedule = staged.read_state("schedule.json")
+    assert schedule is not None
+    assert (schedule["window_start_minute_utc"], schedule["window_length_minutes"]) == (
+        22 * 60,
+        3 * 60,
+    )
+
+    # Hours of its own that the owner takes away again leave the account's in force.
+    staged.write_state("settings.json", update_settings_document())
+    _tick(staged, feed, _NOW + 60)
+
+    schedule = staged.read_state("schedule.json")
+    assert schedule is not None
+    assert (schedule["window_start_minute_utc"], schedule["window_length_minutes"]) == (
+        2 * 60,
+        3 * 60,
+    )
+
+
 @pytest.mark.parametrize(
     ("is_enabled", "is_enabled_here", "is_armed"),
     [

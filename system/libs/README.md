@@ -62,6 +62,10 @@ README for details.
   makes the repository's password, initialises the repository, writes
   `restic.env` once that is ready, and tries again when it fails. Also what a
   client reads of the backups, and whether they are verified.
+- `workspace_initial_data/` - The document a workspace is handed when it is
+  created (its profile snapshot, timezone, update settings and backup
+  destination), the `apply-initial-data` step the boot sequence runs to apply
+  it, and how that stands for the shell's status route.
 - `workspace_update_control/` - A workspace's updates as a client asks for
   them through the shell's update routes (start one, schedule one, skip a
   version, write the update settings, read it all), and the dispatcher cron

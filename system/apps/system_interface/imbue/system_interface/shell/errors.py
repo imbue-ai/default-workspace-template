@@ -127,3 +127,13 @@ class PortParkingError(ShellError, OSError):
 
 class PortInUseError(PortParkingError):
     """Something already listens on the port the shell meant to park (the app itself, most likely)."""
+
+
+class SuggestionSettingsUnavailableError(ShellError, RuntimeError):
+    """The app that holds the workspace's suggestion switches could not be asked: it is not running, timed out, or
+    answered something other than its settings (answered 503)."""
+
+
+class SuggestionSettingsUnsupportedError(ShellError, LookupError):
+    """No registered app holds suggestion switches the shell can read and change, or the one that does is from
+    before it could (answered 501)."""
