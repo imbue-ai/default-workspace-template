@@ -2657,8 +2657,8 @@ version = "0.1.0"
 source = { editable = "system/apps/onboarding_checklist" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "onboarding-activity" },
@@ -2669,7 +2669,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -2680,8 +2680,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fapp_sdk&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
@@ -2692,7 +2692,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fapp_sdk&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },

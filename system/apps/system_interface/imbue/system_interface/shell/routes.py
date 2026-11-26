@@ -16,7 +16,6 @@ from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatsActivityReport
-from workspace_layout.identity import is_owner_participant
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import parse_op_body
@@ -33,6 +32,7 @@ from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.app_sdk.errors import InvalidIdentityValueError
+from imbue.app_sdk.identity import is_owner_participant
 from imbue.app_sdk.routes import model_response
 from imbue.app_sdk.routes import parse_request_body
 from imbue.system_interface.app_context import get_state

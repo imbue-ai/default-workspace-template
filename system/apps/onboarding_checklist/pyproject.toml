@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
-    "app-schema",
+    "imbue-app-sdk",
     "flask>=3.0",
     "imbue-common",
     "loguru>=0.7",
@@ -20,7 +20,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "app-schema[testing]",
+    "imbue-app-sdk[testing]",
     "pytest>=9.0",
     "pytest-timeout>=2.3.0",
     "inline-snapshot>=0.13",
@@ -61,7 +61,6 @@ known-first-party = [
     "workspace_themes",
     "imbue",
     "app_manifest",
-    "app_schema",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
