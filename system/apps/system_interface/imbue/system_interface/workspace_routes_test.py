@@ -158,7 +158,7 @@ def test_the_status_names_every_operation_and_no_version_for_a_tree_that_names_n
     "recorded",
     [
         applied_status(1_795_000_000.5),
-        failed_status("timezone: 'Mars/Olympus' is not a timezone"),
+        failed_status("timezone: zone is an IANA timezone name, and is_replacing true or false"),
     ],
 )
 def test_the_status_says_how_the_initial_data_the_boot_found_stands(

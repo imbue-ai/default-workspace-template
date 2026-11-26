@@ -155,6 +155,80 @@ def test_the_timezone_is_recorded_only_where_none_is(
     assert read_user_timezone(workspace_root) == "Asia/Tokyo"
 
 
+@pytest.mark.parametrize("unknown_zone", ["Nowhere/Land", ""])
+def test_a_zone_the_workspace_does_not_know_is_applied_with_no_zone_written(
+    workspace_root: Path,
+    host_dir: Path,
+    backup_destination: RecordingBackupDestination,
+    unknown_zone: str,
+) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(timezone={"zone": unknown_zone})
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == _APPLIED
+    assert read_initial_data_status(workspace_root) == _APPLIED
+    assert not document_path.exists()
+    assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
+    # The other parts of the same document are written.
+    assert _stored_profile(workspace_root) == PROFILE_PART_DOCUMENT
+    assert read_update_settings() == _STAGED_SETTINGS
+    assert backup_destination.requests == [(workspace_root, BACKUPS_PART_DOCUMENT)]
+    assert read_initial_data_record(workspace_root).progress_by_part == {
+        "profile": PartProgress.WRITTEN,
+        "timezone": PartProgress.WRITTEN,
+        "update_settings": PartProgress.WRITTEN,
+        "backups": PartProgress.WRITTEN,
+    }
+
+
+def test_a_zone_the_workspace_does_not_know_leaves_a_recorded_zone_alone(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    (workspace_root / USER_TIMEZONE_RELATIVE_PATH).parent.mkdir(parents=True)
+    (workspace_root / USER_TIMEZONE_RELATIVE_PATH).write_text("Asia/Tokyo\n")
+    write_initial_data_document(
+        host_dir,
+        initial_data_document(timezone={"zone": "Nowhere/Land", "is_replacing": True}),
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == _APPLIED
+    assert read_user_timezone(workspace_root) == "Asia/Tokyo"
+
+
+@pytest.mark.parametrize(
+    "malformed_part",
+    [
+        {},
+        {"zone": None},
+        {"zone": 7},
+        {"zone": ["Europe/Berlin"]},
+        {"zone": "Europe/Berlin", "is_replacing": "yes"},
+    ],
+)
+def test_a_timezone_part_of_the_wrong_shape_is_refused(
+    workspace_root: Path,
+    host_dir: Path,
+    backup_destination: RecordingBackupDestination,
+    malformed_part: dict[str, object],
+) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(timezone=malformed_part)
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status.state is InitialDataState.FAILED
+    assert status.detail.startswith("timezone: ")
+    assert "; " not in status.detail
+    assert document_path.exists()
+    assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
+
+
 @pytest.mark.parametrize(
     ("text", "reason"),
     [
@@ -235,7 +309,7 @@ def test_a_part_that_stays_refused_is_the_only_one_tried_however_often_the_servi
     workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
     document_path = write_initial_data_document(
-        host_dir, initial_data_document(timezone={"zone": "Nowhere/Land"})
+        host_dir, initial_data_document(timezone={"zone": 7})
     )
 
     first = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)

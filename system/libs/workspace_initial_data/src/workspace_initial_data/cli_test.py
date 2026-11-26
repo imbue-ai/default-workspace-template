@@ -255,7 +255,7 @@ def test_backups_the_owner_turned_off_stay_off_when_the_document_is_tried_again(
 ) -> None:
     # Another part is refused, so the document stays and the next start tries that part again.
     document = initial_data_document(
-        backups=imbue_cloud_request(STORAGE_TOKEN), timezone={"zone": "Nowhere/Land"}
+        backups=imbue_cloud_request(STORAGE_TOKEN), timezone={"zone": 7}
     )
     document_path = write_initial_data_document(host_dir, document)
 

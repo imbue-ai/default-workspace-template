@@ -5,7 +5,8 @@ cloud machine is left its user data. Each part of it has the shape of the reques
 writes the same thing, and is handed to the writer that route calls:
 
 - ``profile``: the profile snapshot (``PUT /api/workspace/profile``);
-- ``timezone``: the user's timezone, recorded only where none is (``PUT /api/workspace/timezone``);
+- ``timezone``: the user's timezone, recorded only where none is (``PUT /api/workspace/timezone``), and not at
+  all when it is a zone this workspace's tz database does not know;
 - ``update_settings``: the update settings (``PUT /api/workspace/update/settings``);
 - ``backups``: where the workspace's backups go, with the storage credentials when the creator had them
   (``PUT /api/workspace/backups/destination``), which the workspace's own backup setup then acts on.
@@ -98,7 +99,15 @@ def _write_timezone(workspace_root: Path, part: Mapping[str, object]) -> None:
         )
     try:
         write_user_timezone(workspace_root, zone, is_replacing)
-    except (InvalidTimezoneError, ProfileWriteError) as e:
+    except InvalidTimezoneError:
+        # Whoever built the document names the zone of the user's browser or machine and cannot know this
+        # workspace's tz database, so a zone it lacks is no refusal: the workspace records none, as one that was
+        # handed none, and keeps UTC until a client writes a zone through the route.
+        logger.warning(
+            "The initial data names a timezone this workspace does not know ({!r}), so none is recorded",
+            zone,
+        )
+    except ProfileWriteError as e:
         raise InitialDataPartRefusedError(str(e)) from e
 
 

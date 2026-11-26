@@ -32,6 +32,15 @@ thing, and is handed to the writer that route calls: `profile` of
 `PUT /api/workspace/backups/destination`. A part that is left out, or null, writes
 nothing.
 
+The `timezone` part differs from its route in one thing. Whoever builds the
+document names the zone of the user's browser or machine and cannot know the
+workspace's tz database, which may lack that zone (`Etc/Unknown`, or a zone newer
+than the image's tzdata). A zone the workspace does not know is therefore no
+refusal: the part is recorded as applied, no zone is written, and the workspace
+keeps UTC, as one that was handed no zone, until a client writes one through
+`PUT /api/workspace/timezone`. A `timezone` part of the wrong shape (no `zone`, or
+a `zone` that is no text) is refused as any other part is.
+
 ## CLI
 
 - `apply-initial-data` - Apply the document in `$MNGR_HOST_DIR`, when there is one.
