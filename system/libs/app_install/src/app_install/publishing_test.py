@@ -377,10 +377,11 @@ def test_only_the_text_files_of_a_tree_are_read_for_the_skills_they_name(tmp_pat
     write_workspace_file(workspace, ".agents/skills/fetch-mail/SKILL.md", "# Fetch mail\n")
     names_the_skill = "uv run .agents/skills/fetch-mail/scripts/run.py\n"
     write_app_file(workspace, "notes", "refresh.sh", names_the_skill)
-    # Each of these names the skill too, in a file that is not text, a file over the size read, and a link.
+    # Each of these names the skill too: a file that is not text, a file over the size read, and a link to the
+    # file above, which would be read a second time through the link.
     write_app_file(workspace, "notes", "thumbnail.png").write_bytes(b"\x89PNG\xff" + names_the_skill.encode())
     write_app_file(workspace, "notes", "fixtures/export.txt", names_the_skill * 25_000)
-    (workspace / "system" / "apps" / "notes" / "mail.db").symlink_to("../../../data/.skills/fetch-mail/mail.db")
+    (workspace / "system" / "apps" / "notes" / "run.sh").symlink_to("refresh.sh")
     # A repository nested in the app is one entry of the tree with no file behind it.
     make_workspace_repository(workspace / "system" / "apps" / "notes" / "vendored")
     _versioned(workspace, runtime, "0.1.0")
