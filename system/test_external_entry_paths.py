@@ -1,10 +1,9 @@
 """The script paths other programs call keep working, under the interpreter those callers use.
 
-Imbue Studio (minds), its evals and admin tools, the web client (through owner-exec), the
-mngr create hook, CI and older releases' update-self flows all run these files by path, from
-outside this release. A bare one runs with the system ``python3`` and no venv, so it is run here
-as ``python -S -s`` (no site-packages at all); the one venv-tier path is run from the root venv,
-as its callers' ``uv run --no-sync`` would.
+Imbue Studio (minds), its evals and admin tools, the mngr create hook, CI and older releases'
+update-self flows all run these files by path, from outside this release. A bare one runs with
+the system ``python3`` and no venv, so it is run here as ``python -S -s`` (no site-packages at
+all); the one venv-tier path is run from the root venv, as its callers' ``uv run --no-sync`` would.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (SYSTEM_SCRIPTS / "seed_welcome_chat.py", ("--help",)),
     (SYSTEM_SCRIPTS / "message_chat.py", ("--help",)),
     (SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
-    (SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
     (SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
     (SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
     (SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),

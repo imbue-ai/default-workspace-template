@@ -14,7 +14,7 @@
 > * `validate_skill.py` requires `scripts/pyproject.toml` with the right project/package names, runs `uv lock --check`, and runs every entry with `uv run --no-sync <entry> --help`.
 > * `.agents/shared/scripts` becomes its own venv-tier uv project (package `agents_shared`), listed explicitly in the root members, with callers on `uv run --no-sync`.
 > * Skill dependencies must co-resolve with the workspace lock (same rule as apps); a clash surfaces at `uv lock` time, with no isolated-environment escape hatch.
-> * Bare tier (system `python3`, stdlib only): guard hooks, bug-report collector, pre-sync build scripts, minds/minds_evals-facing scripts, `oom_priority/bin` wrappers, update-self, `provision_backups`, `require_create_account`, `run_in_background`, and `set_mngr_pin`.
+> * Bare tier (system `python3`, stdlib only): guard hooks, bug-report collector, pre-sync build scripts, minds/minds_evals-facing scripts, `oom_priority/bin` wrappers, update-self, `require_create_account`, `run_in_background`, and `set_mngr_pin`.
 > * A script is bare only if it must run without the venv, OR something outside this release invokes it by path, OR it sits in a long-running process's launch chain (so `with_secrets` and `forward_port` are bare); everything else is venv tier, so `refresh_workspace_view` moves there and update-app's docs change with it.
 > * `system/scripts` becomes one uv project with two packages: a bare package holding exactly the scripts that meet the tier rule, and a venv-tier package for everything else (including `docs_viewer`, `migrate_claude_auth`, `smoketest_app`, `refresh_workspace_view`, `check_changelog_entries`).
 > * Bare entry points stay as stub files at today's paths; a stub imports its sibling package with no path edit, and `sys.path` edits survive only in stubs needing libraries outside `scripts/`.
@@ -85,7 +85,7 @@
 - An agent facing an arbitrary script doesn't need to know its tier. It runs `uv run --no-sync <path>` unless the instruction it follows says `python3`:
   - a bare script also runs under uv (stdlib only), at about 40 ms more;
   - `python3` on a venv-tier script fails loudly at its first third-party import;
-  - the contexts where bareness matters (hooks, pre-sync build steps, program lines, minds/CI/owner-exec calls, update-self's own flow) are wired in config, not typed by agents.
+  - the contexts where bareness matters (hooks, pre-sync build steps, program lines, minds/CI calls, update-self's own flow) are wired in config, not typed by agents.
 - At session start (claude and codex):
   - If `uv.lock` has drifted from `pyproject.toml`, it is left as it is, and the agent is told once (as context, not an instruction to act now) that whoever is changing dependencies relocks.
   - The venv is then synced `--frozen` from the lock.
@@ -108,8 +108,8 @@
 
 ### For guards and external callers
 - The secrets guard accepts `uv run --no-sync|--frozen|--quiet <script>` as the same call as `uv run <script>`. It still blocks `uv run --env-file ...` or any other option before the script.
-- Every path minds, minds_evals, minds_admin, the web client (owner-exec), the mngr create hook or CI calls keeps working unchanged:
-  - `system/scripts/{seed_welcome_chat,message_chat,collect_bug_report_diagnostics,forward_port,provision_backups,require_create_account,set_mngr_pin,with_secrets,run_in_background}.py`
+- Every path minds, minds_evals, minds_admin, the mngr create hook or CI calls keeps working unchanged:
+  - `system/scripts/{seed_welcome_chat,message_chat,collect_bug_report_diagnostics,forward_port,require_create_account,set_mngr_pin,with_secrets,run_in_background}.py`
   - `.agents/skills/launch-task/scripts/create_worker.py`
   - update-self's staged runner path
 - Hook latency per tool call does not regress. Measured by hand before/after; import sets are enforced by test.
@@ -190,7 +190,7 @@
   - `update_banding.py` keeps its runtime `oom_priority` import from the target tree.
 - **`.agents/shared/scripts`**: `pyproject.toml` (`agents-shared`, package `agents_shared`), listed explicitly in `members`. Callers switch to `uv run --no-sync`, including the worker's `eval "$(uv run ... parse_task_frontmatter.py ...)"`.
 - **`system/scripts`**: one `pyproject.toml` with two packages.
-  - **Bare package** (name TBD): `agent_block_pipe_tail_head_check`, `agent_latchkey_request_check`, `agent_rewrite_bash_command`, `agent_secrets_guard_check`, `agent_tk_standalone_check`, `collect_bug_report_diagnostics`, `install_mngr`, `list_mngr_plugins`, `tool_env`, `seed_welcome_chat`, `message_chat`, `forward_port`, `with_secrets`, `provision_backups`, `require_create_account`, `run_in_background`, `set_mngr_pin`.
+  - **Bare package** (name TBD): `agent_block_pipe_tail_head_check`, `agent_latchkey_request_check`, `agent_rewrite_bash_command`, `agent_secrets_guard_check`, `agent_tk_standalone_check`, `collect_bug_report_diagnostics`, `install_mngr`, `list_mngr_plugins`, `tool_env`, `seed_welcome_chat`, `message_chat`, `forward_port`, `with_secrets`, `require_create_account`, `run_in_background`, `set_mngr_pin`.
   - **Venv package** (name TBD): `check_changelog_entries`, `docs_viewer`, `migrate_claude_auth`, `refresh_workspace_view`, `smoketest_app`, plus test helpers (`guard_testing`).
   - Every current path stays as a stub. Hook stubs keep their one `sys.path` insert for `tk_command_parsing` / `oom_priority` `src/`.
   - Delete `script_modules_testing.py`; its users import the package.
