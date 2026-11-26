@@ -3,6 +3,8 @@ name: publish-template
 description: Publish a whole workspace as a template -- a clean, bootable snapshot of what this agent built (several apps that work together, skills, chat behavior, workflows, services, config, seed data) on a new GitHub repo on the user's account, which another workspace can be created from. Use when the user asks to publish, share, or export their workspace or a whole setup as a reusable template. To share one app, use publish-app instead (most sharing is of a single app). For a new version of a template already published, use update-published-template.
 metadata:
   author: imbue
+  exempt-checks: size reachability contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Publish a template
@@ -88,6 +90,7 @@ start (`PTM=...; WT=...; uv run --no-sync --project /home/user/workspace "$PTM/.
 - [ ] 8. Push and tag
 - [ ] 9. Record it, and check the published page
 - [ ] 10. Close out
+- [ ] (only if this agent already has a template.toml) Publishing over an earlier template
 ```
 
 In the user's progress view these are a handful of plain-language steps

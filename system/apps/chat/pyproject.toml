@@ -8,6 +8,7 @@ dependencies = [
     "app-manifest",
     "imbue-app-sdk",
     "chat-background-tasks",
+    "onboarding-activity",
     "concurrency-group",
     "flask>=3.0",
     "flask-sock>=0.7",
@@ -60,6 +61,8 @@ dev = [
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
+    # The Onboarding checklist app, which the e2e suite serves beside the shell and the chat.
+    "onboarding-checklist",
     # The stdlib-only scripts whose copies of this package's wire constants the tests pin.
     "workspace-scripts",
     "update-self-skill",

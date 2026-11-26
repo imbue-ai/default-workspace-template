@@ -35,6 +35,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatAccountBinding
@@ -62,6 +63,8 @@ _MAX_NAME_NUMBER: Final[int] = 9
 # Well under the pipe buffer the prompt is written to stdin through (16KiB on macOS) at four
 # bytes a character; the opening of a long message says what it is about.
 _MAX_PROMPT_CHARACTERS: Final[int] = 3000
+# How long one model may take over a name.
+_COMPLETION_TIMEOUT_SECONDS: Final[float] = 60.0
 # How long a chat created with its first message may take to come up before naming gives up on it.
 _AGENT_WAIT_SECONDS: Final[float] = 600.0
 _AGENT_POLL_SECONDS: Final[float] = 2.0
@@ -241,9 +244,10 @@ def _set_result_of_call(
 class DaemonThreadExecutor(Executor):
     """Runs each submitted call on a daemon thread of its own; a call that raises leaves its exception on the future.
 
-    A naming attempt can wait minutes for its chat to come up. On a pool, such waits would hold the places other
-    chats' attempts queue for, and the pool's threads would hold up the app's exit: the interpreter joins them before
-    the ``atexit`` teardown that stops the namer runs.
+    A naming attempt can wait minutes for its chat to come up, and any question put to a model can take a minute to
+    be answered. On a pool, such waits would hold the places other chats' calls queue for, and the pool's threads
+    would hold up the app's exit: the interpreter joins them before the ``atexit`` teardown that stops their owner
+    runs.
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
@@ -252,7 +256,7 @@ class DaemonThreadExecutor(Executor):
         ObservableThread(
             target=_set_result_of_call,
             args=(future, fn, args, kwargs),
-            name="chat-naming",
+            name="chat-one-shot",
             on_failure=future.set_exception,
         ).start()
         return future
@@ -344,7 +348,14 @@ class ChatNamer(MutableModel):
             return
 
         try:
-            answer = completion.complete(binding.account_dir, CHAT_NAMING_SYSTEM_PROMPT, chat_naming_prompt(message))
+            answer = completion.complete(
+                binding.account_dir,
+                CHAT_NAMING_SYSTEM_PROMPT,
+                chat_naming_prompt(message),
+                model_tier=OneShotModelTier.SMALL,
+                thinking_token_allowance=None,
+                timeout_seconds=_COMPLETION_TIMEOUT_SECONDS,
+            )
         except OneShotCompletionError as e:
             logger.warning("Failed to generate a name for chat {}: {}", chat_id, e)
             self._record_attempt(chat_dir)

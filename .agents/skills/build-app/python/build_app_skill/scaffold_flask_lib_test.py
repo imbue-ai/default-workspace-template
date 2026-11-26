@@ -49,6 +49,7 @@ from app_manifest.testing import commit_everything, init_git_repository
 from imbue.app_sdk.api_schema import NO_SCHEMA_KEY
 from imbue.app_sdk.shell_client import SHELL_URL_ENVIRONMENT_VARIABLE
 from loguru import logger
+from onboarding_activity.markers import MARKER_DIR_ENV, Marker, marked_at
 from workspace_bare_scripts import venv_links
 
 from build_app_skill import scaffold_flask_lib
@@ -235,12 +236,15 @@ def test_a_scaffolded_app_gives_up_instead_of_crash_looping(tmp_path: Path) -> N
     assert float(program["startsecs"]) >= 10
 
 
-def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
+def test_scaffold_authors_only_its_own_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The app's directory, its record and its program are all a scaffold writes; no shared file is edited.
 
     The app is a standalone project, so a real scaffold writes its own `uv.lock` and
     never the root one (the acceptance test below locks and syncs for real).
     """
+    monkeypatch.delenv(MARKER_DIR_ENV, raising=False)
     root = _make_workspace(
         tmp_path / "workspace", {"browser": 8081, "host-backup": None}
     )
@@ -256,11 +260,13 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
         for path in after.keys() - before.keys()
         if not path.startswith("system/apps/news/")
     }
-    # The installer's lock is machine state under data/, which no repository tracks.
+    # The installer's lock and the onboarding marker are machine state under data/, which no
+    # repository tracks.
     assert written_outside_the_app == {
         "system/config/apps/news.toml",
         "system/supervisord.conf.d/news.conf",
         "data/.state/app_install/lock",
+        "data/.state/onboarding_activity/app_build_started",
     }
     assert "system/apps/news/src/news/runner.py" in after
 
@@ -387,6 +393,51 @@ def test_the_apps_gitignore_changes_nothing_the_workspace_tracks_or_ignores(
     assert [
         pattern for pattern in patterns if f"**/{pattern}" not in workspace_patterns
     ] == []
+
+
+def test_every_scaffold_run_sets_the_app_build_started_marker_and_refreshes_its_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chat holds back its "Build an app" suggestion while a build is under way, which it reads from this."""
+    monkeypatch.delenv(MARKER_DIR_ENV, raising=False)
+    root = _make_workspace(tmp_path / "workspace", {})
+    markers = root / "data" / ".state" / "onboarding_activity"
+
+    first = _scaffold(root, "news")
+
+    assert first.returncode == 0, first.stderr
+    assert [path.name for path in markers.iterdir()] == ["app_build_started"]
+    long_ago = time.time() - 7200
+    os.utime(markers / "app_build_started", (long_ago, long_ago))
+
+    second = _scaffold(root, "notes")
+
+    assert second.returncode == 0, second.stderr
+    refreshed = marked_at(Marker.APP_BUILD_STARTED, markers)
+    assert refreshed is not None and refreshed.timestamp() > long_ago + 3600
+
+
+def test_the_marker_goes_where_the_environment_names_and_a_run_that_cannot_write_it_still_scaffolds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_workspace(tmp_path / "workspace", {})
+    monkeypatch.setenv(MARKER_DIR_ENV, str(tmp_path / "elsewhere"))
+
+    assert _scaffold(root, "news").returncode == 0
+
+    assert (tmp_path / "elsewhere" / "app_build_started").is_file()
+    assert not (root / "data" / ".state" / "onboarding_activity").exists()
+
+    # A file where the marker directory should be: nothing can be made under it.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+
+    unrecorded = _scaffold(root, "notes")
+
+    assert unrecorded.returncode == 0, unrecorded.stderr
+    assert "warning: could not record that an app build started" in unrecorded.stderr
+    assert (root / "system/apps/notes/src/notes/runner.py").exists()
 
 
 def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> None:
@@ -543,13 +594,16 @@ def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
     _assert_nothing_left_of(root, "news")
 
 
-def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
+def test_name_already_declared_by_a_dropin_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Two programs of one name would collide; ``browser`` is not in RESERVED_NAMES.
 
-    The refusal leaves nothing behind: a half-scaffolded lib left in the tree is
+    The refusal leaves nothing tracked behind: a half-scaffolded lib left in the tree is
     foreign dirt the next hardening pass cannot clean, and the program that holds
     the name is untouched.
     """
+    monkeypatch.delenv(MARKER_DIR_ENV, raising=False)
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
     before = _files(root)
 
@@ -564,7 +618,10 @@ def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
     assert not record_path(root, "browser").exists()
     after = _files(root)
     assert {path: text for path, text in after.items() if path in before} == before
-    assert after.keys() - before.keys() == {"data/.state/app_install/lock"}
+    assert after.keys() - before.keys() == {
+        "data/.state/app_install/lock",
+        "data/.state/onboarding_activity/app_build_started",
+    }
 
 
 def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:

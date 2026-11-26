@@ -60,7 +60,13 @@ def _write_skill(
         if frontmatter_override is not None
         else (f"---\nname: {name}\ndescription: {description}{meta}\n---\n")
     )
-    body = "\n".join(f"line {i}" for i in range(body_lines))
+    module = name.replace("-", "_")
+    # Names every script these tests write into a skill, so each one is linked from SKILL.md.
+    scripts_line = (
+        f"Run `scripts/run.py`, `scripts/run.sh`, `scripts/{module}.py`, `scripts/helpers.py` "
+        f"or `python/{module}_skill/run.py`."
+    )
+    body = "\n".join([scripts_line, *(f"line {i}" for i in range(body_lines - 1))])
     (skill / "SKILL.md").write_text(fm + body)
     if include_scripts is None:
         include_scripts = metadata_crystallized
@@ -556,6 +562,24 @@ def test_an_installed_apps_skills_are_kept_as_they_came_and_an_owned_apps_are_no
     assert validate_skill.is_third_party_skill((agents_dir / "skills" / "weekly-review").resolve()) is True
     assert validate_skill.is_third_party_skill(agents_dir / "skills" / "morning-digest") is False
     assert validate_skill.is_third_party_skill((agents_dir / "skills" / "morning-digest").resolve()) is False
+
+
+def test_a_skill_an_owned_app_carries_is_checked_against_the_repository_it_is_in(tmp_path: Path) -> None:
+    _write_app_with_a_skill(tmp_path, "digest", "local", "", "morning-digest")
+    link = tmp_path / ".agents" / "skills" / "morning-digest"
+    skill_md = link / "SKILL.md"
+    skill_md.write_text(skill_md.read_text() + "\nThe record is `system/config/apps/digest.toml`.\n")
+
+    # By its entry under skills/, and by the directory inside the app that the entry links to.
+    assert validate_skill.validate(link) is None
+    assert validate_skill.validate(link.resolve()) is None
+
+    skill_md.write_text(skill_md.read_text() + "\nRead `system/config/apps/absent.toml` too.\n")
+
+    error = validate_skill.validate(link)
+    assert error is not None
+    assert "system/config/apps/absent.toml, which does not exist" in error
+    assert "digest.toml" not in error
 
 
 def test_a_listed_skill_is_kept_as_it_came_in_a_checkout_whose_directory_is_named_apps(tmp_path: Path) -> None:

@@ -1,4 +1,5 @@
 import json
+import threading
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -13,8 +14,9 @@ from imbue.app_sdk.identity import ANONYMOUS_OWNER
 from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
+from imbue.system_interface.presence import PRESENCE_SWEEP_INTERVAL_SECONDS
+from imbue.system_interface.presence import PresenceAnnouncer
 from imbue.system_interface.presence import PresenceStore
-from imbue.system_interface.presence import PresenceSweep
 from imbue.system_interface.presence import PresentUser
 from imbue.system_interface.presence import present_user_wire_json
 from imbue.system_interface.presence import present_users_wire_json
@@ -33,13 +35,25 @@ def _store(tmp_path: Path) -> PresenceStore:
     return PresenceStore(directory=tmp_path / "presence")
 
 
+def _recording_announcer(
+    tmp_path: Path, interval_seconds: float = PRESENCE_SWEEP_INTERVAL_SECONDS
+) -> tuple[PresenceAnnouncer, list[list[str]]]:
+    """An announcer over a new store at ``tmp_path``, and the list it records each announced set in, as user ids."""
+    announced: list[list[str]] = []
+    announcer = PresenceAnnouncer(
+        store=_store(tmp_path),
+        interval_seconds=interval_seconds,
+        announce=lambda users: announced.append([user.user_id for user in users]),
+        announce_roster=lambda: None,
+    )
+    return announcer, announced
+
+
 def test_the_first_heartbeat_writes_the_identity_snapshot_and_connects_the_user(tmp_path: Path) -> None:
     store = _store(tmp_path)
 
-    outcome = store.heartbeat(_BOB, _T0)
+    (user,) = store.heartbeat(_BOB, _T0).users
 
-    assert outcome.is_membership_changed is True
-    (user,) = outcome.users
     assert user.user_id == "user-bob-4471"
     assert user.owner is False
     assert user.first_seen == user.last_seen == "2026-09-19T10:00:00.000000000Z"
@@ -60,10 +74,8 @@ def test_a_later_heartbeat_touches_the_file_instead_of_rewriting_it(tmp_path: Pa
     path.write_text(path.read_text() + "\n")
     bytes_after_first = path.read_bytes()
 
-    outcome = store.heartbeat(_BOB, _T0 + timedelta(seconds=30))
+    (user,) = store.heartbeat(_BOB, _T0 + timedelta(seconds=30)).users
 
-    assert outcome.is_membership_changed is False
-    (user,) = outcome.users
     assert user.first_seen == "2026-09-19T10:00:00.000000000Z"
     assert user.last_seen == "2026-09-19T10:00:30.000000000Z"
     assert path.read_bytes() == bytes_after_first
@@ -96,49 +108,74 @@ def test_a_user_is_connected_while_the_mtime_is_within_the_window_and_the_file_i
     assert last_here.last_seen == "2026-09-19T10:00:00.000000000Z"
 
 
-def test_a_heartbeat_reports_the_membership_change_an_expiry_made_since_the_last_report(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    store.heartbeat(_BOB, _T0)
-    store.heartbeat(_OWNER, _T0 + timedelta(seconds=60))
+def test_a_heartbeat_announces_the_membership_change_an_expiry_made_since_the_last_announcement(
+    tmp_path: Path,
+) -> None:
+    announcer, announced = _recording_announcer(tmp_path)
+    announcer.record_heartbeat(_BOB, _T0)
+    announcer.record_heartbeat(_OWNER, _T0 + timedelta(seconds=60))
+    # Bob's file is past the window by the owner's next heartbeat, so the connected set shrank; the one after it
+    # changes nothing.
+    announcer.record_heartbeat(_OWNER, _T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=1))
+    announcer.record_heartbeat(_OWNER, _T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=2))
 
-    # Bob's file is past the window by the owner's next heartbeat, so the connected set shrank.
-    outcome = store.heartbeat(_OWNER, _T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=1))
-
-    assert outcome.is_membership_changed is True
-    assert [user.user_id for user in outcome.users] == ["user-owner-9c21"]
-    # And again nothing changed.
-    assert (
-        store.heartbeat(_OWNER, _T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=2)).is_membership_changed is False
-    )
-
-
-def test_the_sweep_reports_a_silent_departure_once(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    store.heartbeat(_BOB, _T0)
-
-    unchanged = store.sweep(_T0 + timedelta(seconds=10))
-    assert unchanged.is_membership_changed is False and [user.user_id for user in unchanged.users] == ["user-bob-4471"]
-
-    departed = store.sweep(_T0 + PRESENCE_CONNECTED_WINDOW)
-    assert departed.is_membership_changed is True and departed.users == ()
-
-    assert store.sweep(_T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=10)).is_membership_changed is False
+    assert announced == [["user-bob-4471"], ["user-bob-4471", "user-owner-9c21"], ["user-owner-9c21"]]
 
 
 def test_the_sweep_announces_the_connected_set_only_when_it_changed(tmp_path: Path) -> None:
+    announcer, announced = _recording_announcer(tmp_path)
+    announcer.record_heartbeat(_BOB, _T0)
+
+    assert announcer.sweep_once(_T0 + timedelta(seconds=10)) is False
+    assert announcer.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW) is True
+    assert announcer.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=10)) is False
+    assert announced == [["user-bob-4471"], []]
+
+
+def test_a_departure_the_sweep_finds_goes_out_after_a_profile_announcement_already_on_its_way(tmp_path: Path) -> None:
+    """A profile announcement that read Bob as connected is pushed before a sweep that finds him gone gets to read,
+    so the windows are left with Bob gone rather than with the older set the announcement carried."""
     store = _store(tmp_path)
+    store.heartbeat(_BOB, utc_now())
+    is_held = threading.Event()
+    is_released = threading.Event()
+    is_pushed_while_held = threading.Event()
     announced: list[list[str]] = []
 
-    def record(users: Sequence[PresentUser]) -> None:
+    def hold_the_first(users: Sequence[PresentUser]) -> None:
+        if is_held.is_set() and not is_released.is_set():
+            is_pushed_while_held.set()
+        if not is_held.is_set():
+            is_held.set()
+            assert is_released.wait(timeout=10.0)
         announced.append([user.user_id for user in users])
 
-    sweep = PresenceSweep(store=store, announce=record, announce_roster=lambda: None)
-    store.heartbeat(_BOB, _T0)
+    announcer = PresenceAnnouncer(store=store, announce=hold_the_first, announce_roster=lambda: None)
+    profile_announcement = threading.Thread(target=announcer.announce_connected)
+    profile_announcement.start()
+    assert is_held.wait(timeout=10.0)
 
-    assert sweep.sweep_once(_T0 + timedelta(seconds=10)) is False
-    assert sweep.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW) is True
-    assert sweep.sweep_once(_T0 + PRESENCE_CONNECTED_WINDOW + timedelta(seconds=10)) is False
-    assert announced == [[]]
+    departure = threading.Thread(target=announcer.sweep_once, args=(utc_now() + PRESENCE_CONNECTED_WINDOW,))
+    departure.start()
+    # Given the chance, the sweep's push must not go out before the held one; once that is released, it must.
+    is_pushed_while_held.wait(timeout=1.0)
+    is_released.set()
+    profile_announcement.join(timeout=10.0)
+    departure.join(timeout=10.0)
+    assert not profile_announcement.is_alive() and not departure.is_alive()
+
+    assert announced == [["user-bob-4471"], []]
+
+
+def test_a_heartbeat_after_a_profile_announcement_left_its_sender_out_announces_them_again(tmp_path: Path) -> None:
+    """A profile announcement made after Bob's last heartbeat passed the connected window, before the sweep noticed,
+    tells the windows he is gone; his next heartbeat then brings him back to every window."""
+    announcer, announced = _recording_announcer(tmp_path)
+    announcer.record_heartbeat(_BOB, utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1))
+    announcer.announce_connected()
+    announcer.record_heartbeat(_BOB, utc_now())
+
+    assert announced == [["user-bob-4471"], [], ["user-bob-4471"]]
 
 
 def test_an_announcement_of_a_refreshed_profile_that_fails_is_logged_not_raised(
@@ -150,9 +187,9 @@ def test_an_announcement_of_a_refreshed_profile_that_fails_is_logged_not_raised(
     def failing_announce(users: Sequence[PresentUser]) -> None:
         raise OSError("the presence directory went away")
 
-    sweep = PresenceSweep(store=store, announce=failing_announce, announce_roster=lambda: None)
+    announcer = PresenceAnnouncer(store=store, announce=failing_announce, announce_roster=lambda: None)
 
-    sweep.announce_connected()
+    announcer.announce_connected()
 
     assert any(record.startswith("ERROR Failed to announce a refreshed profile") for record in loguru_records)
 
@@ -161,20 +198,15 @@ def test_a_started_sweep_announces_on_its_own_interval_and_ends_when_stopped(tmp
     # A store from an earlier process left a fresh file, which a new store's first sweep announces
     # (its own heartbeat path would have reported the change already).
     _store(tmp_path).heartbeat(_BOB, utc_now())
-    announced: list[list[str]] = []
-
-    def record(users: Sequence[PresentUser]) -> None:
-        announced.append([user.user_id for user in users])
-
-    sweep = PresenceSweep(store=_store(tmp_path), interval_seconds=0.01, announce=record, announce_roster=lambda: None)
-    sweep.start()
+    announcer, announced = _recording_announcer(tmp_path, interval_seconds=0.01)
+    announcer.start()
     try:
-        assert sweep.is_running is True
+        assert announcer.is_running is True
         wait_for(lambda: len(announced) >= 1, timeout=5.0, poll_interval=0.01, error_message="the sweep never ran")
     finally:
-        sweep.stop()
+        announcer.stop()
 
-    assert sweep.is_running is False
+    assert announcer.is_running is False
     assert announced == [["user-bob-4471"]]
 
 
@@ -182,11 +214,10 @@ def test_a_fresh_store_announces_files_left_by_an_earlier_process_when_they_are_
     earlier = _store(tmp_path)
     earlier.heartbeat(_BOB, _T0)
 
-    restarted = _store(tmp_path)
-    outcome = restarted.sweep(_T0 + timedelta(seconds=5))
+    restarted, announced = _recording_announcer(tmp_path)
 
-    assert outcome.is_membership_changed is True
-    assert [user.user_id for user in outcome.users] == ["user-bob-4471"]
+    assert restarted.sweep_once(_T0 + timedelta(seconds=5)) is True
+    assert announced == [["user-bob-4471"]]
 
 
 def test_the_owner_of_an_unshared_workspace_is_recorded_under_the_owner_key_and_kept_off_the_wire(
@@ -257,7 +288,6 @@ def test_a_heartbeat_reports_an_input_change_exactly_when_the_stored_time_moved(
         store.heartbeat(_BOB, _T0 + timedelta(seconds=30), last_input_at=_T0 + timedelta(seconds=20)).is_input_changed
         is True
     )
-    assert store.sweep(_T0 + timedelta(seconds=30)).is_input_changed is False
 
 
 def test_an_unreadable_user_file_is_skipped_and_replaced_on_the_next_heartbeat(tmp_path: Path) -> None:

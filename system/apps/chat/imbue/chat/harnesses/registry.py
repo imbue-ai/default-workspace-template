@@ -362,7 +362,8 @@ class HarnessSpec(FrozenModel):
     # no lane signs in to it, so nothing binds one.
     binding_class: type[AccountBinding] | None = None
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
-    # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
+    # chat's name, the replies to suggest under a chat's last message). None for a harness that cannot
+    # yet: its chats keep the name they were minted with, and get no generated suggestions.
     one_shot_completion_class: type[OneShotCompletion] | None = None
     # Whether mngr can compact this harness's context (the autocompact plugin's request), which is
     # what makes the chat's idle compaction setting meaningful for it. Shipped on the catalog.

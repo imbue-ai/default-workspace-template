@@ -60,6 +60,29 @@
   }
 }
 
+/* The chat list's New chat button pulses while a coach mark points at it (root/newChatCoachMark.ts): a ring in
+   the accent colour that spreads and fades. Reduced motion holds the ring steady. */
+@keyframes coach-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+.coach-pulse {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+  animation: coach-pulse 1.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-pulse {
+    animation: none;
+  }
+}
+
 /* The phone layout's drawer (root/ChatDrawer.ts) comes in from the left, a short slide rather
    than the panel's whole width, so it reads as arriving rather than travelling. */
 @keyframes chat-drawer-in {
@@ -97,6 +120,8 @@
   line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
+  /* A URL or key with nowhere to break wraps rather than running past the edge, wherever markdown is drawn. */
+  overflow-wrap: break-word;
 }
 
 /* The agent's prose bubble sets its text a little looser than the transcript's markdown elsewhere, as a person's
@@ -220,6 +245,13 @@
   cursor: zoom-in;
 }
 
+/* An audio player or SVG a message carries as raw HTML fits the column the same way, whatever width it asks for
+   (Tailwind's base styles already cap a video). */
+.markdown-content audio,
+.markdown-content svg {
+  max-width: 100%;
+}
+
 /* Keeps an image's space while it loads: a picture outline under a slow sweep of light. The
    outline is faded as one group, so its crossing strokes do not darken where they overlap. The box
    takes the image's own width and height when the image carries them (markdown.ts sets them for an
@@ -339,11 +371,19 @@
   color: var(--c-accent-hover);
 }
 
-.markdown-content table {
-  width: 100%;
-  border-collapse: collapse;
+/* A table scrolls sideways inside its own box (markdown.ts wraps it in one) when its columns need more than the
+   bubble's width. It fills the box when it fits, and is at least 7em wide for each of its columns, so a phone
+   scrolls a wide table rather than squeezing its words a few letters to a line. The floor is on the table, not
+   each cell: browsers honour a table's min-width, but not reliably a cell's. */
+.markdown-content .markdown-table-scroll {
+  overflow-x: auto;
   margin-top: 0.75em;
   margin-bottom: 0.75em;
+}
+
+.markdown-content table {
+  min-width: max(100%, calc(var(--markdown-table-columns, 1) * 7em));
+  border-collapse: collapse;
   font-size: 0.875em;
 }
 
@@ -352,6 +392,14 @@
   border: 1px solid var(--c-border);
   padding: 0.5em 0.75em;
   text-align: left;
+}
+
+/* A link or a piece of code in a cell may break anywhere, since the bubble's own break-word does not narrow a
+   column to fit. Prose keeps its words whole: breaking anywhere in it lets a column of short labels shrink to a
+   letter a line. */
+.markdown-content th :is(a, code),
+.markdown-content td :is(a, code) {
+  overflow-wrap: anywhere;
 }
 
 .markdown-content th {
@@ -696,6 +744,11 @@
   padding: 0;
   background: none;
 }
+/* A table in the live narration paints its own text, as a block of code does: the shimmer's gradient-clipped text
+   does not reach into the table's scroller in WebKit, and its header cells' fill covers it everywhere. */
+.pv-tl-narration .markdown-table-scroll {
+  -webkit-text-fill-color: var(--c-text-secondary);
+}
 .pv-tl-narration a,
 .pv-tl-narration--static a {
   color: var(--c-text-secondary);
@@ -822,4 +875,328 @@
   .message-list-skeleton {
     animation-duration: 0ms;
   }
+}
+
+/* The pills of a strip of suggestions (views/SuggestionStrip.ts) rise into place above the composer as they
+   appear. They are dashed, to read as offers rather than as controls of the page, under a shadow light enough to
+   lift them off the chat without boxing them; the recommended one is the success green. Reduced motion shows them
+   in place. A pill is filled with the chat's own background, since the open pills of the strip above the composer
+   float over the transcript's text; its hover tint is laid over that fill rather than replacing it, the tint being
+   translucent. */
+@keyframes suggestion-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.suggestion-rise {
+  animation: suggestion-rise 150ms ease-out;
+}
+
+.suggestion-pill {
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background-color: var(--c-bg-chat);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.045),
+    0 1px 1px rgba(0, 0, 0, 0.03);
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.suggestion-pill:hover {
+  background-image: linear-gradient(var(--c-fill-hover), var(--c-fill-hover));
+}
+
+.suggestion-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.suggestion-pill--recommended {
+  border-color: var(--c-success);
+  color: var(--c-success);
+}
+
+.suggestion-pill--recommended:hover {
+  background-color: var(--c-success-bg);
+  background-image: none;
+}
+
+/* The layer the open pills float in over the transcript's end (views/SuggestionLayer.ts). It takes no pointer
+   events, so a click or a selection beside and between the pills reaches the transcript underneath; each pill
+   takes its own. A list taller than the layer scrolls inside it with no scrollbar of its own, which would need
+   the pointer the layer gives up. */
+.suggestion-layer {
+  pointer-events: none;
+  user-select: none;
+}
+
+.suggestion-layer .suggestion-pill {
+  pointer-events: auto;
+}
+
+.suggestion-layer-scroll {
+  scrollbar-width: none;
+}
+
+.suggestion-layer-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suggestion-rise {
+    animation: none;
+  }
+}
+
+/*
+ * The pickers an agent's message draws in a new workspace's first conversation (views/StudioPickers.ts): pills
+ * that toggle their label in the composer's draft, filled while the draft holds it.
+ */
+.studio-picker-heading {
+  color: var(--c-text-faint);
+  font-size: var(--font-size-helper);
+  line-height: 1.4;
+}
+
+.studio-picker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.studio-picker-pill:hover:not(:disabled) {
+  background: var(--c-fill-hover);
+}
+
+.studio-picker-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.studio-picker-pill--pressed,
+.studio-picker-pill--pressed:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  background: var(--c-accent-light);
+  color: var(--c-accent);
+}
+
+.studio-picker-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.studio-picker-mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/*
+ * The first run's provider page (views/FirstRunProvidersPage.ts): the warm cream ground and brown ink of
+ * Imbue Studio's first-run pages, whatever theme the workspace wears, since it continues them.
+ */
+:root {
+  --first-run-ground: #fff8e9;
+  --first-run-ink: #492222;
+  --first-run-ink-muted: #7a5a52;
+  --first-run-line: #d9c9b6;
+}
+.first-run-page {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 48px 24px;
+  background: var(--first-run-ground);
+  color: var(--first-run-ink);
+}
+/* The first-run sizes match Imbue Studio's own first-run pages (mngr apps/minds/frontend/src/style.css): Besley
+ * Medium for the headline at the welcome's 40px, the type ramp's 18px semibold heading for the line under it, and
+ * the same button. Fixed rather than themed: this page wears the first run's brand, whatever the workspace's theme. */
+.first-run-headline {
+  font-family: "Besley", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 40px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+.first-run-lead {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.333;
+}
+.first-run-muted {
+  color: var(--first-run-ink-muted);
+}
+.first-run-tile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--first-run-line);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--first-run-ink);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+.first-run-tile:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 10%, var(--first-run-ground));
+  border-color: color-mix(in srgb, var(--first-run-ink) 35%, var(--first-run-ground));
+}
+.first-run-tile-mark {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+/* A connected account that is not the default: the row, up to its Remove, is the button that makes it one, and
+ * says so at its right edge only under the pointer or the keyboard's focus. */
+.first-run-account-choice {
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.first-run-account-choice:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+}
+.first-run-account-hint {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.first-run-account-choice:hover .first-run-account-hint,
+.first-run-account-choice:focus-visible .first-run-account-hint {
+  opacity: 1;
+}
+.first-run-remove {
+  padding: 6px 12px;
+  border-radius: 9999px;
+  color: var(--first-run-ink-muted);
+  font-size: 13px;
+  line-height: 1.375;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+.first-run-remove:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  color: var(--first-run-ink);
+}
+.first-run-skip {
+  color: var(--first-run-ink-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.first-run-skip:hover {
+  color: var(--first-run-ink);
+}
+.first-run-next {
+  padding: 16px 28px;
+  border-radius: 9999px;
+  background: var(--first-run-ink);
+  color: var(--first-run-ground);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.333;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.first-run-next:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--first-run-ink) 80%, var(--first-run-ground));
+}
+.first-run-next:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.first-run-tile:focus-visible,
+.first-run-account-choice:focus-visible,
+.first-run-remove:focus-visible,
+.first-run-skip:focus-visible,
+.first-run-next:focus-visible {
+  outline: 2px solid var(--first-run-ink);
+  outline-offset: 3px;
+}
+/*
+ * A dialog the provider page opens (the provider chooser, the confirmation before an account is removed): the
+ * page's cream and brown ink, where a dialog anywhere else wears the workspace's look. The class sits on the
+ * dialog's root and re-declares the colour tokens for everything under it, so the dialog is built from the same
+ * components either way: its card and rows take the cream ground and the page's line, its text the ink, and a
+ * primary button the page's own (ink, with the ground for its label). Fixed like the page, so a token a theme
+ * declares on the root never reaches the dialog. A menu the dialog opens is drawn on <body>, outside it, and is
+ * named beside it for that.
+ */
+.first-run-dialog,
+body:has(.first-run-dialog) [data-part="menu"] {
+  --c-bg: var(--first-run-ground);
+  --c-bg-sidebar: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-bg-code: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-surface: var(--first-run-ground);
+  --c-surface-secondary: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+  --c-fill-faint: color-mix(in srgb, var(--first-run-ink) 3%, transparent);
+  --c-fill-hover: color-mix(in srgb, var(--first-run-ink) 6%, transparent);
+  --c-fill-active: color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-text-primary: var(--first-run-ink);
+  --c-text-secondary: var(--first-run-ink-muted);
+  --c-text-faint: color-mix(in srgb, var(--first-run-ink) 65%, var(--first-run-ground));
+  --c-text-on-accent: var(--first-run-ground);
+  --c-border: var(--first-run-line);
+  --c-border-faint: color-mix(in srgb, var(--first-run-line) 50%, var(--first-run-ground));
+  --c-border-strong: color-mix(in srgb, var(--first-run-ink) 35%, var(--first-run-ground));
+  --c-border-code: var(--first-run-line);
+  --c-accent: var(--first-run-ink);
+  --c-accent-hover: color-mix(in srgb, var(--first-run-ink) 80%, var(--first-run-ground));
+  --c-accent-light: color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-inverse-surface: var(--first-run-ink);
+  --c-inverse-surface-hover: color-mix(in srgb, var(--first-run-ink) 80%, var(--first-run-ground));
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-shadow-raised:
+    0 1px 3px 0 color-mix(in srgb, var(--first-run-ink) 10%, transparent),
+    0 1px 2px -1px color-mix(in srgb, var(--first-run-ink) 10%, transparent);
+  --c-shadow-overlay:
+    0 0 2px 0 color-mix(in srgb, var(--first-run-ink) 8%, transparent),
+    0 3px 8px 2px color-mix(in srgb, var(--first-run-ink) 8%, transparent);
+  color: var(--first-run-ink);
+}
+/* The page fades into its cream behind the dialog, as Imbue Studio's own first-run pages do, where the workspace's
+ * dialogs dim what is behind them. */
+.first-run-dialog.modal-overlay,
+.first-run-dialog .modal-overlay {
+  background-color: color-mix(in srgb, var(--first-run-ground) 90%, transparent);
 }

@@ -4,6 +4,8 @@ description: "Bring everything from another (older, broken, or replaced) workspa
 compatibility: Requires latchkey (the Imbue Studio API gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
+  exempt-checks: size paths contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Migrating another workspace into this one
@@ -33,6 +35,20 @@ summary. Every mechanical step lives in
 the raw material for your judgement, not a substitute for it. **Where the script
 reports something ambiguous or incomplete, that is a real question -- never treat
 an empty or partial result as "nothing there".**
+
+## Contents
+
+- 0. If the user asked you from the OLD workspace
+- 1. Identify the source
+- 2. Get access, in one batched request
+- 3. Preconditions
+- 4. Detect the layout, then resolve the baseline
+- 5. Inventory and audit -- ask everything now
+- 6. Dispatch the worker
+- 7. The worker's half
+- 8. Handle the report, then verify
+- 9. Close out
+- Running it again against the same source
 
 ## 0. If the user asked you from the OLD workspace
 
@@ -281,8 +297,8 @@ findings name which third-party services the user's own creations reach. Grants
 are keyed to the host, so none of the old workspace's carried over. File **one
 batched permission request per scope** here -- before the user starts using
 anything -- rather than letting each migrated app hit a denial the first time they
-open it. Use the `type: "predefined"` request from
-`.agents/skills/connect-external-service/references/latchkey.md`, one call per
+open it. Use the `type: "predefined"` permission request of the
+`connect-external-service` skill, one call per
 scope, all of them back-to-back, with a rationale naming the creation that needs
 it.
 
@@ -425,7 +441,7 @@ uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill
 It skips a package that is already standalone. For each other one it writes its program line (link and sync its own project, then exec from its own
 `.venv/bin`) in place of a source command that runs it under `uv run` or from the
 root venv, and never adds it to the root `pyproject.toml`
-(`.agents/skills/update-self/references/python-packaging-migration.md`, "A user
+(`.agents/shared/references/python-packaging-migration.md`, "A user
 app, service or lib", covers an undeclared import it surfaces). The same goes for a
 user service or library the source workspace had under `system/`, which the same
 command converts.
@@ -460,7 +476,7 @@ A skill the old workspace installed or copied in from elsewhere comes over as it
 is, listed in this workspace's `.agents/third-party-skills.toml` with where it
 came from: carry over the old workspace's entries, if it has the file, and decide about any other
 skill a check fails on by "A skill that came from elsewhere" in
-`.agents/skills/update-self/references/python-packaging-migration.md` (the
+`.agents/shared/references/python-packaging-migration.md` (the
 history and chats to read are the old workspace's). One of the old workspace's
 own skills whose Python sits in its `scripts/` (PEP 723 or plain scripts, the
 layout of older workspaces) moves into its own `python/` project here, by "A
@@ -534,7 +550,7 @@ Proxy a `question` gate per `.agents/shared/references/lead-proxy.md` (worker
 user's intent to the user, relay the answer with `create_worker.py reply
 --task-file data/.tasks/migrate-workspace/task.md -m "..."`, consume the
 report, re-arm. On `stuck` or a dead-worker timeout, follow
-`.agents/skills/launch-task/references/worker-failure.md` -- nothing has been
+`.agents/shared/references/lead-proxy/worker-failure.md` -- nothing has been
 applied here, and the source is untouched either way.
 
 On `done`, merge the branch, then work the checklist. Each item is a check, not
@@ -542,8 +558,12 @@ an assumption:
 
 - **Every migrated app opens and shows the user's own data** -- not an empty
   state. Open it and look.
-- **Every migrated skill loads**:
-  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`.
+- **Every migrated skill is recorded against the skill checks, then loads**:
+  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp` adds an
+  exemption to each skill that fails one and changes nothing else (commit the result;
+  never restructure a migrated skill to pass), then
+  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
+  prints `ok` for each.
 - **The data is present** at its new locations, including the secrets file that
   was supposed to come over.
 - **Every recreated tab renders its history**, on the account the chat ran on

@@ -15,14 +15,28 @@ foreground; supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
 `supervisorctl`.
 
+## Contents
+
+- A program generated for an app
+- Program format
+- OOM priority (memory-pressure shedding)
+- Adding a service
+- Removing a service
+- Modifying a service
+- Inspecting services
+- Important
+
+## A program generated for an app
+
 The program files of an app the workspace built or installed (one with a
 record under `system/config/apps/`) are generated from its `app.toml` and its
 record by `app-install`, and each begins with a comment saying so. The
 sections below on adding, removing and modifying a program are for every
 other program; for such an app:
 
-- **Add it** with the `build-app` scaffold, or `uv run --no-sync app-install
-  add <package>` for an app directory that already exists.
+- **Add it** with the `build-app` skill's scaffolder, or
+  `uv run --no-sync app-install add <package>` for an app directory that
+  already exists.
 - **Change how it runs** in its `app.toml` (`[run]`, `[[services]]`,
   `[[secrets]]`; a `command` there is one of the app's console scripts when
   the app has a `pyproject.toml`, and is run as given otherwise), then
@@ -35,8 +49,8 @@ other program; for such an app:
 ## Program format
 
 ```ini
-[program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/my_service && uv sync --locked --project system/services/my_service && exec system/services/my_service/.venv/bin/my-service"
+[program:<name>]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -45,8 +59,8 @@ autorestart=true
 startretries=1000000
 stopasgroup=true
 killasgroup=true
-stdout_logfile=/var/log/supervisor/my-service-stdout.log
-stderr_logfile=/var/log/supervisor/my-service-stderr.log
+stdout_logfile=/var/log/supervisor/<name>-stdout.log
+stderr_logfile=/var/log/supervisor/<name>-stderr.log
 stdout_logfile_maxbytes=10MB
 stderr_logfile_maxbytes=10MB
 stdout_logfile_backups=3
@@ -63,7 +77,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/foo && uv sync --locked --project system/apps/foo && python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec system/apps/foo/.venv/bin/foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:8090 && exec system/apps/<package>/.venv/bin/<name>"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -78,8 +92,8 @@ Key fields:
   (underscores are tolerated only for legacy names like `system_interface`),
   not `localhost`, and not starting with `host-` or `agent-`. The app then
   execs its entry point from a venv, never through `uv run`: a built-in from the
-  root venv (`.venv/bin/foo`), and a user-built app or service from its own,
-  after syncing it (`system/apps/foo/.venv/bin/foo`; see "User packages are
+  root venv (`.venv/bin/<name>`), and a user-built app or service from its own,
+  after syncing it (`system/apps/<package>/.venv/bin/<name>`; see "User packages are
   standalone projects" in [running-python.md](running-python.md)). A registration with no app directory (a preview, an isolated test
   server, the owner-exec service) keeps the manifest-less
   `forward_port.py --name <name> --url <url>` form with `--internal` or
@@ -177,7 +191,7 @@ than ~1s later, and it keeps the command self-documenting.
 For an app without a record, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`. An app with a
 record is removed with `uv run --no-sync app-install uninstall <name>`
-instead; `build-app`'s `cleanup.md` reference covers the full teardown.
+instead; the `update-app` skill covers the full teardown.
 
 ## Modifying a service
 

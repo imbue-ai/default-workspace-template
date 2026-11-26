@@ -1,10 +1,10 @@
 # The shared (public) URL
 
-Every registered service owns its own browser origin, named by its label (the
+Every registered app owns its own browser origin, named by its label (the
 `<name>-<random>` label `forward_port.py` gave it, in `data/.state/apps.toml`).
 Locally that is `http://<label>.<workspace-host>/`. When the workspace has been
-shared, the same service is also reachable at its own public origin, by the
-SAME rule on the share domain:
+shared, the same app is also reachable at its own public origin, by the SAME
+rule on the share domain:
 
 ```
 https://<label>.<share-domain>/

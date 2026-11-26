@@ -41,6 +41,7 @@ function render(overrides: Partial<BackdropAttrs> = {}): HTMLElement {
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
     isOverlayOpen: false,
+    isAppShareOffered: false,
     onSelectShortcut: vi.fn(),
     onRunShortcut: vi.fn(),
     onShortcutContextMenu: vi.fn(),
@@ -127,6 +128,43 @@ describe("the stage while viewing", () => {
   });
 });
 
+describe("Share in a window's title bar", () => {
+  const shareOf = (root: HTMLElement, windowId: string): Element | null =>
+    root.querySelector(`[data-window-id="${windowId}"] [data-window-control="share"]`);
+
+  it("is drawn on the focused window alone, and only where the shell offers it", () => {
+    const offered = render({ isAppShareOffered: true });
+    expect(shareOf(offered, "win-2")).not.toBeNull();
+    expect(shareOf(offered, "win-1")).toBeNull();
+    unmountViews();
+
+    expect(shareOf(render({ isAppShareOffered: false }), "win-2")).toBeNull();
+  });
+
+  it("is drawn for a critical app, and never for an internal one", () => {
+    socket.deliver().onAppsUpdated([appRecord("docs", { critical: true })]);
+    expect(shareOf(render({ isAppShareOffered: true }), "win-2")).not.toBeNull();
+    unmountViews();
+
+    socket.deliver().onAppsUpdated([appRecord("docs", { internal: true })]);
+    expect(shareOf(render({ isAppShareOffered: true }), "win-2")).toBeNull();
+  });
+
+  it("is not drawn for an app that is part of the workspace itself", () => {
+    socket.deliver().onAppsUpdated([appRecord("docs", { system: true })]);
+    const root = render({ isAppShareOffered: true });
+    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(shareOf(root, "win-2")).toBeNull();
+  });
+
+  it("is not drawn on a window whose app the shell no longer lists", () => {
+    socket.deliver().onAppsUpdated([]);
+    const root = render({ isAppShareOffered: true });
+    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(shareOf(root, "win-2")).toBeNull();
+  });
+});
+
 describe("the shield over a window's content", () => {
   const shieldOf = (root: HTMLElement, windowId: string): Element | null =>
     root.querySelector(`[data-window-id="${windowId}"] [data-window-shield]`);
@@ -155,5 +193,22 @@ describe("the shield over a window's content", () => {
     const touchRoot = render({ isOverlayOpen: true });
     expect(shieldOf(touchRoot, "win-1")).not.toBeNull();
     expect(shieldOf(touchRoot, "win-2")).not.toBeNull();
+  });
+});
+
+describe("the window being moved", () => {
+  it("has a compositor layer of its own until the move ends, and no other window has one", () => {
+    const root = render();
+    const promoted = (): (string | null)[] =>
+      [...root.querySelectorAll<HTMLElement>("[data-window-id]")]
+        .filter((chrome) => chrome.style.willChange === "transform")
+        .map((chrome) => chrome.getAttribute("data-window-id"));
+    expect(promoted()).toEqual([]);
+    store.beginWindowMove("win-1", { x: 300, y: 60 });
+    m.redraw.sync();
+    expect(promoted()).toEqual(["win-1"]);
+    store.endWindowMove({ x: 300, y: 60 });
+    m.redraw.sync();
+    expect(promoted()).toEqual([]);
   });
 });

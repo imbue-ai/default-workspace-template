@@ -3,7 +3,11 @@
         "enabled_when": "false",
         "fetch_and_merge": false,
         "base_branch": "main",
-        "additional_git_directories": []
+        "additional_git_directories": [],
+        "reviewable_markdown_paths": [
+            ".agents/skills",
+            ".agents/shared"
+        ]
     },
     "autofix": {
         "is_enabled": false,

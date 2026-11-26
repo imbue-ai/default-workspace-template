@@ -24,6 +24,16 @@ describe("getClientId", () => {
     const second = await loadClientIdentity();
     expect(second.getClientId()).toBe(minted);
   });
+
+  it("runs as an id Imbue Studio wrote before it booted, unchanged (desktop-interface contracts, section 1)", async () => {
+    const seeded = "6a8bc152-a4af-4c08-a240-7d80ba93757e";
+    localStorage.setItem("si-client-id", seeded);
+
+    const identity = await loadClientIdentity();
+
+    expect(identity.getClientId()).toBe(seeded);
+    expect(localStorage.getItem("si-client-id")).toBe(seeded);
+  });
 });
 
 describe("adoptClientIdentity", () => {

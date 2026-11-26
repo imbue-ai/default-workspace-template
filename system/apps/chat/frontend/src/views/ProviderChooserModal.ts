@@ -63,6 +63,7 @@ import {
   loadLanesAndAccountsWithRetry,
   pickAccount,
   takeChooserAccountId,
+  takeChooserLaneId,
   startFlow,
   submitCode,
   submitKey,
@@ -72,6 +73,8 @@ import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay"
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
+  /** Opened from the first run's provider page, whose cream the dialog then wears in place of the workspace's look. */
+  isFirstRun?: boolean;
 }
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
@@ -931,9 +934,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
-      if (accountId === null) return;
-      const account = getAccounts().find((candidate) => candidate.id === accountId);
-      if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+      const laneId = takeChooserLaneId();
+      if (accountId !== null) {
+        const account = getAccounts().find((candidate) => candidate.id === accountId);
+        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+        return;
+      }
+      const requested = laneId === null ? undefined : getLanes().find((candidate) => candidate.id === laneId);
+      if (requested !== undefined) await begin(requested, requested.methods[0], { fromChooser: true });
     },
 
     onremove() {
@@ -1064,7 +1072,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         // wherever the press ENDED: selecting the device code or the several-hundred
         // character sign-in URL and releasing past the dialog's edge would otherwise read
         // as "close this" and abort the flow the code was being copied out of.
-        { class: MODAL_OVERLAY_CLASS, ...backdropDismissAttrs(onClose) },
+        {
+          class:
+            vnode.attrs.isFirstRun === true ? `${MODAL_OVERLAY_CLASS} ${css.FIRST_RUN_DIALOG}` : MODAL_OVERLAY_CLASS,
+          ...backdropDismissAttrs(onClose),
+        },
         [
           m(
             "div",
