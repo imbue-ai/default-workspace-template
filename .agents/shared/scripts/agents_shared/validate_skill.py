@@ -500,6 +500,10 @@ def validate(
     """
     if not skill_dir.is_dir():
         return f"skill directory not found: {skill_dir}"
+    if tree is None:
+        # A skill an app carries is a link under ``skills/`` to a directory inside the app,
+        # which is not three levels below the repository's root as every other skill is.
+        tree = SkillTree(_agents_dir_of(skill_dir.resolve()).parent)
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         return f"SKILL.md not found at {skill_md}"
