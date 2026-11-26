@@ -42,7 +42,7 @@ is used, so a workspace that never uses datalib downloads nothing. The launcher 
    it in the `user` band (200), the band the manifest's `priority` names; the
    OOM backstop only ever raises a process to its band, so it leaves 900 alone.
 4. Replaces itself with `~/.local/bin/datalib-http --no-open
-   data/.datalib`, with `DATALIB_BIND=127.0.0.1:8731` and the
+   data/.mirrored-data`, with `DATALIB_BIND=127.0.0.1:8731` and the
    token in `DATALIB_TOKEN`. From then on supervisord supervises datalib-http
    directly.
 
@@ -52,11 +52,12 @@ backoff, so the app never appears with nothing behind it.
 
 ## The data root
 
-The store's data root is `data/.datalib`: the data root on the app's command
-line, and the path the skill's scripts and `SKILL.md` name
-(`test_datalib_pin.py` holds them to it). It holds only what datalib mirrors
-and processes, shared by the skill and the app; data that belongs to one app
-stays in that app's `data/.apps/<app>/`, whether or not datalib manages it.
+The store's data root is `data/.mirrored-data`: the data root on the app's
+command line, and the path the skill's scripts and `SKILL.md` name
+(`test_datalib_pin.py` holds them to it). It is named for what it holds, the
+mirror datalib keeps of the user's data, shared by the skill and the app;
+data that belongs to one app stays in that app's `data/.apps/<app>/`, whether
+or not datalib manages it.
 There is one store; a second would need a program, port, token and window of
 its own. The folder is not listed in `data/README.md` or in the layout rule
 (`docs/system/blueprint/workspace-app-model/contracts.md` section 17) while
@@ -77,7 +78,7 @@ the copy, so a window opens at `/?token=<token>`. `app.toml` must keep its
 `[[launch_paths]]` table last for the append to land in it; the launcher
 checks this and refuses to start otherwise.
 
-The token itself is `data/.datalib/system/api-token`: the launcher reads
+The token itself is `data/.mirrored-data/system/api-token`: the launcher reads
 it at start and hands it to `datalib-http` through `DATALIB_TOKEN`, so it stays
 the same across restarts (a browser already holding the cookie stays signed
 in) and the skill can read the same file for its bearer token. When the file
