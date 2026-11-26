@@ -135,7 +135,7 @@ from imbue.system_interface.server import create_application as create_shell_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
-from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
@@ -1240,13 +1240,13 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = find_free_port()
-    server = make_threaded_server(host, port, app)
+    # Bound to port 0 by the server itself: a port picked first and given back could be taken before the bind.
+    server = make_threaded_server(host, 0, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        _wait_until_serving(host, port)
-        yield ServedApp(host, port)
+        _wait_until_serving(host, server.port)
+        yield ServedApp(host, server.port)
     finally:
         server.shutdown()
         thread.join(timeout=5.0)
@@ -1589,8 +1589,6 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
 @contextmanager
 def running_workspace(
     tmp_path: Path,
-    shell_port: int,
-    chat_port: int,
     session_events: Sequence[Mapping[str, Any]] | None = None,
     additional_agents: Sequence[tuple[str, str]] = (),
     is_account_signed_in: bool = True,
@@ -1622,187 +1620,196 @@ def running_workspace(
     ``app.toml`` declares it, so every desktop holds one chat root window, minimized until something shows it.
     ``chat_message_handlers`` registers the chat for those message types, which the shell then posts to it.
     """
-    shell_url = f"http://127.0.0.1:{shell_port}"
-    chat_url = f"http://127.0.0.1:{chat_port}"
-    # The work dir every agent reports, and the one a create runs in.
-    (tmp_path / "work").mkdir(exist_ok=True)
-    agent_info, session_file = make_agent_fixture(tmp_path, session_events=session_events)
-    extra_infos: list[AgentInfo] = []
-    for extra_id, extra_name in additional_agents:
-        extra_state_dir = tmp_path / "agents" / extra_id
-        extra_state_dir.mkdir(parents=True, exist_ok=True)
-        (extra_state_dir / "session_started").touch()
-        extra_infos.append(
-            AgentInfo(
-                id=extra_id,
-                name=extra_name,
-                state="RUNNING",
-                agent_state_dir=extra_state_dir,
-                claude_config_dir=agent_info.claude_config_dir,
+    # Held until the servers adopt them: the setup below binds and connects in this process, and a port picked and
+    # given back could be handed to any of those.
+    with listening_loopback_socket() as shell_listener, listening_loopback_socket() as chat_listener:
+        shell_port = shell_listener.getsockname()[1]
+        chat_port = chat_listener.getsockname()[1]
+        shell_url = f"http://127.0.0.1:{shell_port}"
+        chat_url = f"http://127.0.0.1:{chat_port}"
+        # The work dir every agent reports, and the one a create runs in.
+        (tmp_path / "work").mkdir(exist_ok=True)
+        agent_info, session_file = make_agent_fixture(tmp_path, session_events=session_events)
+        extra_infos: list[AgentInfo] = []
+        for extra_id, extra_name in additional_agents:
+            extra_state_dir = tmp_path / "agents" / extra_id
+            extra_state_dir.mkdir(parents=True, exist_ok=True)
+            (extra_state_dir / "session_started").touch()
+            extra_infos.append(
+                AgentInfo(
+                    id=extra_id,
+                    name=extra_name,
+                    state="RUNNING",
+                    agent_state_dir=extra_state_dir,
+                    claude_config_dir=agent_info.claude_config_dir,
+                )
             )
-        )
-    agents = [agent_info, *extra_infos]
-    fake_bin_dir = _write_fake_binaries(tmp_path)
+        agents = [agent_info, *extra_infos]
+        fake_bin_dir = _write_fake_binaries(tmp_path)
 
-    registry_path = tmp_path / "registry" / "apps.toml"
-    # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
-    # section 7.5, for the mention into the Lounge).
-    write_registry(
-        registry_path,
-        registry_row_toml(
-            "chat",
-            chat_url,
-            is_critical=True,
-            default_shortcuts=[("root", "new")],
-            display_name="Chat",
-            launch_paths=(
-                ("root", "Chat", "/"),
-                ("main", "Send to main chat", "/api/chats/intake"),
-                ("new", "New Chat", "/api/chats/intake"),
-                ("send", "Send to chat...", "/api/chats/intake"),
-                ("draft", "Draft into chat", "/api/chats/intake"),
-                ("lounge", "Mention in the Lounge", "/api/chats/intake"),
-                ("app-chat", "Chat about this app", "/api/chats/intake"),
+        registry_path = tmp_path / "registry" / "apps.toml"
+        # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
+        # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+        # section 7.5, for the mention into the Lounge).
+        write_registry(
+            registry_path,
+            registry_row_toml(
+                "chat",
+                chat_url,
+                is_critical=True,
+                default_shortcuts=[("root", "new")],
+                display_name="Chat",
+                launch_paths=(
+                    ("root", "Chat", "/"),
+                    ("main", "Send to main chat", "/api/chats/intake"),
+                    ("new", "New Chat", "/api/chats/intake"),
+                    ("send", "Send to chat...", "/api/chats/intake"),
+                    ("draft", "Draft into chat", "/api/chats/intake"),
+                    ("lounge", "Mention in the Lounge", "/api/chats/intake"),
+                    ("app-chat", "Chat about this app", "/api/chats/intake"),
+                ),
+                launch_params={
+                    "main": ("message",),
+                    "new": ("account_id", "message"),
+                    "send": ("message",),
+                    "draft": ("message",),
+                    "lounge": ("message",),
+                    "app-chat": ("app", "app_display_name"),
+                },
+                launch_text_params={"main": "message", "new": "message", "send": "message"},
+                launch_draft_params={"draft": "message"},
+                launch_mention_params={"lounge": "message"},
+                launch_app_params={"app-chat": ("app", "app_display_name")},
+                launch_methods={
+                    "main": "POST",
+                    "new": "POST",
+                    "send": "POST",
+                    "draft": "POST",
+                    "lounge": "POST",
+                    "app-chat": "POST",
+                },
+                pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
+                message_handlers=chat_message_handlers,
+                launch_presets={
+                    "main": {"target": "main_chat"},
+                    "new": {"target": "new_chat"},
+                    "send": {"target": "chat_selector"},
+                    "draft": {"target": "current_chat", "is_draft": "true"},
+                    "lounge": {"target": "lounge", "is_draft": "true"},
+                    "app-chat": {"target": "app_chat"},
+                },
             ),
-            launch_params={
-                "main": ("message",),
-                "new": ("account_id", "message"),
-                "send": ("message",),
-                "draft": ("message",),
-                "lounge": ("message",),
-                "app-chat": ("app", "app_display_name"),
-            },
-            launch_text_params={"main": "message", "new": "message", "send": "message"},
-            launch_draft_params={"draft": "message"},
-            launch_mention_params={"lounge": "message"},
-            launch_app_params={"app-chat": ("app", "app_display_name")},
-            launch_methods={
-                "main": "POST",
-                "new": "POST",
-                "send": "POST",
-                "draft": "POST",
-                "lounge": "POST",
-                "app-chat": "POST",
-            },
-            pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
-            message_handlers=chat_message_handlers,
-            launch_presets={
-                "main": {"target": "main_chat"},
-                "new": {"target": "new_chat"},
-                "send": {"target": "chat_selector"},
-                "draft": {"target": "current_chat", "is_draft": "true"},
-                "lounge": {"target": "lounge", "is_draft": "true"},
-                "app-chat": {"target": "app_chat"},
-            },
-        ),
-        *extra_rows,
-    )
-
-    with (
-        patch.dict(
-            os.environ,
-            {
-                "MNGR_HOST_DIR": str(tmp_path),
-                "MNGR_AGENT_ID": "",
-                "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
-                "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
-                "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
-                # Committing the account below rewrites the workspace's create defaults beside
-                # mngr's project config, which the writer finds through this; without it they
-                # land in the .mngr of whatever directory the suite runs from.
-                "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
-                "MINDS_APPS_FILE": str(registry_path),
-                "MINDS_WORKSPACE_SERVER_URL": shell_url,
-                **({} if background_tasks_root is None else {"CHAT_BACKGROUND_TASKS_DIR": str(background_tasks_root)}),
-            },
-        ),
-        patch("imbue.chat.server.discover_agents", return_value=agents),
-    ):
-        # A signed-in account is what a new chat launches on; without one a create is refused and
-        # the chat root offers the provider chooser instead of minting a chat.
-        account_ids: list[str] = []
-        if is_account_signed_in:
-            account_id, _ = mint_account_dir()
-            commit_account(account_id, "anthropic", "Anthropic")
-            account_ids.append(account_id)
-        for lane_id, display in additional_accounts:
-            extra_account_id, _ = mint_account_dir()
-            commit_account(extra_account_id, lane_id, display)
-            account_ids.append(extra_account_id)
-
-        manager = AgentManager.build(
-            WebSocketBroadcaster(),
-            messenger=messenger if messenger is not None else RecordingMngrMessenger(),
-            chat_files_root=tmp_path / "chats",
-            # The successor's prompt template is cwd-relative in production (the repo root); the
-            # suite runs from the chat package, so it is named outright.
-            prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
-            background_tasks=None
-            if background_tasks_root is None
-            else BackgroundTaskReader(root=background_tasks_root),
+            *extra_rows,
         )
-        if not is_first_listing_running:
-            # The agents carry the signed-in account's label, as a chat the app created would, so the
-            # page's provider row names it.
-            agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
-            with manager._lock:
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MNGR_HOST_DIR": str(tmp_path),
+                    "MNGR_AGENT_ID": "",
+                    "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
+                    "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
+                    "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
+                    # Committing the account below rewrites the workspace's create defaults beside
+                    # mngr's project config, which the writer finds through this; without it they
+                    # land in the .mngr of whatever directory the suite runs from.
+                    "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
+                    "MINDS_APPS_FILE": str(registry_path),
+                    "MINDS_WORKSPACE_SERVER_URL": shell_url,
+                    **(
+                        {}
+                        if background_tasks_root is None
+                        else {"CHAT_BACKGROUND_TASKS_DIR": str(background_tasks_root)}
+                    ),
+                },
+            ),
+            patch("imbue.chat.server.discover_agents", return_value=agents),
+        ):
+            # A signed-in account is what a new chat launches on; without one a create is refused and
+            # the chat root offers the provider chooser instead of minting a chat.
+            account_ids: list[str] = []
+            if is_account_signed_in:
+                account_id, _ = mint_account_dir()
+                commit_account(account_id, "anthropic", "Anthropic")
+                account_ids.append(account_id)
+            for lane_id, display in additional_accounts:
+                extra_account_id, _ = mint_account_dir()
+                commit_account(extra_account_id, lane_id, display)
+                account_ids.append(extra_account_id)
+
+            manager = AgentManager.build(
+                WebSocketBroadcaster(),
+                messenger=messenger if messenger is not None else RecordingMngrMessenger(),
+                chat_files_root=tmp_path / "chats",
+                # The successor's prompt template is cwd-relative in production (the repo root); the
+                # suite runs from the chat package, so it is named outright.
+                prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+                background_tasks=None
+                if background_tasks_root is None
+                else BackgroundTaskReader(root=background_tasks_root),
+            )
+            if not is_first_listing_running:
+                # The agents carry the signed-in account's label, as a chat the app created would, so the
+                # page's provider row names it.
+                agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
+                with manager._lock:
+                    for info in agents:
+                        manager._agents[info.id] = AgentStateItem(
+                            id=info.id,
+                            name=info.name,
+                            state="RUNNING",
+                            labels=agent_labels,
+                            work_dir=str(tmp_path / "work"),
+                        )
                 for info in agents:
-                    manager._agents[info.id] = AgentStateItem(
-                        id=info.id,
-                        name=info.name,
-                        state="RUNNING",
-                        labels=agent_labels,
-                        work_dir=str(tmp_path / "work"),
-                    )
-            for info in agents:
-                manager._ensure_activity_tracking(info.id)
-            manager.note_agent_list_known()
-        chat_state = build_test_state(
-            config=Config(chat_host="127.0.0.1", chat_port=chat_port),
-            agent_manager=manager,
-            shell=build_chat_shell_client(shell_url),
-        )
-        chat_app = create_application(chat_state)
-        chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app)
-        chat_thread = threading.Thread(target=chat_server.serve_forever, daemon=True)
-        chat_thread.start()
+                    manager._ensure_activity_tracking(info.id)
+                manager.note_agent_list_known()
+            chat_state = build_test_state(
+                config=Config(chat_host="127.0.0.1", chat_port=chat_port),
+                agent_manager=manager,
+                shell=build_chat_shell_client(shell_url),
+            )
+            chat_app = create_application(chat_state)
+            chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app, fd=chat_listener.fileno())
+            chat_thread = threading.Thread(target=chat_server.serve_forever, daemon=True)
+            chat_thread.start()
 
-        state_dir = tmp_path / "shell-state"
-        shell_state = build_shell_test_state(
-            config=ShellConfig(system_interface_host="127.0.0.1", system_interface_port=shell_port),
-            shell_state_directory=state_dir,
-        )
-        shell_app = create_shell_application(shell_state)
-        shell_server = make_shell_server("127.0.0.1", shell_port, shell_app)
-        shell_thread = threading.Thread(target=shell_server.serve_forever, daemon=True)
-        shell_thread.start()
-        try:
-            for url in (shell_url, chat_url):
-                wait_for(
-                    lambda url=url: _is_serving_api(url),
-                    timeout=10.0,
-                    poll_interval=0.1,
-                    error_message=f"the server at {url} did not come up",
-                )
-            # Started only once the apps are serving: the first liveness probe must find the chat answering.
-            shell_state.shell.start()
+            state_dir = tmp_path / "shell-state"
+            shell_state = build_shell_test_state(
+                config=ShellConfig(system_interface_host="127.0.0.1", system_interface_port=shell_port),
+                shell_state_directory=state_dir,
+            )
+            shell_app = create_shell_application(shell_state)
+            shell_server = make_shell_server("127.0.0.1", shell_port, shell_app, fd=shell_listener.fileno())
+            shell_thread = threading.Thread(target=shell_server.serve_forever, daemon=True)
+            shell_thread.start()
             try:
-                yield RunningWorkspace(
-                    shell_url=shell_url,
-                    chat_url=chat_url,
-                    agent_info=agent_info,
-                    session_file=session_file,
-                    state_dir=state_dir,
-                    chat_state=chat_state,
-                    shell_state=shell_state,
-                    account_ids=tuple(account_ids),
-                )
+                for url in (shell_url, chat_url):
+                    wait_for(
+                        lambda url=url: _is_serving_api(url),
+                        timeout=10.0,
+                        poll_interval=0.1,
+                        error_message=f"the server at {url} did not come up",
+                    )
+                # Started only once the apps are serving: the first liveness probe must find the chat answering.
+                shell_state.shell.start()
+                try:
+                    yield RunningWorkspace(
+                        shell_url=shell_url,
+                        chat_url=chat_url,
+                        agent_info=agent_info,
+                        session_file=session_file,
+                        state_dir=state_dir,
+                        chat_state=chat_state,
+                        shell_state=shell_state,
+                        account_ids=tuple(account_ids),
+                    )
+                finally:
+                    shell_state.shell.stop()
             finally:
-                shell_state.shell.stop()
-        finally:
-            shell_server.shutdown()
-            shell_thread.join(timeout=5.0)
-            chat_server.shutdown()
-            chat_thread.join(timeout=5.0)
-            chat_state.shutdown()
+                shell_server.shutdown()
+                shell_thread.join(timeout=5.0)
+                chat_server.shutdown()
+                chat_thread.join(timeout=5.0)
+                chat_state.shutdown()

@@ -51,7 +51,7 @@ from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import listening_loopback_socket
 
 
 def _playwright_browsers_installed() -> bool:
@@ -158,7 +158,6 @@ def _withholding_broadcaster(release_on_completion: bool) -> WebSocketBroadcaste
 def _serving_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    port: int,
     broadcaster: WebSocketBroadcaster,
     manager_class: type[AgentManager],
 ) -> Generator[str, None, None]:
@@ -208,9 +207,12 @@ def _serving_workspace(
         )
     manager.note_agent_list_known()
 
-    config = Config(chat_host="127.0.0.1", chat_port=port)
-    app = create_application(build_test_state(config=config, agent_manager=manager))
-    server = make_threaded_server("127.0.0.1", port, app)
+    # The app's config names its port, so the port is held from the pick until the server adopts it.
+    with listening_loopback_socket() as listener:
+        port = listener.getsockname()[1]
+        config = Config(chat_host="127.0.0.1", chat_port=port)
+        app = create_application(build_test_state(config=config, agent_manager=manager))
+        server = make_threaded_server("127.0.0.1", port, app, fd=listener.fileno())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -278,7 +280,6 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     with _serving_workspace(
         tmp_path,
         monkeypatch,
-        port=find_free_port(),
         broadcaster=_withholding_broadcaster(release_on_completion=False),
         manager_class=_ReplayHidingAgentManager,
     ) as base_url:
@@ -309,7 +310,6 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     with _serving_workspace(
         tmp_path,
         monkeypatch,
-        port=find_free_port(),
         broadcaster=_withholding_broadcaster(release_on_completion=True),
         manager_class=_ReplayHidingAgentManager,
     ) as base_url:
@@ -336,7 +336,6 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
     with _serving_workspace(
         tmp_path,
         monkeypatch,
-        port=find_free_port(),
         broadcaster=_withholding_broadcaster(release_on_completion=False),
         manager_class=_ReplayHidingAgentManager,
     ) as base_url:
@@ -368,7 +367,6 @@ def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_cre
     with _serving_workspace(
         tmp_path,
         monkeypatch,
-        port=find_free_port(),
         broadcaster=WebSocketBroadcaster(),
         manager_class=_LateReplayListAgentManager,
     ) as base_url:
