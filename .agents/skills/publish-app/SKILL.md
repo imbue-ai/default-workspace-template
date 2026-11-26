@@ -95,9 +95,10 @@ changed since the last one (`is_published`, `published_version`,
 uncommitted in the app's directory first.
 
 When `outside_skill_uses` is not empty, `is_outside_skills_checked` is
-false, or the app's record lists a skill under `[[references]]`, read
+false, the app's record lists a skill under `[[references]]`, or one of its
+routines (`routines/*.toml`) has a `skill`, read
 `references/skills-the-app-needs.md` before step 3: the app takes such a
-skill in, which changes the scope gate, the worker's task and step 8.
+skill in, which changes steps 3, 4 and 8.
 
 Then look for a publish an earlier attempt left between its steps:
 `cat data/.state/app_install/publish/<name>.json`. No such file means nothing
@@ -220,9 +221,9 @@ scan over it, and checks that the app stands alone there. Nothing is pushed.
 
 On `assembled`, go on: keep `version`, `paths`, `excluded_paths` and `needs`
 for the publish gate. On any other `result` (`secrets_found`,
-`outside_skills_found`, `lock_check_failed`, `refused`) nothing was published: read "When assembling
-stops" in `references/results.md`, have the worker fix what it names, wait
-for its next report, and assemble again.
+`outside_skills_found`, `lock_check_failed`, `refused`), read "When
+assembling stops" in `references/results.md`, have the worker fix what it
+names, wait for its next report, and assemble again.
 
 ## Step 6: The publish gate
 
