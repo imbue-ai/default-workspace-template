@@ -962,6 +962,7 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     assert assembled["version"] == "0.2.0"
     assert assembled["is_first_publish"] is False
     assert assembled["is_lock_checked"] is False
+    assert assembled["is_outside_skills_checked"] is True
     assert assembled["excluded_paths"] == ["notes.draft.md"]
     assert assembled["needs"] == {
         "permissions": [],
