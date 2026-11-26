@@ -1,0 +1,1 @@
+- New optional manifest key and registry field `suggestion_settings_path`: the path under an app's origin that reads (`GET`) and changes (`PUT`) the workspace's two suggestion switches, declared by the one app that holds them. The shell's workspace routes pass a client's read and write there. It follows the launch path rule.

@@ -733,3 +733,87 @@ def test_caddy_answers_the_web_clients_permission_check_and_lets_it_read_answers
             assert _RecordingBackend.reached == [(method, path) for method, _host, path, _origin in unanswered]
     finally:
         backend.shutdown()
+
+
+_WALLPAPER_IMAGE = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8
+_WALLPAPER_ETAG = '"1795000000.0-2056-1234567"'
+
+
+class _ImageBackend(BaseHTTPRequestHandler):
+    """The shell behind the share, as far as a route that answers no JSON goes: an image a browser may keep, nothing
+    to a browser that holds it already, and nothing where there is no image."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        if self.path == "/api/workspace/none":
+            self.send_response(204)
+            self.end_headers()
+            return
+        is_held = self.headers.get("If-None-Match") == _WALLPAPER_ETAG
+        self.send_response(304 if is_held else 200)
+        self.send_header("ETag", _WALLPAPER_ETAG)
+        self.send_header("Cache-Control", "private, no-cache")
+        if is_held:
+            self.end_headers()
+            return
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(_WALLPAPER_IMAGE)))
+        self.end_headers()
+        self.wfile.write(_WALLPAPER_IMAGE)
+
+
+def test_caddy_lets_the_web_client_read_a_workspace_routes_answer_that_is_no_json(tmp_path: Path) -> None:
+    """The headers that let the web client's page read an answer are added by the request's path and origin, not by
+    what the answer is: an image, the 304 a browser that holds it gets, and an answer with no body all carry them,
+    and the image arrives as the app sent it, with what a browser needs to keep it. Skipped where no caddy is
+    installed."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _ImageBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    access = render_web_client_access(
+        _DOMAIN, parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP), _AUTH_LABEL, _CHROME_ORIGIN
+    )
+    compression = render_compression(indent="    ")
+    caddyfile_text = (
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://:{port} {{\n{compression}\n{access}\n"
+        f"    handle {{\n        reverse_proxy 127.0.0.1:{backend.server_port}\n    }}\n}}\n"
+    )
+
+    def ask(path: str, headers: dict[str, str]) -> tuple[http.client.HTTPResponse, bytes]:
+        response = _request(port, "GET", path, {"Host": _INTERNAL_HOST, "Accept-Encoding": "gzip, zstd", **headers})
+        return response, response.read()
+
+    try:
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            image, image_body = ask("/api/workspace/wallpaper", {"Origin": _CHROME_ORIGIN})
+            held, held_body = ask(
+                "/api/workspace/wallpaper", {"Origin": _CHROME_ORIGIN, "If-None-Match": _WALLPAPER_ETAG}
+            )
+            none, none_body = ask("/api/workspace/none", {"Origin": _CHROME_ORIGIN})
+            elsewhere, _elsewhere_body = ask("/api/workspace/wallpaper", {"Origin": "https://evil.example.com"})
+    finally:
+        backend.shutdown()
+
+    assert (image.status, image_body) == (200, _WALLPAPER_IMAGE)
+    assert image.getheader("Content-Type") == "image/png"
+    assert image.getheader("Content-Encoding") is None
+    assert (held.status, held_body) == (304, b"")
+    assert (none.status, none_body) == (204, b"")
+    for answer in (image, held, none):
+        assert answer.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN, answer.status
+        assert answer.getheader("Access-Control-Allow-Credentials") == "true", answer.status
+        assert "Origin" in {value.strip() for value in (answer.getheader("Vary") or "").split(",")}, answer.status
+    for answer in (image, held):
+        assert answer.getheader("ETag") == _WALLPAPER_ETAG
+        assert answer.getheader("Cache-Control") == "private, no-cache"
+    # A page of any other origin is given nothing to read the image with.
+    assert elsewhere.status == 200
+    assert elsewhere.getheader("Access-Control-Allow-Origin") is None

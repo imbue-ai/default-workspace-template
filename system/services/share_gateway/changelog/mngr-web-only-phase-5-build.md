@@ -2,3 +2,5 @@
 
 
 - `/_health` answers the owner the label of the gateway's auth address (`auth_label`) beside the service labels, so the owner's page can reach the `/_agent/...` routes, which answer only there. A visitor is answered neither.
+
+- A test runs caddy over the rendered web client access in front of a workspace route that answers an image: the headers that let the web client's page read an answer are added whatever the answer is (an image, a 304, an answer with no body), and the image and its caching headers arrive as the app sent them.

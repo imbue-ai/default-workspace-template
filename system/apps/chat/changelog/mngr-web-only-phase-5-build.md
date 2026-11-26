@@ -1,1 +1,3 @@
 - A new workspace opens its own welcome chat. On a workspace's first boot the chat app, once it has read its agent list, opens the first-run chat that a client used to ask for through `POST /api/chats/seed`, so a workspace gets one whichever client created it, and one created with no client watching gets one too. A client that still posts its own first-run seed is answered the same chat.
+
+- The manifest names where the workspace's two suggestion switches are read and changed (`suggestion_settings_path = "/api/settings/suggestions"`), which is where the shell's new workspace routes pass a client's read and write. New route `GET /api/settings/suggestions` reads the settings at the path that changes them.

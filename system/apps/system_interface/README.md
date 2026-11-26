@@ -108,20 +108,30 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   is `workspace_routes.py`): the state a workspace owns, read and changed by a
   client outside it where a client used to run a command in the workspace.
   `GET /api/workspace/status` names the version of the checkout, every
-  operation the shell has a route for, and the template's compatibility number
+  operation the shell has a route for, the template's compatibility number
   (`WORKSPACE_COMPATIBILITY`, raised only by a change an older client could not
-  work with); a client calls a route only for an operation named there. The
+  work with), and whether the workspace's boot applied the initial data it was
+  handed at create (`initial_data`, read from `workspace_initial_data`); a
+  client calls a route only for an operation named there. The
   rest are who the workspace is shared with and which of its apps can be
   shared (`sharing`, `sharing/grants`), the profile snapshot and the user's
   timezone (`profile`, `timezone`), the backup credentials, the initialisation
   of the repository they name and whether backups are verified
-  (`backups/credentials|setup|verification`), and the updates
-  (`update`, `update/start|schedule|skip|dismissals|liveness|settings`). The
+  (`backups/credentials|setup|verification`), the updates
+  (`update`, `update/start|schedule|skip|dismissals|liveness|settings`), and
+  what a client with no backend of its own reads from the shell: the two
+  suggestion switches (`suggestions`), the workspace's apps with each one's
+  icon markup (`apps`), and the image its first desktop wears (`wallpaper`,
+  204 when that is the theme's default). The
   update settings name the release channel the workspace follows and when it
-  arms its own updates, and a start or a schedule that names no version takes
+  arms its own updates, the workspace's own hours among them, and a start or
+  a schedule that names no version takes
   the one that channel is on. What each one does lives in a library
   (`share_grants`, `workspace_profile`, `workspace_backup_setup`,
-  `workspace_update_control`). A preview shell names
+  `workspace_update_control`). The suggestion switches are the settings of
+  whichever registered app names a `suggestion_settings_path`, and the shell
+  passes a read and a write there over loopback
+  (`shell/suggestion_settings.py`), naming no app. A preview shell names
   no operation and refuses every route that changes the workspace.
   `workspace_routes_api.json` beside this file is the description of these
   routes a client is checked against: a test regenerates it from the route
