@@ -332,7 +332,7 @@ A change every supported client still works with leaves it alone, and it is neve
 A client is built with the highest number it knows. One that reads a higher number still opens the workspace and stops, starts and destroys it, and refuses everything else it would do inside it rather than read a missing operation as a template too old to have it and run its older command.
 
 `initial_data` is `{"state", "detail", "applied_at"}`: whether the workspace's boot applied the document it was handed when it was created (below).
-`state` is `NONE` when the boot found no document and has applied none, `APPLIED`, or `FAILED`; `detail` says why for `FAILED` and is empty otherwise; `applied_at` is when it was applied, in seconds since the epoch, and null unless `APPLIED`.
+`state` is `NONE` when the boot found no document and has applied none, `APPLIED`, or `FAILED`; `detail` says why for `FAILED`, naming each part that is not written, and is empty otherwise; `applied_at` is when it was applied, in seconds since the epoch, and null unless `APPLIED`.
 A status without the member is a template from before the initial data, which ignores the document. The status keeps its schema, since the member is an addition.
 
 | Operation | Route |
@@ -459,8 +459,10 @@ Each part has the shape of the request of the route that writes the same thing (
 The boot sequence applies it each time the workspace's services are started, after the workspace's Python packages are in place and before the clock is set (`apply-initial-data`, `system/libs/workspace_initial_data`), by handing each part to the writer its route calls; the timezone is recorded only where none is, and is in force from that very start.
 The trigger is the file being there, not a first boot: a pool machine's first boot is over when it is baked, and its document is written when it is adopted, before its services are started again.
 When every part is written the step records that in `data/.state/initial_data/state.json` and deletes the document, which holds storage credentials.
-A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, the boot goes on, and the next start applies it again whole; a part its writer refuses does not stop the others, and no reason quotes a credential of the document.
-The backup part is handed to the function `PUT /api/workspace/backups/destination` calls, under that route's rules: the destination and its storage are recorded for `backup-setup`, and a destination named while another backup operation holds the backup lease fails the part until the next start.
+A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, and the boot goes on; a part its writer refuses does not stop the others, and no reason quotes a credential of the document.
+Each part is applied at most once: the next start tries the parts that were refused and no other, so it never puts the create's value back over what the owner chose since, and never names the create's backup destination again after the owner turned backups off.
+The step keeps the document's digest and how far each part has come beside the status, and records that a part is about to be written before it writes it. A part the step was interrupted in the middle of is therefore not written again either: its `FAILED` stands, and the document is deleted once no part is left to try.
+The backup part is handed to the function `PUT /api/workspace/backups/destination` calls, under that route's rules: the destination and its storage are recorded for `backup-setup`, and a destination named while another backup operation holds the backup lease fails the part, which the next start tries again.
 The status route answers how it stands, as `initial_data` (above).
 
 **Suggestions.**

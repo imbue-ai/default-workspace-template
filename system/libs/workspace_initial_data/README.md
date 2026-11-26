@@ -44,20 +44,57 @@ The trigger is the file being there, not a first boot: a pool machine boots when
 is baked, before it has an owner, and the document is written while the machine is
 adopted, before its services are started again.
 
+## Each part is applied at most once
+
+Between two starts the workspace's services run, and the owner changes what the
+document set: the update settings, the profile, where the backups go. A part
+written a second time would put the create's value back over that choice, and a
+second write of the backup destination would turn backups on again after the
+owner turned them off. So a document one of whose parts was refused is left where
+it is, and the next start tries the refused parts and no other.
+
+The step keeps, in its record, the SHA-256 of the document and how far each part
+has come. It records that a part is about to be written (`WRITING`) before it
+calls the part's writer, and that it was written (`WRITTEN`) afterwards; each
+record replaces the file in one step and is on disk before the step goes on. A
+later start skips every part the record names. A part a writer refused is taken
+out of the record again, which is what leaves it to be tried.
+
+A part found as `WRITING` at a later start was being written when the step ended
+(it was killed, or ran out of the time the boot gives it), and nobody knows
+whether the write happened. It is not written again: the boot goes on when the
+step dies, so the services may have run since. The status reads `FAILED` for that
+part from then on, and the record says so from the moment the write begins, so it
+is true even if the step never runs again. A client that opens the workspace
+writes the settings it holds, as it does for any workspace, and the Backup page
+offers the backups.
+
+The order is the reason for the record: the mark comes before the write, since a
+mark made after it could be lost with the step, and the part would then be
+written twice. Rewriting the kept document without the parts already written
+would need the same mark first, to survive the same moment, and would then leave
+two files to keep in step.
+
+Once no part is left to try, the document is deleted, also when a part reads as
+interrupted, since it holds storage credentials and nothing more will be read
+from it. A document left again with the bytes of one already applied is deleted
+and writes nothing; a document with other bytes is a new one, and is applied.
+
 ## Modules
 
 - `apply` -- reads the document and hands each part to its writer. When every part
   is written it records that and deletes the document, which holds storage
   credentials. A document that does not parse, whose `schema` is above the one this
   template knows, or a part of which its writer refuses, is left where it is with
-  the reason recorded, and the next start applies it again whole: every writer is
-  safe to run twice. The backup part is taken by the function the caller passes
-  in.
+  the reason recorded, and the next start tries again. The backup part is taken by
+  the function the caller passes in.
 - `status` -- how the initial data stands, kept in
   `data/.state/initial_data/state.json` and answered by the shell's
   `GET /api/workspace/status` as its `initial_data` member: `NONE` (no document was
-  found and none has been applied), `APPLIED` with when, or `FAILED` with why. No
-  detail quotes a credential of the document.
+  found and none has been applied), `APPLIED` with when, or `FAILED` with why,
+  naming each part that is not written. No detail quotes a credential of the
+  document. The same file holds what the step keeps for itself: the digest of the
+  document it is applying, and how far each part of it has come.
 - `cli` -- the `apply-initial-data` entry point. It hands the backup part to the
   workspace's own backup setup (`request_backup_destination` of
   `workspace_backup_setup`), exactly as `PUT /api/workspace/backups/destination`

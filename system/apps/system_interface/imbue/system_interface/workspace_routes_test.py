@@ -33,10 +33,11 @@ from workspace_backup_setup.verification import BACKUP_TOML_RELATIVE_PATH
 from workspace_bare_scripts.backup_lease import HOLDER_SETUP
 from workspace_bare_scripts.backup_lease import release_lease
 from workspace_bare_scripts.backup_lease import take_lease
+from workspace_initial_data.status import InitialDataRecord
 from workspace_initial_data.status import InitialDataStatus
 from workspace_initial_data.status import applied_status
 from workspace_initial_data.status import failed_status
-from workspace_initial_data.status import write_initial_data_status
+from workspace_initial_data.status import write_initial_data_record
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
 from workspace_layout.identity import RequestIdentity
@@ -163,7 +164,7 @@ def test_the_status_names_every_operation_and_no_version_for_a_tree_that_names_n
 def test_the_status_says_how_the_initial_data_the_boot_found_stands(
     client: FlaskClient, app: Flask, recorded: InitialDataStatus
 ) -> None:
-    write_initial_data_status(_workspace_root(app), recorded)
+    write_initial_data_record(_workspace_root(app), InitialDataRecord(status=recorded))
 
     answered = client.get(STATUS_ROUTE, headers=OWNER_IDENTITY_HEADERS).get_json()
 

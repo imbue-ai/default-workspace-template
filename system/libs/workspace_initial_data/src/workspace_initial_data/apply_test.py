@@ -1,20 +1,33 @@
+import hashlib
 import json
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
+from workspace_profile.snapshot import (
+    SNAPSHOT_RELATIVE_PATH,
+    write_workspace_profile_snapshot,
+)
 from workspace_profile.timezone import USER_TIMEZONE_RELATIVE_PATH, read_user_timezone
-from workspace_update_control.settings import UpdateSettings, read_update_settings
+from workspace_update_control.settings import (
+    UpdateSettings,
+    read_update_settings,
+    take_update_settings,
+)
 
 from workspace_initial_data.apply import INITIAL_DATA_FILE_NAME, apply_initial_data
 from workspace_initial_data.status import (
     NO_INITIAL_DATA,
     STATUS_RELATIVE_PATH,
+    InitialDataRecord,
     InitialDataState,
+    PartProgress,
     applied_status,
     failed_status,
+    read_initial_data_record,
     read_initial_data_status,
+    write_initial_data_record,
 )
 from workspace_initial_data.testing import (
     BACKUPS_PART_DOCUMENT,
@@ -183,7 +196,7 @@ def test_a_document_this_template_cannot_apply_stays_and_reads_failed_with_nothi
     assert backup_destination.requests == []
 
 
-def test_a_document_applied_in_part_is_applied_again_whole_at_the_next_start(
+def test_only_the_part_that_was_refused_is_tried_again_and_what_was_written_is_left_as_it_now_is(
     workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
     document_path = write_initial_data_document(host_dir, initial_data_document())
@@ -197,6 +210,10 @@ def test_a_document_applied_in_part_is_applied_again_whole_at_the_next_start(
     assert _stored_profile(workspace_root) == PROFILE_PART_DOCUMENT
     assert read_update_settings() == _STAGED_SETTINGS
 
+    # What the owner changes while the services run, through the writers the routes call.
+    take_update_settings({**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"})
+    changed_profile = {**PROFILE_PART_DOCUMENT, "written_by": "desktop"}
+    write_workspace_profile_snapshot(workspace_root, changed_profile)
     backup_destination.refusal = ""
     applied = apply_initial_data(
         host_dir, workspace_root, backup_destination, _NOW + 60
@@ -209,6 +226,120 @@ def test_a_document_applied_in_part_is_applied_again_whole_at_the_next_start(
         (workspace_root, BACKUPS_PART_DOCUMENT),
         (workspace_root, BACKUPS_PART_DOCUMENT),
     ]
+    stored_settings = read_update_settings()
+    assert stored_settings is not None and stored_settings.channel == "beta"
+    assert _stored_profile(workspace_root) == changed_profile
+
+
+def test_a_part_that_stays_refused_is_the_only_one_tried_however_often_the_services_start(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(timezone={"zone": "Nowhere/Land"})
+    )
+
+    first = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+    take_update_settings({**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"})
+    second = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 60)
+    third = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 120)
+
+    assert first.state is InitialDataState.FAILED
+    assert first.detail.startswith("timezone: ")
+    assert "; " not in first.detail
+    assert first == second == third
+    assert document_path.exists()
+    assert len(backup_destination.requests) == 1
+    stored_settings = read_update_settings()
+    assert stored_settings is not None and stored_settings.channel == "beta"
+    assert read_initial_data_record(workspace_root).progress_by_part == {
+        "profile": PartProgress.WRITTEN,
+        "update_settings": PartProgress.WRITTEN,
+        "backups": PartProgress.WRITTEN,
+    }
+
+
+class _StepKilled(BaseException):
+    """Stands in for the step being killed in the middle of a part."""
+
+
+def test_a_part_the_step_was_killed_after_writing_and_before_recording_is_never_written_again(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+
+    def _take_the_destination_and_die(
+        root: Path, request: Mapping[str, object]
+    ) -> None:
+        backup_destination(root, request)
+        raise _StepKilled()
+
+    with pytest.raises(_StepKilled):
+        apply_initial_data(
+            host_dir, workspace_root, _take_the_destination_and_die, _NOW
+        )
+
+    # The record already says so, were the step never to run again.
+    interrupted = failed_status(
+        "backups: this part was being written when the step was interrupted, so it is not written again"
+    )
+    assert read_initial_data_status(workspace_root) == interrupted
+    assert document_path.exists()
+
+    at_the_next_start = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 60
+    )
+
+    assert at_the_next_start == interrupted
+    assert read_initial_data_status(workspace_root) == interrupted
+    assert len(backup_destination.requests) == 1
+    # Nothing is left to try, so the document and the credentials in it go.
+    assert not document_path.exists()
+    assert (
+        apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 120)
+        == interrupted
+    )
+
+
+def test_a_part_the_step_was_killed_in_does_not_keep_the_refused_parts_from_being_tried(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+    record = InitialDataRecord(
+        status=failed_status("update_settings: interrupted"),
+        document_digest=hashlib.sha256(document_path.read_bytes()).hexdigest(),
+        progress_by_part={
+            "profile": PartProgress.WRITTEN,
+            "timezone": PartProgress.WRITTEN,
+            "update_settings": PartProgress.WRITING,
+        },
+    )
+    write_initial_data_record(workspace_root, record)
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status.state is InitialDataState.FAILED
+    assert status.detail.startswith("update_settings: this part was being written")
+    assert read_update_settings() is None
+    assert not (workspace_root / SNAPSHOT_RELATIVE_PATH).exists()
+    assert backup_destination.requests == [(workspace_root, BACKUPS_PART_DOCUMENT)]
+    assert not document_path.exists()
+
+
+def test_a_document_left_again_with_the_bytes_of_one_already_applied_is_deleted_and_writes_nothing(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    write_initial_data_document(host_dir, initial_data_document())
+    apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+    take_update_settings({**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"})
+    left_again = write_initial_data_document(host_dir, initial_data_document())
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 60)
+
+    assert status == _APPLIED
+    assert not left_again.exists()
+    assert len(backup_destination.requests) == 1
+    stored_settings = read_update_settings()
+    assert stored_settings is not None and stored_settings.channel == "beta"
 
 
 def test_every_part_a_writer_refuses_is_named_and_no_value_of_the_document_is_quoted(
