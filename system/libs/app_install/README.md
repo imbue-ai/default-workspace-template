@@ -234,7 +234,7 @@ Each such line is one `{skill, path, line}` entry of `compare`'s `outside_skill_
 The way on is for the app to carry the skill, which the `publish-app` skill's worker does, or to stop naming it.
 Telling a workspace's own skill from one every workspace starts with takes a template release tag in the history; with none the tree is not read, and `is_outside_skills_checked` is false in both results.
 The check reads paths only: a Python import of a skill's package is caught by the lock check instead, and a path built up at run time is not caught at all.
-A file over 1 MB, a file that is not text, and a link are not read.
+A file over 1 MB, a file that is not text, a link, and a repository nested in the app are not read.
 
 **The push.**
 On the first publish the public repository is created under the workspace's GitHub account through `latchkey curl`, closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.

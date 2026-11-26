@@ -373,10 +373,13 @@ def test_only_the_text_files_of_a_tree_are_read_for_the_skills_they_name(tmp_pat
     write_app_file(workspace, "notes", "thumbnail.png").write_bytes(b"\x89PNG\xff" + names_the_skill.encode())
     write_app_file(workspace, "notes", "fixtures/export.txt", names_the_skill * 25_000)
     (workspace / "system" / "apps" / "notes" / "mail.db").symlink_to("../../../data/.skills/fetch-mail/mail.db")
+    # A repository nested in the app is one entry of the tree with no file behind it.
+    make_workspace_repository(workspace / "system" / "apps" / "notes" / "vendored")
     _versioned(workspace, runtime, "0.1.0")
 
     compared = compare_with_published(workspace, "notes", "HEAD")
 
+    assert "vendored" in compared.published.paths
     assert compared.outside_skill_uses == (OutsideSkillUse(skill="fetch-mail", path="refresh.sh", line=1),)
 
 

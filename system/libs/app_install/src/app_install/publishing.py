@@ -356,7 +356,8 @@ def _find_outside_skill_uses(
     uses: list[OutsideSkillUse] = []
     for path in published.paths:
         file = tree_directory / path
-        if file.is_symlink() or file.stat().st_size > _LARGEST_FILE_READ_FOR_SKILL_PATHS_BYTES:
+        # A repository nested in the app is checked out as an empty directory, which is not a file to read.
+        if file.is_symlink() or not file.is_file() or file.stat().st_size > _LARGEST_FILE_READ_FOR_SKILL_PATHS_BYTES:
             continue
         try:
             text = file.read_text(encoding="utf-8")
