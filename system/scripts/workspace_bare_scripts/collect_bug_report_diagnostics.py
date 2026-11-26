@@ -114,8 +114,7 @@ CONVERTER_LOG_SOURCE = "logs"
 
 # An image a harness inlined into its transcript (codex puts the screenshots and
 # generated images its tools return there), as a ``data:`` URL. These are most of
-# a busy codex chat's bytes -- 62% of one measured 43MB transcript -- and long
-# random base64 runs, which the secret scanners' shorter random-token rules match
+# a busy codex chat's bytes, and long random base64 runs, which the secret scanners' shorter random-token rules match
 # by chance. A reader of a report needs to know an image was there, not its
 # pixels, so each one is replaced by INLINE_IMAGE_STUB before anything is staged.
 # The base64 alphabet without ``\``: ``mngr transcript`` writes json.dumps

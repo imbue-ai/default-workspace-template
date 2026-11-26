@@ -896,8 +896,7 @@ def _fetched_transcripts(tmp_path: Path) -> set[str]:
 
 def test_only_the_chats_a_report_can_keep_are_fetched(tmp_path: Path) -> None:
     """Every fetch is a whole mngr CLI start, so a busy workspace's chats past the
-    window and the floor are never asked for: measured on an 81-agent workspace,
-    fetching all of them was the larger part of a collection that timed out."""
+    window and the floor are never asked for."""
     now = time.time()
     agents_dir = tmp_path / "agents"
     events_by_agent = {
@@ -990,13 +989,13 @@ def test_an_image_inlined_into_a_chat_rides_as_a_stub_and_cannot_cost_the_chat(
 ) -> None:
     """A codex chat carries the images its tools returned as data URLs: most of its
     bytes, and long random runs the scanners' short random-token rules match by
-    chance, which withheld every codex chat of a measured report. Stubbed before
+    chance, withholding the whole chat. Stubbed before
     staging, a match inside an image can no longer cost the chat, and the reader
     still sees that an image was there, its type and its size."""
     image = os.urandom(1000)
     data_url = _png_data_url(image)
-    # The run the stub gate flags sits inside the image, as the measured
-    # false positives did.
+    # The run the stub gate flags sits inside the image, where the scanners'
+    # random-token rules match by chance.
     flagged_run = data_url[200:240]
     events = (
         json.dumps(
@@ -1035,8 +1034,7 @@ def test_a_chat_ships_without_the_records_the_scan_flagged(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A chat is one record per line, so a finding costs the record it is in rather
-    than the whole conversation: measured on a busy workspace, a field named
-    ``key`` holding a record id withheld chats that were otherwise clean. Nothing
+    than the whole conversation. Nothing
     flagged ships either way -- the record is gone and the rest is scanned again."""
     secret = "flagged-value-" + "q" * 24
     gate = tmp_path / "gate"
