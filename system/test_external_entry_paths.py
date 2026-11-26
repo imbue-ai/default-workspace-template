@@ -28,6 +28,7 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (SYSTEM_SCRIPTS / "message_chat.py", ("--help",)),
     (SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
     (SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "backup_lease.py", ("--help",)),
     (SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
     (SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
     (SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
