@@ -76,7 +76,11 @@ needs a directory put on `sys.path`, and each stub says which. See
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
   skill), `seed_welcome_chat.py` (open the workspace's first chat on the
   conversation the Imbue Studio app had before the workspace existed; run through
-  `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
+  `mngr exec` by the Imbue Studio app), `backup_lease.py` (take, renew, give
+  back, read, or hold around a command the backup lease, the file under `/run`
+  that keeps two backup operations apart; the workspace's own backup setup
+  takes it, and the Imbue Studio app's restore, backup-service update and
+  backup-store migration run this through `mngr exec`), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`,
