@@ -65,10 +65,13 @@ bash /home/user/workspace/.agents/skills/datalib/scripts/install_datalib.sh
 mkdir -p "$DATA_ROOT"
 ```
 
-1. **Search the existing mirror first.** The user may already have data
-   mirrored. Query the local store before syncing anything new. An empty
-   result means "nothing mirrored yet", so offer to sync -- don't treat it as
-   "no such data".
+1. **Before answering from the copy, do datalib's own checks.** `datalib-step
+   help agent`, section "Before you answer from the copy", lists them: search
+   what is already mirrored before syncing, wait for the sync to end, check the
+   copy is complete, and say what it covers. `datalib-step help <type>` has each
+   source's part: what it can never see ("Limitations") and its own check
+   ("Is the copy complete?"). Read the source's page before the first sync of
+   it, and again before building an answer on it.
 2. **Sync to import or refresh data, without holding your turn.** Syncs are
    incremental and resumable; the first sync of a source is slow (minutes to
    an hour), later runs only pull deltas. Don't run one inside your turn: the
@@ -77,20 +80,11 @@ mkdir -p "$DATA_ROOT"
    instead, which runs independently of any chat, and be woken when it ends.
 
    The first time, there is no config to sync: `$DATALIB_CONFIG` does not
-   exist, and the app answers a sync request with 409 "no config ... create
-   one from the Setup tab". Create it from the shell (these are the steps
-   `datalib-step help` prints; `slack` stands for any source type):
-
-   ```bash
-   datalib-pipeline init "$DATA_ROOT"                        # a config with no sources yet
-   datalib-step examples slack --append "$DATALIB_CONFIG"    # add the source; once per source
-   datalib-step probe slack                                  # is the account signed in?
-   # Now set `since` and `refresh_every_minutes` in the source's params table (item 4),
-   # then check the file before syncing:
-   datalib-pipeline check "$DATALIB_CONFIG" && datalib-step check-params "$DATALIB_CONFIG"
-   ```
-
-   Then file the sync and wait for it in the background:
+   exist, and the app refuses a sync request with 409. Create the config and
+   add the source from the shell with the setup steps `datalib-step help`
+   prints, run against `$DATA_ROOT`; set the source's options from what its
+   `datalib-step help <type>` page says (item 4). Then file the sync and wait
+   for it in the background:
 
    ```bash
    # File the sync. Prints one request id per line (one per source).
@@ -115,43 +109,20 @@ mkdir -p "$DATA_ROOT"
    to diagnose a failure. It runs alongside the app's server on the same root
    without conflict; never start a second `datalib-http` on this root, though
    -- the running one holds the root's `system/` lock.
-3. **Read how a sync ended before answering from it.** The sync is over when
-   the `wait` prints each request's outcome (or `datalib-pipeline sync`
-   exits), and not before: the `step_finish ... succeeded` lines that appear
-   in the first second of a sync's log are its prepare pass, while the
-   download has only started. A request that ended `failed` left part of the
-   mirror unfinished: a conversation a transient error interrupted stays
-   missing until the next sync completes it. Run the sync again before
-   building anything on the store, and say what was finished late if the
-   user has already seen an answer from it. A request that ended `done` can
-   still hold a record whose parts could not be read (a thread whose replies
-   failed, a conversation whose listing did); such a record stays owed and the
-   next sync fetches it. So before answering from a copy, ask the store what
-   it could not do and what it still owes, and sync again first when either
-   is not empty. Every raw store has a `problems` table for the first
-   question (`SELECT severity, reason, scope_key, sample FROM problems WHERE
-   severity IN ('error', 'warning')` against
-   `$DATA_ROOT/<source id>/ingest/entities.doltlite_db`); the second is a
-   per-source query, and the Slack one is under "Slack-specific instructions"
-   below. The Manage screen in the Datalib app lists the same problems for
-   the user.
-4. **Size the copy to the data, not to the question.** A source's `since`
-   bounds what the mirror holds, and anything older is never read, so a
-   thread older than `since` that gains a reply is invisible. Set `since` to
-   how far back the user wants the copy to go; narrow the *question* with a
-   query over the store, not the copy with `since`. A copy the user will ask
-   you to refresh on demand should also set `refresh_every_minutes = 0` in
-   the source's method table, so every sync re-reads the recent window for
-   edits and deletions; the default re-reads it at most once an hour, and
-   two refreshes less than an hour apart otherwise leave an edit made
-   between them unseen. Every source's knobs, with their defaults, are in
-   `datalib-step examples <type>`. Know what the copy covers and say so: each
-   source has a default scope (which conversations, folders or labels it
-   reads) that may be narrower than what the user means by "our Slack" or
-   "my mail". State the scope in your first answer from the copy, or ask
-   before the first sync when it would change the answer. Widening a scope
-   can have a running cost on every refresh; the per-source notes below say
-   where.
+3. **A sync is over when the `wait` prints each request's outcome**, and not
+   before. Then check the copy is complete (item 1) before answering from it;
+   a request that ended `failed`, or a check that is not empty, means sync
+   again first. The Manage screen in the Datalib app shows the user the same
+   problems.
+4. **Size the copy to what the user wants kept, not to the question.** A
+   source's default scope may be narrower than what the user means by "our
+   Slack" or "my mail", some edits and deletions are seen late or never, and
+   widening a scope can cost requests on every refresh. Each source's
+   "Limitations" in `datalib-step help <type>` says which, and which option
+   changes it; its options and their defaults are in `datalib-step examples
+   <type>`. A copy the user will ask you to bring up to date on demand should
+   turn off the source's wait between re-reads of recent messages, where its
+   limitations name one.
 5. **Credentials go through latchkey.** The web-API sources authenticate via
    `latchkey`, already wired to the user through the Imbue Studio app. If a sync
    reports missing credentials or "not permitted", file a permission request
@@ -159,16 +130,10 @@ mkdir -p "$DATA_ROOT"
 6. **Never commit the store.** Everything under `data/` is gitignored by the
    workspace, which is why the store lives there. Don't try to force it into
    git, and don't copy it anywhere that is tracked.
-7. **Query with SQL when the question is mechanical.** A source's raw store is
-   `$DATA_ROOT/<source id>/ingest/entities.doltlite_db`, and `datalib-doltlite`
-   is a `sqlite3` shell that reads it: `datalib-doltlite -readonly <file>
-   "<sql>"`. The `ingest` step alone is enough to answer from SQL; the render
-   and search steps are for reading and for full-text search. What each
-   store holds is in `datalib-step help raw-stores` (below); each source's
-   section has that source's recurring queries, so read it before writing
-   your own. Every table's `payload` column is JSONB: select `json(payload)`
-   or `json_extract(payload, '$.text')`, never the bare column, whose bytes
-   (also in `-json` output) no JSON parser reads.
+7. **Query with SQL when the question is mechanical.** How to open a source's
+   raw store, what each of its tables holds, and the queries worth starting
+   from are at the end of `datalib-step help <type>`; read them before
+   writing your own.
 8. **The Datalib app is the user's way in; open it for them.** datalib's own
    web UI -- the Manage screen (every configured source and its sync state)
    and the Add/Edit source wizard -- runs as the supervised `datalib` app
@@ -226,7 +191,8 @@ they always match the tools you have:
 - `datalib-step help apps` -- building on datalib: who starts syncs, how fresh
   the mirror is, and adding a step of your own.
 - `datalib-step help <type>` and `datalib-step examples <type>` -- one source:
-  what it mirrors, how it signs in, and its config.
+  what it mirrors and what it cannot, how it signs in, its config, its raw
+  store's tables, and how to check the copy is complete.
 
 The install script also saved the agent guide as a file beside the binaries:
 
@@ -264,10 +230,7 @@ the method as a params table: `[steps.params.api]` for a service, or
 latchkey gateway: **Slack** (`type = "slack"`), **Linear** (`linear`),
 **GitHub** (`github`), **Notion** (`notion`), and **email** (`email` -- a
 Google Takeout `.mbox` on disk, Gmail over Google's API, or a JMAP server).
-Linear is download-only: its ingest step copies the workspace as raw JSON
-tables and there is no render step. Gmail can also start from a Takeout of
-the same account: give its ingest step both tables, and it downloads only the
-mail newer than the Takeout.
+What each of them mirrors and how is on its `datalib-step help <type>` page.
 
 Cloudflare-walled web sources -- `claude` over claude.ai's `api` method,
 and `chatgpt` -- also work, given a recent Imbue Studio app. Two things have
@@ -291,38 +254,6 @@ or `chatgpt` source's `export` method) for that data and tell the user why. A
 `chatgpt` source can also take both: its export fills in every conversation
 first, past the API's rate limit, and the API then downloads only what changed
 since (`datalib-step help chatgpt`).
-
-## Slack-specific instructions
-
-What the general items above come to for a Slack source (`type = "slack"`).
-Everything here is the Slack source's own behaviour; `datalib-step help slack`
-and the Slack section of `datalib-step help raw-stores` are the full accounts.
-
-- **Scope.** By default the copy holds the channels the account is a member
-  of and no DMs; `all_channels = true` adds every channel the account can
-  see, `dms = true` adds direct messages, and `channels` names a list. A user
-  who says "our Slack" may mean all of it, so say which the copy covers.
-- **The cost of widening.** A refresh skips a channel whose sidebar entry
-  (`client.counts`) shows nothing new, and a channel the account has not
-  joined has no sidebar entry, so every refresh asks each such channel for
-  history, one request apiece.
-- **Is the copy whole?** Two queries against the Slack store; both should
-  come back empty before an answer is built on it, and a sync should be run
-  again when they do not:
-
-  ```bash
-  STORE="$DATA_ROOT/slack/ingest/entities.doltlite_db"
-  datalib-doltlite -readonly "$STORE" "SELECT severity, reason, scope_key, sample FROM problems
-    WHERE severity IN ('error', 'warning') AND (scope_key LIKE 'threads:%' OR scope_key LIKE 'listing:%' OR scope_key LIKE 'phase:%')"
-  datalib-doltlite -readonly "$STORE" "SELECT count(*) AS threads_owed FROM messages m
-    LEFT JOIN threads_bookkeeping b ON b.id = m.id
-    WHERE m.is_thread_root = 1 AND json_extract(m.payload, '$.reply_count') > 0
-      AND (b.fetched_at_utc IS NULL OR b.held_version IS NOT json_extract(m.payload, '$.latest_reply'))"
-  ```
-
-  A thread is held whole when `threads_bookkeeping.held_version` equals the
-  root's `latest_reply`; the Slack section of `raw-stores` has the thread,
-  permalink and coverage queries to build on.
 
 ## Notes
 
