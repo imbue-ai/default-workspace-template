@@ -55,10 +55,9 @@ own cgroup v2 controller at `/sys/fs/cgroup` four times a second and writes the
 limit as MemTotal and, as MemAvailable, the limit minus the usage plus what the
 kernel frees before it kills in the cgroup: the file cache no process has
 mapped, on both the inactive and the active list, and the reclaimable slab. The
-VM-side publishers add the inactive file cache alone, which is all a gVisor
-sandbox's cgroup holds; under runc a file read twice is on the active list, so
-a workspace whose backup walks a large tree every hour would otherwise read as
-full while its processes use a fraction of its cap. It removes the
+VM-side publishers count the file cache on both lists, mapped or not, and the
+slab, and hold back a fixed reserve instead, since under gVisor the mapped
+figure is mostly the sandbox's own memory. The local program removes the
 file while the container is uncapped (and keeps checking, since `mngr docker
 resize` can cap a running container), and touches nothing where it has no
 answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own
@@ -577,3 +576,17 @@ System Monitor app's Quit for one of the user's apps goes through (a program
 that is not running already counts as stopped). The memory figure beside each
 reading is the guard's own (`meminfo`, the headroom file while it is fresh,
 else `/proc/meminfo`). The design is `docs/system/specs/system-monitor.md`.
+
+Memory is credited to the same roots. Every ten minutes the sampler reads each
+process's anonymous memory (`meminfo.read_process_anonymous_kib`, the figure
+earlyoom weighs under gVisor), rolls it up to the chat or program it runs
+under, and appends the five largest holders to
+`events/memory_holders/events.jsonl`, so a slow leak shows as one holder
+climbing across snapshots. A memory stretch opens once the guard's figure has
+stayed at or above 85% for a minute and closes once it has stayed below 80%
+for a minute (`resource_sampler.MemoryStretchTracker`): it appends a
+`memory_stretch_opened` event with the holders at once, since shedding may
+take the sampler itself down before the stretch ends, re-reads the holders
+every 30 s while memory keeps climbing, and appends a `memory_stretch` event
+with the holders at the highest reading when it closes
+(`events/memory_stretches/events.jsonl`; both events carry the stretch's id).

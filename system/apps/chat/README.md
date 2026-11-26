@@ -503,7 +503,13 @@ answers the pure path the shell opens or navigates a window at: `/?chat=<id>` fo
 a send or a create it finished on the server (a send is delivered in the
 background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
 draft or a first message the page has to finish, and `/?intake=<token>` for a
-choice. A pending intake (`chat_intakes.py`) is held in memory under its one-time
+choice. A text sent to a chat whose first agent is still being created (the main
+chat in the seconds after its owner leaves the first run's provider page, which
+starts that agent) is kept for the agent as a send from the chat's own page is:
+it is listed on the chat's provisional record, every page shows it, the agent
+receives it as it lands, and the route answers `/?chat=<id>`. Applying a pending
+intake does the same for a chat whose create began after the intake was held.
+A pending intake (`chat_intakes.py`) is held in memory under its one-time
 token for fifteen minutes: `GET /api/chats/intakes/<token>` says what the root has
 to do, `POST /api/chats/intakes/<token>/apply` (with the picked `chat_id` when a
 pick was needed) consumes it and answers the chat plus either `composer_text` or
@@ -580,7 +586,8 @@ carries it in that message; a launch by the sign-in marks the seed as pending
 on the record (`is_seed_pending`), and the first send since carries it
 (`carry_pending_seed`), the seed counting as delivered only once the harness
 took that send, so a send it refused or could not take yet leaves the
-conversation for the next. The page strips that context block
+conversation for the next. A send the chat app kept while that launch's create
+ran is the first send since, and carries it as the agent lands. The page strips that context block
 and shows the user's own words alone (`prompt_with_context` in
 `harnesses/message_display.py`). A message that is a slash command goes
 out as typed, since a harness runs a command only when the slash leads the

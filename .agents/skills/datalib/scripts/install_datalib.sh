@@ -11,23 +11,29 @@
 # Safe to run every time: each half checks what is already in place first.
 #
 # The release lands in a directory named after the pin, under the persistent
-# home, and ~/.local/bin gets one symlink per binary, so a pin bump installs
-# beside the old release and relinks. datalib-http finds its sibling binaries
-# through the resolved executable path, which is why the binaries themselves
-# stay together in that directory.
+# home, and that home's .local/bin gets one symlink per binary, so a pin bump
+# installs beside the old release and relinks. datalib-http finds its sibling
+# binaries through the resolved executable path, which is why the binaries
+# themselves stay together in that directory.
+#
+# The persistent home is the workspace's parent, /home/user, and not $HOME: an
+# agent's shell has HOME=/root, while the Datalib app under supervisord looks
+# for datalib-http under /home/user, so an install that followed $HOME would
+# land where the app cannot find it.
 set -euo pipefail
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
 readonly PINNED_VERSION="v0.56.0"
 
-readonly INSTALL_ROOT="${DATALIB_INSTALL_ROOT:-$HOME/.local/share/datalib}"
-readonly BIN_DIR="${DATALIB_BIN_DIR:-$HOME/.local/bin}"
-readonly RELEASE_DIR="$INSTALL_ROOT/$PINNED_VERSION"
-
 # This script is .agents/skills/datalib/scripts/install_datalib.sh.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 readonly REPO_ROOT
+WORKSPACE_HOME="$(dirname "$REPO_ROOT")"
+readonly WORKSPACE_HOME
+readonly INSTALL_ROOT="${DATALIB_INSTALL_ROOT:-$WORKSPACE_HOME/.local/share/datalib}"
+readonly BIN_DIR="${DATALIB_BIN_DIR:-$WORKSPACE_HOME/.local/bin}"
+readonly RELEASE_DIR="$INSTALL_ROOT/$PINNED_VERSION"
 readonly PROGRAM_SOURCE="$REPO_ROOT/system/apps/datalib/datalib.conf"
 readonly PROGRAM_DIR="${DATALIB_PROGRAM_DIR:-$REPO_ROOT/system/supervisord.conf.d}"
 readonly SUPERVISORCTL="${DATALIB_SUPERVISORCTL:-supervisorctl}"

@@ -25,6 +25,7 @@ export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
   const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true, ALLOWED_URI_REGEXP });
   rewritePathLinks(fragment);
+  wrapTablesInScrollers(fragment);
   // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
   // element would adopt its <img>s into the page, and an adopted image starts fetching.
   const container = fragment.ownerDocument.createElement("div");
@@ -55,6 +56,24 @@ function rewritePathLinks(root: DocumentFragment): void {
       anchor.setAttribute("target", "_blank");
       anchor.setAttribute("rel", "noopener noreferrer");
     }
+  }
+}
+
+/**
+ * Put each table in a box of its own that scrolls sideways, so a table wider than the bubble it is in scrolls there
+ * rather than spilling out of the bubble and scrolling the whole transcript. The table carries its column count, which
+ * style.css sizes its minimum width by.
+ */
+function wrapTablesInScrollers(root: DocumentFragment): void {
+  for (const table of Array.from(root.querySelectorAll("table"))) {
+    const scroller = table.ownerDocument.createElement("div");
+    scroller.className = "markdown-table-scroll";
+    const rowWidths = Array.from(table.rows, (row) =>
+      Array.from(row.cells).reduce((count, cell) => count + cell.colSpan, 0),
+    );
+    table.style.setProperty("--markdown-table-columns", String(Math.max(...rowWidths, 1)));
+    table.replaceWith(scroller);
+    scroller.append(table);
   }
 }
 

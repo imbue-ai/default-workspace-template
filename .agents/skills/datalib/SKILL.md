@@ -4,9 +4,19 @@ description: Search and mirror the user's own personal data (chat history, Slack
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 160 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # datalib
+
+## Contents
+
+- Instructions
+- Driving datalib: start at `datalib-step help`
+- Authorizing a source
+- Supported sources (inside Imbue Studio)
+- Notes
 
 ## Instructions
 
@@ -34,12 +44,15 @@ folder per library. The library this workspace uses is `Default`, so the
 **data root** is `data/.skills/datalib/Default`, and the store's config file
 is `config.toml` inside it. `data/` is the workspace's own data tree on the
 persistent volume, so the store survives restarts. The binaries live in
-`~/.local/bin`, which is not on PATH for every shell, so establish all of
-this once at the top of your shell work:
+`/home/user/.local/bin`, which is not on PATH for every shell. The paths
+below are spelled out from the workspace's home, `/home/user`, not from
+`$HOME`: an agent's shell has `HOME=/root`, which is not the home the
+workspace and the Datalib app live under. Establish all of this once at the
+top of your shell work:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holding the store
+export PATH="/home/user/.local/bin:$PATH"
+DATA_ROOT="/home/user/workspace/data/.skills/datalib/Default"   # the data root holding the store
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
@@ -48,7 +61,7 @@ DATALIB_CONFIG="$DATA_ROOT/config.toml"
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
 # running, so run it every time:
-bash "$HOME/workspace/.agents/skills/datalib/scripts/install_datalib.sh"
+bash /home/user/workspace/.agents/skills/datalib/scripts/install_datalib.sh
 mkdir -p "$DATA_ROOT"
 ```
 
@@ -177,7 +190,7 @@ they always match the tools you have:
 The install script also saved the agent guide as a file beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.56.0/docs/agent_user.md"
+cat /home/user/.local/share/datalib/v0.56.0/docs/agent_user.md
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -195,7 +208,7 @@ The web-API sources (Slack, Linear, GitHub, Notion, ...) need the user's
 credentials, which flow through the same `latchkey` gateway used elsewhere. If
 a sync fails for a source with a missing-credentials or "request not permitted
 by the user" error, request access the way the `connect-external-service`
-skill's `references/latchkey.md` describes ("Ask for user permission"): POST a
+skill describes: POST a
 `predefined` permission request for that service's scope (e.g. `slack-api`,
 `linear-api`, `github-api`, `notion-api`), wait for the user's approval, then
 re-run the sync. If datalib's own error hint says to run `latchkey auth set`,
@@ -226,8 +239,8 @@ to hold:
   address ranges outright, so for an agent running remotely the requests have
   to go out through the user's own computer. That happens once desktop
   proxying is on for the service: set `"proxy": true` on the permission
-  request you file for it (`references/latchkey.md`, "Proxying requests
-  through the user's desktop"), or the user turns it on in that connector's
+  request you file for it (the `connect-external-service` skill covers
+  proxying through the user's desktop), or the user turns it on in that connector's
   settings.
 
 If a sync of one of these sources returns Cloudflare challenge pages instead
