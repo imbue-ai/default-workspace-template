@@ -22,6 +22,7 @@ from app_install.git import run_git
 from app_install.installing import install_app
 from app_install.mock_runtime_test import RecordingRuntime
 from app_install.operations import add_app
+from app_install.operations import regenerate
 from app_install.publishing import ChangedPath
 from app_install.publishing import ChangeKind
 from app_install.publishing import OutsideSkillUse
@@ -325,9 +326,14 @@ def test_a_tree_that_names_a_skill_the_app_does_not_carry_is_not_assembled(tmp_p
     assert not pending_publish_path(workspace, "notes").exists()
     assert _refs(published) == []
 
-    # The app carrying the skill is the way on: the skill is then in what is published.
-    (workspace / ".agents" / "skills" / "fetch-mail" / "SKILL.md").unlink()
-    write_app_file(workspace, "notes", "skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    # The app carrying the skill is the way on: the skill is then in what is published, and the workspace still
+    # holds its path, as the link the skill is found by.
+    link = workspace / ".agents" / "skills" / "fetch-mail"
+    carried = workspace / "system" / "apps" / "notes" / "skills" / "fetch-mail"
+    carried.parent.mkdir()
+    link.rename(carried)
+    regenerate(workspace, "notes", never_bound)
+    assert link.is_symlink()
     commit_all(workspace, "Have the notes app carry the skill it runs")
     assembled = assemble_app(workspace, "notes", "HEAD", runtime)
     assert assembled.is_outside_skills_checked
