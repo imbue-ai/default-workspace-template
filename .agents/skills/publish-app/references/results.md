@@ -67,11 +67,12 @@ assemble is what gets pushed.
   be replaced with a new one.
 - `outside_skills_found`: `uses` names each line of the app that still names
   a skill of this workspace the app does not carry
-  (`.agents/skills/<skill>/...`, `data/.skills/<skill>/...`). Decide what
-  becomes of the skill as `skills-the-app-needs.md` says ("Which skills"),
-  and have the worker take it in or take the line out. A skill the app takes
-  in changes what the user agreed to at the scope gate, so tell them before
-  the publish gate.
+  (`.agents/skills/<skill>/...`, `data/.skills/<skill>/...`). Read "Which
+  skills" and "A skill something else uses too" in
+  `skills-the-app-needs.md`, decide what becomes of the skill, and have the
+  worker take it in or take the line out. A skill the app takes in changes
+  what the user agreed to at the scope gate, so tell them before the publish
+  gate.
 - `lock_check_failed`: the app's dependencies do not resolve on their own.
   Have the worker make the lock again in the app's directory (`uv lock`) and
   commit it. If it still fails, the app depends on something that exists only
