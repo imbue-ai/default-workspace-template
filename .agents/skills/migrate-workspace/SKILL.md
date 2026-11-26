@@ -373,7 +373,10 @@ registering apps and restarting services, and release it when done.
 **including `data/.secrets/anthropic.env`**, so migrated integrations keep working
 by default. What is excluded is per-workspace identity rather than user content:
 `restic.env` (a backup repository keyed by *that* workspace's own random
-password), `cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
+password), with the copies of it the old workspace kept aside
+(`restic.env.<timestamp>`), the credentials of a backup setup it had not finished
+(`restic.env.pending`) and the record of that setup (`data/.state/backup_setup/`),
+`cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
 workspace's published share -- `share.env`, `share_auth_label`,
 `share_gateway_signing_key`, `share_grants.toml` and its lock,
 `share_identities.json`, `share_tls/`, and the visiting-agent registry

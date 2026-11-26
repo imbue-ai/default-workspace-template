@@ -26,12 +26,22 @@ service.
    may start by itself; a workspace that already existed never gets it. It also
    writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open
    the workspace's welcome chat once it is running.
-3. **Retired registrations** - removes the app registry's `owner-exec` and
+3. **Initial data** - on every boot, once the workspace's Python packages are
+   in place and before the clock is set, runs `apply-initial-data`
+   (`system/libs/workspace_initial_data`), which applies the document whoever
+   created the workspace left at `$MNGR_HOST_DIR/initial_data.json`: the profile
+   snapshot, the timezone, the update settings and the backup destination. The
+   document being there is the trigger, not a first boot: a pool host's first
+   boot is over when it is baked, and its document is written when it is
+   adopted, before its services are started again. A boot that finds none does
+   nothing. A document that cannot be applied is left for the next boot, and the
+   boot goes on; `GET /api/workspace/status` says how it stands.
+4. **Retired registrations** - removes the app registry's `owner-exec` and
    `vm-exec` rows and `data/.state/owner_exec_inner.toml`. No program of this
    release registers them, so a workspace updated from a release that ran those
    programs would otherwise keep them, and a row keeps an origin on the share
    with nothing behind it.
-4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+5. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

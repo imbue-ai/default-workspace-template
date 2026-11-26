@@ -1,6 +1,6 @@
 The update dispatcher arms a workspace's own updates, with no client present.
 
-- `settings` holds the update settings a client writes (`data/.state/update-apply/settings.json`): the release channel, the feed its file is read from, whether the workspace arms its own updates, and the owner's local hours an update may start in, which are read in the timezone the workspace records and in UTC when it records none.
+- `settings` holds the update settings a client writes (`data/.state/update-apply/settings.json`): the release channel, the feed its file is read from, whether the workspace arms its own updates, and the owner's local hours an update may start in, which are read in the timezone the workspace records and in UTC when it records none. Three are the workspace's own and win over the account's: its own answer on arming, and its own hours (`window_start_hour_here` and `window_end_hour_here`, both set or both null). `take_update_settings` keeps the stored value of each of those three that a client leaves out and clears one sent as null, so a client that writes the account's settings cannot wipe what the owner set in another client.
 
 - `channel` reads the version the channel is on from `<feed>/<channel>-web.json`, at most once an hour and within a hard timeout, and keeps the last answer with how the last read went (`channel-version.json`). A read that fails keeps the last version for display.
 

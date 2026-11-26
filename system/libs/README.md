@@ -56,10 +56,16 @@ README for details.
   job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
-- `workspace_backup_setup/` - A workspace's backup configuration as a client
-  sets it up through the shell's backup routes: it initialises the restic
-  repository the credentials name, writes `restic.env` once that is ready,
-  and sets whether backups are verified.
+- `workspace_backup_setup/` - A workspace's own setup of its backups: a
+  client names a destination through the shell's backup routes (or the
+  workspace's initial data does), and the supervised `backup-setup` program
+  makes the repository's password, initialises the repository, writes
+  `restic.env` once that is ready, and tries again when it fails. Also what a
+  client reads of the backups, and whether they are verified.
+- `workspace_initial_data/` - The document a workspace is handed when it is
+  created (its profile snapshot, timezone, update settings and backup
+  destination), the `apply-initial-data` step the boot sequence runs to apply
+  it, and how that stands for the shell's status route.
 - `workspace_update_control/` - A workspace's updates as a client asks for
   them through the shell's update routes (start one, schedule one, skip a
   version, write the update settings, read it all), and the dispatcher cron

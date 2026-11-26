@@ -1,0 +1,1 @@
+- `forward_port.py` copies a manifest's `suggestion_settings_path` onto the app's registry row, and clears it off the row of a manifest that no longer declares it.

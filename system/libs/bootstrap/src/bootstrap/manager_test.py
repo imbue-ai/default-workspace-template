@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -23,6 +24,7 @@ from bootstrap.manager import (
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    MAIN_BRANCH_SIGNAL,
     RETIRED_STATE_FILES,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
@@ -35,6 +37,7 @@ from bootstrap.manager import (
     UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
     _apply_container_timezone,
+    _apply_initial_data,
     _configure_git_global,
     _ensure_git_identity,
     _initialize_workspace_main_branch,
@@ -795,6 +798,95 @@ def test_set_container_timezone_tolerates_a_non_utf8_file(tmp_path: Path) -> Non
     assert not localtime.exists()
 
 
+# _apply_initial_data
+
+
+def _stage_the_initial_data_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv_script: str
+) -> Path:
+    """Make ``tmp_path`` the workspace root a boot runs from, with a host dir beside its data and a stand-in ``uv``
+    first on PATH, followed by the bin dir of the venv this suite runs from; answers the host dir."""
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir()
+    (bin_dir / "uv").write_text(uv_script)
+    (bin_dir / "uv").chmod(0o755)
+    venv_bin = Path(sys.executable).parent
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join([str(bin_dir), str(venv_bin), os.environ.get("PATH", "")]),
+    )
+    host_dir = tmp_path / "host-dir"
+    host_dir.mkdir()
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    monkeypatch.chdir(tmp_path)
+    return host_dir
+
+
+# ``uv run --no-sync <entry>`` as the venv this suite runs from resolves it: the entry itself.
+_UV_RUNNING_THE_ENTRY = '#!/bin/sh\nshift 2\nexec "$@"\n'
+
+
+def test_the_boot_applies_the_initial_data_a_machine_long_past_its_first_boot_was_handed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pool host's first boot was its bake. Its document arrives when it is adopted, and the
+    # boot that follows applies it before it sets the clock, so the zone it names is in force
+    # from that boot on.
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, _UV_RUNNING_THE_ENTRY
+    )
+    MAIN_BRANCH_SIGNAL.parent.mkdir(parents=True)
+    MAIN_BRANCH_SIGNAL.touch()
+    document = host_dir / "initial_data.json"
+    document.write_text(
+        json.dumps({"schema": 1, "timezone": {"zone": "America/New_York"}})
+    )
+
+    _apply_initial_data()
+    localtime, timezone_file = _set_timezone_in(tmp_path, None)
+
+    assert timezone_file.read_text() == "America/New_York\n"
+    assert Path(os.readlink(localtime)).name == "New_York"
+    assert not document.exists()
+    assert (
+        json.loads((tmp_path / "data/.state/initial_data/state.json").read_text())[
+            "state"
+        ]
+        == "APPLIED"
+    )
+
+    # A later boot finds no document, and leaves what the owner has changed since alone.
+    timezone_file.write_text("UTC\n")
+    _apply_initial_data()
+
+    assert timezone_file.read_text() == "UTC\n"
+
+
+def test_the_boot_goes_on_when_the_initial_data_cannot_be_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, "#!/bin/sh\necho broken venv >&2\nexit 1\n"
+    )
+    document = host_dir / "initial_data.json"
+    document.write_text('{"schema": 1}')
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        _apply_initial_data()
+
+        # An entry that cannot even be started is no different.
+        monkeypatch.setenv("PATH", str(tmp_path / "no-such-dir"))
+        _apply_initial_data()
+    finally:
+        logger.remove(sink)
+
+    # Left where it is, for the boot that can apply it.
+    assert document.exists()
+    assert len(errors) == 2
+    assert "broken venv" in errors[0]
+
+
 # _recover_interrupted_update
 
 
@@ -1080,6 +1172,8 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
         "recover_update",
         "initialize_main_branch",
         "sync_venv",
+        # Before the clock is set, so a timezone the initial data carries is the one this boot applies.
+        "apply_initial_data",
         "set_timezone",
         "converge_environment",
         "install_cron",

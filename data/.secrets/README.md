@@ -1,10 +1,18 @@
 # data/.secrets/
 
-Per-secret env files, plus the shared MCP client's credentials. Three kinds
+Per-secret env files, plus the shared MCP client's credentials. Four kinds
 live here:
 
-- Files Imbue Studio injects (for example `restic.env` for the backup repository
-  and `share.env` for the sharing stack's materials).
+- Files Imbue Studio injects (for example `share.env` for the sharing stack's
+  materials).
+- The backup credentials, which the workspace's own `backup-setup` program writes
+  (`system/libs/workspace_backup_setup/`): `restic.env`, the repository, the
+  variables of its storage, and the repository's password, which the workspace
+  makes itself; `restic.env.pending`, the credentials of a setup that has not
+  finished; and `restic.env.<timestamp>`, every `restic.env` that was replaced or
+  turned off, kept so that its repository can be opened again. An Imbue Studio
+  desktop from before the workspace set up its own backups writes `restic.env`
+  itself.
 - Files an agent asked the user for through the chat's secret card (the
   `connect-external-service` skill's `request_secret.py`): `<name>.env`, one line
   per variable as `NAME='value'`, written by the chat app with mode 0600. The

@@ -53,6 +53,7 @@ _BUILTIN_SERVICE_ORDER = (
     "share-gateway",
     "github-sync",
     "host-backup",
+    "backup_setup",
     "cron",
     "screen",
     "files",

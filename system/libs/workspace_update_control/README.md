@@ -30,7 +30,10 @@ where supervisord runs the shell and where the cron line changes to.
   its file is read from, whether the workspace arms its own updates, and the owner's
   local hours an update may start in), the conversion of those hours to the UTC
   window a schedule holds, in the timezone the workspace records, and whether the
-  workspace holds backup credentials.
+  workspace holds backup credentials. Three settings are the workspace's own and win
+  over the account's: its own answer on arming, and its own hours. A client that
+  leaves one of them out keeps what is stored, and one that sends null clears it
+  (`take_update_settings`).
 - `channel` -- the version the release channel is on, read off the feed
   (`<feed>/<channel>-web.json`) at most once an hour and kept with how the last read
   went, and the newest version a client from before all this last named, which

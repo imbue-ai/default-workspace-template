@@ -37,8 +37,8 @@ def test_the_description_holds_every_workspace_route_and_no_other(app: Flask) ->
     described = {(method.upper(), path) for path, path_item in description["paths"].items() for method in path_item}
     assert described == set(WORKSPACE_ROUTE_TABLE)
     status_answer = description["components"]["schemas"]["WorkspaceStatusResponse"]
-    assert set(status_answer["required"]) == {"schema", "template_ref", "operations", "compatibility"}
-    assert len(WORKSPACE_OPERATIONS) == 17
+    assert set(status_answer["required"]) == {"schema", "template_ref", "operations", "compatibility", "initial_data"}
+    assert len(WORKSPACE_OPERATIONS) == 21
 
 
 def test_every_route_but_the_status_names_its_own_operation_of_those_the_status_lists(app: Flask) -> None:

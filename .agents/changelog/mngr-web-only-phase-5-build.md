@@ -7,3 +7,7 @@
 - A version the user names, and a pass that pins its ceiling in its first message, resolve as before. An override in a workspace with no channel's version has no ceiling to exceed.
 
 - `manage-routines` says that the workspace schedules its own updates through the `update-self-dispatch` cron entry.
+
+- `migrate-workspace` leaves behind everything the old workspace's backup setup kept: the copies of `restic.env` it kept aside, the credentials of a setup it had not finished, and the record of that setup. This workspace's own backup setup would otherwise install the old workspace's repository as its own.
+
+- `build-app` refuses `backup-setup` and `backup_setup` as an app's name, which the workspace's own backup setup runs under.

@@ -998,7 +998,9 @@ composer and the lines in the transcript, and the new-chat switch what
 `GET /api/suggestions/new-chat` answers. `PUT /api/settings` replaces the settings whole, so a
 writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions` takes
 either switch or both, changes only those (one left out or null stays as it is), and answers
-the settings as `GET /api/settings` does. The settings file and both routes drop a field the
+the settings as `GET /api/settings` does. `GET /api/settings/suggestions` reads them at the same
+path, which the manifest names as `suggestion_settings_path`: the shell's workspace routes
+(`GET` and `PUT /api/workspace/suggestions`) pass a client's read and write there. The settings file and both routes drop a field the
 settings do not hold, so a file or a writer that carries one keeps every other value. Each
 placement's strip shows the workspace's owner its own link on its line ("disable suggestions"
 on the next-step line while its pills are shown, "disable new chat suggestions" on the
