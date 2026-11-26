@@ -5,7 +5,8 @@ workspace commit, less the paths the manifest's ``[publish] exclude`` names, and
 secret scan found nothing in exactly that tree. The steps are separate commands because a person decides between
 them: what to publish before the tree is assembled, and whether to make it public before it is pushed.
 
-- ``compare`` says what changed since the last publish, for the version to be chosen.
+- ``compare`` says what changed since the last publish, for the version to be chosen, and each line that names
+  a skill of this workspace the app does not carry.
 - ``set_version`` writes the version into the app, with the template version the workspace is on.
 - ``assemble`` builds the tree, scans it, and checks that the app stands alone: it names no skill of this
   workspace that it does not carry, and a Python app locks with no workspace around it.
@@ -422,7 +423,9 @@ def _manifest_version_at(repo_root: Path, tree: str) -> str:
 
 def compare_with_published(repo_root: Path, name: str, revision: str) -> CompareOutcome:
     """What a publish of the app ``name`` at ``revision`` would push, and how that differs from the version last
-    published from this workspace: what the next version's number is chosen from.
+    published from this workspace: what the next version's number is chosen from. Also each line of that tree
+    that names a skill of this workspace the app does not carry, which ``assemble_app`` would refuse; the tree is
+    read for them only when the history holds a template release.
 
     Raises AppRecordNotFoundError for an app with no record, and PublishError when the commit does not hold the
     app or the commit last published cannot be had.

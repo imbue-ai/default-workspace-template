@@ -432,7 +432,8 @@ def _published_tree_fields(published: PublishedTree) -> dict[str, object]:
 @click.option("--commit", "revision", default="HEAD", show_default=True, help="The workspace commit to compare")
 @click.pass_obj
 def publish_compare_command(repo_root: Path, name: str, revision: str) -> None:
-    """Say what a publish of the app NAME would push, and how it differs from the version last published."""
+    """Say what a publish of the app NAME would push, how it differs from the version last published, and
+    each line of it that names a skill the app does not carry."""
     try:
         outcome = compare_with_published(repo_root, name, revision)
     except (AppInstallError, AppManifestError) as e:
