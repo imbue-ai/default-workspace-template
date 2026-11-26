@@ -263,7 +263,13 @@ class BackupVerificationModel(FrozenModel):
 
 
 class UpdateSettingsModel(FrozenModel):
-    """The update settings a workspace holds: the release channel it follows, and when it arms its own updates."""
+    """The update settings a workspace holds: the release channel it follows, and when it arms its own updates.
+
+    Three are the workspace's own, which its owner sets in the workspace's settings: its own answer on arming, and
+    its own hours. A request that leaves one of them out keeps the stored value, and one that sends null clears it,
+    so a client that writes the account's settings, or one from before a setting existed, cannot wipe an answer the
+    owner gave in another client. An answer carries every one of them.
+    """
 
     channel: str = Field(min_length=1, description="The release channel the workspace follows")
     feed_base_url: str = Field(
@@ -273,13 +279,28 @@ class UpdateSettingsModel(FrozenModel):
     is_auto_update_enabled: StrictBool = Field(description="Whether the account's workspaces arm their own updates")
     is_auto_update_enabled_here: StrictBool | None = Field(
         default=None,
-        description="This workspace's own answer, which wins over the account's; null when it has none",
+        description="This workspace's own answer, which wins over the account's; null when it has none. Left out "
+        "of a request, the stored answer is kept",
     )
     window_start_hour: StrictInt = Field(
-        ge=0, le=23, description="The hour of the owner's day an armed update may start from"
+        ge=0, le=23, description="The hour of the owner's day an armed update may start from, as the account sets it"
     )
     window_end_hour: StrictInt = Field(
         ge=0, le=23, description="The hour it may no longer start at; an earlier hour than the start is the next day's"
+    )
+    window_start_hour_here: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        le=23,
+        description="This workspace's own start hour, which with its end hour wins over the account's; both are "
+        "set, or both null when it has none. Left out of a request, the stored hour is kept",
+    )
+    window_end_hour_here: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        le=23,
+        description="This workspace's own end hour; set or null with its start hour. Left out of a request, the "
+        "stored hour is kept",
     )
 
 

@@ -80,8 +80,8 @@ class LocalFeedHandler(BaseHTTPRequestHandler):
 
 
 def update_settings_document(**fields: Any) -> dict[str, Any]:
-    """Update settings as a client sends them: the stable channel, arming on, a window of 02:00 to 05:00, with
-    ``fields`` over them."""
+    """Update settings as a client that names every one sends them: the stable channel, arming on, a window of
+    02:00 to 05:00, nothing of the workspace's own, with ``fields`` over them."""
     return {
         "channel": "stable",
         "feed_base_url": STAGED_FEED_BASE_URL,
@@ -89,6 +89,8 @@ def update_settings_document(**fields: Any) -> dict[str, Any]:
         "is_auto_update_enabled_here": None,
         "window_start_hour": 2,
         "window_end_hour": 5,
+        "window_start_hour_here": None,
+        "window_end_hour_here": None,
         **fields,
     }
 

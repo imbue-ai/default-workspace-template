@@ -5,6 +5,10 @@ workspace follows, where that channel's file is read from, whether the workspace
 hours of the day an armed update may start in. They live in a file of their own, ``settings.json``, beside the
 schedule: every client of the workspace sees the same ones, and the dispatcher reads them with no client present.
 
+Three of them are the workspace's own, which its owner sets in the workspace's settings and which win over the
+account's: its own answer on arming, and its own hours. A client that writes the account's settings leaves them
+out, and ``take_update_settings`` then keeps what is stored.
+
 The hours are the owner's local ones. The workspace reads them in the timezone it records
 (``data/.state/user_timezone``), and in UTC when it records none.
 
@@ -13,6 +17,7 @@ Like the rest of this library, everything here acts on the workspace whose root 
 
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Final, NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -34,6 +39,20 @@ _CHANNEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)
 _FEED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^https?://\S+$")
 _LAST_HOUR_OF_THE_DAY: Final[int] = 23
 _HOURS_PER_DAY: Final[int] = 24
+# The settings that are the workspace's own: a request that leaves one out keeps the stored value, and one that
+# sends null clears it.
+OWN_SETTING_NAMES: Final[tuple[str, ...]] = (
+    "is_auto_update_enabled_here",
+    "window_start_hour_here",
+    "window_end_hour_here",
+)
+_REQUIRED_SETTING_NAMES: Final[tuple[str, ...]] = (
+    "channel",
+    "feed_base_url",
+    "is_auto_update_enabled",
+    "window_start_hour",
+    "window_end_hour",
+)
 
 
 class InvalidUpdateSettingsError(Exception):
@@ -51,9 +70,12 @@ class UpdateSettings(NamedTuple):
     is_auto_update_enabled: bool
     # This workspace's own answer, which wins over the account's; None when it has none.
     is_auto_update_enabled_here: bool | None
-    # The owner's local hours ``[start, end)`` an armed update may start in.
+    # The owner's local hours ``[start, end)`` an armed update may start in, as the account sets them.
     window_start_hour: int
     window_end_hour: int
+    # This workspace's own hours, which win over the account's: both set, or both None when it has none.
+    window_start_hour_here: int | None = None
+    window_end_hour_here: int | None = None
 
     @property
     def is_arming_enabled(self) -> bool:
@@ -61,6 +83,13 @@ class UpdateSettings(NamedTuple):
         if self.is_auto_update_enabled_here is not None:
             return self.is_auto_update_enabled_here
         return self.is_auto_update_enabled
+
+    @property
+    def window_hours(self) -> tuple[int, int]:
+        """The hours ``[start, end)`` in force: the workspace's own when it has them, else the account's."""
+        if self.window_start_hour_here is not None and self.window_end_hour_here is not None:
+            return self.window_start_hour_here, self.window_end_hour_here
+        return self.window_start_hour, self.window_end_hour
 
     def document(self) -> dict[str, object]:
         """The settings as a client reads and writes them."""
@@ -77,13 +106,23 @@ def _is_hour(value: object) -> bool:
 
 def _refusal(settings: UpdateSettings) -> str:
     """Why ``settings`` cannot be stored; '' when they can."""
-    if _CHANNEL_PATTERN.match(settings.channel) is None:
-        return "channel is a release channel's name: lower-case letters, digits and single dashes."
     if (
+        not isinstance(settings.channel, str)
+        or _CHANNEL_PATTERN.match(settings.channel) is None
+    ):
+        return "channel is a release channel's name: lower-case letters, digits and single dashes."
+    if not isinstance(settings.feed_base_url, str) or (
         settings.feed_base_url
         and _FEED_URL_PATTERN.match(settings.feed_base_url) is None
     ):
         return "feed_base_url is an http or https address, or empty where no feed is published."
+    if not isinstance(settings.is_auto_update_enabled, bool):
+        return "is_auto_update_enabled is true or false."
+    if not (
+        settings.is_auto_update_enabled_here is None
+        or isinstance(settings.is_auto_update_enabled_here, bool)
+    ):
+        return "is_auto_update_enabled_here is true, false, or null where the workspace has no answer of its own."
     if not _is_hour(settings.window_start_hour) or not _is_hour(
         settings.window_end_hour
     ):
@@ -92,6 +131,17 @@ def _refusal(settings: UpdateSettings) -> str:
         )
     if settings.window_start_hour == settings.window_end_hour:
         return "window_start_hour and window_end_hour differ: a window of no length never opens."
+    if settings.window_start_hour_here is None and settings.window_end_hour_here is None:
+        return ""
+    if not _is_hour(settings.window_start_hour_here) or not _is_hour(
+        settings.window_end_hour_here
+    ):
+        return (
+            "window_start_hour_here and window_end_hour_here are both whole hours of the day, 0 to 23, or both "
+            "null where the workspace has no hours of its own."
+        )
+    if settings.window_start_hour_here == settings.window_end_hour_here:
+        return "window_start_hour_here and window_end_hour_here differ: a window of no length never opens."
     return ""
 
 
@@ -113,34 +163,39 @@ def write_update_settings(settings: UpdateSettings) -> UpdateSettings:
     return settings
 
 
+def take_update_settings(sent: Mapping[str, object]) -> UpdateSettings:
+    """Store the settings a client sent, and answer them as stored.
+
+    ``sent`` holds each setting the client named. One of the workspace's own (``OWN_SETTING_NAMES``) that it left
+    out keeps its stored value, so a client that writes the account's settings, or one from before a setting
+    existed, cannot wipe an answer the owner gave in another client; one sent as null is cleared. Every other
+    setting is required. Raises ``InvalidUpdateSettingsError`` for settings that cannot be the workspace's.
+    """
+    stored = read_update_settings()
+    values = dict(sent)
+    for name in OWN_SETTING_NAMES:
+        if name not in values:
+            values[name] = getattr(stored, name) if stored is not None else None
+    missing = [name for name in UpdateSettings._fields if name not in values]
+    if missing:
+        raise InvalidUpdateSettingsError(
+            "the update settings leave out %s." % ", ".join(missing)
+        )
+    return write_update_settings(
+        UpdateSettings(**{name: values[name] for name in UpdateSettings._fields})
+    )
+
+
 def read_update_settings() -> UpdateSettings | None:
     """The stored settings; None when no client has written any, or the file does not hold usable ones."""
     stored = read_json_object(UPDATE_SETTINGS_FILE_PATH)
     if stored is None:
         return None
-    channel = stored.get("channel")
-    feed_base_url = stored.get("feed_base_url")
-    is_enabled = stored.get("is_auto_update_enabled")
-    is_enabled_here = stored.get("is_auto_update_enabled_here")
-    start_hour = stored.get("window_start_hour")
-    end_hour = stored.get("window_end_hour")
-    if (
-        not isinstance(channel, str)
-        or not isinstance(feed_base_url, str)
-        or not isinstance(is_enabled, bool)
-        or not (is_enabled_here is None or isinstance(is_enabled_here, bool))
-        or not isinstance(start_hour, int)
-        or not isinstance(end_hour, int)
-    ):
+    if any(name not in stored for name in _REQUIRED_SETTING_NAMES):
         write_log_line("the update settings file does not hold settings; reading none")
         return None
     settings = UpdateSettings(
-        channel=channel,
-        feed_base_url=feed_base_url,
-        is_auto_update_enabled=is_enabled,
-        is_auto_update_enabled_here=is_enabled_here,
-        window_start_hour=start_hour,
-        window_end_hour=end_hour,
+        **{name: stored.get(name) for name in UpdateSettings._fields}
     )
     refusal = _refusal(settings)
     if refusal:
@@ -194,10 +249,10 @@ def utc_update_window(
 
 
 def settings_window(settings: UpdateSettings, now: float) -> tuple[int, int]:
-    """The settings' window as a schedule holds one: ``(UTC start minute, length in minutes)``."""
-    return utc_update_window(
-        settings.window_start_hour, settings.window_end_hour, read_user_zone(), now
-    )
+    """The window in force as a schedule holds one, ``(UTC start minute, length in minutes)``: the workspace's own
+    hours where it has them, else the account's."""
+    start_hour, end_hour = settings.window_hours
+    return utc_update_window(start_hour, end_hour, read_user_zone(), now)
 
 
 def is_backup_configured() -> bool:

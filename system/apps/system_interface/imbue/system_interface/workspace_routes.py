@@ -73,8 +73,7 @@ from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.dispatcher import PROC_ROOT
 from workspace_update_control.protocol import OUTCOME_STARTING
 from workspace_update_control.settings import InvalidUpdateSettingsError
-from workspace_update_control.settings import UpdateSettings
-from workspace_update_control.settings import write_update_settings
+from workspace_update_control.settings import take_update_settings
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
@@ -507,12 +506,15 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
     Answers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at
     most once an hour, and while arming is on it arms an update to that version by itself. The hours are read in
     the timezone the workspace records, and in UTC when it records none.
+
+    The workspace's own answer on arming and its own hours win over the account's. A request that leaves one of
+    those three out keeps the stored value, and one that sends null clears it.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateSettingsModel)
     _require_workspace_root_as_working_directory()
     try:
-        stored = write_update_settings(UpdateSettings(**body.model_dump()))
+        stored = take_update_settings(body.model_dump(exclude_unset=True))
     except InvalidUpdateSettingsError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_UPDATE_SETTINGS, HTTP_BAD_REQUEST) from e
     except OSError as e:
