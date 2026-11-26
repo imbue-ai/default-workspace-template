@@ -21,7 +21,9 @@ from workspace_initial_data.status import (
     "status",
     [
         applied_status(1_795_000_000.5),
-        failed_status("timezone: 'Mars' is not a timezone"),
+        failed_status(
+            "timezone: zone is an IANA timezone name, and is_replacing true or false"
+        ),
     ],
 )
 def test_a_status_is_read_back_as_it_was_recorded(
@@ -36,7 +38,9 @@ def test_a_record_is_read_back_with_how_far_each_part_of_its_document_has_come(
     workspace_root: Path,
 ) -> None:
     record = InitialDataRecord(
-        status=failed_status("timezone: 'Mars' is not a timezone"),
+        status=failed_status(
+            "timezone: zone is an IANA timezone name, and is_replacing true or false"
+        ),
         document_digest="5f" * 32,
         progress_by_part={
             "profile": PartProgress.WRITTEN,
