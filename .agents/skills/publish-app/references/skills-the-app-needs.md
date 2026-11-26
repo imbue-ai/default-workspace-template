@@ -73,7 +73,8 @@ git grep -l -e '.agents/skills/<skill>' -e '<skill_with_underscores>_skill' -e '
 ```
 
 The last pattern is a routine that runs the skill, which names it without a
-path.
+path. A hit that is only an app's record (a file under `system/config/apps/`)
+is the skill using that app, not that app using the skill.
 
 - **Nothing else, or only a routine or a doc**: the app takes it in, and the
   worker repoints what names it.

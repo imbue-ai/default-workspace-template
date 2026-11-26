@@ -113,7 +113,13 @@ it already starts with the app's name. For each one:
      port);
    - another app that now calls this one gets a `[[dependencies]]` entry for
      it in its own `app.toml`, and a skill that does is recorded with
-     `uv run --no-sync app-install reference add <name> .agents/skills/<other> --note "<the surface it uses>"`.
+     `uv run --no-sync app-install reference add <name> .agents/skills/<other> --note "<the surface it uses>"`;
+   - another app whose references list the skill no longer lists it, since a
+     reference never names a path inside an app:
+     `uv run --no-sync app-install reference remove <other> .agents/skills/<skill>`,
+     or, for a built-in app, delete the `[[references]]` entry in its
+     `app.toml`. When the skill calls that app, step 3 lists it under this
+     app's `[[dependencies]]`.
 5. **Have the link written.**
 
    ```bash
