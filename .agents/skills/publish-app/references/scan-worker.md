@@ -71,6 +71,7 @@ it already starts with the app's name. For each one:
 
    ```bash
    uv run --no-sync app-install reference remove <name> .agents/skills/<skill>   # only when the record lists it
+   mkdir -p system/apps/<package>/skills
    git mv .agents/skills/<skill> system/apps/<package>/skills/<carried>
    ```
 
