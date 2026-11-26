@@ -11,6 +11,7 @@ workspace; the gateway attaches it to the request.
 - Custom services (rows 2 to 4)
 - When the gateway is unreachable
 - Proxying requests through the user's desktop
+- Limiting sign-in scopes
 - Notes
 
 ## Services latchkey already knows (row 1)
