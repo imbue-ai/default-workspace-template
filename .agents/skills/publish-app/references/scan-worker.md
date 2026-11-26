@@ -71,9 +71,9 @@ that kind.
 | `[[dependencies]]` | Other apps this one calls (`resolve_app_url("<other>")`, a link to another app's page, another app's data). | `name`, and `repo_url` when that app is published (its record's `published_repo_url`, or `upstream_url` for an installed one) |
 | `[[adaptation]]` | What will not fit someone else's workspace as it is: a hardcoded channel, account, folder or name, an assumption about data that only this user has. | `summary` (what does not carry over), `resolution` (what to ask or change) |
 
-Use the permission and scope names latchkey really has
-(`.agents/skills/connect-external-service/references/latchkey.md`), not ones
-that sound right: an adopter's agent files these as requests.
+Use the permission and scope names latchkey really has (the
+`connect-external-service` skill lists them), not ones that sound right: an
+adopter's agent files these as requests.
 
 Anything hardcoded that is personal to the user (a name, an address, an
 account id) is better removed than described. If it is quick and safe, make it

@@ -14,11 +14,46 @@ in it. The app's stored data is not part of the app's code: it stays under
 `data/.apps/<name>/` across every update, so a new version meets data the old
 version wrote.
 
-All commands run from the repo root (`/home/user/workspace`). Keep git and
-file words out of what you say to the user: they are getting a newer version
-of an app (`.agents/shared/references/user-facing-language.md`).
+## Standing instructions
 
-## 0. Find the app and what it is on
+- **Run every command from the repo root** (`/home/user/workspace`).
+- **Keep git and file words out of what you say to the user**: they are
+  getting a newer version of an app
+  (`.agents/shared/references/user-facing-language.md`).
+- **Never update without a way back.** A `no_snapshot` result is fixed, never
+  worked around.
+- **Never edit the app's program file or skill links.** They are generated
+  from the app's `app.toml`, and the update regenerates them, keeping the
+  app's port.
+- **Done means the user can open the app and see their own data, as before.**
+  A program that starts or a route that answers 200 is not done.
+
+## What an update keeps
+
+- **The workspace's own changes survive.** The new version is merged over
+  them. A conflict in `uv.lock` alone is settled for you: the publisher's
+  lock is taken and made again.
+- **A schedule the user gave one of the app's routines is kept.** It lives in
+  the routine's state, not in the app.
+
+## Other tasks
+
+- **Changing the app yourself** is the `update-app` skill, as for any app.
+- **Removing it** is `uv run --no-sync app-install uninstall <name>`, which
+  keeps its stored data and secret files.
+
+## Steps
+
+1. Find the app and what it is on.
+2. See what is coming, and say so before starting. *Ends the turn* before a
+   major version, until the user says go ahead.
+3. Update. *Ends the turn* when a choice is the user's or an approval is
+   awaited.
+4. Check it against the user's own data.
+5. Go back to the version before, only when the new version mishandles the
+   user's data and the data cannot be brought forward.
+
+## Step 1: Find the app and what it is on
 
 ```bash
 uv run --no-sync app-install list
@@ -32,11 +67,11 @@ Find the app in `apps`. Its `state` says what it is to this workspace:
 - `owned` -- this workspace built it, so there is nothing to update it from.
   A change to it is the `update-app` skill's.
 
-Note three values before anything changes; the way back in step 4 needs them:
+Note three values before anything changes; the way back in step 5 needs them:
 `upstream_version` (the version it is on, empty for an app that never had
 one), `upstream_commit`, and `upstream_url`.
 
-## 1. See what is coming, and say so before starting
+## Step 2: See what is coming, and say so before starting
 
 The update takes the repository's highest `v<major>.<minor>.<patch>` tag, or
 its `main` branch when it has no such tag, unless you name a tag or branch
@@ -47,7 +82,7 @@ git ls-remote --tags --refs -- <upstream_url>
 ```
 
 A listing that is refused means the repository is private to someone: request
-access as under `needs_github_access` in step 2, and skip this check.
+access as under `needs_github_access` in step 3, and skip this check.
 
 Tell the user, in one or two plain sentences, which version they are on and
 which one is coming, and that it is new code from the same source they chose
@@ -64,7 +99,7 @@ An app whose `upstream_version` is empty (its manifest names no version) has
 nothing to compare: an update is there whenever the repository's newest
 commit differs from `upstream_commit`.
 
-## 2. Update
+## Step 3: Update
 
 ```bash
 uv run --no-sync app-install update <name>                  # the latest version
@@ -78,18 +113,19 @@ registered and checked in a place of its own first. Act on its `result`:
 - `up_to_date` -- the app is already at that version. Say so.
 - `updated` -- the new version is live and its programs were restarted.
   `previous_version` and `version` are the versions it went from and to.
-  `snapshot` is where the app's data was copied before the update (see "The
-  copy of the data" below). `problems` lists what could not be done once the
+  `snapshot` is where the app's data was copied before the update ("The copy
+  of the data" in `references/the-apps-data.md`). `problems` lists what could not be done once the
   new version was in: something its environment declares could not be
-  installed, or supervisord did not restart its programs. Go to step 3.
+  installed, or supervisord did not restart its programs. Go to step 4.
 - `conflict` -- the new version changes the same lines this workspace
   changed. `conflicted_paths` names the files, and `worktree` is where the
   half-merged app waits (`data/.state/app_install/worktrees/<name>`). Follow
-  "When the update waits" below.
+  `references/when-the-update-waits.md`.
 - `tests_failed` -- the new version merged, but its environment did not sync
   from its lock or its own tests fail here; `detail` carries the output. The
-  merged app waits in `worktree`. Follow "When the update waits" below, and
-  read "A version made for a newer workspace" first.
+  merged app waits in `worktree`. Follow
+  `references/when-the-update-waits.md`, reading its "A version made for a
+  newer workspace" first.
 - `no_snapshot` -- the app's data could not be kept safe, so the update did
   not start. `detail` says which case it is. The data does not fit on the
   disk beside itself and the workspace has no recent backup: free space, or
@@ -102,96 +138,23 @@ registered and checked in a place of its own first. Act on its `result`:
   workspace already holds (a skill, a routine, a program); `problems` names
   each. The app is unchanged, and the merged version waits in its worktree.
   Tell the user what clashes and ask which one should give way. Then give the
-  update up (below), settle the clash, and start again.
+  update up ("Giving an update up" in `references/when-the-update-waits.md`),
+  settle the clash, and start again.
 - `needs_github_access` -- the repository is private to someone. Request the
   GitHub read permission yourself, as any other latchkey permission request
-  (`.agents/skills/connect-external-service/references/latchkey.md`, scope
-  `github-git`, permission `github-git-read`), end the turn, and run the
-  update again once it is granted.
+  (the `connect-external-service` skill has the command; scope `github-git`,
+  permission `github-git-read`), end the turn, and run the update again once
+  it is granted.
 - `unreachable` -- the repository could not be read for a reason access
   would not change (it is gone, the tag does not exist, the network is down).
   Say what went wrong in plain words, from `detail`.
 - `refused` -- nothing changed; `detail` says why. The cases: the app was
   built here; an earlier update of it is still waiting (finish it or give it
-  up, below); `--continue` was passed with nothing waiting; this git has no
+  up); `--continue` was passed with nothing waiting; this git has no
   `git subtree`; or the finished update no longer fits the workspace as it is
-  now (see "When the update waits").
+  now. `references/when-the-update-waits.md` covers the waiting cases.
 
-### When the update waits
-
-A `conflict` or a `tests_failed` leaves the update in its worktree, a second
-checkout of the workspace at `data/.state/app_install/worktrees/<name>`. The
-app's files are under `system/apps/<package>/` inside it. Nothing the user
-runs has changed.
-
-- **A conflict** is a place where the publisher and this workspace changed
-  the same thing. Read both sides in each file `conflicted_paths` names. Where
-  the right answer is clear (the publisher renamed what this workspace
-  restyled), resolve it yourself. Where it is a choice between the user's own
-  change and the publisher's, ask the user, in their terms: what they had
-  changed, what the new version does there instead, and which they want.
-  Then, in the worktree, stage the resolved files and conclude the merge:
-
-  ```bash
-  git -C data/.state/app_install/worktrees/<name> add -- <the resolved files>
-  git -C data/.state/app_install/worktrees/<name> commit --no-edit
-  ```
-
-- **Failing checks** are fixed in the worktree's copy of the app and
-  committed there the same way (`git ... commit -m "<what you fixed>"`). A fix
-  you make is a change of this workspace's to the app, like any other.
-
-Then finish the update:
-
-```bash
-uv run --no-sync app-install update <name> --continue
-```
-
-It answers with the same results as step 2. `conflict` again, with a
-`detail`, means the worktree is not ready: a resolution that is not committed
-yet, or a merge that was taken back there (`git merge --abort`), which leaves
-no new version to finish; give that one up and start again. `refused` with a
-`detail` saying the result does not merge into the primary checkout means the
-workspace changed the same lines while the update waited: merge the
-workspace's branch into the worktree
-(`git -C data/.state/app_install/worktrees/<name> merge "$(git branch --show-current)"`),
-commit, and run `--continue` again.
-
-### Giving an update up
-
-```bash
-git worktree remove --force data/.state/app_install/worktrees/<name>
-```
-
-The app the user runs was never touched, and the next `update` starts
-afresh. Do this when the user decides against the new version, when a
-conflict or a failing check is not worth settling, and before starting over
-after a `collision`.
-
-### A version made for a newer workspace
-
-Nothing checks up front that a new version suits this workspace. When its
-checks fail (`tests_failed`), or it is `updated` and then does not start,
-compare what it was made on with what this workspace is on:
-
-```bash
-grep verified_template data/.state/app_install/worktrees/<name>/system/apps/<package>/app.toml   # the waiting version
-grep verified_template system/apps/<package>/app.toml                                            # after `updated`
-git describe --tags --abbrev=0 --match 'minds-v*' HEAD                                           # this workspace
-```
-
-`verified_template` is the workspace version the publisher ran when they
-published; it is guidance, and an app without the line says nothing. When it
-is newer than this workspace's, the likely cause is that the app expects a
-newer workspace: do not patch the app to fit. Tell the user the new version
-was made for a newer workspace than theirs, give the update up (or go back,
-step 4, when it already landed), and offer to update the workspace first and
-try again after.
-
-## 3. Check it against the user's own data
-
-**Done means the user can open the app and see their own data, as before.** A
-program that starts or a route that answers 200 is not done.
+## Step 4: Check it against the user's own data
 
 1. Check the app came up and shows the user's real content, and reload any
    window of it the user has open:
@@ -225,95 +188,15 @@ program that starts or a route that answers 200 is not done.
    older entries, dates or names shown wrong: each means the new version does
    not read the old data as it is.
 
-### When the data needs bringing forward
+When the new version does not read the old data as it is, read
+`references/the-apps-data.md` before you touch the data: it has how to bring
+the data forward, and where the copy the update made is.
 
-A well-made app converts its own older data when it starts. When this one did
-not, and the new version needs the data in a new shape, converting it is
-yours to do, and the copy the update made is the way back:
+## Step 5: Go back to the version before
 
-1. Say what you found and what you are about to do, in the user's terms, and
-   that you can put everything back as it was.
-2. Check the copy exists: `snapshot` in the update's result names it. When
-   `snapshot` is empty and the app has stored data, there is no copy (see
-   below), so make one before touching anything, as the `update-app` skill's
-   "Protect the user's data while you verify" says.
-3. Stop the app's programs (`supervisorctl stop <name>`, and each
-   `<name>-<role>`), convert the data under `data/.apps/<name>/`, start the
-   app again (`verify_app.py <name> --restart ...`), and repeat the check in
-   point 4 above.
-4. When it holds, tell the user what changed. When it does not, go back.
-
-### The copy of the data
-
-Before an update the command copies `data/.apps/<name>/` to
-`data/.state/app_install/snapshots/<name>/<the first characters of the
-commit the app was on>/`, outside the backup. Only the newest copy of an app
-is kept: the next update of the same app replaces it. `snapshot` is empty in
-two cases: the app had no stored data, or the data did not fit on the disk
-beside itself and the update went ahead because the workspace has a recent
-backup. In the second case the backup is the way back
-(`system/services/host_backup/README.md`), and the user should hear that
-before you change their data.
-
-## 4. Going back to the version before
-
-When the new version mishandles the user's data and bringing the data
-forward is not possible or not wanted, put the data back and reinstall the
-version the app was on. **Put the data back first**: the reinstall is itself
-an update, so it takes a new copy of whatever is in `data/.apps/<name>/` and
-keeps only that one.
-
-Two values are needed: the commit the app was on, and the copy of the data.
-When the update ran in an earlier chat and neither was noted, both are still
-in the workspace. The copy is the one directory under
-`data/.state/app_install/snapshots/<name>/` (none there means the update made
-none: see "The copy of the data" above). The commit is in the record's own
-history: `git log -p -- system/config/apps/<name>.toml` shows each change to
-the record, and the newest one that changes `upstream_commit` removed the
-commit the app was on, in full.
-
-1. Stop the app's programs: `supervisorctl stop <name>`, and each
-   `<name>-<role>`.
-2. Set the current data aside and put the copy in its place (skip this for an
-   app that had no stored data; when the copy was not made because the data
-   did not fit, bring the data back from the backup instead, as
-   `system/services/host_backup/README.md` describes):
-
-   ```bash
-   uv run --no-sync disk-headroom /var/tmp          # the move must leave room to spare
-   mv data/.apps/<name> /var/tmp/<name>-data-after-update
-   cp -a <snapshot> data/.apps/<name>
-   ```
-
-   Anything the user added through the app since the update is only in the
-   set-aside copy. Say so, and ask before deleting it.
-3. Reinstall the earlier version, by the `upstream_commit` noted in step 0,
-   in full:
-
-   ```bash
-   uv run --no-sync app-install update <name> --branch <the earlier upstream_commit>
-   ```
-
-   The commit works wherever the app came from. A tag `v<upstream_version>`
-   exists only in a published repository, so it is not there for an app
-   taken from someone's dev repository or from a branch. The results are
-   step 2's; `updated` here means the app is back on the earlier version,
-   with this workspace's own changes to it still in place, and its programs
-   started again.
-4. Check it as in step 3, then tell the user they are back on the version
-   they had, what went wrong with the new one, and that you can try again
-   when a later version comes out.
-
-## Things to know
-
-- **The workspace's own changes survive.** The new version is merged over
-  them. A conflict in `uv.lock` alone is settled for you: the publisher's
-  lock is taken and made again.
-- **Never edit the app's program file or skill links.** They are generated
-  from the app's `app.toml`, and the update regenerates them, keeping the
-  app's port.
-- **A schedule the user gave one of the app's routines is kept.** It lives in
-  the routine's state, not in the app.
-- **Changing the app yourself** is the `update-app` skill, as for any app.
-  **Removing it** is `uv run --no-sync app-install uninstall <name>`, which
-  keeps its stored data and secret files.
+When the new version mishandles the user's data and bringing the data forward
+is not possible or not wanted, put the data back and reinstall the version
+the app was on, in that order: follow "Going back to the version before" in
+`references/the-apps-data.md`. Then check the app as in step 4, and tell the
+user they are back on the version they had, what went wrong with the new one,
+and that you can try again when a later version comes out.
