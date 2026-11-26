@@ -14,8 +14,8 @@ def test_the_token_file_is_where_datalib_http_publishes_it() -> None:
     assert launcher.token_file_path(Path("store")) == Path("store/system/api-token")
 
 
-def test_the_default_data_root_is_the_shared_data_folder() -> None:
-    assert launcher.DATA_ROOT == Path("data/.shared-data")
+def test_the_default_data_root_is_the_datalib_folder_under_data() -> None:
+    assert launcher.DATA_ROOT == Path("data/.datalib")
 
 
 def test_a_minted_token_is_64_hex_characters_and_unique() -> None:

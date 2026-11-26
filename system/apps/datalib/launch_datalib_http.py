@@ -46,11 +46,11 @@ MANIFEST_PATH: Final[Path] = Path("system/apps/datalib/app.toml")
 DEFAULT_PORT: Final[int] = 8731
 BIND_HOST: Final[str] = "127.0.0.1"
 
-# The workspace's shared data, as opposed to one app's own data under data/.apps/<app>/: datalib
-# manages it, for the datalib skill and this app alike. The folder is the store's data root, the one
-# the skill's CLI writes and searches and the UI serves, so a source added through the wizard is what
-# the agent queries and vice versa.
-DATA_ROOT: Final[Path] = Path("data/.shared-data")
+# The store datalib mirrors the user's data into, shared by the datalib skill and this app: the folder
+# is the store's data root, the one the skill's CLI writes and searches and the UI serves, so a source
+# added through the wizard is what the agent queries and vice versa. Data that belongs to one app
+# stays under data/.apps/<app>/, whether or not datalib manages it.
+DATA_ROOT: Final[Path] = Path("data/.datalib")
 
 # Where the manifest copy that carries the token is written. Machine state: it is rewritten on
 # every start and never read by anything but the registration.

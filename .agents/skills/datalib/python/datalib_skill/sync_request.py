@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_ORIGIN = "http://127.0.0.1:8731"
-DEFAULT_DATA_ROOT = Path("data/.shared-data")
+DEFAULT_DATA_ROOT = Path("data/.datalib")
 TOKEN_FILE_RELATIVE_PATH = Path("system") / "api-token"
 
 POLL_INTERVAL_SECONDS = 10.0

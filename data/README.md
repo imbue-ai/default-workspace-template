@@ -22,9 +22,6 @@ Hidden folders (dot-prefixed; workspace machinery, safe to ignore):
 - `.apps/` - Stored data belonging to each app in
   `/home/user/workspace/system/apps/`.
 - `.skills/` - Stored data a skill keeps for itself across runs.
-- `.shared-data/` - Data shared across the workspace rather than belonging to
-  one app or skill: the store datalib keeps for the `datalib` skill and the
-  Datalib app. Appears once datalib is first used.
 - `.tickets/` - The agent's internal task tracker records.
 - `.tasks/` - Scratch space for work delegated between agents.
 - `.state/` - Machine state: service registries, markers, and ledgers.
