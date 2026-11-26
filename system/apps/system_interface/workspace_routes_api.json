@@ -482,13 +482,13 @@
             "title": "Applied At"
           },
           "detail": {
-            "description": "Why, for FAILED; '' otherwise",
+            "description": "Why, for FAILED, naming each part that is not written; '' otherwise",
             "title": "Detail",
             "type": "string"
           },
           "state": {
             "$ref": "#/components/schemas/InitialDataState",
-            "description": "NONE when the workspace found no document and has applied none, APPLIED when every part of one was written, FAILED when the last attempt could not apply one, which the next start of the workspace's services tries again"
+            "description": "NONE when the workspace found no document and has applied none, APPLIED when every part of one was written, FAILED when some part of one is not written: the next start of the workspace's services tries the parts that were refused again, and writes no part a second time"
           }
         },
         "required": [
@@ -2426,7 +2426,7 @@
     },
     "/api/workspace/status": {
       "get": {
-        "description": "What this workspace serves: the version of its checkout, the name of every operation it has a route for,\nthe template's compatibility number, and how its initial data stands.\n\nA client asks before the first operation it sends a workspace, and calls a route only for an operation named\nhere. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads\na compatibility number higher than it knows opens the workspace and does nothing else inside it.\n\n``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:\n``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case\nthe next start of the workspace's services tries again. Whoever creates a workspace waits for ``APPLIED``.",
+        "description": "What this workspace serves: the version of its checkout, the name of every operation it has a route for,\nthe template's compatibility number, and how its initial data stands.\n\nA client asks before the first operation it sends a workspace, and calls a route only for an operation named\nhere. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads\na compatibility number higher than it knows opens the workspace and does nothing else inside it.\n\n``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:\n``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case\nthe next start of the workspace's services tries the parts that were refused again, and writes no part a\nsecond time. Whoever creates a workspace waits for ``APPLIED``.",
         "operationId": "get_api_workspace_status",
         "responses": {
           "200": {

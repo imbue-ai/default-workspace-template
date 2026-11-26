@@ -34,7 +34,8 @@ service.
    document being there is the trigger, not a first boot: a pool host's first
    boot is over when it is baked, and its document is written when it is
    adopted, before its services are started again. A boot that finds none does
-   nothing. A document that cannot be applied is left for the next boot, and the
+   nothing. A document a part of which cannot be applied is left for the next
+   boot, which tries that part again and writes no part a second time, and the
    boot goes on; `GET /api/workspace/status` says how it stands.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the

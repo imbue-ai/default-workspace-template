@@ -268,7 +268,8 @@ def workspace_status() -> ResponseReturnValue:
 
     ``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:
     ``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case
-    the next start of the workspace's services tries again. Whoever creates a workspace waits for ``APPLIED``.
+    the next start of the workspace's services tries the parts that were refused again, and writes no part a
+    second time. Whoever creates a workspace waits for ``APPLIED``.
     """
     _admit(is_changing_the_workspace=False)
     workspace_root = _workspace_root()
