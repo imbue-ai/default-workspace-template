@@ -114,8 +114,10 @@ you tell the user it is published:
    `data/.apps/<name>/`). Data is not in git, so the merge did not move it.
    Stop the app's programs (`supervisorctl stop <name>`, and each
    `<name>-<role>`), move the directory (`mv`, never a copy: it can be
-   large), and start the app again with
-   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`.
+   large), and start them again:
+   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`
+   for the one named after the app, and `supervisorctl start <name>-<role>`
+   for each of the others.
    An app's data is what an update copies aside and an uninstall keeps, and
    only what is under `data/.apps/<name>/` counts as that.
 3. **Check it on the user's data.** Open the app and confirm it still shows
