@@ -818,6 +818,7 @@ def test_health_owner_detail_includes_the_service_label_map(tmp_path: Path) -> N
     body = resp.get_json()
     assert body["owner"] is True
     assert body["services"] == {name: label for label, name in _LABELS.items()}
+    assert body["auth_label"] == _AUTH_LABEL
 
 
 def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> None:
@@ -830,6 +831,7 @@ def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> No
     body = resp.get_json()
     assert body["owner"] is False
     assert "services" not in body
+    assert "auth_label" not in body
 
 
 def test_post_with_the_chrome_origin_is_allowed(tmp_path: Path) -> None:
