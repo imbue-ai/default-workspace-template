@@ -29,6 +29,8 @@ def test_every_agent_line_is_removed_and_every_other_line_is_kept_in_its_order(t
 
     assert keys_path.read_text() == f"{_OWNER_LINE}\n{_DESKTOP_LINE}\n"
     assert keys_path.stat().st_mode & 0o777 == 0o600
+    # The lock is the one the file's other writers take, by this name.
+    assert sorted(entry.name for entry in keys_path.parent.iterdir()) == ["authorized_keys", "authorized_keys.lock"]
     # A later start finds nothing to remove and leaves the file as it is.
     assert remove_agent_key_lines(keys_path) is False
     assert keys_path.read_text() == f"{_OWNER_LINE}\n{_DESKTOP_LINE}\n"
