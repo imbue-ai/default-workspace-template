@@ -298,7 +298,9 @@ def test_an_app_with_no_python_project_has_no_lock_to_check(tmp_path: Path) -> N
     assert "check_lock" not in runtime.calls
 
 
-_NAMES_FETCH_MAIL = 'COMMAND = ["uv", "run", ".agents/skills/fetch-mail/scripts/run.py"]\nSTORE = "data/.skills/fetch-mail/mail.db"\n'
+_NAMES_FETCH_MAIL = (
+    'COMMAND = ["uv", "run", ".agents/skills/fetch-mail/scripts/run.py"]\nSTORE = "data/.skills/fetch-mail/mail.db"\n'
+)
 
 
 def test_a_tree_that_names_a_skill_the_app_does_not_carry_is_not_assembled(tmp_path: Path) -> None:
