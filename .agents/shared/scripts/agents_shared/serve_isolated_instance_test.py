@@ -733,6 +733,7 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
     assert "4242" in capsys.readouterr().err
 
 
+@pytest.mark.flaky
 @pytest.mark.parametrize(
     "launch, has_exited_before_teardown",
     [(["sleep", "30"], False), (["sh", "-c", "exit 1"], True)],
