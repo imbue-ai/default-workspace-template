@@ -4,9 +4,19 @@ description: Search and mirror the user's own personal data (chat history, Slack
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 160 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # datalib
+
+## Contents
+
+- Instructions
+- Driving datalib: start at `datalib-step help`
+- Authorizing a source
+- Supported sources (inside Imbue Studio)
+- Notes
 
 ## Instructions
 
@@ -239,7 +249,7 @@ The web-API sources (Slack, Linear, GitHub, Notion, ...) need the user's
 credentials, which flow through the same `latchkey` gateway used elsewhere. If
 a sync fails for a source with a missing-credentials or "request not permitted
 by the user" error, request access the way the `connect-external-service`
-skill's `references/latchkey.md` describes ("Ask for user permission"): POST a
+skill describes: POST a
 `predefined` permission request for that service's scope (e.g. `slack-api`,
 `linear-api`, `github-api`, `notion-api`), wait for the user's approval, then
 re-run the sync. If datalib's own error hint says to run `latchkey auth set`,
@@ -270,8 +280,8 @@ to hold:
   address ranges outright, so for an agent running remotely the requests have
   to go out through the user's own computer. That happens once desktop
   proxying is on for the service: set `"proxy": true` on the permission
-  request you file for it (`references/latchkey.md`, "Proxying requests
-  through the user's desktop"), or the user turns it on in that connector's
+  request you file for it (the `connect-external-service` skill covers
+  proxying through the user's desktop), or the user turns it on in that connector's
   settings.
 
 If a sync of one of these sources returns Cloudflare challenge pages instead

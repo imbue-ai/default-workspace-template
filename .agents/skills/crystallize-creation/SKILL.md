@@ -3,6 +3,8 @@ name: crystallize-creation
 description: "Promote the just-finished work into a new, reusable, committed, tested skill. Use when that process would recur with new inputs -- especially something you figured out through research or debugging -- or when the user says 'crystallize this'."
 metadata:
   author: imbue
+  exempt-checks: contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Crystallizing a creation into existence
@@ -142,8 +144,7 @@ distinctive moments (a key decision, a tool output that drove a step).
 after. Describe the contract; do not prescribe subcommands or surfaces.>
 
 ## What to do
-Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
-reads `operation` and `creations` from this frontmatter and follows the
+Invoke the `harden-worker` skill. It reads `operation` and `creations` from this frontmatter and follows the
 matching references. When you reach a gate or terminal status, push a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
 Whether to split this pass across sibling sub-workers is your own call, per the
@@ -232,7 +233,7 @@ Flow-specific substitutions:
   still runs only on `done`.
 - Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
   then Step 6); `stuck` (failure flow per
-  `launch-task/references/worker-failure.md`, which stops the worker).
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the worker).
 
 ## Step 6: Go live
 

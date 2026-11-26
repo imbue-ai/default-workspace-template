@@ -55,19 +55,19 @@ BUILT_IN_EXCLUDES: Final[tuple[ExcludeGlob, ...]] = (
 
 APP_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
     RepoRelativePath("system/apps/README.md"),
-    RepoRelativePath(".agents/shared/worker/references/type-app.md"),
+    RepoRelativePath(".agents/skills/harden-worker/references/type-app.md"),
     RepoRelativePath("docs/system/style_guide.md"),
 )
 
 SKILL_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
-    RepoRelativePath(".agents/shared/worker/references/type-skill.md"),
+    RepoRelativePath(".agents/skills/harden-worker/references/type-skill.md"),
     RepoRelativePath(".agents/shared/references/spec-summary.md"),
     RepoRelativePath("docs/system/style_guide.md"),
 )
 
 SERVICE_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
     RepoRelativePath("system/services/README.md"),
-    RepoRelativePath(".agents/shared/worker/references/type-service.md"),
+    RepoRelativePath(".agents/skills/harden-worker/references/type-service.md"),
     RepoRelativePath("docs/system/style_guide.md"),
 )
 

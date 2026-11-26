@@ -525,6 +525,17 @@ describe("ChatPanel over a seeded chat", () => {
     );
   });
 
+  it("shows the messages the chat app holds for the seeded chat's agent being created, under its transcript", () => {
+    seeded("creating");
+    mocks.proto = { ...(mocks.proto as object), held_sends: [{ message_id: "m-1", text: "sent from the launcher" }] };
+
+    const tree = mountPanel()();
+
+    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
+    expect(findByClass(tree, "held-send")).toBeTruthy();
+    expect(renderedText(tree)).toContain("sent from the launcher");
+  });
+
   it("reports the chat on screen from each draw of its transcript, with whether the transcript has loaded", () => {
     seeded("awaiting_first_send");
     mocks.reportChatOnScreenOnce.mockClear();

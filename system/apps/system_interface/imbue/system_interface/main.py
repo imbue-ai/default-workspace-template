@@ -19,7 +19,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
 from imbue.system_interface.presence import PresenceStore
-from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.presence import build_presence_announcer
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
@@ -110,13 +110,13 @@ def build_production_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, broadcaster, utc_now)
-    presence_sweep = build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce)
-    profiles.add_refresh_listener(presence_sweep.announce_connected)
+    presence_announcer = build_presence_announcer(presence, profiles, broadcaster, roster_announcer.announce)
+    profiles.add_refresh_listener(presence_announcer.announce_connected)
     return SystemInterfaceState(
         config=config,
         shell=shell,
         presence=presence,
-        presence_sweep=presence_sweep,
+        presence_announcer=presence_announcer,
         profiles=profiles,
         roster=roster,
         roster_announcer=roster_announcer,
@@ -166,7 +166,7 @@ def main() -> None:
     # they are started; ``build_application`` only constructs, so tests that build an app never
     # start them.
     state.shell.start()
-    state.presence_sweep.start()
+    state.presence_announcer.start()
     state.roster_watch.start()
 
     # Tear down the broadcaster, the inventory, and the lifecycle manager (which lets go of

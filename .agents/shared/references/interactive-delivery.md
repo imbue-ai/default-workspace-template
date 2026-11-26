@@ -101,8 +101,8 @@ specifics, but the shape below holds for all of them.
    creation (or a usable build of it) to work with while the slow checks run
    behind them. Notably, this means that at the time of backgrounding there must
    be a reasonably representative sample creation; it can't just be a basic mock.
-   This background pass is the **harden pass** -- its universal contract lives in
-   `.agents/shared/worker/references/harden-creation.md`, and the create operation that
+   This background pass is the **harden pass**, which a worker runs by the
+   `harden-worker` skill, and the create operation that
    produces a brand-new creation from a confirmed prototype is the
    `crystallize-creation` lead. Each specialization (`build-app`,
    `fetch-process-show`, ...) hands its confirmed creation to that lead, which

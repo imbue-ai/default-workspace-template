@@ -177,6 +177,7 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_gated_mngr_binary
 from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_workspace_with_a_user_built_app
@@ -6639,6 +6640,93 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "first_message": "Begin here",
         "hint": None,
     }
+
+
+def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the_main_chats_agent(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """Leaving the provider page starts the main chat's agent, so the launcher's Enter pressed right after finds
+    the chat being created: the text is kept for that agent and delivered as it lands, never handed to the root as
+    a draft. It is the first send the agent takes, so it carries the welcome the chat opened on."""
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats"
+    )
+    # The launch's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+
+        response = _intake(client, message="Write hello.py", target="main_chat", client_id="c1", desktop_id="d1")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"path": f"/?chat={chat_id}"}
+        creating = manager.get_provisional_chat(chat_id)
+        assert creating is not None and creating.phase is ProvisionalChatPhase.CREATING
+        assert [held.text for held in creating.held_sends] == ["Write hello.py"]
+        gate.touch()
+        wait_until_true(lambda: len(messenger.sent) == 1, 10, "the delivery of the text kept for the agent")
+        ((_agent_id, delivered),) = messenger.sent
+        assert delivered.startswith(f"<{SEED_CONTEXT_TAG}>")
+        assert FIRST_RUN_WELCOME[0].text in delivered
+        assert delivered.endswith(f"</{SEED_CONTEXT_TAG}>\nWrite hello.py")
+    finally:
+        # Ends the create the gate still holds when an assertion fails ahead of it.
+        manager.stop()
+
+
+def test_intake_held_for_a_chat_awaiting_its_first_send_is_kept_for_the_agent_a_launch_began_before_the_apply(
+    app: Flask, client: FlaskClient
+) -> None:
+    """A text the root has yet to apply when something else launches the chat (the sign-in that gives it a
+    provider) is kept for that agent: the chat no longer awaits a first message to be launched with."""
+    agent_manager: AgentManager = state_of(app).agent_manager
+    chat_id = agent_manager.mint_awaiting_chat("").chat_id
+    token = _token_of(_intake(client, message="Begin here", target="chat", chat_id=str(chat_id)).get_json()["path"])
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = agent_manager._provisional_chats[chat_id].model_copy_update(
+            to_update(agent_manager._provisional_chats[chat_id].field_ref().phase, ProvisionalChatPhase.CREATING)
+        )
+
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": str(chat_id),
+        "composer_text": None,
+        "first_message": None,
+        "hint": None,
+    }
+    creating = agent_manager.get_provisional_chat(str(chat_id))
+    assert creating is not None
+    assert [held.text for held in creating.held_sends] == ["Begin here"]
+
+
+def test_only_a_text_sent_to_a_chat_being_created_is_kept_for_its_agent() -> None:
+    """A draft is never sent, and a chat whose create failed has no agent on its way: both are held for the root,
+    which puts the text in the composer."""
+    creating_id = ChatId(f"agent-{uuid4().hex}")
+    failed_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(creating_id)
+    seed_failed_chat(manager, failed_id, "Chat 2")
+
+    drafted = _intake(client, message="Draw me a seal", target="chat", chat_id=str(creating_id), is_draft=True)
+    sent_to_failed = _intake(client, message="Begin here", target="chat", chat_id=str(failed_id))
+
+    applied_draft = client.post(f"/api/chats/intakes/{_token_of(drafted.get_json()['path'])}/apply", json={})
+    applied_to_failed = client.post(
+        f"/api/chats/intakes/{_token_of(sent_to_failed.get_json()['path'])}/apply", json={}
+    )
+    assert applied_draft.get_json()["composer_text"] == "Draw me a seal"
+    assert applied_to_failed.get_json()["composer_text"] == "Begin here"
+    for chat_id in (creating_id, failed_id):
+        provisional = manager.get_provisional_chat(chat_id)
+        assert provisional is not None and provisional.held_sends == ()
 
 
 def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
