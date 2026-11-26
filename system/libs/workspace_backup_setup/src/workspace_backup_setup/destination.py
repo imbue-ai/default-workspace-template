@@ -134,7 +134,8 @@ def _checked_value(name: str, value: str) -> str:
         not value
         or value != value.strip()
         or is_quoted
-        or any(character in value for character in "\r\n\0")
+        or value.splitlines() != [value]
+        or "\0" in value
     ):
         raise InvalidBackupDestinationError(
             f"{name} must be one line that is not empty, does not start or end with a space, and is not quoted."
