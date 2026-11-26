@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from workspace_initial_data.errors import InitialDataRecordUnreadableError
 from workspace_initial_data.status import (
     NO_INITIAL_DATA,
     NO_RECORD,
@@ -68,7 +69,9 @@ def test_a_record_whose_parts_are_no_progress_reads_as_none(
         '{"schema": 1, "state": "FAILED", "detail": "x", "applied_at": null, "parts": {"profile": "HALF"}}'
     )
 
-    assert read_initial_data_record(workspace_root) == NO_RECORD
+    assert read_initial_data_status(workspace_root) == NO_INITIAL_DATA
+    with pytest.raises(InitialDataRecordUnreadableError):
+        read_initial_data_record(workspace_root)
 
 
 @pytest.mark.parametrize(
@@ -82,6 +85,9 @@ def test_a_record_that_is_no_status_reads_none(
     path.write_text(stored)
 
     assert read_initial_data_status(workspace_root) == NO_INITIAL_DATA
+    # Whoever needs to know which parts were written is told the record cannot say.
+    with pytest.raises(InitialDataRecordUnreadableError):
+        read_initial_data_record(workspace_root)
 
 
 def test_a_member_a_later_template_recorded_is_ignored(workspace_root: Path) -> None:

@@ -332,6 +332,48 @@ def test_a_part_that_stays_refused_is_the_only_one_tried_however_often_the_servi
     }
 
 
+def test_a_record_that_cannot_be_read_keeps_every_part_of_a_kept_document_from_being_written(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+    backup_destination.refusal = "The storage could not be reached."
+    apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+    backup_destination.refusal = ""
+    changed_profile = {**PROFILE_PART_DOCUMENT, "written_by": "desktop"}
+    write_workspace_profile_snapshot(workspace_root, changed_profile)
+    # With no zone recorded, a second write of the timezone part would show.
+    (workspace_root / USER_TIMEZONE_RELATIVE_PATH).unlink()
+    record_path = workspace_root / STATUS_RELATIVE_PATH
+    record_path.write_text("not json")
+    document_path.chmod(0o644)
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW + 60)
+
+    assert status == failed_status(
+        "The record of what was applied cannot be read, so no part of the document is written."
+    )
+    assert len(backup_destination.requests) == 1
+    assert _stored_profile(workspace_root) == changed_profile
+    assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
+    assert document_path.exists()
+    assert stat.S_IMODE(document_path.stat().st_mode) == 0o600
+    assert record_path.read_text() == "not json"
+
+
+def test_a_record_that_cannot_be_read_reads_none_while_there_is_no_document(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    record_path = workspace_root / STATUS_RELATIVE_PATH
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text("not json")
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == NO_INITIAL_DATA
+    assert record_path.read_text() == "not json"
+    assert backup_destination.requests == []
+
+
 class _StepKilled(BaseException):
     """Stands in for the step being killed in the middle of a part."""
 

@@ -44,7 +44,10 @@ from workspace_update_control.settings import (
     take_update_settings,
 )
 
-from workspace_initial_data.errors import InitialDataPartRefusedError
+from workspace_initial_data.errors import (
+    InitialDataPartRefusedError,
+    InitialDataRecordUnreadableError,
+)
 from workspace_initial_data.status import (
     InitialDataRecord,
     InitialDataState,
@@ -53,6 +56,7 @@ from workspace_initial_data.status import (
     applied_status,
     failed_status,
     read_initial_data_record,
+    read_initial_data_status,
     write_initial_data_record,
 )
 
@@ -78,6 +82,9 @@ _INTERRUPTED_DETAIL: Final[str] = (
 )
 _UNFINISHED_DETAIL: Final[str] = (
     "The step ended before it had applied every part of the document."
+)
+_UNREADABLE_RECORD_DETAIL: Final[str] = (
+    "The record of what was applied cannot be read, so no part of the document is written."
 )
 
 _PartWriter = Callable[[Path, Mapping[str, object]], None]
@@ -191,6 +198,16 @@ def _keep(
     return True
 
 
+def _restrict(document_path: Path) -> None:
+    """Leave a kept document readable by its owner alone."""
+    try:
+        os.chmod(document_path, _DOCUMENT_FILE_MODE)
+    except OSError as e:
+        logger.warning(
+            "Could not restrict the kept document at {}: {}", document_path, e
+        )
+
+
 def _left_for_the_next_start(
     workspace_root: Path,
     document_path: Path,
@@ -200,12 +217,7 @@ def _left_for_the_next_start(
 ) -> InitialDataStatus:
     """Record why the document is not applied yet, and leave it where it is."""
     logger.error("The initial data at {} is not applied: {}", document_path, detail)
-    try:
-        os.chmod(document_path, _DOCUMENT_FILE_MODE)
-    except OSError as e:
-        logger.warning(
-            "Could not restrict the kept document at {}: {}", document_path, e
-        )
+    _restrict(document_path)
     status = failed_status(detail)
     _keep(workspace_root, document_digest, progress_by_part, status)
     return status
@@ -234,12 +246,23 @@ def apply_initial_data(
     middle of is not written again either, and reads as failed from then on. A document left again with the
     bytes of one already applied is deleted and nothing is written.
 
+    While the record of what was applied is there and cannot be read, any part of a document may have been
+    written before, so none is written: the document is left where it is, the record is left as it is, and the
+    answer is failed. With no document the answer is then ``NONE``, as the status reads.
+
     ``record_backup_destination`` takes the backup part: the workspace's own backup setup, which records the
     destination and acts on it once the services run. A destination it refuses, and one named while a backup
     operation holds the backup lease, fail that part as any writer's refusal does.
     """
     document_path = host_dir / INITIAL_DATA_FILE_NAME
-    recorded = read_initial_data_record(workspace_root)
+    try:
+        recorded = read_initial_data_record(workspace_root)
+    except InitialDataRecordUnreadableError as e:
+        if not document_path.exists():
+            return read_initial_data_status(workspace_root)
+        logger.error("The initial data at {} is not applied: {}", document_path, e)
+        _restrict(document_path)
+        return failed_status(_UNREADABLE_RECORD_DETAIL)
     try:
         document_bytes = document_path.read_bytes()
     except FileNotFoundError:
