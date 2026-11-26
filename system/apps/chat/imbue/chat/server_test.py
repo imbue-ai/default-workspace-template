@@ -23,6 +23,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from app_manifest.manifest import load_manifest
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
@@ -7071,6 +7072,24 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def test_the_path_the_manifest_names_reads_and_changes_the_suggestion_switches_as_the_shell_asks(
+    client: FlaskClient,
+) -> None:
+    """The shell's workspace routes pass a client's read and write to the manifest's ``suggestion_settings_path``,
+    and read both switches out of ``settings`` in what comes back."""
+    path = load_manifest(Path(__file__).resolve().parents[2] / "app.toml").suggestion_settings_path
+    assert path is not None
+
+    read = client.get(path)
+    changed = client.put(path, json={"is_next_step_suggestions_enabled": False})
+
+    assert (read.status_code, changed.status_code) == (200, 200)
+    switches = ("is_next_step_suggestions_enabled", "is_new_chat_suggestions_enabled")
+    assert [read.get_json()["settings"][switch] for switch in switches] == [True, True]
+    assert [changed.get_json()["settings"][switch] for switch in switches] == [False, True]
+    assert client.get(path).get_json() == changed.get_json()
 
 
 def _identity_header(identity: RequestIdentity) -> dict[str, str]:

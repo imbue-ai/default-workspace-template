@@ -86,8 +86,11 @@ def test_a_write_names_only_the_switches_it_was_sent_and_answers_both(
             json={"is_next_step_suggestions_enabled": False, "is_new_chat_suggestions_enabled": None},
         )
         read = client.get(SUGGESTIONS_ROUTE)
+        # A write that names no switch changes nothing, so the app is not told of a write.
+        nothing = client.put(SUGGESTIONS_ROUTE, json={})
 
     assert one.status_code == 200
+    assert (nothing.status_code, nothing.get_json()) == (200, read.get_json())
     assert one.get_json() == {"is_next_step_suggestions_enabled": True, "is_new_chat_suggestions_enabled": False}
     assert other.get_json() == {"is_next_step_suggestions_enabled": False, "is_new_chat_suggestions_enabled": False}
     assert read.get_json() == other.get_json()

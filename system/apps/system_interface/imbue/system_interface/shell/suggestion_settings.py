@@ -89,5 +89,8 @@ def read_suggestion_switches(entries: Sequence[AppInventoryEntry]) -> dict[str, 
 
 
 def change_suggestion_switches(entries: Sequence[AppInventoryEntry], changes: dict[str, bool]) -> dict[str, bool]:
-    """Change the switches ``changes`` names, leave the other, and answer both as they then stand."""
+    """Change the switches ``changes`` names, leave the other, and answer both as they then stand. A change that
+    names none is a read: the app tells its pages of every write it takes, and there is nothing to tell."""
+    if not changes:
+        return read_suggestion_switches(entries)
     return _exchange("PUT", suggestion_settings_url(entries), changes)
