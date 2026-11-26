@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,8 @@ _WAIT_FOR_A_RENEWAL = (
     'first=$(cat "$1"); i=0; '
     'while [ "$(cat "$1")" = "$first" ]; do i=$((i+1)); [ $i -gt 800 ] && exit 1; sleep 0.01; done'
 )
+# Exits 5 once the file it is given exists, and 1 when it never does.
+_WAIT_FOR_A_FILE = 'i=0; while [ ! -e "$1" ]; do i=$((i+1)); [ $i -gt 800 ] && exit 1; sleep 0.01; done; exit 5'
 _STUB_PATH = Path(__file__).resolve().parents[1] / "backup_lease.py"
 
 
@@ -47,6 +51,24 @@ class _TickingClock:
     def __call__(self) -> float:
         self.now += 1.0
         return self.now
+
+
+class _ActingClock(_TickingClock):
+    """A ticking clock that does what a test gives it for a reading, just before that reading is answered."""
+
+    def __init__(
+        self, now: float, action_by_reading: dict[int, Callable[[], None]]
+    ) -> None:
+        super().__init__(now)
+        self._action_by_reading = action_by_reading
+        self._readings = 0
+
+    def __call__(self) -> float:
+        self._readings += 1
+        action = self._action_by_reading.get(self._readings)
+        if action is not None:
+            action()
+        return super().__call__()
 
 
 def test_nobody_holds_a_lease_that_was_never_taken(lease_path: Path) -> None:
@@ -155,6 +177,59 @@ def test_hold_renews_while_its_command_runs_and_gives_the_lease_back(
     )
 
     assert exit_code == 0
+    assert read_lease(lease_path, clock.now) is None
+
+
+def test_hold_lets_its_command_finish_when_a_renewal_cannot_be_written(
+    lease_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    directory = lease_path.parent
+    past_the_renewal = tmp_path / "past-the-renewal"
+
+    def _put_a_file_where_the_directory_was() -> None:
+        shutil.rmtree(directory)
+        directory.write_text("")
+
+    def _put_the_directory_back() -> None:
+        directory.unlink()
+        directory.mkdir()
+        past_the_renewal.write_text("")
+
+    # The clock is read once to take the lease, and then once before each renewal.
+    clock = _ActingClock(
+        _TAKEN_AT,
+        {2: _put_a_file_where_the_directory_was, 3: _put_the_directory_back},
+    )
+
+    exit_code = hold_lease(
+        lease_path,
+        "restore",
+        ["sh", "-c", _WAIT_FOR_A_FILE, "sh", str(past_the_renewal)],
+        renew_interval_seconds=0.01,
+        clock=clock,
+        is_kept=False,
+    )
+
+    assert exit_code == 5
+    assert "backup-lease: could not renew for 'restore'" in capsys.readouterr().err
+    assert read_lease(lease_path, clock.now) is None
+
+
+def test_hold_answers_as_a_shell_does_for_a_command_a_signal_ended(
+    lease_path: Path,
+) -> None:
+    clock = _TickingClock(_TAKEN_AT)
+
+    exit_code = hold_lease(
+        lease_path,
+        "restore",
+        ["sh", "-c", "kill -TERM $$"],
+        renew_interval_seconds=60.0,
+        clock=clock,
+        is_kept=False,
+    )
+
+    assert exit_code == 143
     assert read_lease(lease_path, clock.now) is None
 
 

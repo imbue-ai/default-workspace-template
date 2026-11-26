@@ -26,8 +26,8 @@ holds it (the line printed names them), or, for ``renew``, the caller's own leas
 ``release`` gives back only the caller's own lease and always exits 0. ``hold`` takes the lease (or
 renews the caller's own), runs the command, renews every minute for as long as it runs, gives the
 lease back when it ends however it ends (``--keep`` leaves it held, renewed, for a program with more
-to run), and exits with the command's exit code, or 75 without running it when someone else holds
-the lease.
+to run), and exits with the command's exit code (128 plus the signal's number when a signal ended
+it, as a shell reports one), or 75 without running it when someone else holds the lease.
 
 Standard library only: the Imbue Studio desktop runs this by its path with no venv, and the shell
 and ``backup-setup`` import it.
@@ -63,6 +63,8 @@ EXIT_OK = 0
 EXIT_USAGE = 2
 # EX_TEMPFAIL: the caller does not hold the lease, and may try again once it is free.
 EXIT_NOT_HELD = 75
+# What a shell adds to the number of the signal that ended a command, to make its exit code.
+_SIGNAL_EXIT_BASE = 128
 
 _LEASE_FILE_MODE = 0o644
 
@@ -221,9 +223,9 @@ def hold_lease(
 ) -> int:
     """Run ``command`` holding the lease, renewed every ``renew_interval_seconds`` for as long as it runs.
 
-    Answers the command's exit code. The lease is given back when the command ends, however it ends,
-    unless ``is_kept``. Raises ``BackupLeaseHeldError``, without running the command, when someone else
-    holds the lease.
+    Answers the command's exit code, and 128 plus the signal's number for a command a signal ended. The
+    lease is given back when the command ends, however it ends, unless ``is_kept``. Raises
+    ``BackupLeaseHeldError``, without running the command, when someone else holds the lease.
     """
     take_or_renew_lease(lease_path, holder, clock())
     try:
@@ -258,6 +260,8 @@ def _run_renewing(
                 process.wait(timeout=renew_interval_seconds)
             except subprocess.TimeoutExpired:
                 _renew_while_holding(lease_path, holder, clock())
+        if process.returncode < 0:
+            return _SIGNAL_EXIT_BASE - process.returncode
         return process.returncode
     finally:
         if process.poll() is None:
@@ -267,12 +271,22 @@ def _run_renewing(
             signal.signal(signal_number, handler)
 
 
+def _report(message: str) -> None:
+    """Write ``message`` to stderr, for a caller that must go on whether or not anyone reads it."""
+    try:
+        sys.stderr.write(message)
+    except OSError:
+        # Stderr is where a failure is reported, so one of stderr itself has nowhere to go.
+        pass
+
+
 def _renew_while_holding(lease_path: Path, holder: str, now: float) -> None:
-    """Renew ``holder``'s lease under a running command, which a lost lease must not stop half way."""
+    """Renew ``holder``'s lease under a running command, which neither a lost lease nor one that cannot be
+    written must stop half way."""
     try:
         take_or_renew_lease(lease_path, holder, now)
-    except BackupLeaseHeldError as e:
-        sys.stderr.write(f"backup-lease: could not renew for {holder!r}: {e}\n")
+    except (BackupLeaseHeldError, OSError) as e:
+        _report(f"backup-lease: could not renew for {holder!r}: {e}\n")
 
 
 def _print_lease(lease: BackupLease | None) -> None:
