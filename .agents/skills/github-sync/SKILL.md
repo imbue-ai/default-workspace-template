@@ -205,18 +205,17 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     the commit.
 
 11. **Give each app its dev repository**: follow "When sync is enabled" in
-    `references/app-dev-repositories.md`, and carry on past an app whose
-    repository could not be created.
+    `references/app-dev-repositories.md`.
 
 12. **Report**, in plain language (`.agents/shared/references/user-facing-language.md`):
     where the copy lives (the repo URL, since they may want to open it), that
     from now on every change you save is copied there automatically, that each
     app they built also has a private copy of its own (name them, with their
-    URLs) and what a private copy holds if they ever share one, that the
-    files in their workspace folders (uploads, notes, app data) are protected
-    by a separate backup rather than this one, and that if the connection
-    drops the copy catches up on its own. No commits, pushes, hooks, or
-    gateways in the message.
+    URLs) and what one holds if they ever share it ("Giving someone access to
+    a dev repository" in that file), that the files in their workspace folders
+    (uploads, notes, app data) are protected by a separate backup rather than
+    this one, and that if the connection drops the copy catches up on its own.
+    No commits, pushes, hooks, or gateways in the message.
 
 ## App dev repositories
 
