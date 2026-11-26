@@ -4229,6 +4229,8 @@ def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setti
     expected = {**expected, "is_next_step_suggestions_enabled": False}
     assert second.get_json() == {"settings": expected}
     assert client.put("/api/settings/suggestions", json={}).get_json() == {"settings": expected}
+    # The path that changes the switches also reads them, which is where the shell's workspace routes ask.
+    assert client.get("/api/settings/suggestions").get_json() == {"settings": expected}
     back_on = client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": True})
     assert back_on.get_json() == {"settings": {**expected, "is_new_chat_suggestions_enabled": True}}
 
@@ -4264,6 +4266,7 @@ def test_a_settings_change_through_either_route_is_pushed_to_every_page(app: Fla
     client.put("/api/settings/suggestions", json={"is_next_step_suggestions_enabled": "sometimes"})
     client.put("/api/settings", json={"fast_mode_turn_limit": 0})
     client.get("/api/settings")
+    client.get("/api/settings/suggestions")
     assert drain_pushes(pushes) == []
 
 
