@@ -242,7 +242,7 @@ def test_a_command_that_cannot_start_is_one_exit_event_saying_why(tmp_path: Path
     assert len(null_byte) == 1 and null_byte[0]["code"] is None and "null" in str(null_byte[0]["error"])
 
 
-def test_a_command_ended_by_a_signal_reports_owner_execs_code_for_it(tmp_path: Path) -> None:
+def test_a_command_ended_by_a_signal_reports_the_code_kept_for_one(tmp_path: Path) -> None:
     assert run_to_completion(["sh", "-c", "kill -TERM $$"], tmp_path) == [{"type": "exit", "code": -1}]
 
 

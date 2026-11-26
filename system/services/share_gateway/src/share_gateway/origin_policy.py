@@ -26,8 +26,8 @@ def is_request_origin_allowed(
     """Whether a request's Origin may reach this workspace's services.
 
     ``chrome_origin`` is the hosted web chrome (from ``SHARE_CHROME_ORIGIN``):
-    it drives the workspace cross-origin (health probes, the owner-exec
-    channel), so a matching Origin is allowed alongside the workspace's own
+    it drives the workspace cross-origin (health probes, the workspace
+    routes), so a matching Origin is allowed alongside the workspace's own
     origin family. Empty (a share created without a chrome) allows nothing
     extra.
     """

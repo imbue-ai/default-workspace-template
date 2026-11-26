@@ -305,8 +305,7 @@ def render_caddyfile(
             # A visiting agent's admission token rides the Authorization header
             # for the gateway alone; the service never sees it, as it never
             # sees the session cookie. No app reads an inbound Authorization
-            # header over the share, and owner-exec's signature headers are
-            # separate and untouched.
+            # header over the share.
             header_up -Authorization
         }}
     }}

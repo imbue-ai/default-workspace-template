@@ -2,10 +2,10 @@
 
 The same module the gateway's ``/_agent/*`` routes call, exposed to callers
 that reach the workspace some other way: the Imbue Studio desktop over
-``mngr exec`` (the Share panel's Agents section), the hosted web chrome over
-owner-exec, or a person in the terminal. It works while the workspace is
-unpublished (an invite minted then is usable once it is published, within its
-fifteen minutes), and ``--json`` gives a caller the answer to parse.
+``mngr exec`` (the Share panel's Agents section), or a person in the terminal.
+It works while the workspace is unpublished (an invite minted then is usable
+once it is published, within its fifteen minutes), and ``--json`` gives a
+caller the answer to parse.
 
 ``--granter``, ``--revoker`` and ``--owner`` are assertions: the CLI trusts
 whoever reached the workspace with exec, because that reach is the authority
@@ -64,7 +64,6 @@ from share_gateway.agent_orientation import render_instruction_block
 from share_gateway.agent_orientation import render_primer
 from share_gateway.agent_orientation import summarize_connected_accounts
 from share_gateway.agent_orientation import template_ref
-from share_gateway.agent_workspace import HOST_KEY_PUBLIC_PATH
 from share_gateway.agent_workspace import app_origins_for
 from share_gateway.agent_workspace import read_workspace_coordinates
 from share_gateway.caddyfile import APPS_TOML_PATH
@@ -135,7 +134,7 @@ def _command_invite(args: argparse.Namespace) -> int:
     workspace_domain, is_published = _workspace_domain()
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     auth_origin = f"https://{auth_label}.{workspace_domain}" if workspace_domain else ""
-    coordinates = read_workspace_coordinates(os.environ, HOST_KEY_PUBLIC_PATH, workspace_domain.split(".", 1)[0])
+    coordinates = read_workspace_coordinates(os.environ, workspace_domain.split(".", 1)[0])
     instructions = render_instruction_block(
         repo_root=Path.cwd(),
         auth_origin=auth_origin or "https://<the workspace's address once it is published>",
@@ -200,7 +199,7 @@ def _command_revoke(args: argparse.Namespace) -> int:
 def _command_primer(args: argparse.Namespace) -> int:
     repo_root = Path.cwd()
     workspace_domain, _ = _workspace_domain()
-    coordinates = read_workspace_coordinates(os.environ, HOST_KEY_PUBLIC_PATH, workspace_domain.split(".", 1)[0])
+    coordinates = read_workspace_coordinates(os.environ, workspace_domain.split(".", 1)[0])
     scope = _parse_scope_argument(args.scope)
     now = utc_now()
     text = render_primer(
@@ -321,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconciling = subparsers.add_parser(
         "reconcile",
-        help="Prune expired grants and re-assert the authorized_keys lines.",
+        help="Prune expired grants and invites.",
     )
     reconciling.add_argument("--json", action="store_true")
     reconciling.set_defaults(handler=_command_reconcile)

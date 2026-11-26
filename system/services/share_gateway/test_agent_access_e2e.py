@@ -21,7 +21,6 @@ from datetime import timezone
 from pathlib import Path
 
 import pytest
-from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
 
 from share_gateway.agent_access import AgentAccessPaths
 from share_gateway.agent_access import LastSeenStore
@@ -54,7 +53,6 @@ def _require_node() -> None:
 def _gateway(tmp_path: Path, repo: Path, paths: AgentAccessPaths) -> Generator[str, None, None]:
     apps = [
         RegisteredApp("system_interface", "system_interface-sh000000", "127.0.0.1", 8000, is_grantable=False),
-        RegisteredApp("owner-exec", "owner-exec-ex000000", "127.0.0.1", 8793, is_grantable=False),
         RegisteredApp("chat", "chat-ch000000", "127.0.0.1", 8010, is_grantable=True),
     ]
     share_grants = tmp_path / "share_grants.toml"
@@ -65,7 +63,6 @@ def _gateway(tmp_path: Path, repo: Path, paths: AgentAccessPaths) -> Generator[s
             host_id=_HOST_ID,
             workspace_id="agent-" + "f" * 32,
             display_name="E2E Lab",
-            host_public_key="ssh-ed25519 AAAAhostkey root@box",
         ),
         repo_root=repo,
         environ={},
@@ -103,7 +100,6 @@ def test_a_visiting_agent_joins_runs_reads_writes_and_is_shut_out_on_revoke(tmp_
     paths = AgentAccessPaths(
         grants_path=tmp_path / "agent_access" / "grants.toml",
         invites_path=tmp_path / "agent_access" / "invites.toml",
-        authorized_keys_path=tmp_path / "ssh" / "authorized_keys",
         events_dir=tmp_path / "events",
     )
     state_dir = tmp_path / "agent_state"
@@ -160,11 +156,7 @@ def test_a_visiting_agent_joins_runs_reads_writes_and_is_shut_out_on_revoke(tmp_
         assert json.loads(me.stdout.decode())["name"] == "e2e agent"
         assert config["agent_id"] in me.stdout.decode()
 
-        # A helper from before these routes signs with the key this grant put in authorized_keys,
-        # so the line is still written, and still removed with the grant.
-        assert f"{AUTHORIZED_KEYS_MARKER} agent_id={config['agent_id']}" in paths.authorized_keys_path.read_text()
         revoke(paths, config["agent_id"], "user:owner", True, datetime.now(timezone.utc), via="test")
-        assert paths.authorized_keys_path.read_text() == ""
         for arguments in (["run", "--", "echo", "still here?"], ["read", "data/note.txt"]):
             shut_out = _wsvisit(state_dir, arguments)
             assert shut_out.returncode == _EXIT_REVOKED, shut_out.stderr.decode()

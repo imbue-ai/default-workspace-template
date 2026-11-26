@@ -56,7 +56,6 @@ from share_gateway.agent_exec import RunningCommands
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
-from share_gateway.agent_workspace import HOST_KEY_PUBLIC_PATH
 from share_gateway.agent_workspace import read_workspace_coordinates
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
@@ -85,6 +84,8 @@ from share_gateway.request_counts import RequestCountFlusher
 from share_gateway.request_counts import RequestCounter
 from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
 from share_gateway.request_handler import SilentRequestHandler
+from share_gateway.retired_agent_keys import DEFAULT_AUTHORIZED_KEYS_PATH
+from share_gateway.retired_agent_keys import remove_agent_key_lines
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
@@ -517,9 +518,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
 
 def _build_agent_access_context(workspace_domain: str) -> AgentAccessContext:
     paths = default_agent_access_paths(events_dir_from_environ(os.environ))
-    coordinates = read_workspace_coordinates(
-        os.environ, HOST_KEY_PUBLIC_PATH, fallback_display_name=workspace_domain.split(".", 1)[0]
-    )
+    coordinates = read_workspace_coordinates(os.environ, fallback_display_name=workspace_domain.split(".", 1)[0])
     return AgentAccessContext(
         paths=paths,
         coordinates=coordinates,
@@ -554,19 +553,29 @@ def build_agent_admitter(
 
 
 def _reconcile_agent_access_at_start() -> None:
-    """Prune expired grants and invites and re-assert the authorized_keys lines from the grants file."""
+    """Prune expired grants and invites."""
     paths = default_agent_access_paths(events_dir_from_environ(os.environ))
     try:
         if reconcile_agent_access(paths, agent_access_now()):
-            _log("Reconciled the visiting-agent grants and their authorized_keys lines")
+            _log("Pruned the expired visiting-agent grants and invites")
     except (AgentGrantsError, OSError) as exc:
         _log(f"Could not reconcile the visiting-agent grants: {exc}")
+
+
+# CLEANUP: remove with ``share_gateway.retired_agent_keys``.
+def _remove_retired_agent_key_lines_at_start() -> None:
+    try:
+        if remove_agent_key_lines(DEFAULT_AUTHORIZED_KEYS_PATH):
+            _log("Removed the visiting agents' lines from authorized_keys")
+    except (OSError, UnicodeError) as exc:
+        _log(f"Could not remove the visiting agents' lines from authorized_keys: {exc}")
 
 
 def main() -> None:
     _log(f"Watching {materials_module.MATERIALS_FILE} for share materials")
     materials_module.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
     _reconcile_agent_access_at_start()
+    _remove_retired_agent_key_lines_at_start()
 
     inotify_fd = _try_setup_inotify([materials_module.MATERIALS_FILE, APPS_TOML_PATH])
     stack: ShareStack | None = None

@@ -13,7 +13,6 @@ import httpx
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from flask import Flask
 from flask.testing import FlaskClient
-from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
 from share_grants.agent_grants import load_agent_grants
 from share_grants.agent_grants import load_agent_invites
 from werkzeug.test import TestResponse
@@ -47,7 +46,7 @@ _SIGNING_SECRET = "gateway-secret-4471-long-enough-for-hs256"
 _BROKER_KEY = generate_private_key(public_exponent=65537, key_size=2048)
 _APPS = [
     RegisteredApp("system_interface", "system_interface-sh111111", "127.0.0.1", 8000, is_grantable=False),
-    RegisteredApp("owner-exec", "owner-exec-ex111111", "127.0.0.1", 8793, is_grantable=False),
+    RegisteredApp("terminal-pty", "terminal-pty-tp111111", "127.0.0.1", 7682, is_grantable=False),
     RegisteredApp("chat", "chat-ch111111", "127.0.0.1", 8010, is_grantable=True),
     RegisteredApp("files", "files-fi111111", "127.0.0.1", 8300, is_grantable=True),
 ]
@@ -90,21 +89,17 @@ def make_harness(tmp_path: Path, chrome_origin: str = "") -> _Harness:
     repo = make_workspace_repo(tmp_path, _PRIMER, _INVITE)
     share_grants_path = tmp_path / "share_grants.toml"
     share_grants_path.write_text(_SHARE_GRANTS)
-    host_key = tmp_path / "host_key.pub"
-    host_key.write_text("ssh-ed25519 AAAAhostkey root@box\n")
     clock = _Clock()
     context = AgentAccessContext(
         paths=AgentAccessPaths(
             grants_path=tmp_path / "agent_access" / "grants.toml",
             invites_path=tmp_path / "agent_access" / "invites.toml",
-            authorized_keys_path=tmp_path / "ssh" / "authorized_keys",
             events_dir=tmp_path / "events",
         ),
         coordinates=WorkspaceCoordinates(
             host_id="host-" + "a" * 32,
             workspace_id="agent-" + "b" * 32,
             display_name="Research Lab",
-            host_public_key="ssh-ed25519 AAAAhostkey root@box",
         ),
         repo_root=repo,
         environ={},
@@ -172,11 +167,6 @@ def test_join_answers_the_access_document_for_workspace_scope(tmp_path: Path) ->
         "workspace_id": "agent-" + "b" * 32,
         "display_name": "Research Lab",
     }
-    assert document["exec"] == {
-        "origin": f"https://owner-exec-ex111111.{_DOMAIN}",
-        "audience": "container:host-" + "a" * 32,
-        "host_public_key": "ssh-ed25519 AAAAhostkey root@box",
-    }
     assert [app["name"] for app in document["apps"]] == ["chat", "files"]
     assert document["primer_url"] == f"https://{_AUTH_HOST}/_agent/primer"
     assert document["helper"] == {
@@ -187,13 +177,24 @@ def test_join_answers_the_access_document_for_workspace_scope(tmp_path: Path) ->
     assert document["helper"]["source_url"].endswith(
         "/system/services/share_gateway/src/share_gateway/helper/wsvisit.cjs"
     )
+    assert set(document) == {
+        "agent_id",
+        "name",
+        "scope",
+        "granter",
+        "expires_at",
+        "workspace",
+        "apps",
+        "primer_url",
+        "helper",
+        "token",
+    }
     assert len(load_agent_grants(harness.context.paths.grants_path)) == 1
 
 
-def test_join_for_an_app_scope_carries_no_exec_and_only_the_named_apps(tmp_path: Path) -> None:
+def test_join_for_an_app_scope_carries_only_the_named_apps(tmp_path: Path) -> None:
     harness = make_harness(tmp_path)
     document = join_as(harness, ["files"])
-    assert "exec" not in document
     assert [app["name"] for app in document["apps"]] == ["files"]
 
 
@@ -281,9 +282,7 @@ def test_me_requires_a_live_token_and_repeats_the_coordinates(tmp_path: Path) ->
     assert harness.client.get("/_agent/me", headers={}).status_code == 401
     assert harness.client.get("/_agent/me", headers={"Authorization": "Bearer nope"}).status_code == 403
     me = harness.client.get("/_agent/me", headers=bearer(document)).get_json()
-    assert "token" not in me
-    assert me["exec"] == document["exec"] and me["agent_id"] == document["agent_id"]
-    assert me["helper"] == document["helper"]
+    assert me == {key: value for key, value in document.items() if key != "token"}
     assert harness.context.last_seen.read_all()[str(document["agent_id"])] == _NOW.isoformat()
 
 
@@ -342,7 +341,7 @@ def test_invites_need_workspace_level_access_human_or_agent(tmp_path: Path) -> N
     whole = harness.client.post("/_agent/invites", json={"scope": ["chat"]}, headers=headers)
     assert whole.status_code == 200 and whole.get_json()["granter"] == "user:user-visitor-whole"
     assert "wsvisit run" not in whole.get_json()["instructions"]
-    assert harness.client.post("/_agent/invites", json={"scope": ["owner-exec"]}, headers=headers).status_code == 400
+    assert harness.client.post("/_agent/invites", json={"scope": ["terminal-pty"]}, headers=headers).status_code == 400
     assert harness.client.post("/_agent/invites", json={"expires_in_days": -1}, headers=headers).status_code == 400
 
     harness.client.set_cookie(SESSION_COOKIE_NAME, session_cookie("user-visitor-chat"))
@@ -433,7 +432,7 @@ def test_verify_admits_a_workspace_scope_agent_everywhere_with_the_agent_identit
     harness.client.set_cookie(SESSION_COOKIE_NAME, "stale")
     harness.client.set_cookie("theme", "dark")
     headers = {"Authorization": f"Bearer {document['token']}"}
-    for host in (f"owner-exec-ex111111.{_DOMAIN}", f"system_interface-sh111111.{_DOMAIN}", f"chat-ch111111.{_DOMAIN}"):
+    for host in (f"terminal-pty-tp111111.{_DOMAIN}", f"system_interface-sh111111.{_DOMAIN}", f"chat-ch111111.{_DOMAIN}"):
         response = verify(harness, host, headers)
         assert response.status_code == 200, host
         identity = json.loads(response.headers[IDENTITY_HEADER])
@@ -452,7 +451,7 @@ def test_verify_holds_an_app_scope_agent_to_its_apps_and_refuses_bad_tokens(tmp_
     headers = {"Authorization": f"Bearer {document['token']}"}
     assert verify(harness, f"chat-ch111111.{_DOMAIN}", headers).status_code == 200
     assert verify(harness, f"files-fi111111.{_DOMAIN}", headers).status_code == 403
-    assert verify(harness, f"owner-exec-ex111111.{_DOMAIN}", headers).status_code == 403
+    assert verify(harness, f"terminal-pty-tp111111.{_DOMAIN}", headers).status_code == 403
     assert verify(harness, f"system_interface-sh111111.{_DOMAIN}", headers).status_code == 403
     assert verify(harness, f"chat-ch111111.{_DOMAIN}", {"Authorization": "Bearer nope"}).status_code == 403
     assert verify(harness, f"chat-ch111111.{_DOMAIN}", {"Authorization": "Basic abc"}).status_code == 401
@@ -518,7 +517,7 @@ def test_run_streams_the_commands_output_as_json_lines_and_ends_with_its_exit_co
     ]
     assert [event for event in events if event["type"] == "stderr"] == [{"type": "stderr", "data": "trouble\n"}]
     assert events[-1] == {"type": "exit", "code": 4}
-    # owner-exec's stream ends with a line that signs it; this one is not signed.
+    # Nothing signs the stream: the token on the request is the whole credential.
     assert {event["type"] for event in events} == {"stdout", "stderr", "exit"}
     assert "Signature" not in response.headers and "Content-Digest" not in response.headers
 
@@ -791,19 +790,3 @@ def test_files_write_refuses_a_body_it_cannot_act_on_and_writes_nothing(tmp_path
     assert not (harness.repo / "refused.txt").exists()
     assert sorted(entry.name for entry in harness.repo.iterdir()) == [".agents", ".git"]
 
-
-def test_a_workspace_scope_grant_still_carries_what_a_helper_from_before_these_routes_signs_with(
-    tmp_path: Path,
-) -> None:
-    harness = make_harness(tmp_path)
-    document = join_as(harness, "workspace")
-    me = harness.client.get("/_agent/me", headers=bearer(document)).get_json()
-    for answer in (document, me):
-        assert answer["exec"] == {
-            "origin": f"https://owner-exec-ex111111.{_DOMAIN}",
-            "audience": "container:host-" + "a" * 32,
-            "host_public_key": "ssh-ed25519 AAAAhostkey root@box",
-        }
-    key_lines = harness.context.paths.authorized_keys_path.read_text().splitlines()
-    assert len(key_lines) == 1
-    assert f"{AUTHORIZED_KEYS_MARKER} agent_id={document['agent_id']}" in key_lines[0]

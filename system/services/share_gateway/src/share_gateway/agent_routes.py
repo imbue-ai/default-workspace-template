@@ -80,7 +80,6 @@ from share_gateway.agent_orientation import render_primer
 from share_gateway.agent_orientation import template_ref
 from share_gateway.agent_workspace import WorkspaceCoordinates
 from share_gateway.agent_workspace import app_origins_for
-from share_gateway.agent_workspace import exec_origin_for
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
@@ -359,12 +358,6 @@ def register_agent_routes(
         }
         if token is not None:
             document["token"] = token
-        if grant.is_workspace_scope:
-            document["exec"] = {
-                "origin": exec_origin_for(apps, workspace_domain),
-                "audience": context.coordinates.exec_audience(workspace_domain),
-                "host_public_key": context.coordinates.host_public_key,
-            }
         return document
 
     def _helper_document() -> dict[str, str]:

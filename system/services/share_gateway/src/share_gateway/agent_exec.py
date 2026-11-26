@@ -1,10 +1,9 @@
 """A visiting agent's commands and files: run a command and stream its output, read a file, write a file.
 
 The operations behind ``POST /_agent/run``, ``/_agent/files/read`` and
-``/_agent/files/write``. The request and answer shapes are owner-exec's own
-(``imbue-ai/owner-exec``, ``internal/server/server.go``) without its
-signatures: the gateway has already checked the caller's admission token, and
-that token is the whole of the caller's authority.
+``/_agent/files/write``. No request is signed and no answer is: the gateway
+has already checked the caller's admission token, and that token is the whole
+of the caller's authority.
 
 A command runs as the user the gateway runs as, with the gateway's environment.
 Paths are not confined to the repository: a caller that may run any command
@@ -36,7 +35,7 @@ MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MIN_COMMAND_TIMEOUT_SECONDS = 1.0
 # A command's words never exceed what one exec accepts, which is far below this.
 MAX_RUN_BODY_BYTES = 4 * 1024 * 1024
-# owner-exec's cap on a request, which is what bounds a file written through it.
+# The most a write's request may carry, which is what bounds a file written through it.
 MAX_WRITE_BODY_BYTES = 64 * 1024 * 1024
 # The most a write can carry once base64 has grown it by a third, so a file that can be read can be written back.
 MAX_READ_FILE_BYTES = 48 * 1024 * 1024
@@ -49,7 +48,7 @@ _MAX_LINE_CHARACTERS = 1024 * 1024
 STDOUT_EVENT = "stdout"
 STDERR_EVENT = "stderr"
 EXIT_EVENT = "exit"
-# What owner-exec reports for a command a signal ended.
+# The exit code answered for a command a signal ended.
 _SIGNALLED_EXIT_CODE = -1
 
 
@@ -340,7 +339,7 @@ class _CommandOutput:
 
 
 def _exit_code_before(process: subprocess.Popen[bytes], deadline: float) -> int | None:
-    """The command's exit code as owner-exec reports it, or None when it has not exited by ``deadline``."""
+    """The command's exit code as the stream reports it, or None when it has not exited by ``deadline``."""
     try:
         return_code = process.wait(timeout=max(deadline - time.monotonic(), 0.0))
     except subprocess.TimeoutExpired:

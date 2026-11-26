@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from share_grants.agent_grants import (
-    AUTHORIZED_KEYS_MARKER,
     WORKSPACE_SCOPE,
     AgentGrant,
     AgentGrantsError,
@@ -25,16 +24,14 @@ from share_grants.agent_grants import (
     parse_agent_grants,
     parse_agent_invites,
     read_agent_last_seen_times,
-    reconcile_authorized_keys,
-    reconcile_authorized_keys_text,
     render_agent_grants,
     render_agent_invites,
     sanitize_agent_name,
     validate_scope,
 )
 
-# The public key and fingerprint of the owner-exec profile's shared test vectors, so the fingerprint rule here is
-# checked against the one the daemon uses as keyid; every grant these tests make carries this key.
+# A public key and the fingerprint ``ssh-keygen -lf`` prints for it, so the fingerprint rule here is checked against
+# OpenSSH's; every grant these tests make carries this key.
 _VECTOR_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIqI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c"
 _VECTOR_FINGERPRINT = "SHA256:fe85JkIjo8VPe+XqXJGH5Mau1EMFdK1OdKvJUFicyA8"
 
@@ -121,7 +118,7 @@ def test_validate_scope_accepts_workspace_and_grantable_apps_only() -> None:
     assert validate_scope("workspace", ["chat"]) == WORKSPACE_SCOPE
     assert validate_scope(["files", "chat", "chat"], ["chat", "files"]) == ["chat", "files"]
     with pytest.raises(AgentScopeError):
-        validate_scope(["owner-exec"], ["chat"])
+        validate_scope(["terminal-pty"], ["chat"])
     with pytest.raises(AgentScopeError):
         validate_scope([], ["chat"])
     with pytest.raises(AgentScopeError):
@@ -178,7 +175,7 @@ def test_invites_render_and_parse_round_trip() -> None:
 def test_admits_service_follows_the_scope_and_the_registry() -> None:
     workspace_grant = make_grant()
     assert workspace_grant.admits_service(None, ["chat"])
-    assert workspace_grant.admits_service("owner-exec", ["chat"])
+    assert workspace_grant.admits_service("terminal-pty", ["chat"])
     app_grant = make_grant(scope=["chat"])
     assert app_grant.admits_service("chat", ["chat", "files"])
     assert not app_grant.admits_service("files", ["chat", "files"])
@@ -193,28 +190,3 @@ def test_find_grant_by_token_ignores_expired_grants() -> None:
     assert find_grant_by_token([expired, live], "token-" + live.fingerprint, _NOW) is live
     assert find_grant_by_token([expired], "token-" + expired.fingerprint, _NOW) is None
     assert find_grant_by_token([live], "wrong", _NOW) is None
-
-
-def test_reconcile_authorized_keys_text_keeps_foreign_lines_and_owns_only_marked_ones() -> None:
-    owner_line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIqI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c owner@laptop"
-    stale = f"ssh-ed25519 AAAA {AUTHORIZED_KEYS_MARKER} agent_id=va-{'9' * 32}"
-    live = make_grant()
-    app_only = make_grant(scope=["chat"])
-    expired = make_grant(expires_at=_NOW - timedelta(days=1))
-    text = reconcile_authorized_keys_text(f"{owner_line}\n{stale}\n", [live, app_only, expired], _NOW)
-    lines = text.splitlines()
-    assert lines[0] == owner_line
-    assert lines[1] == f"{live.public_key} {AUTHORIZED_KEYS_MARKER} agent_id={live.agent_id}"
-    assert len(lines) == 2
-    assert reconcile_authorized_keys_text("", [], _NOW) == ""
-
-
-def test_reconcile_authorized_keys_writes_only_when_changed_and_keeps_modes(tmp_path: Path) -> None:
-    keys_path = tmp_path / ".ssh" / "authorized_keys"
-    grant = make_grant()
-    assert reconcile_authorized_keys(keys_path, [grant], _NOW) is True
-    assert reconcile_authorized_keys(keys_path, [grant], _NOW) is False
-    assert keys_path.stat().st_mode & 0o777 == 0o600
-    assert keys_path.parent.stat().st_mode & 0o777 == 0o700
-    assert reconcile_authorized_keys(keys_path, [], _NOW) is True
-    assert keys_path.read_text() == ""

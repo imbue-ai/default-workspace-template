@@ -23,7 +23,7 @@ from share_gateway.testing import git_output
 from share_gateway.testing import make_workspace_repo
 
 _APPS = [
-    RegisteredApp("owner-exec", "owner-exec-ex111111", "127.0.0.1", 8793, is_grantable=False),
+    RegisteredApp("terminal-pty", "terminal-pty-tp111111", "127.0.0.1", 7682, is_grantable=False),
     RegisteredApp(
         "chat",
         "chat-ch111111",
@@ -191,7 +191,7 @@ def test_render_primer_fills_every_placeholder_and_cuts_exec_text_for_app_scope(
         "| ttyd | (no description) | http://127.0.0.1:7683 | https://ttyd-tt111111.alpha.example.com | (none) |"
         in full
     )
-    assert "owner-exec" not in full
+    assert "terminal-pty" not in full
     assert "ACCOUNTS" in full and "Initial workspace commit" in full and "{{" not in full
     assert "exec-only" not in full
     reduced = render_primer(
