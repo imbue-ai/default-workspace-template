@@ -851,23 +851,20 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
             )
             state.get_or_create_watcher(info)
 
-        def app_observers() -> list[BaseObserver]:
-            # Told from every other observer in the process by what they watch: this test's own tree. An observer's
-            # emitters are copied in one step, since the chats' watcher threads add to them as this reads.
+        def app_watches() -> list[tuple[BaseObserver, str]]:
+            # Each watch of this test's tree, with the observer holding it: that tree is what tells this app's
+            # observers from every other one in the process. An observer's emitters are copied in one step, since the
+            # chats' watcher threads add to them as this reads.
             return [
-                thread
+                (thread, emitter.watch.path)
                 for thread in threading.enumerate()
                 if isinstance(thread, BaseObserver)
-                and any(Path(emitter.watch.path).is_relative_to(tmp_path) for emitter in tuple(thread.emitters))
+                for emitter in tuple(thread.emitters)
+                if Path(emitter.watch.path).is_relative_to(tmp_path)
             ]
 
         def watch_count(path: Path) -> int:
-            return sum(
-                1
-                for observer in app_observers()
-                for emitter in tuple(observer.emitters)
-                if emitter.watch.path == str(path)
-            )
+            return sum(1 for _, watched in app_watches() if watched == str(path))
 
         # Each chat's own state dir is watched once its watcher has subscribed to everything.
         wait_until_true(
@@ -876,7 +873,7 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
             "every chat's watches in place",
         )
         assert watch_count(account_dir / "projects") == 1
-        assert len(app_observers()) == 1
+        assert len({observer for observer, _ in app_watches()}) == 1
     finally:
         other_apps_observer.close()
         state.shutdown()
