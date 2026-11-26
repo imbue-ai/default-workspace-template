@@ -512,12 +512,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   }
 
   /** The sends not yet on the transcript, in the order they show: what the agent has queued, what the chat app
-   *  holds through a switch, then this page's own. Each one's first bubble names its sender ("You" for the viewer's
-   *  own) unless it carries on the run of the turn drawn above. */
+   *  holds through a switch or for the agent a seeded chat's create lands as, then this page's own. Each one's
+   *  first bubble names its sender ("You" for the viewer's own) unless it carries on the run of the turn drawn
+   *  above. */
   function renderPendingSends(chatId: string, run: PendingBubbleRun): m.Vnode[] {
     return [
       ...renderQueuedMessages(chatId, run),
       ...renderHeldSends(chatId, run),
+      ...(provisionalRecord(chatId) === null ? [] : renderProvisionalHeldSends(chatId, run)),
       ...renderOutgoingMessages(chatId, run),
     ];
   }

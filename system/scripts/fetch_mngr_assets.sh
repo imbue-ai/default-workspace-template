@@ -13,6 +13,8 @@
 #                                                   link classifier is tested against
 #   style_guide.md                                  the base code style guide,
 #                                                   docs/system/style_guide.md
+#   skill_authoring_guide.md                        how to write a skill,
+#                                                   docs/system/skill_authoring_guide.md
 #   apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
 #                                                   the workspace profile snapshot's
 #                                                   format and keys, which
@@ -34,6 +36,7 @@ ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
     apps/minds/electron/link-externality-vectors.json
     style_guide.md
+    skill_authoring_guide.md
     apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
 )
 

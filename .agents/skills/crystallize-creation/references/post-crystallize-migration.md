@@ -11,6 +11,15 @@ The checklist is short on purpose. Stop reading once the items don't
 apply -- it's possible nothing here is needed (e.g. a skill that no
 consumer ever ran against the runtime path), and that's fine.
 
+## Contents
+
+- 1. Find consumers that referenced the runtime fallback path
+- 2. Decide whether to delete the runtime directory
+- 3. Reconcile shape changes the worker introduced
+- 4. Restart any service that consumed the old path
+- 5. Close the tracking ticket
+- 6. Commit the migration changes
+
 ## 1. Find consumers that referenced the runtime fallback path
 
 Look for code on the merged branch that referenced either:

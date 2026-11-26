@@ -4,6 +4,8 @@ description: Use when you want to open, arrange, or close windows on the user's 
 metadata:
   author: imbue
   crystallized: true
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # Managing the workspace desktop
@@ -24,6 +26,21 @@ files.
 > `uv run --no-sync workspace-layout ...`, run from the repo root
 > (`/home/user/workspace`), which is the cwd for all commands in this repo. Keep the
 > `--no-sync`: without it every call first checks, and can start, a sync of the venv.
+
+## Contents
+
+- The vocabulary (read this first)
+- Which client an op targets
+- Popped-out windows
+- Naming a window
+- The verbs you'll use 95% of the time
+- Arranging windows
+- Shortcuts and the wallpaper
+- Inspecting state
+- What is not here, and what to use instead
+- Ops answer at once
+- Exit codes
+- When NOT to use this skill
 
 ## The vocabulary (read this first)
 

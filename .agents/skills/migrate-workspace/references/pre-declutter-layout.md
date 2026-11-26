@@ -16,6 +16,17 @@ reorganizations (`mngr/fix-data-layout`, `mngr/declutter-template`,
 container base-image change. This is a one-off for that discontinuity, not the
 first of a versioned series.
 
+## Contents
+
+- Why the test is the tree, not the version
+- Absolute roots
+- Repo-relative paths
+- Substrate deltas
+- Skills and worker references that were renamed
+- Capabilities that did not exist then
+- The 30-minute `host-backup-now` hang
+- Two gotchas specific to this crossing
+
 ## Why the test is the tree, not the version
 
 The reorganization shipped in **no** `minds-v*` tag: `minds-v0.3.9` still carries
@@ -172,7 +183,9 @@ often assumes the old substrate.
 
 A migrated skill or doc that names a left-hand entry will send an agent looking
 for something that does not exist. `migrate_workspace.py audit-scan
---kind retired-skill` finds these; this table is the replacement.
+--kind retired-skill` finds these; this table is the replacement. The worker
+references on the right are files of the `harden-worker` skill, under
+`.agents/skills/harden-worker/references/`.
 
 | Old | New | Note |
 |---|---|---|

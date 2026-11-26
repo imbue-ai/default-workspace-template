@@ -120,6 +120,8 @@
   line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
+  /* A URL or key with nowhere to break wraps rather than running past the edge, wherever markdown is drawn. */
+  overflow-wrap: break-word;
 }
 
 /* The agent's prose bubble sets its text a little looser than the transcript's markdown elsewhere, as a person's
@@ -243,6 +245,13 @@
   cursor: zoom-in;
 }
 
+/* An audio player or SVG a message carries as raw HTML fits the column the same way, whatever width it asks for
+   (Tailwind's base styles already cap a video). */
+.markdown-content audio,
+.markdown-content svg {
+  max-width: 100%;
+}
+
 /* Keeps an image's space while it loads: a picture outline under a slow sweep of light. The
    outline is faded as one group, so its crossing strokes do not darken where they overlap. The box
    takes the image's own width and height when the image carries them (markdown.ts sets them for an
@@ -362,11 +371,19 @@
   color: var(--c-accent-hover);
 }
 
-.markdown-content table {
-  width: 100%;
-  border-collapse: collapse;
+/* A table scrolls sideways inside its own box (markdown.ts wraps it in one) when its columns need more than the
+   bubble's width. It fills the box when it fits, and is at least 7em wide for each of its columns, so a phone
+   scrolls a wide table rather than squeezing its words a few letters to a line. The floor is on the table, not
+   each cell: browsers honour a table's min-width, but not reliably a cell's. */
+.markdown-content .markdown-table-scroll {
+  overflow-x: auto;
   margin-top: 0.75em;
   margin-bottom: 0.75em;
+}
+
+.markdown-content table {
+  min-width: max(100%, calc(var(--markdown-table-columns, 1) * 7em));
+  border-collapse: collapse;
   font-size: 0.875em;
 }
 
@@ -375,6 +392,14 @@
   border: 1px solid var(--c-border);
   padding: 0.5em 0.75em;
   text-align: left;
+}
+
+/* A link or a piece of code in a cell may break anywhere, since the bubble's own break-word does not narrow a
+   column to fit. Prose keeps its words whole: breaking anywhere in it lets a column of short labels shrink to a
+   letter a line. */
+.markdown-content th :is(a, code),
+.markdown-content td :is(a, code) {
+  overflow-wrap: anywhere;
 }
 
 .markdown-content th {
@@ -718,6 +743,11 @@
 .pv-tl-narration--static pre code {
   padding: 0;
   background: none;
+}
+/* A table in the live narration paints its own text, as a block of code does: the shimmer's gradient-clipped text
+   does not reach into the table's scroller in WebKit, and its header cells' fill covers it everywhere. */
+.pv-tl-narration .markdown-table-scroll {
+  -webkit-text-fill-color: var(--c-text-secondary);
 }
 .pv-tl-narration a,
 .pv-tl-narration--static a {
