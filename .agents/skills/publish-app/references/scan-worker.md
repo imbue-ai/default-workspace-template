@@ -126,7 +126,9 @@ it already starts with the app's name. For each one:
 
 When you are done,
 `git grep -n -e '.agents/skills/<skill>' -e 'data/.skills/<skill>' -e 'skill = "<skill>"'`
-prints nothing, and the app's tests pass with the modules where they now are.
+prints nothing (for a skill that kept its name, only the `data/.skills/`
+lines have to be gone), and the app's tests pass with the modules where they
+now are.
 
 ## 3. Read the app and write what an adopter needs to know
 

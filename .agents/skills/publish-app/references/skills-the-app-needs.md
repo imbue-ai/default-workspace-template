@@ -98,7 +98,8 @@ Add to the one message, in the user's terms:
   that stays behind and is not;
 - that its command changes, when the user runs it by name: an app's skill is
   named after the app (`/<name>-<skill>`), so two apps from different people
-  never clash where both are installed;
+  never clash where both are installed. A skill whose name already starts
+  with the app's keeps its name and its command;
 - for a skill another app uses: which app will own it, and that the other
   will ask this one for the data from now on.
 
@@ -130,8 +131,10 @@ you tell the user it is published:
    An app's data is what an update copies aside and an uninstall keeps, and
    only what is under `data/.apps/<name>/` counts as that.
 3. **Check it on the user's data.** Open the app and confirm it still shows
-   what it showed before, then run the skill once under its new name.
-4. **Tell the user** the skill's new command, when they run it by name.
+   what it showed before, then run the skill once under the name the
+   worker's report gives it.
+4. **Tell the user** the skill's new command, when it changed and they run
+   it by name.
 
 ## When nothing was published
 
