@@ -10,11 +10,11 @@ The workspace routes gain what a client with no backend of its own needs, and a 
 
 - `GET /api/workspace/status` answers `compatibility`, the template's compatibility number (1), which is raised only by a change an older client could not work with, and `initial_data`: whether the workspace's boot applied the document it was handed when it was created (`NONE`, `APPLIED` with when, or `FAILED` with why).
 
-- New routes `GET` and `PUT /api/workspace/suggestions` (`suggestions.read`, `suggestions.write`) read and change the workspace's two suggestion switches. The shell passes each request over loopback to the registered app that declares a `suggestion_settings_path`, sending a write exactly the switches the client named. An app that is not running or does not answer is `503 SUGGESTIONS_UNAVAILABLE`, and a workspace whose app is from before the switches could be reached this way is `501 SUGGESTIONS_UNSUPPORTED`.
+- New routes `GET` and `PUT /api/workspace/suggestions` (`suggestions.read`, `suggestions.write`) read and change the workspace's two suggestion switches, by passing each request over loopback to the registered app that declares a `suggestion_settings_path`. An app that does not answer is `503 SUGGESTIONS_UNAVAILABLE`, and one from before the switches could be reached this way is `501 SUGGESTIONS_UNSUPPORTED`.
 
-- New route `GET /api/workspace/apps` (`apps.read`) lists the registered apps that are not internal, in the registry's order: what `shareable_apps` lists, each with the SVG markup of its icon.
+- New route `GET /api/workspace/apps` (`apps.read`) lists what `shareable_apps` lists, each app with the SVG markup of its icon.
 
-- New route `GET /api/workspace/wallpaper` (`wallpaper.read`) answers the image the workspace's first desktop wears, with an `ETag` and `Cache-Control: private, no-cache`, and 204 when that desktop wears its theme's default. It is a workspace route like the others, so the request guard is no looser: an image element of another site is refused it.
+- New route `GET /api/workspace/wallpaper` (`wallpaper.read`) answers the image the workspace's first desktop wears, with an `ETag` and `Cache-Control: private, no-cache`, and 204 when that desktop wears its theme's default. The request guard is no looser for it: an image element of another site is refused.
 
 - `GET /api/workspace/sharing` lists `shareable_apps`: the registered apps that are not internal, each with its name, its origin label, its display name and whether it is a system app.
 

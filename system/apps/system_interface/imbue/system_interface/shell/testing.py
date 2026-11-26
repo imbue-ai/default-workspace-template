@@ -277,6 +277,7 @@ def builtin_chat_row_toml() -> str:
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
         launch_methods={"new": "POST"},
         pin=("/", "avatar", "independent", "floating"),
+        suggestion_settings_path="/api/settings/suggestions",
     )
 
 

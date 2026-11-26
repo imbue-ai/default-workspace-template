@@ -403,7 +403,7 @@ The update routes act on the workspace the shell runs from, so they are refused 
 
 **The initial data.**
 Whoever creates a workspace leaves one JSON file of mode 0600 in the machine's host directory, `$MNGR_HOST_DIR/initial_data.json`: `{"schema": 1, "profile", "timezone", "update_settings", "backups"}`.
-Each part has the shape of the request of the route that writes the same thing (`PUT /api/workspace/profile`, `PUT /api/workspace/timezone`, `PUT /api/workspace/update/settings`, and the route that names where the workspace's backups go), and a part that is left out, or null, writes nothing.
+Each part has the shape of the request of the route that writes the same thing (`PUT /api/workspace/profile`, `PUT /api/workspace/timezone`, `PUT /api/workspace/update/settings`, and `PUT /api/workspace/backups/destination`, which names where the workspace's backups go), and a part that is left out, or null, writes nothing.
 The boot sequence applies it each time the workspace's services are started, after the workspace's Python packages are in place and before the clock is set (`apply-initial-data`, `system/libs/workspace_initial_data`), by handing each part to the writer its route calls; the timezone is recorded only where none is, and is in force from that very start.
 The trigger is the file being there, not a first boot: a pool machine's first boot is over when it is baked, and its document is written when it is adopted, before its services are started again.
 When every part is written the step records that in `data/.state/initial_data/state.json` and deletes the document, which holds storage credentials.
