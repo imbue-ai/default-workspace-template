@@ -98,8 +98,9 @@ the mock converges.
   label of a standalone service (`share`, `app`, `owner`, `vm`, `host`, `env`,
   `agent`, `github`), which would claim that service as the app's sidecar. Nor
   may it be a name the template uses (`system-interface`, `terminal`,
-  `bootstrap` and the like) or one that clashes with another app's or
-  program's. The scaffolder refuses all of these.
+  `bootstrap` and the like), one another app or program holds, or one that
+  differs from another app's only by a hyphenated suffix. The scaffolder
+  refuses all of these.
 - **Icon.** Draw one specific to what this app does, to the rules in
   `docs/system/app-icons.md`: a 216 by 216 two-layer SVG tile with one
   fill-only glyph, coloured from that doc's palette. A brand-new registration
@@ -122,12 +123,12 @@ does what it needs. Pass `--display-name` (at most 64 characters) when the
 description is too long to be the app's name. The scaffolder registers the
 app through `app-install`, which picks its port and generates its program
 file: never do either by hand. `--start` waits until the app answers healthy.
-Then commit and, with GitHub sync on, follow `references/link-new-app.md`.
+Then commit; with GitHub sync on, follow `references/link-new-app.md`.
 
-`references/scaffold-output.md` has the other flags, each generated file, the
-program file, how the app starts, adding a dependency and a credential. Read
-it when you change something the scaffold wrote other than routes, or when
-the scaffolder or a start fails.
+`references/scaffold-output.md` has the other flags, the generated files, how
+the app starts, adding a dependency and a credential. Read it when you change
+something the scaffold wrote other than routes, or when the scaffolder or a
+start fails.
 
 ## Step 4: Confirm a mock
 
@@ -193,8 +194,8 @@ one.
   `DATA_DIR`, the content-security policy, a "view raw" control on derived
   data, finding another app by name, data migrations, calling Claude.
 - `.agents/shared/references/apps/manifest.md` says when an app that works
-  between requests needs `stop_when_no_windows = false`, where the app's
-  skills, routines and environment units go, and how to change how it runs.
+  between requests needs `stop_when_no_windows = false`, where its skills,
+  routines and environment units go, and how it runs.
 
 **The mock frame stays until the app is really hooked up.** Confirming the mock
 does not take it down. The app stays framed while any of it is not real, above
