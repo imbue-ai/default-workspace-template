@@ -6,8 +6,8 @@ from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceAnnouncer
 from imbue.system_interface.presence import PresenceStore
-from imbue.system_interface.presence import PresenceSweep
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.roster import RosterAnnouncer
 from imbue.system_interface.roster import RosterSource
@@ -44,8 +44,9 @@ class SystemInterfaceState(MutableModel):
     shell: ShellState
     # Who is connected right now: the per-user files under data/.state/presence.
     presence: PresenceStore
-    # The periodic check that notices a silent departure and tells the windows.
-    presence_sweep: PresenceSweep
+    # How the connected set reaches the windows, one announcement at a time, and the periodic check that notices a
+    # silent departure.
+    presence_announcer: PresenceAnnouncer
     # Each account's display name and avatar, from imbue_cloud through the on-disk cache.
     profiles: ProfileResolver
     # Everyone who may be here, computed from the grants, presence, and the profiles.
@@ -74,7 +75,7 @@ class SystemInterfaceState(MutableModel):
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""
-        self.presence_sweep.stop()
+        self.presence_announcer.stop()
         self.roster_watch.stop()
         self.shell.broadcaster.shutdown()
         self.shell.stop()
