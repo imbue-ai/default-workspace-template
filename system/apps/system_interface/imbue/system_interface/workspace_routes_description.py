@@ -32,7 +32,8 @@ FROZEN_DESCRIPTIONS_DIRECTORY: Final[Path] = _APP_DIRECTORY / "workspace_routes_
 _DESCRIPTION_TITLE: Final[str] = "Workspace routes"
 _DESCRIPTION_TEXT: Final[str] = (
     "The state a workspace owns, read and changed over HTTP by a client outside it: its sharing grants, its profile "
-    "snapshot and timezone, its backup configuration, and its updates."
+    "snapshot and timezone, its backup configuration, its updates, its suggestion switches, its apps and its "
+    "wallpaper."
 )
 _DESCRIPTION_VERSION: Final[str] = "1"
 # The key under which a route's entry names the operation it serves, which a client looks for in the status

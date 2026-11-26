@@ -8,6 +8,7 @@ from workspace_layout.identity import RequestIdentity
 
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.workspace_routes import STATUS_ROUTE
+from imbue.system_interface.workspace_routes import WALLPAPER_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 
 # A workspace's share address, which is where the web client's page reaches the shell.
@@ -82,6 +83,35 @@ def test_a_grantee_of_the_whole_workspace_is_admitted_from_the_web_client_as_the
     )
 
     assert response.status_code == 200
+
+
+def test_an_image_element_of_another_site_is_refused_the_wallpaper_and_the_web_clients_own_request_is_not(
+    client: FlaskClient,
+) -> None:
+    # An image element of another site asks without an Origin, so the gateway vouches for nothing: the guard is no
+    # looser for the wallpaper than for any other route.
+    as_an_image = client.get(
+        WALLPAPER_ROUTE,
+        headers={
+            FETCH_SITE_HEADER: "cross-site",
+            FETCH_MODE_HEADER: "no-cors",
+            "Sec-Fetch-Dest": "image",
+            **identity_headers(_OWNER_FROM_ELSEWHERE),
+        },
+        base_url=_SHARE_BASE_URL,
+    )
+
+    assert as_an_image.status_code == 403
+    assert as_an_image.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
+
+    # The web client's page fetches it from its own code, with the session, as it calls every workspace route.
+    fetched = client.get(
+        WALLPAPER_ROUTE,
+        headers={**CROSS_SITE_FETCH_HEADERS, **identity_headers(_OWNER_FROM_WEB_CLIENT)},
+        base_url=_SHARE_BASE_URL,
+    )
+
+    assert fetched.status_code == 204
 
 
 @pytest.mark.parametrize(("method", "path"), [("GET", "/api/apps"), ("POST", "/api/layout"), ("GET", "/api/schema")])

@@ -315,9 +315,7 @@ def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_an
 def test_an_armed_schedule_takes_the_workspaces_own_hours_where_it_has_them(update_workspace_app: Flask) -> None:
     client = _client(update_workspace_app)
     _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
-    client.put(
-        UPDATE_SETTINGS_ROUTE, json=update_settings_document(window_start_hour_here=22, window_end_hour_here=1)
-    )
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(window_start_hour_here=22, window_end_hour_here=1))
 
     schedule = client.put(UPDATE_SCHEDULE_ROUTE, json={}).get_json()["schedule"]
 

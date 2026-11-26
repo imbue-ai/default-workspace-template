@@ -15,6 +15,7 @@ from pydantic import Field
 from pydantic import SecretStr
 from pydantic import StrictBool
 from pydantic import StrictInt
+from workspace_initial_data.status import InitialDataStatus
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -47,6 +48,10 @@ OPERATION_UPDATE_SKIP: Final[str] = "update.skip"
 OPERATION_UPDATE_DISMISS: Final[str] = "update.dismiss"
 OPERATION_UPDATE_LIVENESS_READ: Final[str] = "update.liveness.read"
 OPERATION_UPDATE_SETTINGS_WRITE: Final[str] = "update.settings.write"
+OPERATION_SUGGESTIONS_READ: Final[str] = "suggestions.read"
+OPERATION_SUGGESTIONS_WRITE: Final[str] = "suggestions.write"
+OPERATION_APPS_READ: Final[str] = "apps.read"
+OPERATION_WALLPAPER_READ: Final[str] = "wallpaper.read"
 
 WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_SHARING_READ,
@@ -66,6 +71,10 @@ WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_UPDATE_DISMISS,
     OPERATION_UPDATE_LIVENESS_READ,
     OPERATION_UPDATE_SETTINGS_WRITE,
+    OPERATION_SUGGESTIONS_READ,
+    OPERATION_SUGGESTIONS_WRITE,
+    OPERATION_APPS_READ,
+    OPERATION_WALLPAPER_READ,
 )
 
 # The codes a workspace route's refusal or failure carries beside its ``detail``, for a caller that acts on it.
@@ -79,6 +88,8 @@ CODE_INVALID_CREDENTIALS: Final[str] = "INVALID_CREDENTIALS"
 CODE_SETUP_RUNNING: Final[str] = "SETUP_RUNNING"
 CODE_INVALID_UPDATE_SETTINGS: Final[str] = "INVALID_UPDATE_SETTINGS"
 CODE_WRITE_FAILED: Final[str] = "WRITE_FAILED"
+CODE_SUGGESTIONS_UNAVAILABLE: Final[str] = "SUGGESTIONS_UNAVAILABLE"
+CODE_SUGGESTIONS_UNSUPPORTED: Final[str] = "SUGGESTIONS_UNSUPPORTED"
 CODE_NOT_AT_WORKSPACE_ROOT: Final[str] = "NOT_AT_WORKSPACE_ROOT"
 
 GRANTS_ERROR_UNREADABLE: Final[str] = "UNREADABLE"
@@ -108,8 +119,9 @@ class InvalidGrantsError(WorkspaceRouteError):
 
 
 class WorkspaceStatusResponse(FrozenModel):
-    """What the workspace serves: the version of its checkout, the operations it has a route for, and the
-    compatibility number a client checks before it acts inside the workspace."""
+    """What the workspace serves: the version of its checkout, the operations it has a route for, the
+    compatibility number a client checks before it acts inside the workspace, and how the initial data it was
+    handed at create stands."""
 
     model_config = ConfigDict(serialize_by_alias=True)
 
@@ -123,6 +135,11 @@ class WorkspaceStatusResponse(FrozenModel):
         description="The template's compatibility number, raised only by a change an older client could not work "
         "with; an answer without it means 1. A client that knows a lower number opens the workspace and runs its "
         "lifecycle, and does nothing else inside it"
+    )
+    initial_data: InitialDataStatus = Field(
+        description="How the document the workspace was handed when it was created stands: whether its boot "
+        "found and applied one. An answer without it is a template from before the initial data, which ignores "
+        "the document"
     )
 
 
@@ -180,6 +197,25 @@ class SharingStateResponse(FrozenModel):
     shareable_apps: tuple[ShareableApp, ...] = Field(
         description="The registered apps that are not internal, in the registry's order: each can be shared by "
         "itself, and an internal app is reached only through a share of the whole workspace"
+    )
+
+
+class WorkspaceApp(ShareableApp):
+    """One app of the workspace, as a client lists it and draws it."""
+
+    icon: str = Field(
+        description="The SVG markup the app registered as its icon, as it registered it; '' when it has none. It "
+        "is the app's own markup, so a client draws it as an image and never as part of its page"
+    )
+
+
+class WorkspaceAppsResponse(FrozenModel):
+    """The workspace's apps."""
+
+    apps: tuple[WorkspaceApp, ...] = Field(
+        description="The registered apps that are not internal, in the registry's order: the apps the sharing "
+        "read lists as shareable. Those with is_system false are the apps built on the workspace, which a client "
+        "lists as the workspace's own"
     )
 
 
@@ -301,6 +337,28 @@ class UpdateSettingsModel(FrozenModel):
         le=23,
         description="This workspace's own end hour; set or null with its start hour. Left out of a request, the "
         "stored hour is kept",
+    )
+
+
+class SuggestionSettingsRequest(FrozenModel):
+    """The suggestion switches to change. One left out, or null, stays as it is."""
+
+    is_next_step_suggestions_enabled: StrictBool | None = Field(
+        default=None, description="Whether suggested replies are offered under an agent's reply"
+    )
+    is_new_chat_suggestions_enabled: StrictBool | None = Field(
+        default=None, description="Whether things to try are offered on a chat with no message yet"
+    )
+
+
+class SuggestionSettingsResponse(FrozenModel):
+    """The workspace's two suggestion switches, as they stand."""
+
+    is_next_step_suggestions_enabled: bool = Field(
+        description="Whether suggested replies are offered under an agent's reply"
+    )
+    is_new_chat_suggestions_enabled: bool = Field(
+        description="Whether things to try are offered on a chat with no message yet"
     )
 
 
