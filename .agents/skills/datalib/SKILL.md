@@ -114,22 +114,17 @@ mkdir -p "$DATA_ROOT"
    missing until the next sync completes it. Run the sync again before
    building anything on the store, and say what was finished late if the
    user has already seen an answer from it. A request that ended `done` can
-   still hold a thread whose replies could not be read; such a thread stays
-   owed and the next sync fetches it. So before answering from a Slack copy,
-   ask the store what it could not do and what it still owes (both should be
-   empty; otherwise sync again first):
-
-   ```bash
-   STORE="$DATA_ROOT/slack/ingest/entities.doltlite_db"
-   datalib-doltlite -readonly "$STORE" "SELECT severity, reason, scope_key, sample FROM problems
-     WHERE severity IN ('error', 'warning') AND (scope_key LIKE 'threads:%' OR scope_key LIKE 'listing:%' OR scope_key LIKE 'phase:%')"
-   datalib-doltlite -readonly "$STORE" "SELECT count(*) AS threads_owed FROM messages m
-     LEFT JOIN threads_bookkeeping b ON b.id = m.id
-     WHERE m.is_thread_root = 1 AND json_extract(m.payload, '$.reply_count') > 0
-       AND (b.fetched_at_utc IS NULL OR b.held_version IS NOT json_extract(m.payload, '$.latest_reply'))"
-   ```
-
-   The Manage screen in the Datalib app lists the same problems for the user.
+   still hold a record whose parts could not be read (a thread whose replies
+   failed, a conversation whose listing did); such a record stays owed and the
+   next sync fetches it. So before answering from a copy, ask the store what
+   it could not do and what it still owes, and sync again first when either
+   is not empty. Every raw store has a `problems` table for the first
+   question (`SELECT severity, reason, scope_key, sample FROM problems WHERE
+   severity IN ('error', 'warning')` against
+   `$DATA_ROOT/<source id>/ingest/entities.doltlite_db`); the second is a
+   per-source query, and the Slack one is under "Slack-specific instructions"
+   below. The Manage screen in the Datalib app lists the same problems for
+   the user.
 4. **Size the copy to the data, not to the question.** A source's `since`
    bounds what the mirror holds, and anything older is never read, so a
    thread older than `since` that gains a reply is invisible. Set `since` to
@@ -140,15 +135,13 @@ mkdir -p "$DATA_ROOT"
    edits and deletions; the default re-reads it at most once an hour, and
    two refreshes less than an hour apart otherwise leave an edit made
    between them unseen. Every source's knobs, with their defaults, are in
-   `datalib-step examples <type>`. Know what the copy covers and say so: a
-   Slack source copies the channels the account is a member of and no DMs
-   unless `all_channels = true` or `dms = true` says otherwise, and a user who
-   says "our Slack" may mean all of it. State the scope in your first answer
-   from the copy, or ask before the first sync when it would change the answer.
-   Widening has a running cost: a refresh skips the channels whose sidebar
-   entry (`client.counts`) shows nothing new, and a channel the account has
-   not joined has no sidebar entry, so every refresh asks each such channel
-   for history, one request apiece.
+   `datalib-step examples <type>`. Know what the copy covers and say so: each
+   source has a default scope (which conversations, folders or labels it
+   reads) that may be narrower than what the user means by "our Slack" or
+   "my mail". State the scope in your first answer from the copy, or ask
+   before the first sync when it would change the answer. Widening a scope
+   can have a running cost on every refresh; the per-source notes below say
+   where.
 5. **Credentials go through latchkey.** The web-API sources authenticate via
    `latchkey`, already wired to the user through the Imbue Studio app. If a sync
    reports missing credentials or "not permitted", file a permission request
@@ -161,8 +154,8 @@ mkdir -p "$DATA_ROOT"
    is a `sqlite3` shell that reads it: `datalib-doltlite -readonly <file>
    "<sql>"`. The `ingest` step alone is enough to answer from SQL; the render
    and search steps are for reading and for full-text search. What each
-   store holds is in `datalib-step help raw-stores` (below); its Slack section
-   has the thread, permalink and coverage queries, so read it before writing
+   store holds is in `datalib-step help raw-stores` (below); each source's
+   section has that source's recurring queries, so read it before writing
    your own. Every table's `payload` column is JSONB: select `json(payload)`
    or `json_extract(payload, '$.text')`, never the bare column, whose bytes
    (also in `-json` output) no JSON parser reads.
@@ -288,6 +281,38 @@ or `chatgpt` source's `export` method) for that data and tell the user why. A
 `chatgpt` source can also take both: its export fills in every conversation
 first, past the API's rate limit, and the API then downloads only what changed
 since (`datalib-step help chatgpt`).
+
+## Slack-specific instructions
+
+What the general items above come to for a Slack source (`type = "slack"`).
+Everything here is the Slack source's own behaviour; `datalib-step help slack`
+and the Slack section of `datalib-step help raw-stores` are the full accounts.
+
+- **Scope.** By default the copy holds the channels the account is a member
+  of and no DMs; `all_channels = true` adds every channel the account can
+  see, `dms = true` adds direct messages, and `channels` names a list. A user
+  who says "our Slack" may mean all of it, so say which the copy covers.
+- **The cost of widening.** A refresh skips a channel whose sidebar entry
+  (`client.counts`) shows nothing new, and a channel the account has not
+  joined has no sidebar entry, so every refresh asks each such channel for
+  history, one request apiece.
+- **Is the copy whole?** Two queries against the Slack store; both should
+  come back empty before an answer is built on it, and a sync should be run
+  again when they do not:
+
+  ```bash
+  STORE="$DATA_ROOT/slack/ingest/entities.doltlite_db"
+  datalib-doltlite -readonly "$STORE" "SELECT severity, reason, scope_key, sample FROM problems
+    WHERE severity IN ('error', 'warning') AND (scope_key LIKE 'threads:%' OR scope_key LIKE 'listing:%' OR scope_key LIKE 'phase:%')"
+  datalib-doltlite -readonly "$STORE" "SELECT count(*) AS threads_owed FROM messages m
+    LEFT JOIN threads_bookkeeping b ON b.id = m.id
+    WHERE m.is_thread_root = 1 AND json_extract(m.payload, '$.reply_count') > 0
+      AND (b.fetched_at_utc IS NULL OR b.held_version IS NOT json_extract(m.payload, '$.latest_reply'))"
+  ```
+
+  A thread is held whole when `threads_bookkeeping.held_version` equals the
+  root's `latest_reply`; the Slack section of `raw-stores` has the thread,
+  permalink and coverage queries to build on.
 
 ## Notes
 
