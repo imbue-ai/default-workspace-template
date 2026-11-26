@@ -518,7 +518,10 @@ def read_backup_credentials_of_workspace() -> ResponseReturnValue:
     identity = request_identity()
     if not identity.owner or identity.agent_id is not None:
         raise WorkspaceRouteRefusal(_OWNER_ONLY_REFUSAL_DETAIL, CODE_OWNER_ONLY, HTTP_FORBIDDEN)
-    return model_response(read_backup_credentials(_workspace_root()))
+    response = model_response(read_backup_credentials(_workspace_root()))
+    # The body is the repository's password and the storage's credentials, which no cache may keep.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def write_backup_verification() -> ResponseReturnValue:

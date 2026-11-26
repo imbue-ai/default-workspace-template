@@ -702,6 +702,7 @@ def test_the_backup_credentials_are_answered_to_the_owner_with_the_digest_the_st
     from_inside_the_workspace = client.get(BACKUP_CREDENTIALS_ROUTE)
 
     assert through_a_proxy.status_code == 200
+    assert through_a_proxy.headers["Cache-Control"] == "no-store"
     assert through_a_proxy.get_json() == from_inside_the_workspace.get_json()
     assert through_a_proxy.get_json() == {"env_text": env_text, "digest": _backups(client)["credentials_digest"]}
     assert through_a_proxy.get_json()["digest"] == env_digest(env_text) != ""
