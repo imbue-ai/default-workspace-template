@@ -6,6 +6,29 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ## [Unreleased]
 
+### Added
+
+- Added: `validate_skill.py` enforces the new skill authoring guide (`docs/system/skill_authoring_guide.md`) with `size`, `reachability`, `depth`, `paths`, `contents` and `boundary` checks, run over built-in skills by `system/test_skills.py`; failing skills carry `exempt-checks` in their frontmatter, and `--stamp` (run by `update-self` and the migration flows) exempts a user's existing skills instead of restructuring them.
+- Added: `update_self.py stage-shared-prose --ref <ref>` stages `.agents/shared/` from the target release, and `update-self` reads its shared prose from there instead of the workspace's older tree.
+- Added: The System Monitor sampler records the five largest memory holders every ten minutes and memory stretches (85%+ for a minute) with their peak holders; explorer-plan analytics now collects these and other machine readings.
+
+### Changed
+
+- Changed: The `datalib` skill installs datalib v0.56.0, which renames the sync runner to `datalib-pipeline` with verb subcommands (`datalib-pipeline sync <data_root> <step>`; `datalib-dag` is gone), adds Markdown (Local) and Google Drive folder sources and a Library card, and re-keys the Claude Code raw store on first start.
+- Changed: Major skill restructure: `harden-worker` moved from `.agents/shared/worker/` to `.agents/skills/harden-worker/`, references used by several skills moved into `.agents/shared/references/` (including new `review-gates.md`, `apply-exit-codes.md` and `apps/`), and the `dealing-with-the-unexpected` skill was deleted.
+- Changed: `build-app` and `update-app` are rewritten as short numbered checklists (SKILL.md under 14 KB each) with detail in references; `build-app` now asks for approval once, at the mock, instead of first proposing a plan and waiting.
+- Changed: A message sent to a chat from outside it (launcher, Getting Started tile, `workspace-layout open chat --launch`) while its first agent is starting is delivered to that agent instead of being left unsent in the composer.
+- Changed: `submit-upstream-changes` adds the changelog entry CI requires and waits for green CI before reporting the PR ready.
+- Changed: Claude chats tell progress updates from reasoning with mngr_claude's common-transcript rule, matching `mngr transcript`.
+- Changed: Latchkey is bumped to 3.26.0 (was 3.22.1).
+
+### Fixed
+
+- Fixed: Markdown in chat no longer makes the conversation scroll sideways: wide tables scroll in their own box, unbreakable URLs wrap, and raw-HTML audio/SVG is capped to the column width.
+- Fixed: Stopping an Antigravity chat or switching it to another provider no longer fails with "'AntigravityHarnessSession' object has no attribute '_handed_back_tokens'".
+- Fixed: The list of connected people no longer gets stuck out of date when a profile loads as someone arrives or leaves, and someone briefly shown as gone reappears as soon as their window checks in.
+- Fixed: The `datalib` skill, its install script and the Datalib launcher use `/home/user` instead of `$HOME`, so an agent shell (`HOME=/root`) no longer writes configs the Datalib app can't read or installs a second copy of the binaries.
+
 ## [minds-v0.10.7] - 2026-11-23
 
 This release polishes the first run and the show-around tour: the provider page can remove a connected account, system apps no longer show Share in their title bar, the Onboarding checklist and its pointers read more clearly, next-step suggestions get more time to think, and the tour's Getting Started window and title-bar cards sit where they no longer cover what they point at.

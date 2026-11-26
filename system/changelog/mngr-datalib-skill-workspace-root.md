@@ -1,1 +1,0 @@
-The Datalib app's launcher looks for `datalib-http` under the home that holds the workspace (`/home/user/.local/bin`, derived from the launcher's own location) instead of under the home of whatever started it, so it agrees with the datalib skill's install script by construction. The pin test checks that the skill names no path through `$HOME`.
