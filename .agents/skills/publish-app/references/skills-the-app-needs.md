@@ -130,6 +130,9 @@ you tell the user it is published:
    for each of the others.
    An app's data is what an update copies aside and an uninstall keeps, and
    only what is under `data/.apps/<name>/` counts as that.
+   With no data to move, run that `verify_app.py` call all the same: an
+   app's program installs the app's package as it starts, and the commands
+   the skill now runs are not there until it has.
 3. **Check it on the user's data.** Open the app and confirm it still shows
    what it showed before, then run the skill once under the name the
    worker's report gives it.
