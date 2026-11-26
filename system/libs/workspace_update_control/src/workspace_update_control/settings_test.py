@@ -79,11 +79,6 @@ def test_settings_that_did_not_change_are_not_written_again(
         {"window_start_hour_here": 24, "window_end_hour_here": 4},
         {"window_start_hour_here": 4, "window_end_hour_here": 4},
         {"window_start_hour_here": True, "window_end_hour_here": 4},
-        # A value of the wrong kind, as a document no route checked may carry.
-        {"channel": 7},
-        {"feed_base_url": None},
-        {"is_auto_update_enabled": "yes"},
-        {"is_auto_update_enabled_here": 1},
     ],
 )
 def test_settings_that_cannot_be_the_workspaces_are_refused_and_not_stored(
@@ -299,9 +294,7 @@ def test_one_of_the_workspaces_own_hours_sent_alone_is_held_to_the_stored_other(
     staged: StagedUpdateWorkspace,
 ) -> None:
     with pytest.raises(InvalidUpdateSettingsError):
-        take_update_settings(
-            {**_the_accounts_settings(), "window_start_hour_here": 22}
-        )
+        take_update_settings({**_the_accounts_settings(), "window_start_hour_here": 22})
     assert read_update_settings() is None
 
     take_update_settings(
@@ -321,6 +314,29 @@ def test_settings_that_leave_out_one_that_is_not_the_workspaces_own_are_refused(
 
     with pytest.raises(InvalidUpdateSettingsError, match="feed_base_url"):
         take_update_settings(sent)
+
+    assert read_update_settings() is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"channel": 7},
+        {"feed_base_url": None},
+        {"is_auto_update_enabled": "yes"},
+        {"is_auto_update_enabled_here": 1},
+        {"window_start_hour": "2"},
+        {"window_end_hour": 5.0},
+        {"window_start_hour": True},
+        {"window_start_hour_here": "22", "window_end_hour_here": 23},
+    ],
+)
+def test_a_setting_that_is_not_of_its_kind_is_refused_and_nothing_is_stored(
+    staged: StagedUpdateWorkspace, fields: dict[str, object]
+) -> None:
+    # The initial data hands a document here that no route's request model has checked.
+    with pytest.raises(InvalidUpdateSettingsError):
+        take_update_settings(update_settings_document(**fields))
 
     assert read_update_settings() is None
 
