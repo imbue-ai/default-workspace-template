@@ -8,11 +8,6 @@ Dot-prefixed because it is machinery-managed: apps read and write here through
 their `DATA_DIR` constant, so the layout inside each folder belongs to the app,
 not to the user.
 
-`shared-data/` is the one folder here not named for an app: the workspace's
-shared data, which datalib manages for the `datalib` skill and the Datalib app
-(`/home/user/workspace/system/apps/datalib/README.md`). Data that belongs to
-one app stays in that app's folder, whether or not datalib manages it.
-
 Everything here is in the hourly backup except two things. The backup's
 exclude patterns match at any depth, so a directory here named like a build
 output or cache (`build`, `dist`, `target`, `.cache`, `node_modules`, `.venv`,

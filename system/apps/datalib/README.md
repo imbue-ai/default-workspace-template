@@ -42,7 +42,7 @@ is used, so a workspace that never uses datalib downloads nothing. The launcher 
    it in the `user` band (200), the band the manifest's `priority` names; the
    OOM backstop only ever raises a process to its band, so it leaves 900 alone.
 4. Replaces itself with `~/.local/bin/datalib-http --no-open
-   data/.apps/shared-data/Default`, with `DATALIB_BIND=127.0.0.1:8731` and the
+   data/.shared-data`, with `DATALIB_BIND=127.0.0.1:8731` and the
    token in `DATALIB_TOKEN`. From then on supervisord supervises datalib-http
    directly.
 
@@ -50,18 +50,15 @@ If it is started before that script has installed the binary, the launcher
 exits without registering anything and supervisord retries it with its
 backoff, so the app never appears with nothing behind it.
 
-## The libraries folder
+## The data root
 
 The store is the workspace's shared data: data shared across the workspace,
 as opposed to one app's own data, which stays in that app's `data/.apps/<app>/`
-(an app may keep its own data with datalib too). It lives at
-`data/.apps/shared-data`, the one folder under `data/.apps/` that is not named
-for an app, laid out like the desktop app's `~/Datalib`: a libraries folder
-with one folder per library. The app serves one library, `Default`, so the
-data root on its command line is `data/.apps/shared-data/Default`, and the
-skill's scripts and `SKILL.md` name the same path (`test_datalib_pin.py` holds
-them to it). A second library would need a program, port, token and window of
-its own; the layout only leaves room for one.
+(an app may keep its own data with datalib too). Its data root is
+`data/.shared-data`, a category of its own under `data/` beside `.apps/` and
+`.skills/`: the data root on the app's command line, and the path the skill's
+scripts and `SKILL.md` name (`test_datalib_pin.py` holds them to it). There is
+one store; a second would need a program, port, token and window of its own.
 
 ## The token
 
@@ -78,7 +75,7 @@ the copy, so a window opens at `/?token=<token>`. `app.toml` must keep its
 `[[launch_paths]]` table last for the append to land in it; the launcher
 checks this and refuses to start otherwise.
 
-The token itself is `data/.apps/shared-data/Default/system/api-token`: the launcher reads
+The token itself is `data/.shared-data/system/api-token`: the launcher reads
 it at start and hands it to `datalib-http` through `DATALIB_TOKEN`, so it stays
 the same across restarts (a browser already holding the cookie stays signed
 in) and the skill can read the same file for its bearer token. When the file

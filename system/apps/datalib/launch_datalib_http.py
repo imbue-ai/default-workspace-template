@@ -47,13 +47,10 @@ DEFAULT_PORT: Final[int] = 8731
 BIND_HOST: Final[str] = "127.0.0.1"
 
 # The workspace's shared data, as opposed to one app's own data under data/.apps/<app>/: datalib
-# manages it, for the datalib skill and this app alike. Laid out like the desktop app's ~/Datalib: a
-# libraries folder holding one folder per library, and the store the skill's CLI writes and searches
-# is the default library. The UI serves the same one, so a source added through the wizard is what
+# manages it, for the datalib skill and this app alike. The folder is the store's data root, the one
+# the skill's CLI writes and searches and the UI serves, so a source added through the wizard is what
 # the agent queries and vice versa.
-LIBRARIES_DIR: Final[Path] = Path("data/.apps/shared-data")
-DEFAULT_LIBRARY_NAME: Final[str] = "Default"
-DATA_ROOT: Final[Path] = LIBRARIES_DIR / DEFAULT_LIBRARY_NAME
+DATA_ROOT: Final[Path] = Path("data/.shared-data")
 
 # Where the manifest copy that carries the token is written. Machine state: it is rewritten on
 # every start and never read by anything but the registration.
@@ -287,7 +284,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         "--data-root",
         type=Path,
         default=DATA_ROOT,
-        help="The datalib data root the UI serves: a library inside the libraries folder",
+        help="The datalib data root the UI serves",
     )
     parser.add_argument(
         "--datalib-http",
