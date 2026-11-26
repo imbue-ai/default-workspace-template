@@ -2429,7 +2429,14 @@ def _seed_chat() -> Response:
         else:
             created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
     except AgentNameConflictError as e:
-        return error_response(str(e), 409)
+        # The workspace opens the same chat itself (``first_boot_welcome.py``), on a thread that may get in
+        # between the look for the chat above and this seed.
+        opened_meanwhile = (
+            agent_manager.update_first_run_context(seed_request.context) if seed_request.is_first_run else None
+        )
+        if opened_meanwhile is None:
+            return error_response(str(e), 409)
+        created = opened_meanwhile
     except AgentCreationError as e:
         return error_response(str(e), 400)
     response = CreateChatResponse(chat_id=created.chat_id, name=created.name, display_name=created.display_name)
