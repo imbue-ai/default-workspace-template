@@ -13,24 +13,50 @@ its own, with `app.toml` at the root. Installing it adds that one app to this
 workspace and leaves everything else here as it is.
 
 A template is different: it is a whole workspace. If the URL turns out to be a
-template (step 1 says how you will know), hand over to the `use-template`
+template (step 3 says how you will know), hand over to the `use-template`
 skill.
 
-All commands run from the repo root (`/home/user/workspace`). Keep git and
-file words out of what you say to the user: they are getting an app, not a
-repository (`.agents/shared/references/user-facing-language.md`).
+## Standing instructions
 
-## Which case this is
+- **Run every command from the repo root** (`/home/user/workspace`).
+- **Keep git and file words out of what you say to the user**: they are
+  getting an app, not a repository
+  (`.agents/shared/references/user-facing-language.md`).
+- **Never run the installer before the user has agreed to trust the source**
+  (step 2).
+- **Never edit the app's program file or skill links.** They are generated
+  from the app's `app.toml`. To change how it runs, change the manifest and
+  run `uv run --no-sync app-install regenerate <name>`.
+- **Done means the user can open the app and see their own data.** A program
+  that starts or a route that answers 200 is not done.
+
+## Other tasks
+
+- **Removing an app**: `uv run --no-sync app-install uninstall <name>`. The
+  app's stored data and secret files are kept; say so.
+- **Checking what is generated**: `uv run --no-sync app-install check` says
+  whether everything generated for the workspace's apps is as it should be.
+
+## Steps
+
+1. Find which case this is.
+2. Confirm the user trusts the source. *Ends the turn* until they say yes.
+3. Install the app.
+4. Set it up, before talking about changes. *Ends the turn* while a
+   permission or a secret is awaited.
+5. Adapt it with the user.
+
+## Step 1: Find which case this is
 
 Run `uv run --no-sync app-install list` and look for the app.
 
-- **The app is not listed.** Start at the trust gate (step 0).
+- **The app is not listed.** Go on to step 2.
 - **The app is already listed** (the Imbue Studio app installed it while it
   created this workspace, or an earlier turn did). The user already agreed to
-  trust it. Skip to step 2 and set it up; read what it needs from its manifest
+  trust it. Skip to step 4 and set it up; read what it needs from its manifest
   at `system/apps/<package>/app.toml`.
 
-## 0. Trust gate -- confirm before installing
+## Step 2: Confirm the user trusts the source
 
 An app is code published by someone else, in a repository outside Imbue's
 control. **Imbue does not review, verify, or vouch for apps.** An installed
@@ -44,7 +70,7 @@ about to add code that **Imbue has not verified and that could be malicious**,
 name where it comes from, and ask them to confirm they trust that source and
 want to go ahead. Do not install until they say yes. If they decline, stop.
 
-## 1. Install
+## Step 3: Install the app
 
 ```bash
 uv run --no-sync app-install install <url>                  # the latest version
@@ -58,7 +84,7 @@ The command asks nothing and ends in one JSON line. Act on its `result`:
   say), and `is_answering` says whether the app's port answered; it is false
   while the app waits on a secret file, and otherwise means the app did not
   come up, so read its log (the `check-app-errors` skill) before you call it
-  running. Go to step 2 with the `needs` it lists.
+  running. Go to step 4 with the `needs` it lists.
 - `collision` -- something here already has a name the app would take;
   `problems` names each one. Nothing was changed. Tell the user what clashes
   and ask whether to remove the thing already here or leave the app out. There
@@ -75,7 +101,7 @@ The command asks nothing and ends in one JSON line. Act on its `result`:
 - `unreachable` or `refused` -- say what went wrong in plain words, from
   `detail`.
 
-## 2. Set it up, before talking about changes
+## Step 4: Set it up, before talking about changes
 
 Work from `needs` in the installer's result (or from the manifest, when the
 app was already installed).
@@ -111,12 +137,10 @@ app was already installed).
    run it by hand (`bash system/apps/<package>/env.d/<file>`, from the repo
    root).
 
-**Done means the user can open the app and see their own data.** A program
-that starts or a route that answers 200 is not done. Open the app yourself
-(`verify_app.py <name> --open`), confirm it shows the user's real content, then
-tell them it is ready and invite them to look.
+Then open the app yourself (`verify_app.py <name> --open`), confirm it shows
+the user's real content, tell them it is ready and invite them to look.
 
-## 3. Adapt it with the user
+## Step 5: Adapt it with the user
 
 `needs.adaptation` lists what the publisher knew would not carry over as it
 is: each has a `summary` (what does not fit) and a `resolution` (what to ask
@@ -125,13 +149,3 @@ are ordinary changes to the app: use the `update-app` skill.
 
 The app is yours to change. It stays connected to where it came from, so a
 later version can be brought in on top of your changes.
-
-## Things to know
-
-- **Never edit the app's program file or skill links.** They are generated
-  from the app's `app.toml`. To change how it runs, change the manifest and
-  run `uv run --no-sync app-install regenerate <name>`.
-- **Removing it** is `uv run --no-sync app-install uninstall <name>`. The
-  app's stored data and secret files are kept; say so.
-- **`uv run --no-sync app-install check`** says whether everything generated
-  for the workspace's apps is as it should be.
