@@ -62,21 +62,23 @@ def build_sock(application: Flask) -> Sock:
     return Sock(application)
 
 
-def make_threaded_server(host: str, port: int, app: Flask, fd: int | None = None) -> BaseWSGIServer:
+def make_threaded_server(host: str, port: int, app: Flask) -> BaseWSGIServer:
     """Build a threaded Werkzeug server that serves HTTP/1.1.
 
     Thread-per-connection (so flask-sock and long-lived SSE/WebSocket
     connections each own a thread) plus HTTP/1.1 keepalive and chunked
     streaming. The caller owns the returned server's ``serve_forever`` /
-    ``shutdown`` lifecycle. With ``fd`` the server serves on that socket,
-    already bound to ``host``:``port`` and listening, instead of binding one
-    of its own.
+    ``shutdown`` lifecycle.
     """
-    return make_server(host, port, app, threaded=True, request_handler=Http11RequestHandler, fd=fd)
+    return _threaded_http11_server(host, port, app, fd=None)
 
 
 def make_threaded_server_on(listener: socket.socket, app: Flask) -> BaseWSGIServer:
     """The same server, serving on ``listener``, already bound and listening, instead of binding a socket of its
     own."""
     host, port = listener.getsockname()[:2]
-    return make_threaded_server(host, port, app, fd=listener.fileno())
+    return _threaded_http11_server(host, port, app, fd=listener.fileno())
+
+
+def _threaded_http11_server(host: str, port: int, app: Flask, fd: int | None) -> BaseWSGIServer:
+    return make_server(host, port, app, threaded=True, request_handler=Http11RequestHandler, fd=fd)

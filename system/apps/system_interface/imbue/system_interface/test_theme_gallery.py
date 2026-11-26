@@ -27,7 +27,7 @@ from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.testing import listening_loopback_socket
-from imbue.system_interface.wsgi import make_threaded_server
+from imbue.system_interface.wsgi import make_threaded_server_on
 
 _STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
 # imbue/system_interface/test_theme_gallery.py -> the repo root
@@ -66,7 +66,7 @@ def themed_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[st
             # Not beside the registry: on macOS a second watch of one folder in a process is refused and stays dead.
             agent_events_path=tmp_path / "mngr-events" / "events.jsonl",
         )
-        server = make_threaded_server("127.0.0.1", port, create_application(state), fd=listener.fileno())
+        server = make_threaded_server_on(listener, create_application(state))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:

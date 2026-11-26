@@ -42,7 +42,7 @@ from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.testing import stand_in_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from imbue.system_interface.wsgi import make_threaded_server
+from imbue.system_interface.wsgi import make_threaded_server_on
 
 
 @pytest.fixture(autouse=True)
@@ -359,7 +359,7 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
         state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
         app = create_application(state)
 
-        server = make_threaded_server("127.0.0.1", port, app, fd=listener.fileno())
+        server = make_threaded_server_on(listener, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:

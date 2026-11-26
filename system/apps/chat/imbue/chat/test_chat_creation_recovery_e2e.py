@@ -49,7 +49,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
-from imbue.chat.wsgi import make_threaded_server
+from imbue.chat.wsgi import make_threaded_server_on
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import listening_loopback_socket
 
@@ -212,7 +212,7 @@ def _serving_workspace(
         port = listener.getsockname()[1]
         config = Config(chat_host="127.0.0.1", chat_port=port)
         app = create_application(build_test_state(config=config, agent_manager=manager))
-        server = make_threaded_server("127.0.0.1", port, app, fd=listener.fileno())
+        server = make_threaded_server_on(listener, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

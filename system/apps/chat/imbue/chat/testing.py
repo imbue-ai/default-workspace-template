@@ -112,6 +112,7 @@ from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
+from imbue.chat.wsgi import make_threaded_server_on
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
@@ -136,7 +137,7 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.testing import listening_loopback_socket
-from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
+from imbue.system_interface.wsgi import make_threaded_server_on as make_shell_server_on
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
 # provisioned by env-converge. Playwright's own browser-cache lookup only
@@ -1771,7 +1772,7 @@ def running_workspace(
                 shell=build_chat_shell_client(shell_url),
             )
             chat_app = create_application(chat_state)
-            chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app, fd=chat_listener.fileno())
+            chat_server = make_threaded_server_on(chat_listener, chat_app)
             chat_thread = threading.Thread(target=chat_server.serve_forever, daemon=True)
             chat_thread.start()
 
@@ -1781,7 +1782,7 @@ def running_workspace(
                 shell_state_directory=state_dir,
             )
             shell_app = create_shell_application(shell_state)
-            shell_server = make_shell_server("127.0.0.1", shell_port, shell_app, fd=shell_listener.fileno())
+            shell_server = make_shell_server_on(shell_listener, shell_app)
             shell_thread = threading.Thread(target=shell_server.serve_forever, daemon=True)
             shell_thread.start()
             try:

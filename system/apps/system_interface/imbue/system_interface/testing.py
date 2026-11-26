@@ -342,7 +342,7 @@ def listening_loopback_socket() -> Generator[socket.socket, None, None]:
     For a server whose port must be known before it is built: the URLs of the apps it serves beside, its own
     config. A port picked and given back (``find_free_port``) can be handed to any bind or connect in the process
     before the server binds it, which then fails with "Address already in use"; this one is never free until the
-    block ends. The server adopts it through ``make_threaded_server``'s ``fd``.
+    block ends. The server adopts it through ``make_threaded_server_on``.
     """
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as listener:
         listener.bind(("127.0.0.1", 0))

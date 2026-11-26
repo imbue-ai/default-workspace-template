@@ -69,6 +69,7 @@ from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.wsgi import make_threaded_server
+from imbue.system_interface.wsgi import make_threaded_server_on
 
 
 def _frontend_built() -> bool:
@@ -295,7 +296,7 @@ def _running_e2e_server(
             )
             app = create_application(state)
             # Started here, inside the stubs' contexts, so the shutdown below owns it whatever fails first.
-            server = make_threaded_server("127.0.0.1", port, app, fd=shell_listener.fileno())
+            server = make_threaded_server_on(shell_listener, app)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
