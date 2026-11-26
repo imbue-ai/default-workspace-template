@@ -1,1 +1,0 @@
-The post-launch-paths plan (`docs/system/blueprint/post-launch-paths/plan-post-launch-paths.md`, sections 3.5 and 3.6.1) says what the chat's intake does with a text sent to a chat whose first agent is being created: it is kept for that agent, where the plan had it held for the chat root as a draft.
