@@ -1,15 +1,15 @@
 /**
  * A window's title bar (concepts.md section 2.7; the multiplayer spec, section 9.1), drawn from the theme's
  * chrome slots (docs/system/blueprint/workspace-themes/, section 4.3): the leading slots from the left edge, the
- * trailing ones ending at the right. The standard look is close, minimize, and maximize (fullscreen and restore
- * when maximized: the state control cycles on from maximized to the whole viewport, the Screen spec's L2 layer) at
- * the left edge; the app icon and the title centred over the bar; then, while the window is focused, the window
- * menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not
- * internal), and Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a
- * chrome that can open them, on every window of an app built on the workspace, which is neither internal nor part
- * of the workspace itself) ending at the right edge, where Imbue Studio's own Share sits. Share never sits over the
- * centred title (``shareLookOf``): it wears its word beside its glyph where the title leaves room for both, its glyph
- * alone where it leaves room for that, and is not drawn where it leaves room for neither, which leaves Share to the
+ * trailing ones ending at the right. The standard look is, while the window is focused, the window menu (three
+ * dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal), and
+ * Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a chrome that can
+ * open them, on every window of an app built on the workspace, which is neither internal nor part of the
+ * workspace itself); the app icon and the title centred over the bar;
+ * then minimize, maximize (fullscreen and restore when maximized: the state control cycles on from maximized to
+ * the whole viewport, the Screen spec's L2 layer), and close at the right edge. Share never sits over the centred
+ * title (``shareLookOf``): it wears its word beside its glyph where the title leaves room for both, its glyph alone
+ * where it leaves room for that, and is not drawn where it leaves room for neither, which leaves Share to the
  * window menu. A theme may rearrange the slots and align the title its own way, never drop a slot's
  * control; the balloon and Share follow Refresh wherever the theme puts it, and a theme whose controls have no
  * room for a word hides Share, which its window menu still offers. Resting on the maximize control opens the
@@ -53,9 +53,9 @@ const CENTERED_ICON_WIDTH = APP_GLYPH_SIZE + 6;
 /** The air kept between Share and the centred title. */
 const SHARE_CLEARANCE = 8;
 
-/** How far from the bar's edge the run of the window menu, Refresh, the balloon and Share reaches, with Share's
- *  glyph alone and with its word, counting the bar's inset. The desktop pair was measured in Chromium on the
- *  standard look (124 and 174.9), the labelled run less the 10 that Share's tighter padding and gap
+/** How far from the bar's leading edge the run that ends in Share reaches, with its glyph alone and with its word:
+ *  the bar's inset, the window menu, Refresh and the balloon, then Share. The desktop pair was measured in Chromium
+ *  on the standard look (124 and 174.9), the labelled run less the 10 that Share's tighter padding and gap
  *  (``.window-share--labelled``) take off it, plus the 2 its larger glyph adds; the touch pair is the same run with
  *  each square control as wide as the 44 touch target its minimum width asks for. */
 interface ShareRunWidths {
@@ -175,7 +175,7 @@ const SLOT_MARGIN: Readonly<Record<ChromeSlot, string>> = {
   title: "ml-1.5",
   refresh: "ml-0.5",
   menu: "ml-0.5",
-  minimize: "ml-1",
+  minimize: "",
   maximize: "ml-1",
   close: "ml-1",
 };

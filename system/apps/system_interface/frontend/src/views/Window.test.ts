@@ -103,7 +103,7 @@ describe("Window", () => {
   it("offers the controls in the title bar's order and reports each", () => {
     const onControl = vi.fn();
     const element = render({ onControl });
-    expect(controlNamesOf(element)).toEqual(["close", "minimize", "maximize", "menu", "refresh", "app-chat"]);
+    expect(controlNamesOf(element)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
     (element.querySelector('[data-window-control="app-chat"]') as HTMLElement).click();
@@ -113,11 +113,11 @@ describe("Window", () => {
   it("offers Share after the balloon where the caller says so, and reports it", () => {
     const onControl = vi.fn();
     const element = render({ hasShare: true, onControl });
-    expect(controlNamesOf(element)).toEqual(["close", "minimize", "maximize", "menu", "refresh", "app-chat", "share"]);
+    expect(controlNamesOf(element)).toEqual(["menu", "refresh", "app-chat", "share", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="share"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("share", expect.anything());
     unmountViews();
-    expect(controlNamesOf(render({ hasShare: true, isFocused: false }))).toEqual(["close", "minimize", "maximize"]);
+    expect(controlNamesOf(render({ hasShare: true, isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
   });
 
   it("draws Share by the window's own width, its title, and whether the client is a touch one", () => {
@@ -138,14 +138,14 @@ describe("Window", () => {
 
   it("offers Chat about this app only where the caller says so, and no title action on an unfocused window", () => {
     expect(controlNamesOf(render({ hasAppChat: false }))).toEqual([
-      "close",
-      "minimize",
-      "maximize",
       "menu",
       "refresh",
+      "minimize",
+      "maximize",
+      "close",
     ]);
     unmountViews();
-    expect(controlNamesOf(render({ isFocused: false }))).toEqual(["close", "minimize", "maximize"]);
+    expect(controlNamesOf(render({ isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
     unmountViews();
     const appChat = render().querySelector('[data-window-control="app-chat"]') as HTMLElement;
     expect(appChat.getAttribute("aria-label")).toBe("Chat about this app");
@@ -157,7 +157,7 @@ describe("Window", () => {
     const controls = [...maximized.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["close", "minimize", "fullscreen", "restore", "menu", "refresh", "app-chat"]);
+    expect(controls).toEqual(["menu", "refresh", "app-chat", "minimize", "fullscreen", "restore", "close"]);
     (maximized.querySelector('[data-window-control="fullscreen"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("fullscreen", expect.anything());
     unmountViews();
