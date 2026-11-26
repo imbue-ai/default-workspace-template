@@ -201,9 +201,10 @@ what this workspace records about an app its agent built or installed, which
   the registry holds an app the workspace's user built: a row that is neither
   `system` nor `internal`, registered by a package under `system/apps/` that
   the root `pyproject.toml` does not list as a workspace member, under its
-  manifest's name. The template's own apps never count, and neither does a
-  new app's mock frame or a preview: a frame's row belongs to no package, and
-  the app behind one is `internal` while the frame is up.
+  manifest's name. The template's own apps never count, and neither does an
+  app installed from someone else's repository (its record's `origin` is
+  `installed`), a new app's mock frame or a preview: a frame's row belongs to
+  no package, and the app behind one is `internal` while the frame is up.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
   `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,
