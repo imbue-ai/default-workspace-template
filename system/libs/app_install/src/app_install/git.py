@@ -155,6 +155,16 @@ def is_commit_present(repo_root: Path, commit: str) -> bool:
     return True
 
 
+def is_path_in_commit(repo_root: Path, commit: str, path: str) -> bool:
+    """Whether the tree of ``commit`` holds anything at ``path``."""
+    try:
+        run_git(repo_root, ["cat-file", "-e", f"{commit}:{path}"])
+    except GitCommandError as e:
+        logger.debug("{} holds nothing at {}: {}", commit, path, e)
+        return False
+    return True
+
+
 def workspace_template_version(repo_root: Path) -> str:
     """The template version the workspace is on: the nearest ``minds-v`` release tag its history holds, which is
     how the update pass names a workspace's version too. Empty when the history holds no such tag."""

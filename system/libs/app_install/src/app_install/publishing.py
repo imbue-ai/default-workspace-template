@@ -7,7 +7,8 @@ them: what to publish before the tree is assembled, and whether to make it publi
 
 - ``compare`` says what changed since the last publish, for the version to be chosen.
 - ``set_version`` writes the version into the app, with the template version the workspace is on.
-- ``assemble`` builds the tree, scans it, and checks that a Python app locks with no workspace around it.
+- ``assemble`` builds the tree, scans it, and checks that the app stands alone: it names no skill of this
+  workspace that it does not carry, and a Python app locks with no workspace around it.
 - ``push`` creates the repository on the first publish, and pushes the assembled tree as one commit.
 - ``record`` writes what was published into the app's record.
 
@@ -43,6 +44,7 @@ from app_install.errors import LockCheckError
 from app_install.errors import NotAssembledError
 from app_install.errors import NotModifiedAppError
 from app_install.errors import NotPushedError
+from app_install.errors import OutsideSkillsError
 from app_install.errors import PublishError
 from app_install.errors import PushRefusedError
 from app_install.errors import RepositoryUnreachableError
@@ -50,12 +52,16 @@ from app_install.errors import SecretsFoundError
 from app_install.git import DEFAULT_BRANCH
 from app_install.git import fetch_commit
 from app_install.git import is_commit_present
+from app_install.git import is_path_in_commit
 from app_install.git import run_git
 from app_install.git import workspace_template_version
 from app_install.interfaces import WorkspaceRuntimeInterface
+from app_install.paths import APP_SKILLS_DIRNAME
 from app_install.paths import MANIFEST_FILENAME
 from app_install.paths import PUBLISHED_REF_PREFIX
 from app_install.paths import PYPROJECT_FILENAME
+from app_install.paths import SKILL_FILENAME
+from app_install.paths import SKILLS_DIRECTORY
 from app_install.paths import STATE_DIRECTORY
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
@@ -91,6 +97,12 @@ _NON_FAST_FORWARD_MARKERS: Final[tuple[str, ...]] = ("(non-fast-forward)", "(fet
 _ALREADY_EXISTS_MARKER: Final[str] = "already exists"
 # How many paths one git command is given, so that its arguments stay within what a command line can hold.
 _PATHS_PER_COMMAND: Final[int] = 200
+# A skill named by where it lives in a workspace, or by where it keeps its data there.
+_SKILL_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:\.agents/skills|data/\.skills)/([a-z0-9]+(?:-[a-z0-9]+)*)"
+)
+# A larger file is data or a bundle, not where an app names something it runs or reads.
+_LARGEST_FILE_READ_FOR_SKILL_PATHS_BYTES: Final[int] = 1_000_000
 
 
 class ChangeKind(LowerCaseStrEnum):
@@ -117,6 +129,14 @@ class PublishedTree(FrozenModel):
     excluded_paths: tuple[str, ...] = Field(description="The files [publish] exclude left out")
 
 
+class OutsideSkillUse(FrozenModel):
+    """One line of a tree to publish that names a skill of this workspace the app does not carry."""
+
+    skill: str = Field(description="The skill's name")
+    path: str = Field(description="The file that names it, relative to the app's directory")
+    line: int = Field(description="The line of the file, counted from one")
+
+
 class PendingPublish(FrozenModel):
     """A publish between its steps: what was assembled, and how much of it has reached the repository."""
 
@@ -141,6 +161,12 @@ class CompareOutcome(FrozenModel):
     changed_paths: tuple[ChangedPath, ...] = Field(
         description="The files that differ from the version last published; empty for an app never published"
     )
+    outside_skill_uses: tuple[OutsideSkillUse, ...] = Field(
+        description="Each line that names a skill of this workspace the app does not carry, which stops a publish"
+    )
+    is_outside_skills_checked: bool = Field(
+        description="Whether the tree was read for such skills, which takes a template release in the history"
+    )
 
 
 class VersionOutcome(FrozenModel):
@@ -161,6 +187,10 @@ class AssembleOutcome(FrozenModel):
     published: PublishedTree = Field(description="The tree that waits to be pushed")
     manifest: AppManifest = Field(description="The manifest in the tree, for what it asks an adopter to do")
     is_lock_checked: bool = Field(description="Whether the tree holds a Python project, whose lock was checked")
+    is_outside_skills_checked: bool = Field(
+        description="Whether the tree was read for skills it names and does not carry, which takes a template "
+        "release in the history"
+    )
 
 
 class PushOutcome(FrozenModel):
@@ -305,6 +335,48 @@ def _build_published_tree(repo_root: Path, record: AppRecord, revision: str, ind
     )
 
 
+def _check_out_tree(repo_root: Path, index_file: Path, tree_directory: Path) -> None:
+    """Write the files of the tree ``index_file`` holds into the new directory ``tree_directory``."""
+    tree_directory.mkdir()
+    run_git(
+        repo_root,
+        ["checkout-index", "--all", f"--prefix={tree_directory}/"],
+        extra_environment={"GIT_INDEX_FILE": str(index_file)},
+    )
+
+
+def _find_outside_skill_uses(
+    repo_root: Path, published: PublishedTree, template_version: str, tree_directory: Path
+) -> tuple[OutsideSkillUse, ...]:
+    """Each line of the checked-out tree that names, by its path under ``.agents/skills/`` or ``data/.skills/``,
+    a skill that would be missing where the app is installed: one the workspace holds at the published commit,
+    the app does not carry in its own ``skills/``, and the template release ``template_version`` does not ship.
+    """
+    is_outside_by_skill: dict[str, bool] = {}
+    uses: list[OutsideSkillUse] = []
+    for path in published.paths:
+        file = tree_directory / path
+        if file.is_symlink() or file.stat().st_size > _LARGEST_FILE_READ_FOR_SKILL_PATHS_BYTES:
+            continue
+        try:
+            text = file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            logger.debug("Reading no skill paths from {}, which is not text: {}", path, e)
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for skill in dict.fromkeys(match.group(1) for match in _SKILL_PATH_PATTERN.finditer(line)):
+                if skill not in is_outside_by_skill:
+                    skill_path = (SKILLS_DIRECTORY / skill).as_posix()
+                    is_outside_by_skill[skill] = (
+                        not (tree_directory / APP_SKILLS_DIRNAME / skill / SKILL_FILENAME).is_file()
+                        and is_path_in_commit(repo_root, published.source_commit, skill_path)
+                        and not is_path_in_commit(repo_root, template_version, skill_path)
+                    )
+                if is_outside_by_skill[skill]:
+                    uses.append(OutsideSkillUse(skill=skill, path=path, line=line_number))
+    return tuple(uses)
+
+
 def _ensure_published_commit_present(repo_root: Path, record: AppRecord) -> None:
     """Have the commit last published in the repository, fetching it from the published repository when a
     restored workspace has lost it. Raises PublishError when it cannot be had."""
@@ -355,13 +427,22 @@ def compare_with_published(repo_root: Path, name: str, revision: str) -> Compare
     app or the commit last published cannot be had.
     """
     record = load_record(repo_root, name)
+    template_version = workspace_template_version(repo_root)
     with _scratch_directory() as scratch:
-        published = _build_published_tree(repo_root, record, revision, scratch / _INDEX_FILENAME)
+        index_file = scratch / _INDEX_FILENAME
+        published = _build_published_tree(repo_root, record, revision, index_file)
+        outside_skill_uses: tuple[OutsideSkillUse, ...] = ()
+        if template_version:
+            tree_directory = scratch / _TREE_DIRNAME
+            _check_out_tree(repo_root, index_file, tree_directory)
+            outside_skill_uses = _find_outside_skill_uses(repo_root, published, template_version, tree_directory)
     return CompareOutcome(
         record=record,
         published=published,
         version=_manifest_version_at(repo_root, published.tree),
         changed_paths=_changed_paths(repo_root, record, published.tree),
+        outside_skill_uses=outside_skill_uses,
+        is_outside_skills_checked=bool(template_version),
     )
 
 
@@ -488,11 +569,13 @@ def _check_nothing_pushed_is_unrecorded(repo_root: Path, name: str) -> None:
 def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRuntimeInterface) -> AssembleOutcome:
     """Build the tree a publish of the app ``name`` at ``revision`` would push, in a directory outside the
     workspace, and find it fit to publish: its manifest passes the authoring check and names a version newer
-    than the last one published, the secret scan finds nothing in it, and, for a Python app, its lock is what
-    its project calls for with no workspace around it. The tree then waits for ``push_app``. Nothing is pushed.
+    than the last one published, the secret scan finds nothing in it, it names no skill of this workspace that
+    it does not carry, and, for a Python app, its lock is what its project calls for with no workspace around
+    it. The tree then waits for ``push_app``. Nothing is pushed.
 
     Raises AppRecordNotFoundError for an app with no record, NotModifiedAppError for an installed app nobody
-    has changed, SecretsFoundError with each finding, LockCheckError, and PublishError for everything else,
+    has changed, SecretsFoundError with each finding, OutsideSkillsError with each line that names such a
+    skill, LockCheckError, and PublishError for everything else,
     which includes a version that was pushed and still waits to be recorded. A tree that was waiting from an
     earlier assembly is gone when it raises for any other reason.
     """
@@ -504,12 +587,7 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
         published = _build_published_tree(repo_root, record, revision, index_file)
         _check_is_this_workspaces_to_publish(repo_root, record, published)
         tree_directory = scratch / _TREE_DIRNAME
-        tree_directory.mkdir()
-        run_git(
-            repo_root,
-            ["checkout-index", "--all", f"--prefix={tree_directory}/"],
-            extra_environment={"GIT_INDEX_FILE": str(index_file)},
-        )
+        _check_out_tree(repo_root, index_file, tree_directory)
         if not (tree_directory / MANIFEST_FILENAME).is_file():
             raise PublishError(
                 f"[publish] exclude leaves {MANIFEST_FILENAME} out of the published tree, and a repository "
@@ -527,6 +605,17 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
             raise SecretsFoundError(scan.findings)
         if scan.failure:
             raise PublishError(f"the secret scan did not run to the end, so nothing can be published: {scan.failure}")
+        template_version = workspace_template_version(repo_root)
+        if template_version:
+            outside_skill_uses = _find_outside_skill_uses(repo_root, published, template_version, tree_directory)
+            if outside_skill_uses:
+                raise OutsideSkillsError(
+                    tuple(
+                        f"{use.path}:{use.line} names the skill {use.skill}, which this workspace holds and the "
+                        "app does not carry"
+                        for use in outside_skill_uses
+                    )
+                )
         is_lock_checked = (tree_directory / PYPROJECT_FILENAME).is_file()
         if is_lock_checked:
             lock_failure = runtime.check_lock(tree_directory)
@@ -546,7 +635,13 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
             verified_template=manifest.verified_template or "",
         ),
     )
-    return AssembleOutcome(record=record, published=published, manifest=manifest, is_lock_checked=is_lock_checked)
+    return AssembleOutcome(
+        record=record,
+        published=published,
+        manifest=manifest,
+        is_lock_checked=is_lock_checked,
+        is_outside_skills_checked=bool(template_version),
+    )
 
 
 def _derived_from(record: AppRecord) -> str:

@@ -97,6 +97,15 @@ class SecretsFoundError(PublishError):
         super().__init__("; ".join(findings))
 
 
+class OutsideSkillsError(PublishError):
+    """The tree about to be published names, by path, skills of this workspace that the app does not carry;
+    ``uses`` names each line."""
+
+    def __init__(self, uses: tuple[str, ...]) -> None:
+        self.uses = uses
+        super().__init__("; ".join(uses))
+
+
 class LockCheckError(PublishError):
     """The app's lock does not match its project when the app stands alone, outside any workspace."""
 

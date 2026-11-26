@@ -12,6 +12,7 @@ from app_install.errors import LockCheckError
 from app_install.errors import NotAssembledError
 from app_install.errors import NotModifiedAppError
 from app_install.errors import NotPushedError
+from app_install.errors import OutsideSkillsError
 from app_install.errors import PublishedNameTakenError
 from app_install.errors import PublishError
 from app_install.errors import PushRefusedError
@@ -23,6 +24,7 @@ from app_install.mock_runtime_test import RecordingRuntime
 from app_install.operations import add_app
 from app_install.publishing import ChangedPath
 from app_install.publishing import ChangeKind
+from app_install.publishing import OutsideSkillUse
 from app_install.publishing import PushOutcome
 from app_install.publishing import assemble_app
 from app_install.publishing import compare_with_published
@@ -40,6 +42,7 @@ from app_install.testing import never_bound
 from app_install.testing import point_url_at
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
+from app_install.testing import write_workspace_file
 from app_manifest.records import load_record
 from github_sync.testing import install_fake_latchkey
 
@@ -293,6 +296,72 @@ def test_an_app_with_no_python_project_has_no_lock_to_check(tmp_path: Path) -> N
 
     assert not assembled.is_lock_checked
     assert "check_lock" not in runtime.calls
+
+
+_NAMES_FETCH_MAIL = 'COMMAND = ["uv", "run", ".agents/skills/fetch-mail/scripts/run.py"]\nSTORE = "data/.skills/fetch-mail/mail.db"\n'
+
+
+def test_a_tree_that_names_a_skill_the_app_does_not_carry_is_not_assembled(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    write_workspace_file(workspace, ".agents/skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    write_app_file(workspace, "notes", "src/notes/refresh.py", _NAMES_FETCH_MAIL)
+    _versioned(workspace, runtime, "0.1.0")
+
+    compared = compare_with_published(workspace, "notes", "HEAD")
+    with pytest.raises(OutsideSkillsError) as stopped:
+        assemble_app(workspace, "notes", "HEAD", runtime)
+
+    assert compared.is_outside_skills_checked
+    assert compared.outside_skill_uses == (
+        OutsideSkillUse(skill="fetch-mail", path="src/notes/refresh.py", line=1),
+        OutsideSkillUse(skill="fetch-mail", path="src/notes/refresh.py", line=2),
+    )
+    assert stopped.value.uses == (
+        "src/notes/refresh.py:1 names the skill fetch-mail, which this workspace holds and the app does not carry",
+        "src/notes/refresh.py:2 names the skill fetch-mail, which this workspace holds and the app does not carry",
+    )
+    assert not pending_publish_path(workspace, "notes").exists()
+    assert _refs(published) == []
+
+    # The app carrying the skill is the way on: the skill is then in what is published.
+    (workspace / ".agents" / "skills" / "fetch-mail" / "SKILL.md").unlink()
+    write_app_file(workspace, "notes", "skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    commit_all(workspace, "Have the notes app carry the skill it runs")
+    assembled = assemble_app(workspace, "notes", "HEAD", runtime)
+    assert assembled.is_outside_skills_checked
+    assert "skills/fetch-mail/SKILL.md" in assembled.published.paths
+    assert compare_with_published(workspace, "notes", "HEAD").outside_skill_uses == ()
+
+
+def test_a_skill_the_template_ships_and_a_path_that_names_no_skill_are_no_reason_to_stop(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    write_workspace_file(workspace, ".agents/skills/notify-user/SKILL.md", "# Notify the user\n")
+    commit_all(workspace, "A later template release, which ships the notify-user skill")
+    run_git(workspace, ["tag", "minds-v0.11.1"])
+    write_app_file(
+        workspace,
+        "notes",
+        "src/notes/refresh.py",
+        'NOTIFY = ".agents/skills/notify-user/python/notify.py"\nEXAMPLE = ".agents/skills/some-skill/run.py"\n',
+    )
+    _versioned(workspace, runtime, "0.1.0")
+
+    assert compare_with_published(workspace, "notes", "HEAD").outside_skill_uses == ()
+    assert assemble_app(workspace, "notes", "HEAD", runtime).is_outside_skills_checked
+
+
+def test_a_workspace_with_no_template_release_cannot_tell_its_own_skills_from_the_templates(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    run_git(workspace, ["tag", "--delete", _TEMPLATE_VERSION])
+    write_workspace_file(workspace, ".agents/skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    write_app_file(workspace, "notes", "src/notes/refresh.py", _NAMES_FETCH_MAIL)
+    _versioned(workspace, runtime, "0.1.0")
+
+    compared = compare_with_published(workspace, "notes", "HEAD")
+    assembled = assemble_app(workspace, "notes", "HEAD", runtime)
+
+    assert (compared.is_outside_skills_checked, compared.outside_skill_uses) == (False, ())
+    assert not assembled.is_outside_skills_checked
 
 
 def test_the_real_lock_check_passes_a_current_lock_and_fails_a_stale_one(tmp_path: Path) -> None:
@@ -922,6 +991,30 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     }
     assert run("push", "notes")[1]["result"] == "not_assembled"
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
+
+
+def test_the_command_names_each_line_that_names_a_skill_the_app_does_not_carry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    _install_scanners(workspace, tmp_path / "bin", None)
+    write_workspace_file(workspace, ".agents/skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    write_app_file(workspace, "notes", "refresh.sh", "uv run .agents/skills/fetch-mail/scripts/run.py\n")
+    _versioned(workspace, runtime, "0.1.0")
+    arguments = ["--repo-root", str(workspace), "publish"]
+
+    compared = CliRunner().invoke(main, [*arguments, "compare", "notes"])
+    assembled = CliRunner().invoke(main, [*arguments, "assemble", "notes"])
+
+    comparison = json.loads(compared.output)
+    assert (compared.exit_code, comparison["result"], comparison["is_outside_skills_checked"]) == (0, "compared", True)
+    assert comparison["outside_skill_uses"] == [{"skill": "fetch-mail", "path": "refresh.sh", "line": 1}]
+    refusal = json.loads(assembled.output)
+    assert (assembled.exit_code, refusal["result"], refusal["name"]) == (1, "outside_skills_found", "notes")
+    assert refusal["uses"] == [
+        "refresh.sh:1 names the skill fetch-mail, which this workspace holds and the app does not carry"
+    ]
 
 
 def test_the_command_names_a_lock_that_does_not_hold_a_name_that_is_taken_and_a_push_that_is_refused(

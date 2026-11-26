@@ -3,7 +3,8 @@
 The `app-install` command: what registers an app a workspace's agent builds, and what keeps the files the workspace needs for it in step with its manifest.
 
 A user app is one self-contained directory, `system/apps/<package>/`.
-Everything the app owns is inside it: its code, its skills (`skills/<name>/`), its routines (`routines/<id>.toml`), and its environment units (`env.d/<NNNN>-<name>.sh`).
+Everything the app owns is inside it: its code, its routines (`routines/<id>.toml`), its environment units (`env.d/<NNNN>-<name>.sh`), and the skills it carries (`skills/<name>/`).
+A skill built for an app is made under `.agents/skills/` like any other and listed in the app's record as a reference; the app comes to carry it when it is published (the `publish-app` skill), which is also how an installed app arrives with skills.
 The command is deterministic and asks nothing; every run ends in one JSON line on stdout.
 
 ```bash
@@ -89,9 +90,9 @@ What it could not do outside the tree, such as reaching a supervisord that is no
 
 ## Converting an app built before this layout
 
-`app-install migrate <package>` turns an app that has a manifest and a hand-written program file, and keeps its skills and routines elsewhere in the workspace, into a user app.
+`app-install migrate <package>` turns an app that has a manifest and a hand-written program file, and keeps its routines elsewhere in the workspace, into a user app.
 
-- A skill the manifest's `[[references]]` names moves into the app's `skills/`, with a link left where it was, unless another app names it too or it has a Python project of its own; those, and every other reference, are listed in the record's `references`.
+- Every path the manifest's `[[references]]` names is listed in the record's `references`. A skill among them stays where it is: an app comes to carry a skill only when it is published.
 - A routine whose `app` is this app moves into the app's `routines/`.
 - The manifest loses `[[references]]` and `[wiring]`, and its `[scope] exclude` globs become relative to the app's directory.
 - The record keeps the port the app already runs on, and the program file is replaced by the generated one.
@@ -203,7 +204,7 @@ A publish is driven by the `publish-app` skill, which asks the user twice before
 
 | Step | What it does | Result |
 | --- | --- | --- |
-| `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`) and which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from. Writes nothing. | `compared` |
+| `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`), which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from, and each line that names a skill the app does not carry (`outside_skill_uses`). Writes nothing. | `compared` |
 | `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
 | `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
 | `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
@@ -220,10 +221,19 @@ The tree is refused, with nothing left waiting, when:
 
 - its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
 - the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
+- a file in it names, by its path under `.agents/skills/` or `data/.skills/`, a skill the app does not carry (`outside_skills_found`, with each line under `uses`). See "Skills the app does not carry" below;
 - it holds a `pyproject.toml` whose lock is not what the project calls for (`lock_check_failed`). `uv lock --check` runs in the assembled directory, so an app that resolves only inside a workspace does not pass;
 - the app was installed and nobody has changed it, so it is its publisher's to publish (`refused`).
 
 The result names what an adopter will be asked for under `needs` (`permissions`, `secrets`, `llm`, `environment`, `dependencies`, `adaptation`).
+
+**Skills the app does not carry.**
+A published app has to work where the publisher's workspace is not, so it may not run or read a skill that stays behind.
+`compare` and `assemble` read every text file of the tree for a path under `.agents/skills/<skill>` or `data/.skills/<skill>`, and count a skill as left behind when the workspace holds it at the published commit, the tree has no `skills/<skill>/SKILL.md`, and the template release the workspace is on does not ship it.
+Each such line is one `{skill, path, line}` entry of `compare`'s `outside_skill_uses`, and stops `assemble`.
+The way on is for the app to carry the skill, which the `publish-app` skill's worker does, or to stop naming it.
+Telling a workspace's own skill from one every workspace starts with takes a template release tag in the history; with none the tree is not read, and `is_outside_skills_checked` is false in both results.
+The check reads paths only: a Python import of a skill's package is caught by the lock check instead, and a path built up at run time is not caught at all.
 
 **The push.**
 On the first publish the public repository is created under the workspace's GitHub account through `latchkey curl`, closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.

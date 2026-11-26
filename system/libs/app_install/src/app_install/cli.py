@@ -39,6 +39,7 @@ from app_install.errors import NoSnapshotError
 from app_install.errors import NotAnAppError
 from app_install.errors import NotAssembledError
 from app_install.errors import NotPushedError
+from app_install.errors import OutsideSkillsError
 from app_install.errors import PublishedNameTakenError
 from app_install.errors import PushRefusedError
 from app_install.errors import RepositoryUnreachableError
@@ -447,6 +448,8 @@ def publish_compare_command(repo_root: Path, name: str, revision: str) -> None:
         published_version=record.published_version,
         version=outcome.version,
         changed_paths=[change.model_dump(mode="json") for change in outcome.changed_paths],
+        outside_skill_uses=[use.model_dump(mode="json") for use in outcome.outside_skill_uses],
+        is_outside_skills_checked=outcome.is_outside_skills_checked,
         **_published_tree_fields(outcome.published),
     )
 
@@ -480,12 +483,15 @@ def publish_set_version_command(repo_root: Path, name: str, version: str) -> Non
 @click.pass_obj
 def publish_assemble_command(repo_root: Path, name: str, revision: str) -> None:
     """Build the tree a publish of the app NAME would push, outside the workspace, scan it for secrets, and
-    check that a Python app's lock holds there. Pushes nothing."""
+    check that it names no skill the app does not carry and that a Python app's lock holds there. Pushes
+    nothing."""
     with install_lock(repo_root):
         try:
             outcome = assemble_app(repo_root, name, revision, WorkspaceRuntime(repo_root=repo_root))
         except SecretsFoundError as e:
             _refuse("secrets_found", name=name, findings=list(e.findings))
+        except OutsideSkillsError as e:
+            _refuse("outside_skills_found", name=name, uses=list(e.uses))
         except LockCheckError as e:
             _refuse("lock_check_failed", name=name, detail=str(e))
         except (AppInstallError, AppManifestError) as e:
@@ -499,6 +505,7 @@ def publish_assemble_command(repo_root: Path, name: str, revision: str) -> None:
         is_first_publish=not outcome.record.published_commit,
         published_repo_url=outcome.record.published_repo_url,
         is_lock_checked=outcome.is_lock_checked,
+        is_outside_skills_checked=outcome.is_outside_skills_checked,
         needs={
             **_adopter_needs(manifest),
             "environment": manifest.environment.model_dump(mode="json"),
