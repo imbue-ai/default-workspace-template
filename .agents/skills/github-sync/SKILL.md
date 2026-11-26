@@ -212,10 +212,11 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     from now on every change you save is copied there automatically, that each
     app they built also has a private copy of its own (name them, with their
     URLs) and what one holds if they ever share it ("Giving someone access to
-    a dev repository" in that file), that the files in their workspace folders
-    (uploads, notes, app data) are protected by a separate backup rather than
-    this one, and that if the connection drops the copy catches up on its own.
-    No commits, pushes, hooks, or gateways in the message.
+    a dev repository" in `references/app-dev-repositories.md`), that the files
+    in their workspace folders (uploads, notes, app data) are protected by a
+    separate backup rather than this one, and that if the connection drops the
+    copy catches up on its own. No commits, pushes, hooks, or gateways in the
+    message.
 
 ## App dev repositories
 
