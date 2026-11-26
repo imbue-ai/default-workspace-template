@@ -12,6 +12,7 @@ digest is someone else's, and a file gone that the record expects is backups tur
 
 import fcntl
 import json
+import math
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import auto
@@ -47,6 +48,11 @@ WORKSPACE_ID_ENV: Final[str] = "MNGR_AGENT_ID"
 
 FIRST_RETRY_SECONDS: Final[float] = 60.0
 LONGEST_RETRY_SECONDS: Final[float] = 3600.0
+# The doubling that first reaches the longest delay. A count of failures has no bound, and two to its power
+# outgrows a float.
+_DOUBLINGS_TO_LONGEST_RETRY: Final[int] = math.ceil(
+    math.log2(LONGEST_RETRY_SECONDS / FIRST_RETRY_SECONDS)
+)
 
 NO_STORAGE_DETAIL: Final[str] = (
     "This workspace holds no storage credentials for the destination."
@@ -307,7 +313,8 @@ def failed_record(record: SetupRecord, detail: str, now: float) -> SetupRecord:
     """``record`` after an attempt that failed at ``now``: tried again after a minute, then twice as long each
     time, up to an hour."""
     failed_attempts = record.failed_attempts + 1
-    delay = min(FIRST_RETRY_SECONDS * 2 ** (failed_attempts - 1), LONGEST_RETRY_SECONDS)
+    doublings = min(failed_attempts - 1, _DOUBLINGS_TO_LONGEST_RETRY)
+    delay = min(FIRST_RETRY_SECONDS * 2**doublings, LONGEST_RETRY_SECONDS)
     return record.model_copy_update(
         to_update(record.field_ref().state, BackupSetupState.FAILED),
         to_update(record.field_ref().detail, detail),

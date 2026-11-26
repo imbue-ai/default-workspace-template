@@ -24,6 +24,8 @@ from workspace_backup_setup.program import (
 from workspace_backup_setup.state import (
     BackupSetupState,
     BackupState,
+    SetupRecord,
+    failed_record,
     read_backup_credentials,
     read_backup_state,
     read_setup_record,
@@ -298,6 +300,21 @@ def test_a_failed_setup_is_tried_again_after_a_minute_then_twice_as_long_up_to_a
     )
     assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-1"
     assert read_setup_record(workspace.root).failed_attempts == 0
+
+
+def test_a_setup_that_has_failed_thousands_of_times_is_tried_again_after_an_hour() -> (
+    None
+):
+    record = SetupRecord(
+        request_id="request-a",
+        destination=BackupDestinationKind.IMBUE_CLOUD,
+        state=BackupSetupState.FAILED,
+        failed_attempts=5000,
+    )
+
+    failed = failed_record(record, "restic init failed", _NOW)
+
+    assert (failed.failed_attempts, failed.retry_at) == (5001, _NOW + 3600.0)
 
 
 class _ProgramStopped(BaseException):
