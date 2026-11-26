@@ -19,7 +19,7 @@ numbers are SKILL.md's.
 
 ## Which skills
 
-Three places name them. A skill named in any of them is a candidate:
+Four places name them. A skill named in any of them is a candidate:
 
 - `outside_skill_uses` in `compare`'s result: each line of the app that names
   a skill by its path (`.agents/skills/<skill>/...`, `data/.skills/<skill>/...`).
@@ -30,15 +30,22 @@ Three places name them. A skill named in any of them is a candidate:
   git grep -n -E '_skill\b|-skill\b' -- system/apps/<package>
   ```
 
+- A skill one of the app's routines runs. A routine names its skill by name,
+  never by path, so nothing above finds it:
+
+  ```bash
+  git grep -n -e '^skill = ' -- system/apps/<package>/routines
+  ```
+
 - A skill the app's record lists under `[[references]]`
   (`system/config/apps/<name>.toml`): one that was built for the app or calls
   it.
 
 Then decide, for each:
 
-- **The app cannot do its job without it** (the first two places): the app
+- **The app cannot do its job without it** (the first three places): the app
   takes it in. There is no publishing around it.
-- **It only drives the app** (the third place alone) and would be useless
+- **It only drives the app** (the last place alone) and would be useless
   without it: the app takes it in, so whoever installs the app gets it too.
 - **It is useful without the app**: it stays where it is, and is not
   published. Say so at the scope gate.
@@ -53,8 +60,11 @@ Before the scope gate, find what else uses each skill the app would take in:
 
 ```bash
 git grep -l -e '.agents/skills/<skill>' -e '<skill_with_underscores>_skill' -e 'data/.skills/<skill>' \
-    -- . ':!.agents/skills/<skill>' ':!system/apps/<package>'
+    -e 'skill = "<skill>"' -- . ':!.agents/skills/<skill>' ':!system/apps/<package>'
 ```
+
+The last pattern is a routine that runs the skill, which names it without a
+path.
 
 - **Nothing else, or only a routine or a doc**: the app takes it in, and the
   worker repoints what names it.

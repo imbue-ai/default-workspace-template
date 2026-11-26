@@ -102,7 +102,10 @@ it already starts with the app's name. For each one:
    each pair of directories in your report, for the lead to move.
 4. **Repoint everything else that named it.** Your task lists what else uses
    the skill. Make only the change that keeps each working:
-   - a routine that runs the skill names `<carried>`;
+   - a routine that runs the skill names `<carried>`
+     (`skill = "<carried>"`). Look in the app's own `routines/` too: a
+     routine names its skill without a path, and those are published with
+     the app;
    - another app, or a skill that stays outside the app, that imported its
      package or ran its scripts calls this app instead: its console script,
      or its HTTP API, found by name (`resolve_app_url("<name>")`, never a
@@ -121,8 +124,8 @@ it already starts with the app's name. For each one:
    name: pick another that starts with the app's name.
 
 When you are done,
-`git grep -n -e '.agents/skills/<skill>' -e 'data/.skills/<skill>'` prints
-nothing, and the app's tests pass with the modules where they now are.
+`git grep -n -e '.agents/skills/<skill>' -e 'data/.skills/<skill>' -e 'skill = "<skill>"'`
+prints nothing, and the app's tests pass with the modules where they now are.
 
 ## 3. Read the app and write what an adopter needs to know
 
