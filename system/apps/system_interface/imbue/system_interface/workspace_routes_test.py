@@ -14,6 +14,7 @@ from share_grants.document import SHARE_GRANTS_RELATIVE_PATH
 from share_grants.document import SHARE_IDENTITIES_RELATIVE_PATH
 from share_grants.grants import load_grants
 from workspace_backup_setup.setup import PENDING_ENV_RELATIVE_PATH
+from workspace_backup_setup.setup import SETUP_STATE_RELATIVE_PATH
 from workspace_backup_setup.testing import FAKE_RESTIC_HOLDS
 from workspace_backup_setup.testing import fake_restic_calls
 from workspace_backup_setup.testing import release_fake_restic
@@ -286,6 +287,44 @@ def test_a_body_holding_text_that_is_not_valid_unicode_is_refused_and_changes_no
         "code": "INVALID_REQUEST",
     }
     assert not (_workspace_root(app) / "data").exists()
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "body", "written_path"),
+    [
+        # The identities are written ahead of the grants, whose own file would read as GRANTS_UNREADABLE first.
+        (
+            "PUT",
+            SHARING_GRANTS_ROUTE,
+            {"grants": {"workspace": {"users": ["user-1"]}}},
+            SHARE_IDENTITIES_RELATIVE_PATH,
+        ),
+        ("PUT", PROFILE_ROUTE, {"snapshot_format": 7, "account_id": "account-123"}, Path(SNAPSHOT_RELATIVE_PATH)),
+        ("PUT", TIMEZONE_ROUTE, {"zone": "Europe/Berlin", "is_replacing": True}, USER_TIMEZONE_RELATIVE_PATH),
+        ("PUT", BACKUP_CREDENTIALS_ROUTE, {"env_text": _ENV_TEXT}, SETUP_STATE_RELATIVE_PATH),
+        ("DELETE", BACKUP_CREDENTIALS_ROUTE, None, SETUP_STATE_RELATIVE_PATH),
+        ("PUT", BACKUP_VERIFICATION_ROUTE, {"is_enabled": False}, BACKUP_TOML_RELATIVE_PATH),
+    ],
+)
+def test_a_write_that_fails_is_answered_with_the_routes_own_error_object(
+    client: FlaskClient,
+    app: Flask,
+    fake_restic_control: Path,
+    method: str,
+    route: str,
+    body: dict[str, object] | None,
+    written_path: Path,
+) -> None:
+    # A directory where a file the route writes belongs, which no write can replace.
+    blocked = _workspace_root(app) / written_path
+    blocked.mkdir(parents=True)
+
+    failed = client.open(route, method=method, json=body)
+
+    assert failed.status_code == 500
+    assert failed.get_json()["code"] == "WRITE_FAILED"
+    assert blocked.is_dir()
+    assert fake_restic_calls(fake_restic_control) == []
 
 
 # The profile snapshot and the timezone
