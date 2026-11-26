@@ -502,10 +502,13 @@ def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_r
 ):
     current = migrate_workspace.data_rsync_exclude_args("current")
     assert "--exclude=/.secrets/restic.env" in current
+    # The credentials of a setup the source had not finished, and every copy it kept aside.
+    assert "--exclude=/.secrets/restic.env.*" in current
+    assert "--exclude=/.state/backup_setup/" in current
     assert "--exclude=/.secrets/share.env" in current
     assert "--exclude=/.secrets/share_tls/" in current
     assert "--exclude=/.secrets/agent_access/" in current
-    assert len(current) == len(migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY)
+    assert len(current) == len(migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY) + 1
     # The sign-in file the migration is supposed to carry is not excluded.
     assert not any("anthropic.env" in flag for flag in current)
     # A pre-declutter source keeps its secrets under runtime/secrets/.

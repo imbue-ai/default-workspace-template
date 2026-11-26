@@ -113,9 +113,11 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   work with); a client calls a route only for an operation named there. The
   rest are who the workspace is shared with and which of its apps can be
   shared (`sharing`, `sharing/grants`), the profile snapshot and the user's
-  timezone (`profile`, `timezone`), the backup credentials, the initialisation
-  of the repository they name and whether backups are verified
-  (`backups/credentials|setup|verification`), and the updates
+  timezone (`profile`, `timezone`), the backups (`backups`, which answers where
+  they go and how the workspace's own setup of them stands;
+  `backups/destination`, which names where they go; `backups/credentials`,
+  which answers the credentials in use to the owner alone; and
+  `backups/verification`), and the updates
   (`update`, `update/start|schedule|skip|dismissals|liveness|settings`). The
   update settings name the release channel the workspace follows and when it
   arms its own updates, and a start or a schedule that names no version takes

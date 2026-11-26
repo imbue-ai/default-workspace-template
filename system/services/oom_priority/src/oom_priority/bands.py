@@ -206,7 +206,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "host-backup": 50,
     # The workspace's own setup of its backups: a small process that is idle but for a setup and an hourly
     # check. A shed costs nothing kept: what it was asked is on disk, and it takes it up when it comes back.
-    "backup-setup": 52,
+    "backup_setup": 52,
     # The cron daemon behind the workspace's scheduled jobs. A shed defers those
     # jobs rather than losing them -- the every-minute checkers fire at the due
     # hour when the container is up, or the first minute it is back up after a

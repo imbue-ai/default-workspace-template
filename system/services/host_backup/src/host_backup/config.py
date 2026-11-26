@@ -13,9 +13,9 @@ Two on-disk inputs, both optional from the service's point of view:
   (`RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, and any backend credentials restic
   reads from the environment: `RESTIC_REST_USERNAME` / `RESTIC_REST_PASSWORD`
   for Imbue Studio's backup store, or e.g. `AWS_ACCESS_KEY_ID` /
-  `AWS_SECRET_ACCESS_KEY` for an S3 backend). Written only by Imbue Studio
-  (injected whole); a missing file simply means backups are not configured.
-  Gitignored.
+  `AWS_SECRET_ACCESS_KEY` for an S3 backend). Written by the workspace's
+  `backup-setup` program, or injected whole by an Imbue Studio from before it;
+  a missing file simply means backups are not configured. Gitignored.
 
 Snapshot mechanics are NOT configuration: see `host_backup.capabilities`,
 which the service detects in memory at startup.

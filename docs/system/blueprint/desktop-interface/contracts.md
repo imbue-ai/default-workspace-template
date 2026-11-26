@@ -336,9 +336,9 @@ A client is built with the highest number it knows. One that reads a higher numb
 | `sharing.grants.write` | `PUT /api/workspace/sharing/grants` |
 | `profile.write` | `PUT /api/workspace/profile` |
 | `timezone.write` | `PUT /api/workspace/timezone` |
-| `backups.credentials.write` | `PUT /api/workspace/backups/credentials` |
-| `backups.credentials.remove` | `DELETE /api/workspace/backups/credentials` |
-| `backups.setup.read` | `GET /api/workspace/backups/setup` |
+| `backups.read` | `GET /api/workspace/backups` |
+| `backups.destination.write` | `PUT /api/workspace/backups/destination` |
+| `backups.credentials.read` | `GET /api/workspace/backups/credentials` |
 | `backups.verification.write` | `PUT /api/workspace/backups/verification` |
 | `update.read` | `GET /api/workspace/update` |
 | `update.start` | `POST /api/workspace/update/start` |
@@ -351,13 +351,65 @@ A client is built with the highest number it knows. One that reads a higher numb
 | `update.settings.write` | `PUT /api/workspace/update/settings` |
 
 A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
-A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
-A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry.
+The one exception is `GET /api/workspace/backups/credentials`, which answers a secret to a client outside the workspace and so answers the owner alone (`403` with the code `OWNER_ONLY` otherwise).
+A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_DESTINATION`, `BACKUP_OPERATION_RUNNING`, `OWNER_ONLY`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
+A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry, and a `BACKUP_OPERATION_RUNNING` carries `lease`, who holds the backup lease.
 
 Two routes answer before their work is done, and a client reads on:
 
-- `PUT /api/workspace/backups/credentials` takes the whole of `restic.env` and answers `202` with the setup's state `INITIALIZING` (`200` with `READY` when those credentials are already in place); `restic.env` is written only once the repository is initialised, so the backup service never sees credentials for a repository that is not. `GET /api/workspace/backups/setup` then says `NONE`, `INITIALIZING`, `READY`, or `FAILED` with restic's own words, the credentials' values redacted. An initialisation whose process is gone reads as `FAILED`, and sending the credentials again is safe.
+- `PUT /api/workspace/backups/destination` names where the backups go and answers the backup state, under `202` when the request left the workspace something to do and under `200` when it did not. `GET /api/workspace/backups` then says how the setup stands.
 - `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then holds the attempt under `last_start`, with its outcome once it has one. An attempt whose process is gone reads as `CREATE_FAILED`.
+
+**The workspace sets up its own backups.**
+A client names where the backups go and supplies the storage credentials that destination needs, and nothing else: the workspace makes the repository's password, initialises the repository, installs `data/.secrets/restic.env`, and tries again by itself when any of that fails.
+The supervised `backup-setup` program does it (`system/libs/workspace_backup_setup/`; supervisord knows it as `backup_setup`), so a setup outlasts a restart of the shell, and one the program was stopped in is taken up when it starts.
+
+The body of `PUT /api/workspace/backups/destination` is `{"destination"}` with the storage where the client has some:
+
+| `destination` | What comes with it |
+|---|---|
+| `IMBUE_CLOUD` | `imbue_cloud_storage`: `{"repository_url", "rest_username", "rest_password"}`, as the connector's `POST /backups/repositories` answers them |
+| `OWN_STORAGE` | `own_storage`: `{"repository", "backend_env"}`, the variables of the storage as the user typed them |
+| `NONE` | Nothing: backups are off |
+
+- A request for what the workspace already holds changes nothing and answers the state, except that a setup that had failed is tried again at once.
+- A request that would change something is refused with `409` and the code `BACKUP_OPERATION_RUNNING`, naming the holder, while anyone holds the backup lease.
+- A destination named with no storage is set up from what the workspace kept for it, and reads `AWAITING_STORAGE` when it kept nothing.
+- Storage offered for the repository the workspace already uses is taken only once the workspace finds that the storage refuses what it holds: a repository at the backup store has one token, and a client that asks the connector for another ends the first.
+- `NONE` moves `restic.env` aside to `restic.env.<timestamp>`, which the workspace keeps, and the backup service goes idle. Until the new destination is ready, a change of destination leaves the previous one in use.
+- A password among the variables of the user's own storage is refused with `400` and the code `INVALID_DESTINATION`, as is a destination the workspace does not know.
+
+`GET /api/workspace/backups` answers everything a client reads about the backups:
+
+| Field | Meaning |
+|---|---|
+| `destination` | `NONE`, `IMBUE_CLOUD` or `OWN_STORAGE` |
+| `setup` | How the setup stands: `state`, `detail`, `started_at`, `finished_at` and `retry_at` |
+| `is_configured` | Whether `restic.env` is in place, which is what the backup service runs on |
+| `is_verification_enabled` | The verification flag |
+| `repository` | The address of the destination's repository, with any credential in it taken out; `""` when there is none or the workspace does not know it yet |
+| `credentials_digest` | The SHA-256, in hex, of the text of the `restic.env` in use; `""` when there is none |
+| `lease` | Who holds the backup lease: `holder`, `taken_at` and `expires_at`; null when nobody does |
+
+| `setup.state` | Meaning |
+|---|---|
+| `NONE` | No destination is chosen |
+| `AWAITING_STORAGE` | A destination is chosen, and the workspace holds no storage credentials that work for it |
+| `INITIALIZING` | An attempt at the setup is running, or about to |
+| `READY` | `restic.env` is in place for the destination |
+| `FAILED` | The last attempt failed; `detail` says what failed, with the credentials' values redacted, and `retry_at` when the next one starts |
+
+A failed setup is tried again after a minute, then after twice as long each time, up to an hour, for as long as the destination stands.
+Once an hour, and when it starts, `backup-setup` checks that the credentials in use still open the repository; a storage that refuses them leaves the setup `AWAITING_STORAGE`, with `restic.env` where it is.
+
+`GET /api/workspace/backups/credentials` answers `{"env_text", "digest"}`, the whole text of the `restic.env` in use and the digest the state answers as `credentials_digest` (both `""` when there is none), to the owner alone. The workspace makes the repository's password, so this is how an owner's client comes to hold a copy: it reads the credentials when the digest differs from that of its own copy.
+
+A `restic.env` the workspace's program did not write is taken as the destination. An Imbue Studio desktop from before these routes writes the file by its own command, and so do a current desktop's restore, its update of the backup service and its migration of the backup store. The setup then reads `READY` for the repository the file names, the destination's kind is read off the file (Imbue Cloud where the repository is a `rest:` address whose user name is the workspace's own id, storage of the user's own otherwise), and a file such a writer moved aside reads as `NONE`.
+
+**One backup operation at a time.**
+The workspace holds a backup lease: a file at `/run/backup-operation.lease` that names its holder, when it was taken, and when it expires. It lasts ten minutes from when it was taken or last renewed, and one past its expiry is free. Under `/run` it outlasts the workspace's services being stopped and does not outlast a reboot.
+The workspace's own setup takes it as `setup`. A program of the Imbue Studio desktop that changes backups (`restore`, `backup-service-update`, `store-migration`) takes it through `python3 system/scripts/backup_lease.py`, run from the workspace root: `take --holder <name>`, `renew --holder <name>`, `release --holder <name>`, `read`, and `hold --holder <name> [--keep] -- <command>`, which runs a command under the lease, renews it every minute for as long as the command runs, and gives it back when the command ends unless `--keep` is given.
+Each prints one JSON line, the lease as it stands or `null`. `take` and `renew` exit 75 when the caller does not hold the lease afterwards, and `hold` exits 75 without running its command when someone else holds it, and with the command's exit code otherwise.
 
 `GET /api/workspace/sharing` also lists the apps that can be shared by themselves, as `shareable_apps`: every registered app that is not internal, in the registry's order, each `{"name", "label", "display_name", "is_system"}` (its grants' key, its origin label, the name a person reads, and whether it is part of the workspace itself). An internal app is reached only through a share of the whole workspace.
 `PUT /api/workspace/profile` leaves the stored snapshot alone when the one sent equals it apart from `written_at`, and answers `is_written: false` then: a client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a change that did not happen.

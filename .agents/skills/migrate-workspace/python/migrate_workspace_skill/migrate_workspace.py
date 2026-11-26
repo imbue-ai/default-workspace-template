@@ -491,14 +491,17 @@ def classify_branches(
 
 # The files under the data tree's secrets directory that are identity minted
 # for one workspace rather than user content, so the copy must leave them
-# behind: a backup repository keyed by the old workspace's own random password,
-# a tunnel minted per agent id, and the published share's whole identity (its
+# behind: a backup repository keyed by the old workspace's own random password
+# (the credentials in use, those of a setup it had not finished, and every copy
+# it kept aside, any of which this workspace's own backup setup would otherwise
+# install as its own), a tunnel minted per agent id, and the published share's whole identity (its
 # relay materials, auth label, gateway signing key, grants document, grantee
 # identities, TLS material, and the visiting-agent registry). Copying any of
 # the share files would make this workspace present the old one's hostname
 # and certificate and have two machines claim one share.
 DATA_SECRETS_EXCLUDED_FROM_COPY = (
     "restic.env",
+    "restic.env.*",
     "cloudflare_tunnel.env",
     "share.env",
     "share_auth_label",
@@ -514,16 +517,28 @@ DATA_SECRETS_EXCLUDED_FROM_COPY = (
 # ``runtime/`` on a pre-declutter source).
 _SECRETS_DIR_BY_LAYOUT = {LAYOUT_CURRENT: ".secrets", LAYOUT_PRE_DECLUTTER: "secrets"}
 
+# What the source's own backup setup keeps about the repository it was asked
+# for, relative to its data root. A pre-declutter source has none.
+_BACKUP_SETUP_STATE_BY_LAYOUT = {LAYOUT_CURRENT: (".state/backup_setup/",)}
+
 
 def data_rsync_exclude_args(layout: str) -> list[str]:
-    """The ``--exclude`` flags an rsync of the source's data root takes, one per excluded secret.
+    """The ``--exclude`` flags an rsync of the source's data root takes: one per excluded secret, and
+    one for the state of the source's own backup setup.
 
     Anchored at the data root (the leading ``/``), so a user file that happens
     to share a name elsewhere in the tree still comes over.
     """
     secrets_dir = _SECRETS_DIR_BY_LAYOUT[layout]
     return [
-        f"--exclude=/{secrets_dir}/{name}" for name in DATA_SECRETS_EXCLUDED_FROM_COPY
+        *(
+            f"--exclude=/{secrets_dir}/{name}"
+            for name in DATA_SECRETS_EXCLUDED_FROM_COPY
+        ),
+        *(
+            f"--exclude=/{path}"
+            for path in _BACKUP_SETUP_STATE_BY_LAYOUT.get(layout, ())
+        ),
     ]
 
 

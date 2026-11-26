@@ -5,3 +5,9 @@ New entry file `system/scripts/install_update_dispatcher_cron.py`: it writes the
 The desktop interface's contracts, section 5.7, describe the update settings route, the workspace arming its own updates from its release channel's version, the request values a client may now leave to the workspace, how a desktop that still names its newest version holds the workspace to it, the compatibility number, the shareable apps, and the profile route leaving an unchanged snapshot alone.
 
 The state docs list the files a workspace that arms its own updates keeps under `data/.state/update-apply/`: `settings.json`, `channel-version.json`, `client-ceiling.json`, `schedule-origin.json` and `installed-version.json`.
+
+New program `system/scripts/backup_lease.py` (`backup-lease`): it takes, renews, gives back and reads the workspace's backup lease, a file at `/run/backup-operation.lease` that keeps two backup operations apart, and `hold` runs a command under it, renewed every minute. The workspace's own backup setup takes it, and the Imbue Studio desktop's backup programs run it by its path with no venv. It joins the bare entry lists.
+
+New supervised program `backup-setup` (`system/supervisord.conf.d/backup_setup.conf`, which supervisord knows as `backup_setup`), which sets up the workspace's backups.
+
+The desktop interface's contracts, section 5.7, also describe the workspace setting up its own backups: the destination a client names, the backup state, the read of the credentials by the owner, a `restic.env` another writer put in place, and the backup lease. The state and secrets docs list what the backup setup keeps.

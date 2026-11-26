@@ -1,0 +1,9 @@
+A workspace sets up its own backups. A client names where they go and supplies the storage credentials, and nothing else.
+
+- `destination`: `request_backup_destination` records a destination (`IMBUE_CLOUD`, `OWN_STORAGE` or `NONE`, with its storage where the caller has some) for the `backup-setup` program, and answers the backup state. The shell's route and the workspace's initial data both call it. A request for what the workspace already holds changes nothing, one named with no storage is set up from what the workspace kept, and one that would change something while the backup lease is held is refused.
+
+- `program`: `backup-setup`, a new supervised program. It makes the repository's password unless the workspace kept one for that repository, initialises the repository or checks that the password opens it, and installs `restic.env`. A failed setup is tried again after a minute, then twice as long each time, up to an hour, and one the program was stopped in is taken up when it starts. `NONE` moves `restic.env` aside and keeps it. Once an hour and at its start it checks that the storage still accepts the credentials in use, and a refusal reads `AWAITING_STORAGE`.
+
+- `state`: `read_backup_state` answers the destination, how the setup stands, whether `restic.env` is in place, the verification flag, the repository, the digest of the credentials in use, and who holds the backup lease. A `restic.env` another writer put in place, such as a released Imbue Studio desktop, is taken as the destination.
+
+`setup`, which took a whole `restic.env` from a client and initialised the repository on a thread of the shell, is gone.

@@ -1,0 +1,1 @@
+The README says that the workspace's own `backup-setup` program creates the repository and makes its password, and lists what that program calls of this service among the stable contracts. No code of the service changes.
