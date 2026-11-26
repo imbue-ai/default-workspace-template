@@ -1,0 +1,1 @@
+- The boot removes the app registry's `owner-exec` and `vm-exec` rows and `data/.state/owner_exec_inner.toml` before it starts supervisord. This release runs neither program, and neither row names one, so the update's own pruning would leave them: a workspace that updates would keep an origin on its share with nothing behind it. A workspace that never held them is unchanged.

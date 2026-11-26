@@ -1,0 +1,1 @@
+- `forward_port.py`'s documentation and tests name previews and isolated test servers as the registrations with no app directory. The workspace's boot now runs `forward_port.py --remove` for the `owner-exec` and `vm-exec` rows.
