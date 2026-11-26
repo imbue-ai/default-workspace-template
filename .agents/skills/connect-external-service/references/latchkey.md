@@ -11,6 +11,7 @@ workspace; the gateway attaches it to the request.
 - Custom services (rows 2 to 4)
 - When the gateway is unreachable
 - Proxying requests through the user's desktop
+- Limiting sign-in scopes
 - Notes
 
 ## Services latchkey already knows (row 1)
@@ -289,6 +290,31 @@ request (by POSTing to `/permission-requests` as described above).
 Once the user approves the request, the necessary permissions and
 proxy rules are set up so that traffic flows through the user's
 desktop whenever possible.
+
+## Limiting sign-in scopes
+
+Advanced users can also adjust the set of provider-side scopes
+that a token is issued with when connecting a service, one
+level below Studio's own permissions.
+
+`latchkey services info` gives information about the actually
+granted underlying scopes (if any) for each set of credentials.
+
+The optional `login_scopes` parameter of a `predefined` permission
+request can be used to specify the desired list of underlying
+scopes if needed.
+
+```bash
+  -d '{... "payload": {"scope": "github-rest-api", "permissions": ["github-read-all"], "login_scopes": ["repo", "read:org"]}}'
+```
+
+The scopes a service accepts are listed under `capabilities.scopes` in
+`latchkey services info <service_name>`; an empty list means its sign-in
+offers no choice.
+
+Reasoning about the underlying scopes in the presence of
+Studio's own permissions can be confusing for the user so avoid
+mentioning the underlying scopes unless necessary.
 
 ## Notes
 
