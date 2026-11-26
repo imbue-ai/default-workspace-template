@@ -39,6 +39,7 @@ from pydantic import SecretStr
 from update_self_skill import update_agent_restarts
 from update_self_skill import update_runtime
 from update_self_skill.update_layout import APPS_REGISTRY_PATH
+from watchdog.events import FileSystemEventHandler
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -111,6 +112,7 @@ from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -823,14 +825,17 @@ def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: st
 
 
 def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree(
-    tmp_path: Path,
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     """The chats of one account all watch that account's projects tree; the app watches it once, through one
     observer, however many of them are open."""
     state = build_test_state()
     account_dir = tmp_path / "account"
     (account_dir / "projects" / "hash123").mkdir(parents=True)
-    observers_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseObserver)}
+    # Another app's observer starting meanwhile: the suite runs in one process, where an earlier test's watcher can
+    # still be subscribing.
+    other_apps_observer = SharedWatchObserver.build()
+    other_apps_observer.subscribe(tmp_path_factory.mktemp("another-app"), False, FileSystemEventHandler())
     try:
         for index in range(4):
             agent_id = f"account-chat-{index}"
@@ -847,15 +852,21 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
             state.get_or_create_watcher(info)
 
         def app_observers() -> list[BaseObserver]:
+            # Told from every other observer in the process by what they watch: this test's own tree. An observer's
+            # emitters are copied in one step, since the chats' watcher threads add to them as this reads.
             return [
                 thread
                 for thread in threading.enumerate()
-                if isinstance(thread, BaseObserver) and thread not in observers_before
+                if isinstance(thread, BaseObserver)
+                and any(Path(emitter.watch.path).is_relative_to(tmp_path) for emitter in tuple(thread.emitters))
             ]
 
         def watch_count(path: Path) -> int:
             return sum(
-                1 for observer in app_observers() for emitter in observer.emitters if emitter.watch.path == str(path)
+                1
+                for observer in app_observers()
+                for emitter in tuple(observer.emitters)
+                if emitter.watch.path == str(path)
             )
 
         # Each chat's own state dir is watched once its watcher has subscribed to everything.
@@ -867,6 +878,7 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
         assert watch_count(account_dir / "projects") == 1
         assert len(app_observers()) == 1
     finally:
+        other_apps_observer.close()
         state.shutdown()
 
 
