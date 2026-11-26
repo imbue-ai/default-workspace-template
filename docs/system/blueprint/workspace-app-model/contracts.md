@@ -17,6 +17,7 @@ Every rule below is normative and describes the current contract; where a phase 
   `app:<name>` for an app with `instances = true` is not an address of an instance; it names the app for `open` and `--action`.
 - A **view id** is a project id (the slugified project name) or the literal `everything`.
 - A **client id** is the uuid the browser keeps in local storage under `si-client-id`.
+  Imbue Studio writes it before the shell boots; what that constrains is in the [desktop interface contracts](../desktop-interface/contracts.md), section 1.
 - A **tab id** is `tab-<16 hex>`, minted when a page is first opened, carried in the `params` of every panel showing that page in a client's layout (section 6), and never reused.
 - A **save id** is `save-<16 hex>`, minted by a window for each layout save it makes.
 

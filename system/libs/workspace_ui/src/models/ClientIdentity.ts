@@ -9,6 +9,7 @@
  * `workspace-layout context`) can attribute requests to a client and its desktop.
  */
 
+// Imbue Studio writes this key before the shell boots (desktop-interface contracts.md, section 1).
 const CLIENT_ID_STORAGE_KEY = "si-client-id";
 
 let cachedClientId: string | null = null;
