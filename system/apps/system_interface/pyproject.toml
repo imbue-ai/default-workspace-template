@@ -8,6 +8,7 @@ dependencies = [
     "app-manifest",
     "imbue-app-sdk",
     "chat-background-tasks",
+    "onboarding-activity",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.

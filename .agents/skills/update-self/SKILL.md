@@ -3,6 +3,8 @@ name: update-self
 description: Safely pull updates from the upstream template repo (default target is the release the running Imbue Studio app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
+  exempt-checks: size paths contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Pulling updates from the upstream template, safely
@@ -321,6 +323,22 @@ built no bridge: record `run-status verdict STUCK --detail "<the error line, in
 plain terms>"`, surface it, and stop. From here on, a pass that ends for any
 reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
+**Then stage the target's shared prose**, once `$REF` is settled (re-run it
+whenever you re-run §2a, which clears the staging dir):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    stage-shared-prose --ref "$REF" || exit 1
+```
+
+It puts the target release's `.agents/shared/` beside the staged skill. From here to the end of the
+pass, this document and its references name those files by their staged path,
+because the workspace's own copies may be older than this flow. When a staged
+file names a further `.agents/...` path, read the copy under
+`data/.tasks/update-self/skill-at-target/` if one is there, else the
+workspace's. If the command exits non-zero, record `run-status verdict STUCK
+--detail "<the error line, in plain terms>"`, surface it, and stop.
+
 ### 3b. Launch
 
 Do not open a window for your own chat while the pass runs: Step 6 opens it
@@ -368,7 +386,7 @@ this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per §6 of the worker guide: the report shapes come from
-`.agents/shared/references/worker-reporting.md`, but you write and push the
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md`, but you write and push the
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the
@@ -452,11 +470,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 Once the poll is armed, **end your turn**; its message wakes you with the
 report. Re-arm with the same command. Never wait on the worker any other way
 -- no `sleep`, no polling its reports directory or its pane -- see "Never sleep
-on a worker" in `.agents/shared/references/lead-proxy.md`.
+on a worker" in `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
-Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
+Per `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of four things. You answer the first two yourself; the third
 you answer too, and reach the user only where it says so; the last always ends
@@ -546,14 +564,14 @@ Their answer, whenever it comes, arrives in this chat: follow
 ## 5. Terminal status
 
 - A worker that died without reporting is not yet a failure: recover it per
-  `.agents/skills/launch-task/references/dead-worker-recovery.md`, then re-arm
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/dead-worker-recovery.md`, then re-arm
   the poll. It is stuck only once that recovery has not brought it back.
 - A **`stuck`** report that shows the merge cannot land without breaking the
   running workspace is a migration-required update: follow
   `references/apply-outcomes.md`, "Migration-required updates", which ends the
   pass `NEEDS_RECREATION`.
 - Any other **`stuck`**, or a dead worker its recovery did not bring back -> surface per
-  `.agents/skills/launch-task/references/worker-failure.md` (if the user
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/worker-failure.md` (if the user
   then overrides, see `references/resuming-after-stuck.md`). Nothing is merged
   or applied. Compose it as a plain-language lead ("I couldn't complete this
   update cleanly; your workspace is untouched") followed by a clearly-marked
@@ -615,17 +633,17 @@ path below instead.
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
 `system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
-`system/apps/style_guide/frontend/`,
+`system/apps/style_guide/frontend/`, `system/apps/onboarding_checklist/frontend/`,
 `system/libs/workspace_ui/`,
 `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files, Routines, Screen and Style Guide frontends, the shared library,
+Getting Started, Files, Routines, Screen, Style Guide and Onboarding checklist frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
 wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files, Routines, Screen and Style Guide frontends, `workspace_ui`, and the npm files count as both
+Started, Files, Routines, Screen, Style Guide and Onboarding checklist frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
 `system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
@@ -694,7 +712,7 @@ A non-zero exit other than 7, or a `No agents found` line, means the message
 did not reach the worker: do not re-arm the poll on it. Exit 8 means the
 worker is gone, and takes the fresh pass below. Otherwise check whether the
 worker is alive ("Diagnose worker liveness" in
-`.agents/shared/references/lead-proxy.md`) and send again; a worker that is
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`) and send again; a worker that is
 gone takes the fresh pass below. Exit 7 means it arrived but the worker sits
 on a dialog it could not dismiss: do not send it again; re-arm the poll, and
 diagnose liveness the same way if no report comes.
@@ -758,18 +776,21 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, and the Style Guide's), append
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, the Style Guide's, and the Onboarding checklist's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
 --worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
---worker-bundle screen=<path> --worker-bundle style_guide=<path>` so the
+--worker-bundle screen=<path> --worker-bundle style_guide=<path>
+--worker-bundle onboarding_checklist=<path>` so the
 exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
 
 That one command is the whole landing: it fast-forwards to the worker's
 branch, refreshes, rebuilds and restarts what the update changed, probes the
-workspace's health, and reverts the entire merge on any failure. Exit codes,
-each spelled out in `references/apply-outcomes.md`:
+workspace's health, and reverts the entire merge on any failure. What each
+exit code means is in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`,
+and what this pass does on each in `references/apply-outcomes.md`:
 
 - **`0` -- applied.** Read its closing stderr lines before signing off.
 - **`2` -- automatically rolled back.** The update did not land and the
@@ -808,10 +829,11 @@ stopped and told nothing: starting it would take the memory back, and the next
 message to it starts it. It is safe to re-run: a non-zero exit names what it
 could not start or tell, and the same command finishes the rest.
 
-What each outcome means for the user, the `provision-incomplete` and
-`emergency.json` records, an interrupted apply (re-run the same command; it
-resumes), and how to honor a rollback request are in
-`references/apply-outcomes.md`.
+The `provision-incomplete` and `emergency.json` records and an interrupted
+apply (re-run the same command; it resumes) are in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
+What each outcome means for the user and how to honor a rollback request are
+in `references/apply-outcomes.md`.
 
 ### 5c. Carry out the report-driven remainder
 
@@ -827,7 +849,7 @@ that no longer imports, a consumer the report names that the update broke:
 2. Dispatch a repair worker with the evidence (the program's status and the
    tail of its stderr log, the failing check's output, what the update changed
    that it touches), through `launch-task` as in Step 4, with
-   `references/python-packaging-migration.md` named when the failure is one of
+   `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md` named when the failure is one of
    its symptoms.
 3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
    the worker gives up. A give-up is still recorded as `UPDATED`, with a
@@ -900,7 +922,7 @@ you hit this pass (a failing built-in test, a built-in test the worker's
 Validation names as flaky, a step of this flow that broke and had to be worked
 around). Escalate them together as AGENTS.md's "Updates"
 section describes -- one report via
-`.agents/shared/references/report-built-in-issues.md`, or
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/report-built-in-issues.md`, or
 `submit-upstream-changes` for a template fix -- or name each in the results
 message with the submission offered. A flaky test of a creation the workspace
 built is not built-in: file a regular ticket for it (`tk create`).

@@ -370,7 +370,9 @@ The layer posts the focused window's page no `ttyd-focus` while a landing it tak
 The page-reported `shell:focused` of section 4.2 raises the same window and is subject to neither that exception nor the hold: a page that reports its own focus has its window raised whatever the layer had just sent it.
 Hidden pages (minimized, on another desktop) are parked: moved out of the viewport and made invisible, which stops every engine rendering them while the page keeps its size, layout, and scroll (`display: none` would collapse its viewport and lose its document scroll, and Safari keeps rendering it).
 A shown page that the windows in front of it wholly cover within the backdrop, and the taskbar's band too while a fullscreen window paints over it (so one dragged wholly below that counts), is parked the same way but stays shown to the contract (it gets no `shell:hidden`); the focused window's page never is, so the keyboard stays in the window the user is in.
-A page is covered only where the windows are both drawn now and going, and never while a window is being moved or resized, so a window travelling over it covers it once it lands and one moving away uncovers it at once.
+A page is covered only where the windows are both drawn now and going, so a window travelling over it covers it once it lands and one moving away uncovers it at once.
+A window being moved or resized moves with no reconcile, so for the length of the gesture it neither is covered nor covers: the pages it was covering show, and the pages behind the windows that stay put stay parked.
+The window being moved has a compositor layer of its own (`will-change: transform` on its chrome and its page) until the move ends, so each pointer move slides the layer instead of repainting it.
 Sandbox and permission attributes are today's.
 The handshake, shown, hidden, close-request, and navigate messages go through `relay.ts` as today.
 

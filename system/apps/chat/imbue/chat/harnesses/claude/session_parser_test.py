@@ -159,6 +159,12 @@ def test_an_empty_progress_update_adds_no_text() -> None:
     assert events[0]["text"] == ""
 
 
+def test_a_thinking_block_whose_kind_cannot_be_read_shows_its_text() -> None:
+    block = {"type": "thinking", "thinking": "Checking the skills next.", "signature": "not base64 !!"}
+    events = parse_lines([_make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", block)])
+    assert events[0]["text"] == "Checking the skills next."
+
+
 def test_a_progress_update_line_carries_no_deferred_payload() -> None:
     line = _make_content_block_line(
         "uuid-1", "2026-01-01T00:00:01Z", _thinking_block("Reading the data next.", "narration")
@@ -232,6 +238,17 @@ def test_queued_command_reconciles_alongside_normal_turns() -> None:
         "assistant_message",
     ]
     assert events[2]["content"] == "actually do gmail instead"
+
+
+def test_only_a_queued_command_is_marked_delivered_mid_turn() -> None:
+    """The chat shows everything the agent says after a message it took into a running turn."""
+    lines = [
+        _make_user_line("uuid-1", "2026-01-01T00:00:00Z", "fetch my slack unreads"),
+        _make_queued_command_line("uuid-2", "2026-01-01T00:00:01Z", "which channel is busiest?"),
+    ]
+    events = parse_lines(lines)
+    assert "delivered_mid_turn" not in events[0]
+    assert events[1]["delivered_mid_turn"] is True
 
 
 def test_queued_task_notification_attachment_not_emitted() -> None:

@@ -69,9 +69,9 @@ The command asks nothing and ends in one JSON line. Act on its `result`:
   not an app you can install.
 - `needs_github_access` -- the repository is private to someone. Request the
   GitHub read permission yourself, as any other latchkey permission request
-  (`.agents/skills/connect-external-service/references/latchkey.md`, scope
-  `github-git`, permission `github-git-read`), end the turn, and run the
-  installer again once it is granted.
+  (the `connect-external-service` skill has the command; scope `github-git`,
+  permission `github-git-read`), end the turn, and run the installer again
+  once it is granted.
 - `unreachable` or `refused` -- say what went wrong in plain words, from
   `detail`.
 

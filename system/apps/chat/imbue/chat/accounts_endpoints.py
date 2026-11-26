@@ -120,6 +120,9 @@ class AccountsResponse(FrozenModel):
     accounts: tuple[AccountRow, ...] = Field(description="Every signed-in account, in index order")
     mru: str | None = Field(description="The account the newest chat was created on, if any")
     default: str | None = Field(description="The account the user pinned for new chats, if any")
+    is_first_run_provider_step_pending: bool = Field(
+        default=False, description="Whether the first run's provider page is still owed to the workspace's owner"
+    )
 
 
 class StartFlowRequest(FrozenModel):
@@ -232,7 +235,23 @@ def list_accounts() -> Response:
         )
         for numbered in accounts.number_accounts(index.accounts)
     )
-    return model_response(AccountsResponse(accounts=rows, mru=index.mru, default=index.default_account))
+    return model_response(
+        AccountsResponse(
+            accounts=rows,
+            mru=index.mru,
+            default=index.default_account,
+            is_first_run_provider_step_pending=get_state().agent_manager.is_first_run_provider_step_pending(),
+        )
+    )
+
+
+def finish_first_run_provider_step() -> Response:
+    """``POST /api/first-run/provider-step/done``: the owner pressed Skip or Next on the first run's provider page."""
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
+    get_state().agent_manager.finish_first_run_provider_step()
+    return model_response(OkResponse())
 
 
 def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
@@ -422,6 +441,7 @@ ROUTE_TABLE: Final[RouteTable] = {
         request_model=UpdateAccountRequest, response_model=OkResponse
     ),
     ("GET", "/api/accounts/{account_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
+    ("POST", "/api/first-run/provider-step/done"): RouteModels(response_model=OkResponse),
 }
 
 
@@ -442,4 +462,7 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])
     application.add_url_rule(
         "/api/accounts/<account_id>/model-options", view_func=account_model_options, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/first-run/provider-step/done", view_func=finish_first_run_provider_step, methods=["POST"]
     )

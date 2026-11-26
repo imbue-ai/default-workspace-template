@@ -13,7 +13,10 @@ changelog gathering, the rollbacks to undo) live in
 flow shipped with the version being updated to (the lead staged it and it was
 synced into this worktree with the runtime dir); reference it by literal each
 time (each bash invocation is a fresh shell) and run it from your worktree
-root. Impact analysis (who depends on a changed file) is deliberately *not*
+root. The lead staged the target release's `.agents/shared/` beside it, and this guide names those files
+by their staged path; when one of them names a further `.agents/...` path, read
+the copy under `data/.tasks/update-self/skill-at-target/` if one is there, else
+your worktree's. Impact analysis (who depends on a changed file) is deliberately *not*
 scripted; Step 4a is your recipe for it.
 
 ## 1. Resolve inputs
@@ -346,7 +349,7 @@ in your report.
   never by hand-editing its lock. A user package that is not standalone yet (the
   update that made them standalone; `system/test_user_packages_are_standalone.py`
   names it) is converted with the same command's `migrate`, after its `--dry-run`,
-  whose output goes in your report, per `references/python-packaging-migration.md`
+  whose output goes in your report, per `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`
   ("A user app, service or lib"). Each converted package then gets this step's
   suites, and an app or service its isolated boot, from its own venv. A failure here
   or in the suites below on the workspace's own skills, apps, services or docs
@@ -354,7 +357,7 @@ in your report.
   skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
   import, a user service whose program line runs under `uv run`, or a type
   error in a user skill or app) is fixed by following
-  `references/python-packaging-migration.md`.
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`.
   The workspace's own apps are brought to the layout this template expects in
   the same gate, once the venv is synced (below). These steps run on every
   update, whether or not a manifest or lockfile is in the merged set: a change
@@ -388,6 +391,13 @@ in your report.
   (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
   lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
   which never syncs, so it would otherwise run on the pre-merge environment.
+- **Skill exemptions, on every run**, after the environment gate's sync when that
+  ran: `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp`
+  from the merged tree, then commit what it changed. It records which skill checks
+  each of the workspace's existing skills fails, as an exemption in that skill's
+  frontmatter, and removes one that has gone stale; it changes nothing else. Never
+  restructure a user's skill to clear what it reports. List its output lines under
+  your report's Validation.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test
@@ -431,8 +441,8 @@ in your report.
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
-  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
-  says, naming a flaky test under your report's Validation; the tree before
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/review-gates.md` says, naming a flaky test under
+  your report's Validation; the tree before
   your change, for attributing a failure, is `$MERGE^1` (a test absent there
   arrived with the update). mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
@@ -453,10 +463,10 @@ in your report.
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
-  app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
+  app's, the Screen's, the Style Guide's, and the Onboarding checklist's) and drive it per
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`. Those eight bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all seven locations in your report.
+  installed only as a set) -- name all eight locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -580,7 +590,7 @@ report. Read a long file in parts.
 ## 6. Report back
 
 Take the frontmatter parse, the report frontmatter, and the body shapes from
-`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
 `data/.tasks/update-self/task.md`).
 
 Deliver the report **by hand**, not with that reference's `report` subcommand:
@@ -627,13 +637,14 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all seven (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all eight (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
     `<your work_dir>/system/apps/routines/src/routines_app/static`,
-    `<your work_dir>/system/apps/screen/src/screen/static`, and
-    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
+    `<your work_dir>/system/apps/screen/src/screen/static`,
+    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`, and
+    `<your work_dir>/system/apps/onboarding_checklist/src/onboarding_checklist/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,

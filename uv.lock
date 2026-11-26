@@ -54,6 +54,8 @@ members = [
     "migrate-workspace-skill",
     "mngr-cli-contract",
     "notify-user-skill",
+    "onboarding-activity",
+    "onboarding-checklist",
     "oom-priority",
     "publish-template-skill",
     "pytest-executable-tmp",
@@ -503,6 +505,7 @@ dependencies = [
     { name = "app-install" },
     { name = "app-manifest" },
     { name = "app-registration" },
+    { name = "onboarding-activity" },
     { name = "workspace-layout" },
     { name = "workspace-scripts" },
 ]
@@ -513,6 +516,7 @@ requires-dist = [
     { name = "app-install", editable = "system/libs/app_install" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-registration", editable = "system/libs/app_registration" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-scripts", editable = "system/scripts" },
 ]
@@ -724,6 +728,7 @@ dependencies = [
     { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
     { name = "latchkey-access" },
+    { name = "onboarding-activity" },
     { name = "oom-priority" },
     { name = "pexpect" },
     { name = "pydantic-settings" },
@@ -744,6 +749,7 @@ dev = [
     { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
+    { name = "onboarding-checklist" },
     { name = "playwright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -776,6 +782,7 @@ requires-dist = [
     { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "latchkey-access", editable = "system/libs/latchkey_access" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -796,6 +803,7 @@ dev = [
     { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fapp_sdk&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
+    { name = "onboarding-checklist", editable = "system/apps/onboarding_checklist" },
     { name = "playwright", specifier = ">=1.40" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -1038,6 +1046,8 @@ dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
     { name = "litellm" },
+    { name = "onboarding-activity" },
+    { name = "onboarding-checklist" },
     { name = "playwright" },
     { name = "routines" },
     { name = "routines-app" },
@@ -1090,6 +1100,8 @@ requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "litellm", specifier = ">=1.88.1" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
+    { name = "onboarding-checklist", editable = "system/apps/onboarding_checklist" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "routines", editable = "system/libs/routines" },
     { name = "routines-app", editable = "system/apps/routines" },
@@ -2623,6 +2635,70 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "workspace-scripts", editable = "system/scripts" }]
+
+[[package]]
+name = "onboarding-activity"
+version = "0.1.0"
+source = { editable = "system/libs/onboarding_activity" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.87" }]
+
+[[package]]
+name = "onboarding-checklist"
+version = "0.1.0"
+source = { editable = "system/apps/onboarding_checklist" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "flask" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "onboarding-activity" },
+    { name = "pydantic" },
+    { name = "werkzeug" },
+    { name = "workspace-themes" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-themes", editable = "system/libs/workspace_themes" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.87" },
+]
 
 [[package]]
 name = "oom-priority"
@@ -4178,6 +4254,7 @@ dependencies = [
     { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "latchkey-access" },
+    { name = "onboarding-activity" },
     { name = "oom-priority" },
     { name = "pydantic-settings" },
     { name = "resvg-py" },
@@ -4223,6 +4300,7 @@ requires-dist = [
     { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fapp_sdk&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=7cf77041f174555c0f45a16726c26df7858ab802" },
     { name = "latchkey-access", editable = "system/libs/latchkey_access" },
+    { name = "onboarding-activity", editable = "system/libs/onboarding_activity" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "resvg-py", specifier = ">=0.5.0" },

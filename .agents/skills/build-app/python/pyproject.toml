@@ -10,6 +10,8 @@ dependencies = [
     "app-install",
     "app-manifest",
     "app-registration",
+    # scaffold_flask_lib records that a build started.
+    "onboarding-activity",
     "workspace-layout",
     "workspace-scripts",
 ]

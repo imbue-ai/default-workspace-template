@@ -140,6 +140,18 @@ def test_a_command_sees_its_run_directory_and_its_result_file_becomes_the_summar
     assert runner.paths.result_path(SYNC, event.run_id).is_file()
 
 
+@pytest.mark.parametrize(("trigger", "spelling"), [(RunTrigger.MANUAL, "manual"), (RunTrigger.SCHEDULED, "scheduled")])
+def test_a_command_sees_what_started_its_run(
+    runner: Runner, definitions: FileDefinitionStore, trigger: RunTrigger, spelling: str
+) -> None:
+    script = 'printf \'{"summary": "started by %s"}\' "$ROUTINES_TRIGGER" > "$ROUTINES_RUN_DIR/result.json"'
+    _command_routine(definitions, "sh", "-c", script)
+
+    event = runner.run(SYNC, trigger, None)
+
+    assert event.summary == f"started by {spelling}"
+
+
 def test_a_result_file_can_name_how_a_failed_run_ended_and_what_it_had_to_say(
     runner: Runner, definitions: FileDefinitionStore
 ) -> None:

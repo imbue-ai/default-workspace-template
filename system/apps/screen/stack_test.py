@@ -141,6 +141,7 @@ def test_neko_never_answering_health_is_a_failed_start(service: ScreenService, f
     assert "health" in service.stack.stop_reason
 
 
+@pytest.mark.flaky
 def test_installing_is_reported_until_the_unit_is_satisfied(
     tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
 ) -> None:

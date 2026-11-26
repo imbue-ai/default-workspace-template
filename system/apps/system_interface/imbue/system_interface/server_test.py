@@ -5,7 +5,10 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
@@ -17,6 +20,7 @@ import pytest
 from app_manifest.testing import assert_document_policy_admits_page
 from flask import Flask
 from flask.testing import FlaskClient
+from pydantic import Field
 from workspace_layout.primitives import ClientId
 
 from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
@@ -606,6 +610,24 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
     assert "javascript" in response.headers["Content-Type"]
 
 
+def test_assets_named_from_their_content_are_cached_for_good_and_others_are_revalidated(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "assets" / "index-BScc3eNh.js").write_text("console.log('app');")
+    (static_dir / "assets" / "index.js").write_text("console.log('app');")
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    hashed = test_client.get("/assets/index-BScc3eNh.js")
+    unhashed = test_client.get("/assets/index.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """Routing-level HTTP errors pass through the unhandled-exception handler intact.
 
@@ -965,6 +987,56 @@ def test_presence_carries_each_users_profile_from_the_connector(
         broadcaster.unregister(client_queue)
 
 
+class _BroadcasterHoldingBobsNamedPresence(WebSocketBroadcaster):
+    """Holds the first ``presence_updated`` push that names Bob (the one a landed profile fetch announces) until
+    released, recording every presence push in the order it went out."""
+
+    held: threading.Event = Field(default_factory=threading.Event)
+    release: threading.Event = Field(default_factory=threading.Event)
+    pushed_while_held: threading.Event = Field(default_factory=threading.Event)
+    presence_pushes: list[list[tuple[str, str | None]]] = Field(default_factory=list)
+
+    def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
+        if self.held.is_set() and not self.release.is_set():
+            self.pushed_while_held.set()
+        if any(user["display_name"] == "Bob" for user in users) and not self.held.is_set():
+            self.held.set()
+            assert self.release.wait(timeout=10.0)
+        self.presence_pushes.append([(user["user_id"], user["display_name"]) for user in users])
+        super().broadcast_presence_updated(users)
+
+
+def test_a_profile_announcement_read_before_a_heartbeat_never_goes_out_after_it(tmp_path: Path) -> None:
+    """The announcement a landed profile fetch makes reads the connected set and pushes it as one step, so a
+    heartbeat that brings the owner in while that announcement is on its way pushes after it, and the windows are
+    left with the owner connected."""
+
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(200, json={"user_id": "user-bob-4471", "display_name": "Bob"})
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    broadcaster = _BroadcasterHoldingBobsNamedPresence()
+    client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
+    # Bob's heartbeat finds no cached profile, so it starts the fetch whose announcement the broadcaster holds.
+    _heartbeat(client, _VISITOR_IDENTITY)
+    assert broadcaster.held.wait(timeout=10.0), "the landed profile fetch never announced"
+
+    owner_heartbeat = threading.Thread(target=_heartbeat, args=(client, _OWNER_IDENTITY))
+    owner_heartbeat.start()
+    # Given the chance, the owner's push must not go out before the held one; once that is released, it must.
+    broadcaster.pushed_while_held.wait(timeout=1.0)
+    broadcaster.release.set()
+    owner_heartbeat.join(timeout=10.0)
+    assert not owner_heartbeat.is_alive()
+
+    assert broadcaster.presence_pushes == [
+        [("user-bob-4471", None)],
+        [("user-bob-4471", "Bob")],
+        [("user-bob-4471", "Bob"), ("user-owner-9c21", None)],
+    ]
+
+
 def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_nothing_is_silent(app: Flask) -> None:
     client = app.test_client()
     state = state_of(app)
@@ -983,12 +1055,12 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
         bob_path = state.presence.users_directory / "user-bob-4471.json"
         stale_at = utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1)
         os.utime(bob_path, (stale_at.timestamp(), stale_at.timestamp()))
-        assert state.presence_sweep.sweep_once(utc_now()) is True
+        assert state.presence_announcer.sweep_once(utc_now()) is True
 
         (departed,) = _presence_messages(drain_messages(client_queue))
         assert [user["user_id"] for user in departed["users"]] == ["user-owner-9c21"]
         assert bob_path.exists()
-        assert state.presence_sweep.sweep_once(utc_now()) is False
+        assert state.presence_announcer.sweep_once(utc_now()) is False
     finally:
         state.shell.broadcaster.unregister(client_queue)
 
@@ -1084,6 +1156,25 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
         )
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_ping_is_answered_on_its_own_connection_and_registers_nothing(app: Flask) -> None:
+    """A page back in sight pings its socket to learn whether it survived; the answer goes to that connection
+    alone, and the ping neither registers nor moves the client."""
+    shell = state_of(app).shell
+    pinging_queue = shell.broadcaster.register()
+    other_queue = shell.broadcaster.register()
+    try:
+        assert (
+            _handle_client_state_message(json.dumps({"type": "ping"}), pinging_queue, shell, is_first_report=False)
+            is False
+        )
+        assert pinging_queue.get_nowait() == json.dumps({"type": "pong"})
+        assert pinging_queue.empty() and other_queue.empty()
+        assert shell.broadcaster.get_client_info(pinging_queue) is None
+    finally:
+        shell.broadcaster.unregister(pinging_queue)
+        shell.broadcaster.unregister(other_queue)
 
 
 def test_client_state_reports_register_the_client_and_log_only_real_desktop_switches(app: Flask) -> None:

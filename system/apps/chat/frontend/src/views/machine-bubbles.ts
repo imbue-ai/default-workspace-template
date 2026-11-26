@@ -10,9 +10,11 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
+import { splitStudioWidgets } from "../studio-widgets";
 import { getWorkspaceAgent } from "../models/Participants";
 import { AgentRail, railNodeAttrs } from "./agent-rail";
 import { FACE_COLUMN_CLASS, TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
+import { StudioPicker } from "./StudioPickers";
 
 /** The bubbles' text edge, for a line of the agent's that stands outside a stretch (the status row under a person's
  *  turn, a notice not yet on the transcript): the face column plus a bubble's left padding. */
@@ -40,17 +42,43 @@ export interface AgentProseAttrs {
   readonly layout: ProseLayout;
   /** The stretch's first piece: its corner squares toward the face beside it. */
   readonly isStretchHead: boolean;
+  readonly chatId: string;
+  /** Whether a picker the text carries takes clicks (``views/StudioPickers.ts``). */
+  readonly isPickerLive: boolean;
+}
+
+/** The prose as it is drawn: its markdown, with a picker wherever the text carries a picker's tag on a line of its
+ *  own. Text with no picker is one markdown block. */
+function proseContent(attrs: AgentProseAttrs, text: string): m.Children {
+  const segments = splitStudioWidgets(text);
+  if (segments.length === 1 && segments[0].kind === "markdown") {
+    return m(MarkdownContent, {
+      content: text,
+      requestedAt: attrs.timestamp,
+      expansionKeyPrefix: attrs.expansionKeyPrefix,
+    });
+  }
+  return m(
+    "div",
+    { class: "flex flex-col gap-3" },
+    segments.map((segment, index) =>
+      segment.kind === "markdown"
+        ? m(MarkdownContent, {
+            key: index,
+            content: segment.text,
+            requestedAt: attrs.timestamp,
+            expansionKeyPrefix: `${attrs.expansionKeyPrefix}:${index}`,
+          })
+        : m(StudioPicker, { key: index, kind: segment.widget, chatId: attrs.chatId, isLive: attrs.isPickerLive }),
+    ),
+  );
 }
 
 /** The agent's prose. Null for whitespace-only text (a lone newline before a tool call), which draws nothing. */
 export function renderAgentProse(attrs: AgentProseAttrs): m.Vnode | null {
   const trimmed = attrs.text.trim();
   if (!trimmed) return null;
-  const content = m(MarkdownContent, {
-    content: trimmed,
-    requestedAt: attrs.timestamp,
-    expansionKeyPrefix: attrs.expansionKeyPrefix,
-  });
+  const content = proseContent(attrs, trimmed);
   if (attrs.layout === "plain") return m("div", { class: "agent-prose", "data-agent-prose": "" }, content);
   return m(
     "div",

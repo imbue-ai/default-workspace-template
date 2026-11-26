@@ -183,6 +183,12 @@ Imbue Studio feed, and once more when the routine works again.
 A command may write `$ROUTINES_RUN_DIR/result.json` with a one-line
 `summary` (shown in the list) and `links` for the run page.
 
+`$ROUTINES_TRIGGER` says what started a command's run: `scheduled` or
+`manual` (Run now in the app, or `routines run`), so a job can behave
+differently when the user runs it by hand. A skill run finds the same in
+`uv run --no-sync routines runs <id> --limit 1 --format json`, whose newest
+record is its own run (`outcome` null, `trigger` `SCHEDULED` or `MANUAL`).
+
 Full reference: `system/libs/routines/README.md`.
 
 ## The Caretaker
