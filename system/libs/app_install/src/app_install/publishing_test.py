@@ -364,6 +364,22 @@ def test_a_workspace_with_no_template_release_cannot_tell_its_own_skills_from_th
     assert not assembled.is_outside_skills_checked
 
 
+def test_only_the_text_files_of_a_tree_are_read_for_the_skills_they_name(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    write_workspace_file(workspace, ".agents/skills/fetch-mail/SKILL.md", "# Fetch mail\n")
+    names_the_skill = "uv run .agents/skills/fetch-mail/scripts/run.py\n"
+    write_app_file(workspace, "notes", "refresh.sh", names_the_skill)
+    # Each of these names the skill too, in a file that is not text, a file over the size read, and a link.
+    write_app_file(workspace, "notes", "thumbnail.png").write_bytes(b"\x89PNG\xff" + names_the_skill.encode())
+    write_app_file(workspace, "notes", "fixtures/export.txt", names_the_skill * 25_000)
+    (workspace / "system" / "apps" / "notes" / "mail.db").symlink_to("../../../data/.skills/fetch-mail/mail.db")
+    _versioned(workspace, runtime, "0.1.0")
+
+    compared = compare_with_published(workspace, "notes", "HEAD")
+
+    assert compared.outside_skill_uses == (OutsideSkillUse(skill="fetch-mail", path="refresh.sh", line=1),)
+
+
 def test_the_real_lock_check_passes_a_current_lock_and_fails_a_stale_one(tmp_path: Path) -> None:
     project = tmp_path / "standalone"
     project.mkdir()
