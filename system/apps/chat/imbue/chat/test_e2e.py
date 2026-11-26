@@ -2828,6 +2828,50 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         assert box_once_landed["y"] == box_while_starting["y"]
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_from_the_launcher_as_the_first_run_provider_page_is_left_is_sent_to_the_main_chat(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new workspace's owner presses Next on the provider page, which starts the main chat's agent, and sends a
+    message with the launcher's Enter before that agent is up: the message shows in the main chat as a sent one,
+    the composer stays empty, and the agent takes it as it lands, with the welcome ahead of it."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(
+        tmp_path, find_free_port(), find_free_port(), messenger=messenger, is_chat_pinned=True
+    ) as server:
+        main_chat_id = server.chat_state.agent_manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id
+        try:
+            _land(page, server)
+            # Entering the workspace, the Imbue Studio app asks for the chat list, whose page tells the shell the
+            # provider page is owed.
+            _post_chat_json(server, "/api/focus-chat", {"type": "minds:focus-chat", "client_id": _client_id(page)})
+            page.frame_locator("#first-run-cover").locator("#first-run-next").click(timeout=30000)
+            expect(page.locator("#first-run-cover")).to_have_count(0, timeout=15000)
+
+            launcher_field = page.locator("[data-launcher-field] textarea")
+            launcher_field.fill("Write hello.py")
+            main_chat_row = page.locator(f'[data-launcher-overlay] [data-launch="{CHAT_APP_NAME}:main"]')
+            expect(main_chat_row).to_have_attribute("data-highlighted", "true", timeout=10000)
+            launcher_field.press("Enter")
+
+            chat = _chat(page, main_chat_id)
+            # The long wait covers the chat page's socket connecting and bringing the provisional record; the
+            # create itself is held until released below.
+            expect(chat.locator(".held-send", has_text="Write hello.py")).to_be_visible(timeout=45000)
+            expect(chat.locator(".message-input-textbox")).to_have_value("")
+            assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
+        finally:
+            release_create.touch()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=30.0, error_message="the message never reached the agent")
+        ((_agent_id, delivered),) = messenger.sent
+        assert FIRST_RUN_WELCOME[0].text in delivered
+        assert delivered.endswith("\nWrite hello.py")
+        expect(chat.locator(".message-input-textbox")).to_have_value("")
+
+
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
 # once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
 @pytest.mark.flaky
