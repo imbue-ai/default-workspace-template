@@ -44,7 +44,7 @@ each round.
 A workspace whose version has only the earlier tool, `memory_candidates.py`, gets the same things
 laid out by kind. An app is stopped by its `PROGRAM`, and `AUTO-STOP` `no` is an app that keeps
 running with no window. What it does not print is unknown, not absent: it lists no apps before
-minds-v0.9.2, and before minds-v0.10.7 does not say how much free memory is left before the guard
+minds-v0.9.2, and before minds-v0.10.6 does not say how much free memory is left before the guard
 starts stopping processes. With no memory listing at all, only chats can be stopped (`run-status
 stop-chats --agent`); say so in the results message.
 
