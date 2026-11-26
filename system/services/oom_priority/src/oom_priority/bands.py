@@ -145,8 +145,8 @@ CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
 # services.
 #
 # The services are ordered from least- to most-expendable by how much losing one
-# hurts: the two authority paths into the workspace (owner-exec, then the
-# terminal) come first, then the UI and the chat app, then the sharing stack,
+# hurts: the terminal, the authority path into the workspace, comes first,
+# then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
 # the job scheduler, then the Screen service (the stack it starts sits far above,
 # at SCREEN_STACK), then the Files app, then the two single-page apps (Getting
@@ -174,13 +174,6 @@ CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
 SERVICE_BANDS: Final[dict[str, int]] = {
-    # The owner-authenticated exec service: SSH-equivalent authority over the
-    # workspace (run a command, read/write a file, edit the sharing grants). A
-    # web-only workspace has no desktop and no SSH client, so this is the *only*
-    # way its owner can act on it -- including to repair anything else that
-    # broke -- and it is the single writer of the sharing grants for the desktop
-    # too. It is also a small HTTP server, so shedding it frees almost nothing.
-    "owner-exec": 5,
     "terminal": 10,
     # ttyd, on its own origin, framed by the terminal app's wrapper page: a shed pty drops
     # every terminal pane's connection (the tmux sessions survive), so it sits right beside

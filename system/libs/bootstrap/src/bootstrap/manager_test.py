@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,13 +18,16 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
+    APP_REGISTRATION_SCRIPT,
     BOOTSTRAP_COMPLETED_EVENT,
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    RETIRED_STATE_FILES,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
     RUNTIME_CRON_DIR,
+    STATE_DIR,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_DISPATCHER_CRON_SCRIPT,
@@ -39,6 +43,7 @@ from bootstrap.manager import (
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
+    _remove_retired_registrations,
     _set_container_timezone,
     _supervisord_environment,
     _wake_update_dri_agent,
@@ -479,6 +484,99 @@ def test_the_update_dispatchers_cron_entry_tolerates_a_tree_without_its_entry(
     _write_update_dispatcher_cron_entry(target_dir=target)
 
     assert list(target.iterdir()) == []
+
+
+# _remove_retired_registrations
+
+
+_REGISTRY_WITH_RETIRED_ROWS = (
+    '[[apps]]\nname = "chat"\nurl = "http://localhost:8010"\n\n'
+    '[[apps]]\nname = "owner-exec"\nurl = "http://127.0.0.1:8793"\ninternal = true\n\n'
+    '[[apps]]\nname = "vm-exec"\nurl = "http://127.0.0.1:8794"\ninternal = true\n\n'
+    '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\n'
+)
+
+
+def _stage_the_registration_entry(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lay the real registration entry and its library out under ``workspace_root`` as the template holds
+    them, and make it the working directory."""
+    repo_root = Path(__file__).resolve().parents[5]
+    scripts = workspace_root / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(repo_root / APP_REGISTRATION_SCRIPT, scripts)
+    library = workspace_root / "system" / "libs" / "app_registration"
+    library.mkdir(parents=True)
+    (library / "src").symlink_to(
+        repo_root / "system" / "libs" / "app_registration" / "src",
+        target_is_directory=True,
+    )
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    monkeypatch.chdir(workspace_root)
+
+
+def _registered_names() -> list[str]:
+    registry = tomllib.loads((STATE_DIR / "apps.toml").read_text())
+    return [row["name"] for row in registry["apps"]]
+
+
+def test_the_boot_removes_the_rows_and_state_of_the_retired_programs_and_leaves_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A workspace updated from a release that ran the owner-exec daemon still holds its row and its
+    # rendered configuration, and one from before that the VM exec service's row; no program of
+    # this release registers either, so nothing else would take them out.
+    _stage_the_registration_entry(tmp_path, monkeypatch)
+    STATE_DIR.mkdir(parents=True)
+    (STATE_DIR / "apps.toml").write_text(_REGISTRY_WITH_RETIRED_ROWS)
+    for state_file in RETIRED_STATE_FILES:
+        state_file.write_text('role = "inner"\n')
+
+    _remove_retired_registrations()
+
+    assert _registered_names() == ["chat", "files"]
+    assert [state_file.exists() for state_file in RETIRED_STATE_FILES] == [False]
+
+    # Every later boot runs it again over a registry that holds none of them.
+    registry_after_the_first_boot = (STATE_DIR / "apps.toml").read_text()
+    _remove_retired_registrations()
+
+    assert (STATE_DIR / "apps.toml").read_text() == registry_after_the_first_boot
+
+
+def test_the_boot_removes_nothing_from_a_workspace_that_never_held_a_retired_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stage_the_registration_entry(tmp_path, monkeypatch)
+    STATE_DIR.mkdir(parents=True)
+    registry = '[[apps]]\nname = "chat"\nurl = "http://localhost:8010"\n'
+    (STATE_DIR / "apps.toml").write_text(registry)
+
+    _remove_retired_registrations()
+
+    assert (STATE_DIR / "apps.toml").read_text() == registry
+
+
+def test_the_boot_reaches_supervisord_when_the_retired_rows_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No registration entry in this tree, so each removal fails; the rows stay and the boot goes on.
+    monkeypatch.chdir(tmp_path)
+    STATE_DIR.mkdir(parents=True)
+    (STATE_DIR / "apps.toml").write_text(_REGISTRY_WITH_RETIRED_ROWS)
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
+    try:
+        _remove_retired_registrations()
+    finally:
+        logger.remove(sink_id)
+
+    assert (STATE_DIR / "apps.toml").read_text() == _REGISTRY_WITH_RETIRED_ROWS
+    assert [line.split(" (exit")[0] for line in warnings] == [
+        "Could not remove the registry row of owner-exec",
+        "Could not remove the registry row of vm-exec",
+    ]
 
 
 # _supervisord_environment

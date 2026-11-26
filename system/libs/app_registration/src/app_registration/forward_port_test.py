@@ -324,7 +324,7 @@ def test_register_without_internal_omits_the_key(tmp_path: Path) -> None:
 def test_register_internal_marks_the_entry(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "owner-exec", "--url", "http://localhost:8793", "--internal"],
+        ["--name", "files-preview", "--url", "http://localhost:8793", "--internal"],
         apps_file,
     )
     assert result.returncode == 0, result.stderr

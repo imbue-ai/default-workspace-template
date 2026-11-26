@@ -34,9 +34,9 @@ Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
 ``--name --url`` without a manifest registers rows for things with no app
-directory (owner-exec, the VM exec service, previews, isolated test servers);
-``--display-name`` gives such a row the label users read, since the raw service
-name is what the workspace falls back to.
+directory (previews, isolated test servers); ``--display-name`` gives such a
+row the label users read, since the raw service name is what the workspace
+falls back to.
 
 Icons
 -----

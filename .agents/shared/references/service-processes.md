@@ -64,7 +64,7 @@ Key fields:
   root venv (`.venv/bin/foo`), and a user-built app or service from its own,
   after syncing it (`system/apps/foo/.venv/bin/foo`; see "User packages are
   standalone projects" in [running-python.md](running-python.md)). A registration with no app directory (a preview, an isolated test
-  server, the owner-exec service) keeps the manifest-less
+  server) keeps the manifest-less
   `forward_port.py --name <name> --url <url>` form with `--internal` or
   `--no-icon`, and never passes `--program`.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths

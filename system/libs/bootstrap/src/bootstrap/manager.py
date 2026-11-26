@@ -85,6 +85,17 @@ ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
 # own-process: other-tier -- the boot re-syncs the venv after this process started, and the entry needs none
 UPDATE_DISPATCHER_CRON_SCRIPT = Path("system/scripts/install_update_dispatcher_cron.py")
 _UPDATE_DISPATCHER_CRON_TIMEOUT_SECONDS = 60.0
+# The entry every writer of the app registry goes through; ``--remove --name <app>`` drops a row.
+# own-process: other-tier -- the boot re-syncs the venv after this process started, and the entry needs none
+APP_REGISTRATION_SCRIPT = Path("system/scripts/forward_port.py")
+_APP_REGISTRATION_TIMEOUT_SECONDS = 60.0
+# What the owner-exec daemon and the VM exec service kept in a workspace: a registry row each,
+# registered with no program, so the update's pruning of rows whose program the tree dropped
+# passes them by, and the daemon's rendered configuration.
+# CLEANUP: remove these, ``_remove_retired_registrations`` and its call once every workspace has
+# booted a release without the owner-exec daemon.
+RETIRED_REGISTRY_ROWS = ("owner-exec", "vm-exec")
+RETIRED_STATE_FILES = (STATE_DIR / "owner_exec_inner.toml",)
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
 # /run/lock, so `flock` there fails and the guard never runs.
@@ -619,6 +630,42 @@ def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> Non
         logger.info("Installed cron entry {} into {}", entry.name, target_dir)
 
 
+def _remove_retired_registrations() -> None:
+    """Drop the registry rows and the state files of programs this release does not run.
+
+    Nothing starts those programs, so nothing else would ever take their rows out, and a row keeps
+    an origin on the share with nothing behind it. Runs before supervisord starts, so the share
+    gateway and the shell first read a registry without them. A name with no row is a no-op for
+    the registration entry, which makes this safe at every boot.
+
+    Best-effort like the cron entries: the boot must reach supervisord.
+    """
+    for name in RETIRED_REGISTRY_ROWS:
+        try:
+            completed = subprocess.run(
+                ["python3", str(APP_REGISTRATION_SCRIPT), "--remove", "--name", name],
+                capture_output=True,
+                text=True,
+                timeout=_APP_REGISTRATION_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning("Could not remove the registry row of {}: {}", name, e)
+            continue
+        if completed.returncode != 0:
+            logger.warning(
+                "Could not remove the registry row of {} (exit {}): {}",
+                name,
+                completed.returncode,
+                (completed.stderr or completed.stdout).strip(),
+            )
+    for state_file in RETIRED_STATE_FILES:
+        try:
+            state_file.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not remove {}: {}", state_file, e)
+
+
 def _ensure_supervisor_log_dir() -> None:
     """Create supervisord's log directory if missing.
 
@@ -1053,6 +1100,9 @@ def main() -> None:
         _write_routines_tick_cron_entry()
         _write_update_dispatcher_cron_entry()
         _install_runtime_cron_entries()
+
+    # The share gateway and the shell read the registry as soon as supervisord starts them.
+    _remove_retired_registrations()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every

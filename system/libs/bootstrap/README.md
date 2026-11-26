@@ -26,7 +26,12 @@ service.
    may start by itself; a workspace that already existed never gets it. It also
    writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open
    the workspace's welcome chat once it is running.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **Retired registrations** - removes the app registry's `owner-exec` and
+   `vm-exec` rows and `data/.state/owner_exec_inner.toml`. No program of this
+   release registers them, so a workspace updated from a release that ran those
+   programs would otherwise keep them, and a row keeps an origin on the share
+   with nothing behind it.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

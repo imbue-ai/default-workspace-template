@@ -43,7 +43,7 @@
 
 ### Memory pressure
 
-- The apply orchestrator is close to OOM-exempt: every agent, chat, and ordinary service is shed before it — losing a build is an ordinary failure the rollback absorbs, but losing the apply mid-motion is the half-applied state this design exists to prevent. Only the authority paths that would repair a failed apply (owner-exec, the terminal) sit below it and would go first.
+- The apply orchestrator is close to OOM-exempt: every agent, chat, and ordinary service is shed before it — losing a build is an ordinary failure the rollback absorbs, but losing the apply mid-motion is the half-applied state this design exists to prevent. Only the terminal, the authority path that would repair a failed apply, sits below it and would go first.
 - Subprocesses inherit that protection by default, which is what the recovery-critical steps need: git operations, snapshot copies and restores, service restarts, the provisioner, `mngr` invocations. During the forward apply, only the genuinely memory-hungry, cleanly recoverable steps — `npm ci` / `npm run build`, the uv installs, the pre-flight boot — are tagged back to the expendable band.
 - During rollback and `recover`, nothing is tagged expendable: there is no further rollback to absorb a shed, so every recovery step keeps the orchestrator's protection.
 
@@ -111,7 +111,7 @@
 
 ### `system/services/oom_priority/src/oom_priority/bands.py`
 
-- A new near-exempt band constant for the update apply, sitting above agents/chats/services and below the owner-exec/terminal authority bands.
+- A new near-exempt band constant for the update apply, sitting above agents/chats/services and below the terminal's authority band.
 
 ### Boot and provisioning
 
