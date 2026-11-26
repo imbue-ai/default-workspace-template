@@ -24,7 +24,7 @@ set -euo pipefail
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
-readonly PINNED_VERSION="v0.56.0"
+readonly PINNED_VERSION="v0.57.0"
 
 # This script is .agents/skills/datalib/scripts/install_datalib.sh.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
