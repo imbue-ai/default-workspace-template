@@ -282,6 +282,31 @@ Once the user approves the request, the necessary permissions and
 proxy rules are set up so that traffic flows through the user's
 desktop whenever possible.
 
+## Limiting sign-in scopes
+
+Advanced users can also adjust the set of provider-side scopes
+that a token is issued with when connecting a service, one
+level below Studio's own permissions.
+
+`latchkey services info` gives information about the actually
+granted underlying scopes (if any) for each set of credentials.
+
+The optional `login_scopes` parameter of a `predefined` permission
+request can be used to specify the desired list of underlying
+scopes if needed.
+
+```bash
+  -d '{... "payload": {"scope": "github-rest-api", "permissions": ["github-read-all"], "login_scopes": ["repo", "read:org"]}}'
+```
+
+The scopes a service accepts are listed under `capabilities.scopes` in
+`latchkey services info <service_name>`; an empty list means its sign-in
+offers no choice.
+
+Reasoning about the underlying scopes in the presence of
+Studio's own permissions can be confusing for the user so avoid
+mentioning the underlying scopes unless necessary.
+
 ## Notes
 
 - All curl arguments are passed through unchanged; return code, stdout and
@@ -296,8 +321,12 @@ desktop whenever possible.
 
 ## Currently supported services
 
-Latchkey offers varying levels of support for AWS, Calendly, Coolify, Discord,
-Dropbox, Figma, GitHub, GitLab, Gmail, Google Analytics, Google Calendar, Google
-Docs, Google Drive, Google Sheets, Google Slides, Linear, Mailchimp, Notion, Ramp,
-Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more. The list
+Latchkey offers varying levels of support for Airtable, Any.do, Asana,
+Atlassian,Attio, AWS, beehiiv, Buildkite, Cal.com, Calendly, Canva, Coolify,
+Discord, Dropbox, Fathom, Figma, Gamma, GitHub, GitLab, Gmail,
+Google Analytics, Google Calendar, Google Docs, Google Drive, Google Sheets,
+Granola, Hugging Face, invideo, Linear, Linktree, Mailchimp, Neon, Netlify,
+ngrok, Notion, OpenRouter, Otter.ai, PayPal, Peloton, PostHog, Ramp,
+Readwise, Sentry, Slack, Stripe, Supabase, Tailscale, Telegram, TickTick,
+Todoist, Trello, Umami, Vercel, Webflow, Wix, Yelp, Zoom, and more. The list
 that counts is `latchkey services list`.

@@ -1,0 +1,1 @@
+The `connect-external-service` skill explains the optional `login_scopes` parameter of a permission request, which asks for a browser sign-in to be limited to specific scopes on the services that offer a choice.
