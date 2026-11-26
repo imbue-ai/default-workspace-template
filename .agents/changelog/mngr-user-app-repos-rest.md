@@ -18,4 +18,4 @@ The update worker's guide runs `app-install verify <name> --template <target>` f
 
 The use-template and update-installed-template skills merge the fetched commit by its hash in their scratch worktree: `FETCH_HEAD` belongs to the checkout that fetched, so the merge named it where it does not exist.
 
-`test_a_server_this_process_spawned_reads_as_gone_once_killed` in the shared scripts' `serve_isolated_instance_test.py` is marked flaky: its `crashed-during-boot` case failed with `ChildProcessError` in two of five local runs on a branch that does not touch that code, so the test runner now retries it.
+`test_a_server_this_process_spawned_reads_as_gone_once_killed` in the shared scripts' `serve_isolated_instance_test.py` no longer fails now and then with `ChildProcessError`: the child of its `crashed-during-boot` case exits only once the test lets it, so the finalizer of the `Popen` the spawner drops cannot reap it before the test looks at it.
