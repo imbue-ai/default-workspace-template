@@ -85,6 +85,10 @@ def test_the_destination_is_read_off_a_restic_env(
             "rest:https://alice:hunter2@rest.example/alice/",
             "rest:https://rest.example/alice/",
         ),
+        (
+            "rest:https://alice:p@ss@rest.example/alice/",
+            "rest:https://rest.example/alice/",
+        ),
         ("rest:https://rest.example/alice/", "rest:https://rest.example/alice/"),
         ("s3:https://s3.example/bucket", "s3:https://s3.example/bucket"),
         ("/srv/backups/repository", "/srv/backups/repository"),

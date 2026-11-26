@@ -43,8 +43,9 @@ _INSTALLED_ENV_HEADER: Final[str] = (
     "# RESTIC_PASSWORD itself; it is the repository's only key.\n"
 )
 _PENDING_REQUEST_PREFIX: Final[str] = "# backup-setup request "
-# A credential written into a repository's address, between the scheme and the host.
-_ADDRESS_CREDENTIAL: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/@]*@")
+# A credential written into a repository's address, between the scheme and the host. A password may itself
+# hold an "@", so the host begins after the last one.
+_ADDRESS_CREDENTIAL: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/]*@")
 
 
 class BackupDestinationKind(UpperCaseStrEnum):
