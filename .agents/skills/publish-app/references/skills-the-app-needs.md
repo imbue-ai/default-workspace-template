@@ -23,7 +23,16 @@ Four places name them. A skill named in any of them is a candidate:
 
 - `outside_skill_uses` in `compare`'s result: each line of the app that names
   a skill by its path (`.agents/skills/<skill>/...`, `data/.skills/<skill>/...`).
-  A publish is refused while one remains.
+  A publish is refused while one remains. When `is_outside_skills_checked`
+  is false, the workspace's history holds no template release, so its own
+  skills cannot be told from the ones every workspace starts with: nothing
+  looked for these lines, and nothing will refuse them. Find them yourself,
+  and leave out a skill every workspace has:
+
+  ```bash
+  git grep -n -e '.agents/skills/' -e 'data/.skills/' -- system/apps/<package>
+  ```
+
 - A skill's package the app imports or lists as a dependency:
 
   ```bash

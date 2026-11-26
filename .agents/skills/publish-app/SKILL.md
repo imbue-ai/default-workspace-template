@@ -94,10 +94,10 @@ changed since the last one (`is_published`, `published_version`,
 (`outside_skill_uses`). It reads the committed app: commit anything
 uncommitted in the app's directory first.
 
-When `outside_skill_uses` is not empty, or the app's record lists a skill
-under `[[references]]`, read `references/skills-the-app-needs.md` before
-step 3: the app takes such a skill in, which changes the scope gate, the
-worker's task and step 8.
+When `outside_skill_uses` is not empty, `is_outside_skills_checked` is
+false, or the app's record lists a skill under `[[references]]`, read
+`references/skills-the-app-needs.md` before step 3: the app takes such a
+skill in, which changes the scope gate, the worker's task and step 8.
 
 Then look for a publish an earlier attempt left between its steps:
 `cat data/.state/app_install/publish/<name>.json`. No such file means nothing
@@ -276,11 +276,11 @@ Merge the worker's branch (`git merge --no-ff mngr/<slug>`), then:
 uv run --no-sync app-install publish record <name>
 ```
 
-It writes what was published into the app's record and saves that one change. If this step is interrupted, or its result
-is not `recorded` with no `problems`, the app IS published: never push again,
-and read "When recording stops" in `references/results.md`. When the app
-took in a skill, finish with "After the version is published" in
-`references/skills-the-app-needs.md`.
+It writes what was published into the app's record. If this step is
+interrupted, or its result is not `recorded` with no `problems`, the app IS
+published: never push again, and read "When recording stops" in
+`references/results.md`. When the app took in a skill, finish with "After
+the version is published" in `references/skills-the-app-needs.md`.
 
 Then destroy the worker and its branch:
 
