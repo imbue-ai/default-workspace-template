@@ -8,6 +8,7 @@ import pytest
 from app_schema.testing import OWNER_IDENTITY_HEADERS
 from flask import Flask
 from flask.testing import FlaskClient
+from flask.typing import ResponseReturnValue
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.testing import build_inventory
@@ -146,9 +147,13 @@ def test_a_workspace_whose_apps_declare_no_switches_does_not_support_them(client
     assert response.get_json()["code"] == "SUGGESTIONS_UNSUPPORTED"
 
 
-def _app_answering(path: str, body: object, status: int) -> Flask:
+def _app_answering(path: str, body: dict[str, Any] | str, status: int) -> Flask:
     app = Flask("stand-in")
-    app.add_url_rule(path, view_func=lambda: (body, status), methods=["GET", "PUT"], endpoint="answer")
+
+    def answer() -> ResponseReturnValue:
+        return body, status
+
+    app.add_url_rule(path, view_func=answer, methods=["GET", "PUT"], endpoint="answer")
     return app
 
 
