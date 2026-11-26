@@ -74,10 +74,13 @@ kept; a taken one is refused.
 
 ## It has no `app.toml`
 
-It predates manifests. Write one first, as `build-app`'s "Escape hatch: wrap
-an existing server" shows: its `name`, `display_name` and `icon`, and a
-`[run]` table when it does not start the way a scaffolded app does. Then
-`add` it as above.
+It predates manifests. Write one first, at `system/apps/<package>/app.toml`:
+its `name`, `display_name` and `icon`, and a `[run]` table when it does not
+start the way a scaffolded app does. In `[run]`, `command` is one word, the
+program itself; its arguments go in `args`, and `{port:main}` in `args` or
+`env` is where the app takes the port the workspace allocates. It is the
+manifest the `build-app` skill writes when it wraps an existing server, and
+that skill has the rest. Then `add` it as above.
 
 ## When all are registered
 
