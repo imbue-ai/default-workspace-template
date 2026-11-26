@@ -39,7 +39,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 
 Recorded here so the implementation need not re-argue them.
 
-1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
+1. A seeded shortcut is in `new` mode, "a new window of this app", except the two of decision 7.
    A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's rows.
 2. A new chat window is the chat list at `/`.
    The chat app creates chats only from its own page (the New chat button) and through its intake route (the launcher's free-text rows and the Getting Started app's seeded prompts, posted by the shell as the `new` launch path; the post-launch-paths plan); the desktop shortcut and `workspace-layout open chat` never create one.
@@ -52,7 +52,7 @@ Recorded here so the implementation need not re-argue them.
 6. The fleet holds **one browser**.
    Closing its last window **stops** it (profile and tabs kept); `/new` brings the same browser back.
    Its profile is never deleted by the desktop; only the fleet CLI's explicit `close` deletes it.
-7. The browser shortcut is the one `focus`-mode shortcut: "show me the browser".
+7. The browser shortcut and the chat shortcut are the `focus`-mode shortcuts: "show me the browser", "show me the chat"; the chat's raises its pinned window in either mode (section 3.2).
 8. An agent that wants a terminal or a browser opens a window for it, minimized, on the desktop of the client it serves; with no client connected the window is still opened, unplaced.
    The lease stays purely "who is driving".
 
@@ -62,7 +62,7 @@ Recorded here so the implementation need not re-argue them.
 
 | App | `default_shortcut` | `launch_paths` | Desktop label |
 |---|---|---|---|
-| `chat` | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
+| `chat` | `{launch = "root", mode = "focus"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
 | `terminal` | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, param `workdir`) | Terminal |
 | `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, param `path`) | File Viewer |
 | `browser` | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, param `url`) | Browser |
@@ -75,8 +75,9 @@ The browser's launch path was relabelled "Open Browser" because it no longer alw
 
 ### 3.2 What a run does
 
-`resolveLaunchRun` is unchanged.
-A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Chat opens another list window and every double click on Terminal allocates another session.
+`resolveLaunchRun` keeps its modes and gains one rule, for a launch path at the app's pin path.
+A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Terminal allocates another session.
+A shortcut whose launch path is a GET at the app's pin path raises the pinned window in either mode, as the launcher's row for that path does, so a double click on Chat shows the pinned chat list and never opens a second one; its menu offers no mode to switch to.
 The `focus` browser shortcut raises this client's most recent browser window on this desktop and opens `/new` only when there is none.
 
 `workspace-layout open <app>` with no `--path` or `--launch` follows `default_shortcut.launch`, so an agent asked to "show the chat" opens the list.

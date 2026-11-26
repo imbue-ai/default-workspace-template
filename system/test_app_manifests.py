@@ -655,9 +655,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (45, "routines"),
         (50, "system-monitor"),
     ]
-    # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).
+    # The seeded shortcut modes of the Screen spec D2 and window-bound-resources.md section 3.1.
     for name, mode in (
-        ("chat", "new"),
+        ("chat", "focus"),
         ("terminal", "new"),
         ("files", "new"),
         ("screen", "focus"),

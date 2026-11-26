@@ -51,7 +51,7 @@ files.
 | **placement** | Where one *client* keeps one window on its screen: its frame, whether it is snapped, maximized, or fullscreen (filling the whole viewport, taskbar and title bar gone), whether it is minimized. Per client, never shared. |
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
 | **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` declares `new` at `/new`; `screen` declares `browser` at `/launch/browser`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
-| **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
+| **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). A shortcut to the app's pinned page (the chat's `root`) raises the pinned window in either mode. |
 | **popped-out window** | A window the user dragged out of the desktop into its own Imbue Studio window (or opened there from the window menu). The desktop draws nothing where the window was; its taskbar entry stays, marked as popped out. Per client, like a placement. |
 
 **Shared vs per client.** Desktops, their windows, their shortcuts, and their

@@ -2702,8 +2702,9 @@ export class DesktopStore {
     }
   }
 
-  /** Run a shortcut in its mode: focus raises the app's most recent window and runs the launch path only when there
-   *  is none, but always runs a one-window app's POST launch path into that window (``resolveLaunchRun``). Before
+  /** Run a shortcut in its mode: a launch path at the app's pin path raises the pinned window in either mode; focus
+   *  raises the app's most recent window and runs the launch path only when there is none, but always runs a
+   *  one-window app's POST launch path into that window (``resolveLaunchRun``). Before
    *  the apps are known (the inventory has not answered) the user is told to wait rather than that the app is
    *  missing. */
   async runLaunch(app: string, launch: string, mode: ShortcutMode): Promise<void> {
