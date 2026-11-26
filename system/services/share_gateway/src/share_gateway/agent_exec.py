@@ -305,11 +305,12 @@ class _CommandOutput:
     def __init__(self, process: subprocess.Popen[bytes], caller: socket.socket | None) -> None:
         assert process.stdout is not None and process.stderr is not None
         self._pipes = (process.stdout, process.stderr)
+        self._splitters = (_LineSplitter(STDOUT_EVENT), _LineSplitter(STDERR_EVENT))
         self._open_pipe_count = len(self._pipes)
         self.has_caller_left = False
         self._selector = selectors.DefaultSelector()
-        self._selector.register(process.stdout, selectors.EVENT_READ, _LineSplitter(STDOUT_EVENT))
-        self._selector.register(process.stderr, selectors.EVENT_READ, _LineSplitter(STDERR_EVENT))
+        for pipe, splitter in zip(self._pipes, self._splitters, strict=True):
+            self._selector.register(pipe, selectors.EVENT_READ, splitter)
         if caller is not None:
             self._selector.register(caller, selectors.EVENT_READ, caller)
 
@@ -342,6 +343,17 @@ class _CommandOutput:
             if not chunk:
                 self._selector.unregister(key.fileobj)
                 self._open_pipe_count -= 1
+        return events
+
+    def read_written_events(self) -> list[dict[str, object]]:
+        """The events of all that is written and no event has carried yet, a line with no end included, without waiting.
+
+        What a command that is about to be stopped has to show. Each pipe is read once, so a command that never
+        stops writing cannot hold this past the moment it was called.
+        """
+        events = self.read_events(0.0)
+        for splitter in self._splitters:
+            events.extend(splitter.feed(b""))
         return events
 
 
@@ -377,7 +389,8 @@ def stream_command(
     its own. It is finished when it has exited and nothing it started still
     holds its output open, which is what a shell waits for at the end of a
     pipe. When its time runs out first, the whole group is killed and the exit
-    event says ``timed_out``.
+    event says ``timed_out``; what it had written by then comes before that
+    event, a line it had not ended included.
 
     A command nobody is waiting for is ended the same way, with no exit event:
     when this generator is closed, which is how a server reports an answer it
@@ -400,6 +413,7 @@ def stream_command(
         return
     deadline = time.monotonic() + request.timeout_seconds
     exit_code: int | None = None
+    events_at_timeout: list[dict[str, object]] = []
     running.add(process)
     try:
         with _CommandOutput(process, caller) as output:
@@ -409,12 +423,15 @@ def stream_command(
                 exit_code = _exit_code_while_awaited(process, output, deadline)
             if output.has_caller_left:
                 return
+            if exit_code is None:
+                events_at_timeout = output.read_written_events()
     finally:
         if exit_code is None:
             _kill_command(process)
             process.wait()
         running.discard(process)
     if exit_code is None:
+        yield from events_at_timeout
         yield {"type": EXIT_EVENT, "code": None, "timed_out": True}
     else:
         yield {"type": EXIT_EVENT, "code": exit_code}

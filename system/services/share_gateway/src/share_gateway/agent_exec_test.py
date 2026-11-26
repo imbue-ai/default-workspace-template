@@ -264,6 +264,24 @@ def test_a_command_out_of_time_is_killed_with_everything_it_started_and_says_so(
         lifeline.close()
 
 
+def test_a_command_out_of_time_still_delivers_the_lines_it_had_not_ended(tmp_path: Path) -> None:
+    command = "echo ended; printf 'progress 10%%\\rprogress 20%%'; printf 'waiting for lock...' >&2; sleep 600"
+    assert run_to_completion(["sh", "-c", command], tmp_path, timeout_seconds=1.0) == [
+        {"type": "stdout", "data": "ended\n"},
+        {"type": "stdout", "data": "progress 10%\rprogress 20%"},
+        {"type": "stderr", "data": "waiting for lock..."},
+        {"type": "exit", "code": None, "timed_out": True},
+    ]
+
+
+def test_a_command_that_never_stops_writing_is_still_stopped_when_its_time_runs_out(tmp_path: Path) -> None:
+    events = run_to_completion(["sh", "-c", "while :; do printf x; done"], tmp_path, timeout_seconds=1.0)
+    assert events[-1] == {"type": "exit", "code": None, "timed_out": True}
+    written = "".join(str(event["data"]) for event in events[:-1])
+    assert written and set(written) == {"x"}
+    assert {event["type"] for event in events[:-1]} == {"stdout"}
+
+
 def test_a_command_whose_reader_stops_reading_is_killed_with_everything_it_started(tmp_path: Path) -> None:
     lifeline = ProcessLifeline(tmp_path)
     running = RunningCommands()

@@ -395,7 +395,9 @@ the same gateway:
     "<the line>"}`, and a last line with the exit: `{"type": "exit", "code":
     <n>}` (`-1` for a command a signal ended), `{"type": "exit", "code": null,
     "timed_out": true}` for one that ran out of time, or `{"type": "exit",
-    "code": null, "error": "..."}` for one that could not be started. The
+    "code": null, "error": "..."}` for one that could not be started. A
+    command that ran out of time has what it had written by then, a line it
+    had not ended included, sent before that last line. The
     command is finished when it has exited and nothing it started still holds
     its output open. The line owner-exec signs its stream with is not sent.
   - `POST /_agent/files/read` takes `{"path": "<path>"}` and answers
