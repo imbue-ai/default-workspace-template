@@ -3,10 +3,12 @@
 
 Every few seconds this walks ``/proc`` once, works out how busy the CPU was since the
 last walk and how much memory is in use, rewrites the recent file the system monitor
-app's graphs read, appends a line per closed minute to the day of history, and records
+app's graphs read, appends a line per closed minute to the day of history, records
 a busy stretch (CPU above 90% for at least two minutes) with the chats and programs that
-caused it (``oom_priority.resource_sampler`` has the policy;
-``docs/system/specs/system-monitor.md`` the design).
+caused it, records which chats and programs hold the most memory every ten minutes, and
+records a memory stretch (memory above 85% for a minute) with who held it
+(``oom_priority.resource_sampler`` has the policy; ``docs/system/specs/system-monitor.md``
+the design).
 
 Logs only when something changes: the first reading, a stretch opening or closing, a
 walk that starts failing or recovers.
@@ -68,6 +70,7 @@ class _Loop:
         self.rounds = 0
         self.was_failing = False
         self.was_open = False
+        self.was_memory_open = False
 
     def run_round(self) -> bool:
         """One round; False once the loop should stop (only with ``--rounds``)."""
@@ -96,6 +99,12 @@ class _Loop:
                     event["peak"],
                 )
             self.was_open = is_open
+            is_memory_open = self.sampler.memory_stretches.is_open
+            if is_memory_open != self.was_memory_open:
+                logging.info(
+                    "memory stretch %s", "opened" if is_memory_open else "closed"
+                )
+            self.was_memory_open = is_memory_open
         return self.args.rounds <= 0 or self.rounds < self.args.rounds
 
 
