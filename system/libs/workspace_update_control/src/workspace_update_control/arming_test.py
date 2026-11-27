@@ -461,6 +461,53 @@ def test_a_schedule_somebody_asked_for_stands_when_the_workspace_leaves_its_chan
     assert _armed_target(staged) == _ON_THE_CHANNEL
 
 
+def test_a_schedule_armed_for_a_version_a_client_named_stands_when_the_workspace_leaves_its_channel(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    # Armed by a client for the version it names, with the window and the backup flag left to the workspace.
+    armed = arm_schedule_in(
+        staged,
+        feed,
+        now=_NOW - CLIENT_CEILING_HOLD_SECONDS,
+        ceiling="minds-v0.9.5",
+        is_auto_armed=True,
+    )["schedule"]
+    assert staged.read_state("schedule-origin.json") is not None
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW) is False
+
+    assert staged.read_state("schedule.json") == armed
+
+
+def test_a_schedule_armed_for_a_channel_left_stands_while_a_client_that_names_its_version_keeps_asking(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    # A desktop from before the workspace armed its own updates rewrites the schedule with its own values.
+    swept_at = _NOW + 30
+    refreshed = _sweep_as_a_client_that_names_its_version(staged, feed, swept_at)
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert refreshed is not None
+    assert staged.read_state("schedule.json") == refreshed
+
+    # Once that client stops asking, the schedule is the workspace's own to cancel again.
+    assert (
+        control.cancel_schedule_armed_for_a_channel_left(
+            swept_at + CLIENT_CEILING_HOLD_SECONDS
+        )
+        is True
+    )
+
+    assert staged.read_state("schedule.json") is None
+
+
 def test_a_checkout_that_names_no_version_arms_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:
