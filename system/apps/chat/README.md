@@ -1413,7 +1413,8 @@ fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 A chrome with no computer behind it, as Imbue Studio in a browser, cannot listen
 on a port of the user's machine, and says so before any sign-in
 (`declinesProviderRelay` in `minds:embedder-capabilities`, which reaches a page
-in the shell's handshake). Under such a chrome the chooser asks for no relay.
+in the shell's handshake, and the first run's provider page, which the shell
+greets with none, as that message itself, repeated to it once it has loaded). Under such a chrome the chooser asks for no relay.
 It opens a browser tab at the click that asks for the sign-in, which is when a
 browser allows one, and shows the sign-in's page in it once the sign-in has
 started and says where that is; the chooser is then on the step that takes the

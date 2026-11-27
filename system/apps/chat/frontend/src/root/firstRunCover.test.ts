@@ -1,17 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SHELL_HANDSHAKE } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 
-const HANDSHAKE = {
-  type: SHELL_HANDSHAKE,
-  clientId: "client-1",
-  windowId: "win-1",
-  desktopId: "home",
-  app: "chat",
-  path: "/",
-};
 const CAPABILITIES = { type: "minds:embedder-capabilities", canPopOut: false };
 
 let connection: ShellConnection | null = null;
@@ -34,7 +25,7 @@ afterEach(() => {
 });
 
 describe("the first run's cover", () => {
-  it("keeps whether the chrome relays no provider sign-in, from the handshake and from the chrome's own word after it", async () => {
+  it("keeps whether the chrome relays no provider sign-in, as the chrome's own message says it", async () => {
     const parent = framed();
     vi.resetModules();
     const cover = await import("./firstRunCover");
@@ -42,13 +33,10 @@ describe("the first run's cover", () => {
     connection = cover.connectFirstRunCoverToShell();
     expect(relay.isProviderRelayDeclined()).toBe(false);
 
-    deliver({ ...HANDSHAKE, declinesProviderRelay: true }, parent);
+    deliver({ ...CAPABILITIES, declinesProviderRelay: true }, parent);
     expect(relay.isProviderRelayDeclined()).toBe(true);
 
     deliver(CAPABILITIES, parent);
     expect(relay.isProviderRelayDeclined()).toBe(false);
-
-    deliver({ ...CAPABILITIES, declinesProviderRelay: true }, parent);
-    expect(relay.isProviderRelayDeclined()).toBe(true);
   });
 });
