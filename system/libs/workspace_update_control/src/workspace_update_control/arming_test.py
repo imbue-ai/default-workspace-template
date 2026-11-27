@@ -1,5 +1,6 @@
 """The workspace arming its own updates: the decision, and the minute that makes it against a staged workspace."""
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -593,6 +594,98 @@ def test_a_schedule_a_client_armed_with_its_own_values_is_left_to_that_client(
 
     assert staged.read_state("schedule.json") == armed
     assert staged.read_state("schedule-origin.json") is None
+
+
+def _skip(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    control.skip_target(target_ref=target_ref, skipped_at=_NOW - 60)
+
+
+def _fail_a_run_to(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    """A run that went out for ``target_ref`` a day ago and ended stuck."""
+    staged.write_state(
+        "last-dispatch.json",
+        {
+            "chat_agent_name": "update-that-failed",
+            "chat_id": "",
+            "target_ref": target_ref,
+            "dispatched_at": _NOW - 24 * 60 * 60,
+        },
+    )
+    staged.write_state(
+        "run.json",
+        {
+            "chat_agent_name": "update-that-failed",
+            "started_at": _NOW - 24 * 60 * 60 + 60,
+            "verdict": "STUCK",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "hold_back", [_skip, _fail_a_run_to], ids=["skipped", "already-tried"]
+)
+def test_a_self_armed_schedule_is_cancelled_when_its_channel_moves_to_a_version_the_workspace_does_not_arm(
+    staged: StagedUpdateWorkspace,
+    hold_back: Callable[[StagedUpdateWorkspace, str], None],
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    hold_back(staged, "minds-v0.10.1")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    feed.template_ref = "minds-v0.10.1"
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+    assert any(
+        "minds-v0.10.1" in line and "cancelled" in line
+        for line in staged.dispatcher_log_lines()
+    )
+
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS + 60)
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _skip(staged, "minds-v0.9.9")
+    _tick(staged, feed, _NOW)
+
+    feed.template_ref = "minds-v0.10.1"
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == "minds-v0.10.1"
+
+
+def test_a_schedule_a_client_armed_follows_the_channel_to_a_version_the_workspace_would_not_arm(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _skip(staged, "minds-v0.10.1")
+    control.arm_schedule(
+        ceiling=None,
+        override_ref="",
+        window_start_minute_utc=None,
+        window_length_minutes=None,
+        is_backup_configured=None,
+        is_auto_armed=False,
+        now=_NOW,
+        live_cron_dir=str(staged.live_cron_dir),
+        agent_environment=AgentEnvironment(),
+        fetch_channel_file=feed,
+    )
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    feed.template_ref = "minds-v0.10.1"
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    schedule = staged.read_state("schedule.json")
+    assert schedule is not None
+    assert (schedule["ceiling"], schedule["is_auto_armed"]) == ("minds-v0.10.1", False)
 
 
 def _sweep_as_a_client_that_names_its_version(

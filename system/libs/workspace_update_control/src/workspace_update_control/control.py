@@ -79,11 +79,12 @@ from workspace_update_control.protocol import (
     STARTED_BY_IMMEDIATE,
 )
 from workspace_update_control.settings import (
-    is_backup_configured as is_backup_configured_here,
-)
-from workspace_update_control.settings import (
+    UpdateSettings,
     read_update_settings,
     settings_window,
+)
+from workspace_update_control.settings import (
+    is_backup_configured as is_backup_configured_here,
 )
 
 # The workspace's agents as a caller reads them (``agents.read_observed_agents``, or the dispatcher's own
@@ -389,6 +390,48 @@ def refresh_schedule(
     return {"is_armed": True, "schedule": schedule}
 
 
+def _read_followed_schedule(
+    now: float,
+) -> tuple[dict[str, object], dict[str, object]] | None:
+    """The armed schedule and the record of which of its values the workspace filled in itself; None when there
+    is no such schedule, or a client from before the workspace armed its own updates keeps asking."""
+    schedule = read_json_object(SCHEDULE_FILE_PATH)
+    origin = read_json_object(SCHEDULE_ORIGIN_FILE_PATH)
+    if schedule is None or origin is None:
+        return None
+    if origin.get("armed_at") != schedule.get("armed_at"):
+        return None
+    if read_fresh_client_ceiling(now) is not None:
+        return None
+    return schedule, origin
+
+
+def _followed_ceiling(
+    origin: Mapping[str, object], settings: UpdateSettings | None
+) -> str | None:
+    """The version a schedule that follows the channel is kept at; None when it follows none, or the channel's
+    version is not current."""
+    channel_version = read_channel_version(settings)
+    if origin.get(_FOLLOWED_CEILING) is True and is_channel_version_current(
+        channel_version
+    ):
+        return channel_template_ref(channel_version)
+    return None
+
+
+def read_self_armed_schedule_move(now: float) -> str | None:
+    """The version ``refresh_followed_schedule`` is about to move a schedule the workspace armed itself to; None
+    when no such schedule is armed, or it stays at its version."""
+    followed = _read_followed_schedule(now)
+    if followed is None:
+        return None
+    schedule, origin = followed
+    if schedule.get("is_auto_armed") is not True:
+        return None
+    ceiling = _followed_ceiling(origin, read_update_settings())
+    return ceiling if ceiling != schedule.get("ceiling") else None
+
+
 def refresh_followed_schedule(now: float) -> None:
     """Bring current the values of the armed schedule that the workspace filled in itself, from what it holds
     now: the version its channel was last read at, the window of its settings, whether it holds backup
@@ -398,21 +441,15 @@ def refresh_followed_schedule(now: float) -> None:
     armed its own updates keeps asking: that client rewrites the schedule with its own values, and the two
     would undo each other.
     """
-    schedule = read_json_object(SCHEDULE_FILE_PATH)
-    origin = read_json_object(SCHEDULE_ORIGIN_FILE_PATH)
-    if schedule is None or origin is None:
+    followed = _read_followed_schedule(now)
+    if followed is None:
         return
-    if origin.get("armed_at") != schedule.get("armed_at"):
-        return
-    if read_fresh_client_ceiling(now) is not None:
-        return
+    schedule, origin = followed
     settings = read_update_settings()
     fields: dict[str, object] = {}
-    channel_version = read_channel_version(settings)
-    if origin.get(_FOLLOWED_CEILING) is True and is_channel_version_current(
-        channel_version
-    ):
-        fields["ceiling"] = channel_template_ref(channel_version)
+    ceiling = _followed_ceiling(origin, settings)
+    if ceiling is not None:
+        fields["ceiling"] = ceiling
     if origin.get(_FOLLOWED_WINDOW) is True and settings is not None:
         fields["window_start_minute_utc"], fields["window_length_minutes"] = (
             settings_window(settings, now)

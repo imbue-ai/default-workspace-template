@@ -23,7 +23,12 @@ from workspace_update_control.channel import (
     read_fresh_client_ceiling,
     refresh_channel_version,
 )
-from workspace_update_control.control import arm_schedule, refresh_followed_schedule
+from workspace_update_control.control import (
+    arm_schedule,
+    cancel_schedule,
+    read_self_armed_schedule_move,
+    refresh_followed_schedule,
+)
 from workspace_update_control.dispatcher import (
     UPDATE_PROGRAM_SCHEMA,
     AgentEnvironment,
@@ -80,6 +85,14 @@ class ArmingFacts(NamedTuple):
     last_dispatch: LastDispatch | None
 
 
+def _is_version_held_back(facts: ArmingFacts, target_ref: str) -> bool:
+    """Whether the workspace does not aim at ``target_ref`` by itself: the user skipped it, or a run already
+    went out for it."""
+    return facts.skipped_target_ref == target_ref or (
+        facts.last_dispatch is not None and facts.last_dispatch.target_ref == target_ref
+    )
+
+
 def should_auto_arm(
     facts: ArmingFacts,
     target_ref: str,
@@ -97,14 +110,11 @@ def should_auto_arm(
     """
     if not facts.is_enabled or facts.is_scheduled or facts.is_run_in_flight:
         return False
-    if (
-        facts.shown_verdict == _NEEDS_DECISION_VERDICT
-        or facts.skipped_target_ref == target_ref
+    if facts.shown_verdict == _NEEDS_DECISION_VERDICT or _is_version_held_back(
+        facts, target_ref
     ):
         return False
     last_dispatch = facts.last_dispatch
-    if last_dispatch is not None and last_dispatch.target_ref == target_ref:
-        return False
     if facts.shown_verdict in _FAILURE_VERDICTS and (
         # A failure the last dispatch did not make says nothing of what it aimed at.
         last_dispatch is None
@@ -208,6 +218,9 @@ def tick_self_arming(
     that are the workspace's own, and arms a schedule for the channel's version when ``should_auto_arm`` says
     so. A channel whose file could not be read arms nothing. Neither does a version past the one a client from
     before the workspace armed its own updates named, while that client keeps asking.
+
+    A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
+    skipped or a run already went out for: the workspace would not have armed that version.
     """
     settings = read_update_settings()
     if settings is None:
@@ -217,6 +230,14 @@ def tick_self_arming(
     )
     facts = read_arming_facts(settings.is_arming_enabled, now)
     if facts.is_scheduled:
+        moved_to = read_self_armed_schedule_move(now)
+        if moved_to is not None and _is_version_held_back(facts, moved_to):
+            cancel_schedule()
+            write_log_line(
+                "cancelled the workspace's own schedule: its channel moved to %s, which was skipped or already tried"
+                % moved_to
+            )
+            return
         refresh_followed_schedule(now)
         return
     if not is_channel_version_current(channel_version):
