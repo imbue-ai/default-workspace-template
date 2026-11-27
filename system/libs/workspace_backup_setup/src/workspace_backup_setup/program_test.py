@@ -1058,6 +1058,49 @@ def test_a_password_that_cannot_be_kept_fails_the_attempt_before_the_repository_
     assert read_lease(workspace.lease_path, _NOW) is None
 
 
+def test_a_restic_env_that_cannot_be_written_fails_the_attempt_and_keeps_the_password_the_repository_has(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    def _put_a_directory_in_restic_envs_place_then_make_a_password() -> str:
+        workspace.restic_env.mkdir()
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_put_a_directory_in_restic_envs_place_then_make_a_password,
+    )
+    workspace.request(imbue_cloud_request("token-a"))
+
+    program.run_pass()
+
+    workspace.restic_env.rmdir()
+    setup = workspace.state().setup
+    assert setup.state is BackupSetupState.FAILED
+    assert setup.detail.startswith(
+        "The repository is ready, but restic.env could not be written: "
+    )
+    assert "made-password-1" not in setup.detail
+    assert setup.retry_at == _NOW + 60.0
+    # The repository is initialised with this password, which is nowhere else yet.
+    pending = read_pending_env(
+        workspace.root, read_setup_record(workspace.root).request_id
+    )
+    assert pending is not None and pending["RESTIC_PASSWORD"] == "made-password-1"
+    assert read_lease(workspace.lease_path, _NOW) is None
+
+    set_fake_restic_mode(fake_restic_control, FAKE_RESTIC_FINDS_A_REPOSITORY)
+    workspace.clock.advance(60.0)
+    program.run_pass()
+
+    assert workspace.state().setup.state is BackupSetupState.READY
+    assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-1"
+    assert workspace.passwords.made == ["made-password-1"]
+    assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
+
+
 def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
     workspace: _Workspace,
 ) -> None:
