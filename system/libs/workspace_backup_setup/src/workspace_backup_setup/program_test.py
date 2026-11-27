@@ -777,6 +777,59 @@ def test_the_setup_waits_while_someone_else_holds_the_backup_lease(
     assert workspace.state().lease is None
 
 
+def test_storage_kept_for_the_hourly_check_is_tried_as_soon_as_the_backup_lease_is_given_back(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    refuse_fake_restic_token(fake_restic_control, "token-a")
+    program = workspace.start_program()
+    workspace.request(imbue_cloud_request("token-a"))
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.AWAITING_STORAGE
+    (fake_restic_control / "refused-tokens").unlink()
+
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    take_lease(workspace.lease_path, "restore", workspace.clock())
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.AWAITING_STORAGE
+    assert len(fake_restic_calls(fake_restic_control)) == 1
+
+    release_lease(workspace.lease_path, "restore", workspace.clock())
+    workspace.clock.advance(1.0)
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.READY
+
+
+def test_an_attempt_whose_lease_ran_out_and_was_taken_ends_and_is_taken_up_once_the_lease_is_back(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    def _make_a_password_while_the_lease_runs_out_and_a_restore_takes_it() -> str:
+        workspace.clock.advance(601.0)
+        take_lease(workspace.lease_path, "restore", workspace.clock())
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_make_a_password_while_the_lease_runs_out_and_a_restore_takes_it,
+    )
+    workspace.request(imbue_cloud_request("token-a"))
+
+    program.run_pass()
+
+    assert workspace.state().setup.state is BackupSetupState.INITIALIZING
+    assert fake_restic_calls(fake_restic_control) == []
+    held = read_lease(workspace.lease_path, workspace.clock())
+    assert held is not None and held.holder == "restore"
+
+    release_lease(workspace.lease_path, "restore", workspace.clock())
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.READY
+    assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-1"
+    assert workspace.passwords.made == ["made-password-1"]
+
+
 def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -792,8 +845,8 @@ def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     assert not workspace.restic_env.exists()
 
 
-def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
-    workspace: _Workspace,
+def test_a_password_that_cannot_be_kept_fails_the_attempt_before_the_repository_is_touched(
+    workspace: _Workspace, fake_restic_control: Path
 ) -> None:
     pending_path = workspace.root / PENDING_ENV_RELATIVE_PATH
 
@@ -808,6 +861,37 @@ def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
         clock=workspace.clock,
         workspace_id=WORKSPACE_ID,
         make_password=_put_a_directory_in_the_pending_envs_place_then_make_a_password,
+    )
+    workspace.request(
+        own_storage_request("s3:b/r", {"AWS_SECRET_ACCESS_KEY": "typed-secret"})
+    )
+
+    program.run_pass()
+
+    setup = workspace.state().setup
+    assert setup.state is BackupSetupState.FAILED
+    assert setup.detail.startswith("The repository's password could not be kept: ")
+    assert "Is a directory" in setup.detail
+    assert "typed-secret" not in setup.detail
+    assert "made-password-1" not in setup.detail
+    assert setup.retry_at == _NOW + 60.0
+    assert fake_restic_calls(fake_restic_control) == []
+    assert read_lease(workspace.lease_path, _NOW) is None
+
+
+def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
+    workspace: _Workspace,
+) -> None:
+    def _make_a_password_then_fail() -> str:
+        password = workspace.passwords()
+        raise OSError(f"no room for a password of {len(password)} characters")
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_make_a_password_then_fail,
     )
     # A traceback that shows the values on its frames cuts each one short, so these are short enough to be shown.
     workspace.request(
@@ -828,6 +912,6 @@ def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
     assert workspace.passwords.made == ["made-password-1"]
     assert len(logged) == 1
     assert "A pass of backup-setup failed" in logged[0]
-    assert "Is a directory" in logged[0]
+    assert "no room for a password" in logged[0]
     assert "frame-secret" not in logged[0]
     assert "made-password-1" not in logged[0]

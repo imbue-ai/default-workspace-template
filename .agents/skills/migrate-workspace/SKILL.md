@@ -376,6 +376,9 @@ by default. What is excluded is per-workspace identity rather than user content:
 password), with the copies of it the old workspace kept aside
 (`restic.env.<timestamp>`), the credentials of a backup setup it had not finished
 (`restic.env.pending`) and the record of that setup (`data/.state/backup_setup/`),
+the record of the initial data the old workspace was created with
+(`data/.state/initial_data/`, by which this workspace's boot knows which parts of
+its own it has applied),
 `cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
 workspace's published share -- `share.env`, `share_auth_label`,
 `share_gateway_signing_key`, `share_grants.toml` and its lock,

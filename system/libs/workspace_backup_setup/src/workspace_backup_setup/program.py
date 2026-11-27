@@ -228,7 +228,9 @@ class BackupSetupProgram:
         if is_check_due:
             self._next_credentials_check_at = now + CREDENTIALS_CHECK_INTERVAL_SECONDS
         if is_attempt_due or (is_check_due and pending is not None):
-            self._attempt(record, pending)
+            if not self._attempt(record, pending) and is_check_due:
+                # Storage kept for the hourly check is still to be tried, once the lease is given back.
+                self._next_credentials_check_at = now
         elif is_check_due and env_text is not None:
             in_use = parse_restic_env_file(env_text)
             # A destination that awaits its first storage says nothing of the previous one's file, still in place.
@@ -279,7 +281,8 @@ class BackupSetupProgram:
         finally:
             release_lease(self._lease_path, HOLDER_SETUP, self._clock())
 
-    def _attempt(self, record: SetupRecord, pending: dict[str, str] | None) -> None:
+    def _attempt(self, record: SetupRecord, pending: dict[str, str] | None) -> bool:
+        """Try the setup once; False when it waits for whoever holds the backup lease, and nothing was tried."""
         now = self._clock()
         if pending is None or not pending.get(REPOSITORY_KEY):
             with setup_lock(self._workspace_root):
@@ -293,17 +296,18 @@ class BackupSetupProgram:
                         installed_digest=record.installed_digest,
                     ),
                 )
-            return
+            return True
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, now)
         except BackupLeaseHeldError as e:
             self._note_waiting_for(e.lease.holder)
-            return
+            return False
         self._awaited_holder = ""
         try:
             self._attempt_holding_the_lease(record, pending)
         finally:
             release_lease(self._lease_path, HOLDER_SETUP, self._clock())
+        return True
 
     def _attempt_holding_the_lease(
         self, record: SetupRecord, pending: dict[str, str]
@@ -351,19 +355,31 @@ class BackupSetupProgram:
             }
             # Kept before it is used: a repository initialised with a password that was then lost cannot be read.
             # Another destination named since has its own storage in that file, which this attempt leaves alone.
-            with setup_lock(self._workspace_root):
-                if (
-                    read_setup_record(self._workspace_root).request_id
-                    != record.request_id
-                ):
-                    return
-                write_pending_env(self._workspace_root, record.request_id, pending)
-        self._renew()
+            try:
+                with setup_lock(self._workspace_root):
+                    if (
+                        read_setup_record(self._workspace_root).request_id
+                        != record.request_id
+                    ):
+                        return
+                    write_pending_env(self._workspace_root, record.request_id, pending)
+            except OSError as e:
+                self._record_failure(
+                    attempting,
+                    _ResticFailure(
+                        detail=f"The repository's password could not be kept: {e}"
+                    ),
+                )
+                return
+        # Without the lease the attempt ends here, and the next pass waits for its holder.
+        if not self._renew():
+            return
         failure = _initialize_repository(pending)
         if failure is not None:
             self._record_failure(attempting, failure)
             return
-        self._renew()
+        if not self._renew():
+            return
         env_text = render_restic_env(pending)
         now = self._clock()
         with setup_lock(self._workspace_root):
@@ -397,7 +413,8 @@ class BackupSetupProgram:
         self._next_credentials_check_at = now + CREDENTIALS_CHECK_INTERVAL_SECONDS
         logger.info("Backups are set up: restic.env is in place")
 
-    def _renew(self) -> None:
+    def _renew(self) -> bool:
+        """Renew the lease before the attempt's next step; False when it ran out and another holder took it."""
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, self._clock())
         except BackupLeaseHeldError as e:
@@ -405,6 +422,8 @@ class BackupSetupProgram:
                 "The backup lease ran out under the setup and {} took it",
                 e.lease.holder,
             )
+            return False
+        return True
 
     def _keep_the_credentials_in_use(
         self, attempting: SetupRecord, in_use_text: str

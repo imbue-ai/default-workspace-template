@@ -237,6 +237,25 @@ def test_what_was_kept_is_found_by_destination_and_by_repository(
     )
 
 
+def test_a_restic_env_another_writer_left_readable_is_kept_aside_for_its_owner_alone(
+    workspace_root: Path,
+) -> None:
+    path = workspace_root / RESTIC_ENV_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_restic_env(_IMBUE_CLOUD_ENV))
+    path.chmod(0o644)
+
+    assert keep_restic_env_aside(workspace_root, _NOW) is True
+
+    (kept_path,) = [
+        candidate
+        for candidate in path.parent.iterdir()
+        if candidate.name.startswith("restic.env.")
+    ]
+    assert stat.S_IMODE(kept_path.stat().st_mode) == 0o600
+    assert kept_envs(workspace_root) == [_IMBUE_CLOUD_ENV]
+
+
 def test_a_kept_password_is_found_when_the_credential_in_the_repositorys_address_changed(
     workspace_root: Path,
 ) -> None:
@@ -257,6 +276,30 @@ def test_a_kept_password_is_found_when_the_credential_in_the_repositorys_address
         kept_password_for_repository(
             workspace_root, "rest:https://alice:new-credential@rest.example/bob/"
         )
+        is None
+    )
+
+
+def test_a_kept_password_is_found_when_the_repository_is_named_again_with_or_without_its_final_slash(
+    workspace_root: Path,
+) -> None:
+    kept = {
+        "RESTIC_REPOSITORY": "s3:https://s3.example/bucket",
+        "RESTIC_PASSWORD": "own-password",
+    }
+    install_restic_env(workspace_root, render_restic_env(kept), _NOW)
+    keep_restic_env_aside(workspace_root, _NOW + 10.0)
+
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket/")
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket")
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket2")
         is None
     )
 
