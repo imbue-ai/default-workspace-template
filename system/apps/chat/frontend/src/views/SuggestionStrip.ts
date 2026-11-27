@@ -16,6 +16,7 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { Suggestion, SuggestionPlacement } from "../models/Suggestions";
 
 /** What a placement's strip says of itself. */
@@ -29,12 +30,12 @@ interface PlacementWords {
 export const SUGGESTION_PLACEMENT_WORDS: Record<SuggestionPlacement, PlacementWords> = {
   next_step: {
     label: "Suggestions",
-    disableLink: "disable suggestions",
+    disableLink: "Disable suggestions",
     offNotice: "Next step suggestions are off.",
   },
   new_chat: {
     label: "Things to try",
-    disableLink: "disable new chat suggestions",
+    disableLink: "Disable new chat suggestions",
     offNotice: "New chat suggestions are off.",
   },
 };
@@ -52,16 +53,24 @@ export interface SuggestionStripAttrs {
   onDisable: (() => void) | null;
 }
 
-// The user's side of the column: the group as wide as its widest pill and every pill stretched to that, set in from
-// the column's edge as far as a person's bubble sets its text in.
-const PILLS_CLASS = "suggestion-strip-pills ml-auto flex w-fit max-w-full flex-col items-stretch gap-1.5 pr-4";
+// The user's side of the column: the group as wide as its widest pill and every pill stretched to that, ending at
+// the column's edge, where the composer's box ends.
+const PILLS_CLASS = "suggestion-strip-pills ml-auto flex w-fit max-w-full flex-col items-stretch gap-1.5";
 
 const QUIET_LINK_CLASS =
   "cursor-pointer text-(length:--font-size-helper) text-faint hover:text-secondary hover:underline " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 // One height whatever it holds, so a set that arrives moves nothing. What it holds sits at its right end.
-const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end gap-4";
+const LINE_CLASS = "suggestion-line flex h-5 w-full items-center justify-end";
+
+// The line's words, 12px apart, set in 16px from the column's end as a pill sets in its label and a bubble its text,
+// so the last of them lines up with theirs.
+const WORDS_CLASS = "suggestion-line-words flex h-full items-center gap-3 pr-4";
+
+function lineWords(children: m.Children[]): m.Vnode {
+  return m("div", { class: WORDS_CLASS }, children);
+}
 
 /** The suggestions as pills, in order; a click picks that one. */
 export function suggestionPills(
@@ -86,11 +95,24 @@ export function suggestionPills(
   );
 }
 
-function disableLink(placement: SuggestionPlacement, onDisable: () => void): m.Vnode {
+// The words on a link beside its partner in a reply's line, which say what they act on in their name and tooltip.
+const DISABLE_SHORT = "Disable";
+const HIDE_SHORT = "Hide";
+const HIDE_LINK = "Hide suggestions";
+
+/** The link that switches ``placement`` off: in full where it stands alone, or ``short`` beside Hide with the full
+ *  words as its name and tooltip. */
+function disableLink(placement: SuggestionPlacement, onDisable: () => void, isShort: boolean): m.Vnode {
+  const words = SUGGESTION_PLACEMENT_WORDS[placement].disableLink;
   return m(
     "button",
-    { type: "button", class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`, onclick: onDisable },
-    SUGGESTION_PLACEMENT_WORDS[placement].disableLink,
+    {
+      type: "button",
+      class: `suggestion-strip-disable ${QUIET_LINK_CLASS}`,
+      onclick: onDisable,
+      ...(isShort ? { "aria-label": words, ...hoverTooltipAttrs(words, "above") } : {}),
+    },
+    isShort ? DISABLE_SHORT : words,
   );
 }
 
@@ -112,19 +134,25 @@ export interface SuggestionLineAttrs {
 export function suggestionLine(attrs: SuggestionLineAttrs | null): m.Vnode {
   if (attrs === null) return m("div", { class: LINE_CLASS });
   const seeLabel = attrs.count === 1 ? "See 1 suggestion" : `See ${attrs.count} suggestions`;
-  return m("div", { class: LINE_CLASS }, [
-    attrs.isOpen && attrs.onDisable !== null ? disableLink("next_step", attrs.onDisable) : null,
-    m(
-      "button",
-      {
-        type: "button",
-        class: `suggestion-line-toggle ${QUIET_LINK_CLASS}`,
-        "aria-expanded": attrs.isOpen ? "true" : "false",
-        onclick: attrs.onToggle,
-      },
-      attrs.isOpen ? "Hide suggestions" : seeLabel,
-    ),
-  ]);
+  const toggle = m(
+    "button",
+    {
+      type: "button",
+      class: `suggestion-line-toggle ${QUIET_LINK_CLASS}`,
+      "aria-expanded": attrs.isOpen ? "true" : "false",
+      onclick: attrs.onToggle,
+      ...(attrs.isOpen ? { "aria-label": HIDE_LINK, ...hoverTooltipAttrs(HIDE_LINK, "above") } : {}),
+    },
+    attrs.isOpen ? HIDE_SHORT : seeLabel,
+  );
+  // Disable just left of Hide; the toggle alone otherwise.
+  return m(
+    "div",
+    { class: LINE_CLASS },
+    attrs.isOpen && attrs.onDisable !== null
+      ? lineWords([disableLink("next_step", attrs.onDisable, true), toggle])
+      : lineWords([toggle]),
+  );
 }
 
 /** The next-step line with no set to speak of, which keeps its height above the composer. */
@@ -134,7 +162,11 @@ export function emptyNextStepLine(): m.Vnode {
 
 /** The line under a strip whose pills are always shown: its link alone, at the height of a reply's line. */
 function linkLine(placement: SuggestionPlacement, onDisable: (() => void) | null): m.Vnode {
-  return m("div", { class: LINE_CLASS }, onDisable === null ? null : disableLink(placement, onDisable));
+  return m(
+    "div",
+    { class: LINE_CLASS },
+    onDisable === null ? null : lineWords([disableLink(placement, onDisable, false)]),
+  );
 }
 
 /** A strip's part in the footer: its line. */

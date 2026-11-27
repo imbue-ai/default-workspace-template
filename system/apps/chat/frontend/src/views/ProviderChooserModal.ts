@@ -73,7 +73,8 @@ import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay"
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
-  /** Opened from the first run's provider page, whose cream the dialog then wears in place of the workspace's look. */
+  /** Opened from the first run's provider page: a white card over the page's cream wash, in place of the workspace's
+   *  look. */
   isFirstRun?: boolean;
 }
 

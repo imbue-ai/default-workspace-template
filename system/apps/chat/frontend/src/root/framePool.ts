@@ -159,6 +159,15 @@ export class InnerFramePool {
     return true;
   }
 
+  /** Hand the keyboard to the shown chat's composer; false when no loaded chat is shown. */
+  focusShown(): boolean {
+    if (this.shownChatId === null) return false;
+    const api = this.api(this.shownChatId);
+    if (api === null) return false;
+    api.focus();
+    return true;
+  }
+
   private api(chatId: string): ChatPageEmbedApi | null {
     const held = this.held.get(chatId);
     if (held === undefined || !held.isLoaded) return null;

@@ -20,6 +20,7 @@
  */
 
 import m from "mithril";
+import { faceGutterInset } from "./participant-picture";
 import { isSlotClaimed } from "../slots";
 import {
   addMessageSentListener,
@@ -940,6 +941,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // it finds, so the flip waits for the agent to register.
       const isRoom = isRoomChat(chatId);
       const isListed = getChatById(chatId) !== undefined;
+      // On a phone a listed chat's tools button sits beside the composer, in the face gutter.
+      const isGutterHeld = isCompact && isListed;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
       // (which read this closure variable) see the current value. Undefined for a
@@ -1055,24 +1058,23 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-6"}` }, [
+              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-4" : "px-6"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
                 m(AgentWorkingReport, { chatId }),
-                m(ChatSuggestions, { chatId }),
+                m(ChatSuggestions, { chatId, isGutterHeld }),
                 m(MessageInput, {
                   chatId,
-                  leading:
-                    isCompact && isListed
-                      ? m(ModelProviderMenu, {
-                          chatId,
-                          isCompact: true,
-                          sourceView: { on: isFlipped, onToggle: toggleSourceView },
-                        })
-                      : undefined,
+                  leading: isGutterHeld
+                    ? m(ModelProviderMenu, {
+                        chatId,
+                        isCompact: true,
+                        sourceView: { on: isFlipped, onToggle: toggleSourceView },
+                      })
+                    : undefined,
                 }),
                 // The under-bar is a sibling of the whole flip card, not part of this face: on
                 // a face it would rotate away with the face its own switch turns, and the flip
@@ -1087,7 +1089,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-6"}` },
+            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-4" : "px-6"}` },
             m(
               "div",
               {
@@ -1097,11 +1099,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // on a phone, where the chip is the settings button, only as tall as a notice in it.
                 class:
                   `composer-under-bar relative mx-auto mt-1 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
-                  "max-w-(--width-message-column) items-center gap-2",
+                  `max-w-(--width-message-column) items-center gap-2${faceGutterInset(isGutterHeld)}`,
               },
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.
-                isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
+                isGutterHeld ? null : m(ModelProviderMenu, { chatId }),
                 m(FastModeNotice, { chatId }),
                 !isListed || isRoom || (isCompact && !isFlipped)
                   ? null

@@ -487,7 +487,7 @@ def _offer_fixed_suggestions(server: RunningWorkspace, labels: Sequence[str]) ->
 
 
 def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) -> None:
-    """One pill to a row, all as wide as the widest, their right edge 16px in from the column's."""
+    """One pill to a row, all as wide as the widest, their right edge on the column's."""
     boxes = [_box(pills.nth(index)) for index in range(pills.count())]
     assert len(boxes) > 1
     column_box = _box(column)
@@ -495,7 +495,7 @@ def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) 
         assert lower["top"] >= upper["bottom"], "each pill has a row of its own"
     assert max(box["right"] - box["left"] for box in boxes) - min(box["right"] - box["left"] for box in boxes) < 1
     for box in boxes:
-        assert abs(column_box["right"] - 16 - box["right"]) < 1, "the pills are set in 16px from the column's edge"
+        assert abs(column_box["right"] - box["right"]) < 1, "the pills end at the column's edge"
         assert box["left"] > column_box["left"] + (column_box["right"] - column_box["left"]) / 3, (
             "the pills sit on the user's side of the column"
         )
@@ -547,16 +547,18 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     first_reply_event_id = _offer_fixed_suggestions(e2e_server, fixed_labels)
 
     expect(pills).to_have_text(fixed_labels, timeout=15000)
-    expect(toggle).to_have_text("Hide suggestions")
+    expect(toggle).to_have_text("Hide")
     disable = column.locator(".suggestion-strip-disable")
-    expect(disable).to_have_text("disable suggestions")
+    expect(disable).to_have_text("Disable")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
     assert _box(composer) == composer_box, "the composer does not move"
-    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
-    # The link sits immediately left of the button that hides the suggestions, 16px away, on the same line.
-    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 16) < 1
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, (
+        "the line's words end 16px in from the box's edge"
+    )
+    # The link sits immediately left of the button that hides the suggestions, 12px away, on the same line.
+    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 12) < 1
     assert abs(_box(toggle)["top"] - _box(disable)["top"]) < 1
     page.screenshot(path=str(tmp_path / "1-fixed-set-shown.png"))
 
@@ -586,14 +588,16 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     expect(pills).to_have_count(0)
     expect(column.locator(".suggestion-strip-disable")).to_have_count(0)
     assert _box(composer) == composer_box_before_the_set, "the set's arrival moves nothing"
-    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    assert abs(_box(composer)["right"] - 16 - _box(toggle)["right"]) < 1, (
+        "the line's words end 16px in from the box's edge"
+    )
     page.screenshot(path=str(tmp_path / "2-generated-set-line.png"))
 
     toggle.click()
 
     expect(pills).to_have_text(generated_labels)
     expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
-    expect(toggle).to_have_text("Hide suggestions")
+    expect(toggle).to_have_text("Hide")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(composer) == composer_box_before_the_set
     page.screenshot(path=str(tmp_path / "3-generated-set-shown.png"))
@@ -606,7 +610,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
 
     answered_pills = first_answered.locator(".suggestion-pill")
     expect(answered_pills).to_have_text(fixed_labels)
-    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(answered_toggle).to_have_text("Hide")
     expect(first_answered.locator(".suggestion-strip-disable")).to_have_count(0)
     assert _box(answered_toggle)["bottom"] <= _box(answered_pills.first)["top"]
     _assert_pills_are_a_list_on_the_users_side(answered_pills, chat.locator(".message-list"))
@@ -615,7 +619,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     answered_pills.nth(1).click()
 
     wait_for(lambda: (FIXTURE_AGENT_ID, fixed_labels[1]) in messenger.sent, timeout=10.0)
-    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(answered_toggle).to_have_text("Hide")
     # That send answered the second reply, whose set joins the first's in the transcript.
     expect(answered_lines).to_have_count(2)
     expect(toggle).to_have_count(0)
@@ -644,14 +648,16 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
         expect(pills).to_have_text(["Work in parallel by starting a new chat", "Build an app"], timeout=15000)
         expect(shown).to_have_attribute("aria-label", "Things to try")
-        expect(disable).to_have_text("disable new chat suggestions")
+        expect(disable).to_have_text("Disable new chat suggestions")
         # The strip's line is the column's one quiet line, and holds the link alone.
         expect(line).to_have_count(1)
-        expect(line).to_have_text("disable new chat suggestions")
+        expect(line).to_have_text("Disable new chat suggestions")
         expect(column.get_by_role("button")).to_have_count(1)
         _assert_pills_are_a_list_on_the_users_side(pills, column)
         assert _box(disable)["top"] >= _box(pills.last)["bottom"]
-        assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
+        assert abs(_box(composer)["right"] - 16 - _box(disable)["right"]) < 1, (
+            "the line's words end 16px in from the box's edge"
+        )
         assert _box(line)["bottom"] <= _box(composer)["top"]
         page.screenshot(path=str(tmp_path / "new-chat-strip.png"))
 
@@ -916,7 +922,7 @@ def test_a_tall_list_of_suggestion_pills_keeps_to_its_share_of_the_transcript_an
 def test_suggestion_pills_float_over_the_transcript_in_the_phone_layout_in_line_with_its_messages(
     tmp_path: Path, page: Page
 ) -> None:
-    """At a phone's width the pills float over the transcript the same way: set in 16px from the edge of the
+    """At a phone's width the pills float over the transcript the same way: ending at the edge of the
     transcript's own column, above a footer that keeps its box, the last reply ending just above them."""
     with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
         _set_fixture_agent(server, "WAITING", ActivityState.IDLE)

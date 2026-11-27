@@ -10,7 +10,8 @@
  * it started. Skip and Next both finish the step for good (`finishFirstRunProviderStep`), after which the shell
  * takes its cover down.
  *
- * The dialogs the page opens (the chooser, the removal's confirmation) wear the page's cream (`FIRST_RUN_DIALOG`).
+ * The dialogs the page opens (the chooser, the removal's confirmation) are white cards over the page's cream wash
+ * (`FIRST_RUN_DIALOG`); no dialog wears the cream itself.
  */
 
 import m from "mithril";

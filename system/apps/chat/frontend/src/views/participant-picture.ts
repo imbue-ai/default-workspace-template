@@ -16,6 +16,13 @@ export const TURN_FACE_SIZE_PX = 24;
  *  in style.css). A margin, so a row in the message list's stretching flex column keeps the column's right edge. */
 export const FACE_COLUMN_CLASS = "ml-(--width-face-gutter)";
 
+/** The composer column's set-in by the face gutter, so the box and what stands about it start where an agent's
+ *  bubbles do; none where the gutter holds something of its own instead (``isGutterHeld``: the phone layout's
+ *  tools button beside the composer). Leads with a space, to append to a class list. */
+export function faceGutterInset(isGutterHeld: boolean): string {
+  return isGutterHeld ? "" : " pl-(--width-face-gutter)";
+}
+
 /** The first letter of a name, uppercased; "?" for an empty one. */
 export function monogramOf(name: string): string {
   const first = name.trim().slice(0, 1);

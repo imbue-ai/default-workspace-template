@@ -16,6 +16,7 @@
  */
 
 import m from "mithril";
+import { faceGutterInset } from "./participant-picture";
 import { ensureChatSettings, isSuggestionSwitchOn } from "../models/ChatSettings";
 import { isRoomChat } from "../models/Chats";
 import { isViewerOwner } from "../models/Participants";
@@ -55,7 +56,7 @@ export function openStrip(chatId: string): PlacementStrip | null {
   return strip !== null && strip.isOpen ? strip : null;
 }
 
-export function ChatSuggestions(): m.Component<{ chatId: string }> {
+export function ChatSuggestions(): m.Component<{ chatId: string; isGutterHeld?: boolean }> {
   let shownChatId: string | null = null;
   let stopFollowingNextStep: () => void = () => undefined;
   const links: Record<SuggestionPlacement, SuggestionSwitchLink> = {
@@ -106,7 +107,7 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
         );
       }
       if (children.length === 0) return null;
-      return m("div", { class: COLUMN_CLASS }, children);
+      return m("div", { class: `${COLUMN_CLASS}${faceGutterInset(vnode.attrs.isGutterHeld === true)}` }, children);
     },
   };
 }

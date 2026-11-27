@@ -184,10 +184,27 @@ export function isFirstRunProviderStepPending(): boolean {
   return firstRunProviderStepPending;
 }
 
+// Written by the provider page's frame when the owner leaves it; the chat window, another frame of this app, hears
+// it as a storage event and hands its composer the keyboard the page held.
+const FIRST_RUN_PROVIDER_STEP_DONE_KEY = "first-run-provider-step-done";
+
 /** The owner left the first run's provider page (Skip or Next): it is never shown again. */
 export async function finishFirstRunProviderStep(): Promise<void> {
   await m.request({ method: "POST", url: apiUrl("/api/first-run/provider-step/done") });
   firstRunProviderStepPending = false;
+  try {
+    localStorage.setItem(FIRST_RUN_PROVIDER_STEP_DONE_KEY, String(Date.now()));
+  } catch (error) {
+    // The step is done either way; only the chat window's composer misses the keyboard.
+    console.warn("Could not tell the chat window the first run's provider page was left", error);
+  }
+}
+
+/** Run ``onDone`` each time another frame of this app reports the first run's provider page left. */
+export function onFirstRunProviderStepDoneElsewhere(onDone: () => void): void {
+  window.addEventListener("storage", (event: StorageEvent) => {
+    if (event.key === FIRST_RUN_PROVIDER_STEP_DONE_KEY && event.newValue !== null) onDone();
+  });
 }
 
 export async function loadAccounts(): Promise<void> {

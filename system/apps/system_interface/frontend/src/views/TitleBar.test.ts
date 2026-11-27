@@ -281,8 +281,8 @@ describe("shareLookOf", () => {
     widths.map((barWidth) => shareLookOf(fitting({ ...overrides, barWidth })));
 
   it("draws the fullest look the room before the centred title holds, at the width each stops fitting", () => {
-    // "Chat" with its icon is taken to be 58 wide: the word needs a bar of 424, the glyph one of 322.
-    expect(looksAt([321, 322, 423, 424], { title: SHORT_TITLE })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
+    // "Chat" with its icon is taken to be 58 wide: the word needs a bar of 408, the glyph one of 322.
+    expect(looksAt([321, 322, 407, 408], { title: SHORT_TITLE })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
     expect(looksAt([600], { title: "Getting Started" })).toEqual(["labelled"]);
     expect(looksAt([600], { title: LONG_TITLE })).toEqual(["glyph"]);
   });
@@ -290,7 +290,7 @@ describe("shareLookOf", () => {
   it("takes a title no wider than the three fifths of the bar its element is capped at", () => {
     const endless = "x".repeat(400);
 
-    expect(looksAt([659, 660, 914, 915], { title: endless })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
+    expect(looksAt([659, 660, 874, 875], { title: endless })).toEqual(["hidden", "glyph", "glyph", "labelled"]);
   });
 
   it("counts the app's icon only where the theme centres it with the title", () => {
@@ -299,7 +299,7 @@ describe("shareLookOf", () => {
   });
 
   it("asks a touch client's longer run for more room", () => {
-    expect(looksAt([449, 450, 519, 520], { title: SHORT_TITLE, isTouch: true })).toEqual([
+    expect(looksAt([449, 450, 503, 504], { title: SHORT_TITLE, isTouch: true })).toEqual([
       "hidden",
       "glyph",
       "glyph",

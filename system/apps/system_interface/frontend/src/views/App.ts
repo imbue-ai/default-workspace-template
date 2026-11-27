@@ -1318,18 +1318,27 @@ export function App(): m.Component<AppAttrs> {
     if (row !== null) runLauncherRow(current, row);
   }
 
+  /** A press on a control the size menu hangs off acts on the window at once, which moves the window out from under
+   *  the menu: the menu goes with the press rather than staying where the control was, over whatever lands there. */
+  function closeSizeMenuOf(windowId: string): void {
+    if (openMenu?.kind === "size" && openMenu.windowId === windowId) menu.close();
+  }
+
   function onWindowControl(current: DesktopStore, windowId: string, control: WindowControl, event: MouseEvent): void {
     switch (control) {
       case "minimize":
         current.minimizeWindow(windowId);
         return;
       case "maximize":
+        closeSizeMenuOf(windowId);
         current.setWindowState(windowId, "MAXIMIZED");
         return;
       case "fullscreen":
+        closeSizeMenuOf(windowId);
         current.toggleFullscreen(windowId);
         return;
       case "restore":
+        closeSizeMenuOf(windowId);
         current.toggleMaximized(windowId);
         return;
       case "close":

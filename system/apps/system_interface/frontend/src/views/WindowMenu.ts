@@ -13,7 +13,7 @@
  */
 
 import m from "mithril";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { icon, shareIcon } from "@imbue/workspace-ui/src/components/icons";
 import type { MenuRow, SubmenuChildRow } from "@imbue/workspace-ui/src/components/menu";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { glyph } from "./glyphs";
@@ -151,7 +151,8 @@ function shareAndQuitRows(
       kind: "action",
       key: "share",
       label: `Share ${app.display_name}`,
-      icon: "share",
+      // The named icons a menu draws are 14 across.
+      icon: { markup: shareIcon(14) },
       onSelect: share,
     });
   }

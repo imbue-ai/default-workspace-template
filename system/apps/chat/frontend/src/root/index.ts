@@ -65,6 +65,7 @@ import {
   isFirstRunProviderStepPending,
   isProviderChooserOpen,
   loadAccountsWithRetry,
+  onFirstRunProviderStepDoneElsewhere,
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
@@ -686,6 +687,8 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
 function bootstrap(): void {
   initChatUnread();
   initRailWidth();
+  // The first run's provider page held the keyboard over the desktop; as it comes down, the chat under it takes it.
+  onFirstRunProviderStepDoneElsewhere(() => pool?.focusShown());
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   // An empty list starts a chat only once an account is signed in.

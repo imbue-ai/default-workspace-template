@@ -203,7 +203,7 @@ describe("the suggestions of a reply that has been answered", () => {
     draw();
 
     const toggle = toggleUnder("a-1");
-    expect(toggle.textContent).toBe("Hide suggestions");
+    expect(toggle.textContent).toBe("Hide");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(pillsUnder("a-1").map((pill) => pill.textContent)).toEqual(["Go ahead", "Change the plan"]);
     expect(toggle.compareDocumentPosition(pillsUnder("a-1")[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -228,7 +228,7 @@ describe("the suggestions of a reply that has been answered", () => {
     draw();
 
     expect(mocks.submitSuggestion).toHaveBeenCalledExactlyOnceWith(CHAT, "Change the plan");
-    expect(toggleUnder("a-1").textContent).toBe("Hide suggestions");
+    expect(toggleUnder("a-1").textContent).toBe("Hide");
   });
 
   it("keep one line under every answered reply the page knows a set for, and none under the reply waited on", async () => {
