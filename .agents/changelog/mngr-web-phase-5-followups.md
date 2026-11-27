@@ -1,0 +1,1 @@
+- `migrate-workspace` leaves behind one more record of the old workspace's own update state, `release-tags-fetch.json` (when its dispatcher last fetched its template's release tags), so the new workspace makes its own first fetch without waiting out the old one's day.

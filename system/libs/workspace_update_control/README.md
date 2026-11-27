@@ -44,6 +44,15 @@ where supervisord runs the shell and where the cron line changes to.
   own files.
 - `installed_version` -- the version of the checkout, read from git, and how
   releases order. The shell's status route reads the version by the same rules.
+- `release_tags` -- the fetch of the template's release tags into a checkout that
+  names no version, which a workspace made from a published copy of the template
+  is: it holds the template's history and none of its tags. The tags come from
+  where the update-self skill fetches from, the `upstream` remote, or the address
+  `system/config/parent.toml` names where the checkout has no such remote yet.
+  Nothing is fetched into a checkout with no `parent.toml` (it was not made from
+  the template) or into a shallow one, and an attempt is made a day after the last
+  at the earliest. `arming` asks for it in the minute the channel's version is
+  read, and never while an update is running.
 - `tick` -- the tick as a program. `system/scripts/update_dispatcher_tick.py` is its
   entry file, which the `update-self-dispatch` cron line runs, and
   `system/scripts/install_update_dispatcher_cron.py` writes that line at boot.
@@ -73,8 +82,8 @@ lock cron's line tests. `last-start.json` is this library's alone, and so are th
 files a workspace that arms its own updates keeps: `settings.json`,
 `channel-version.json`
 (which the update-self skill reads for its default target), `client-ceiling.json`,
-`schedule-origin.json` and `installed-version.json`. A desktop from before them
-reads none, and `schedule.json` gains no field for them.
+`schedule-origin.json`, `installed-version.json` and `release-tags-fetch.json`. A
+desktop from before them reads none, and `schedule.json` gains no field for them.
 
 ## A desktop from before the workspace armed its own updates
 

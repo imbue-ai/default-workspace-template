@@ -22,6 +22,7 @@ from workspace_update_control.channel import (
     CLIENT_CEILING_HOLD_SECONDS,
 )
 from workspace_update_control.dispatcher import AgentEnvironment
+from workspace_update_control.release_tags import RELEASE_TAG_FETCH_RETRY_SECONDS
 from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
@@ -30,8 +31,10 @@ from workspace_update_control.testing import (
     armed_schedule,
     epoch_at,
     stage_checkout_at,
+    stage_template_upstream,
     stage_update_workspace,
     update_settings_document,
+    write_parent_file,
 )
 
 _INSTALLED = "minds-v0.9.0"
@@ -334,6 +337,103 @@ def test_a_checkout_that_names_no_version_arms_nothing(
     _tick(staged, RecordingFeed(_ON_THE_CHANNEL), _NOW)
 
     assert staged.read_state("schedule.json") is None
+
+
+def _stage_a_workspace_with_none_of_its_templates_tags(
+    staged: StagedUpdateWorkspace,
+) -> RecordingFeed:
+    """A checkout at ``_INSTALLED`` that holds no tag saying so, as one made from a published copy of the
+    template, with update settings and a feed whose stable channel is on ``_ON_THE_CHANNEL``."""
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    stage_template_upstream(
+        staged.root, staged.root.parent / "template-upstream", _INSTALLED
+    )
+    staged.write_state("settings.json", update_settings_document())
+    return RecordingFeed(_ON_THE_CHANNEL)
+
+
+def test_a_checkout_with_none_of_its_templates_tags_fetches_them_and_arms_in_the_same_minute(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+
+    _tick(staged, feed, _NOW)
+
+    installed = staged.read_state("installed-version.json")
+    assert installed is not None and installed["template_ref"] == _INSTALLED
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+
+def test_a_workspace_that_does_not_arm_itself_still_fetches_the_tags_that_name_its_version(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    staged.write_state(
+        "settings.json", update_settings_document(is_auto_update_enabled=False)
+    )
+
+    _tick(staged, feed, _NOW)
+
+    assert read_installed_version(_NOW) == _INSTALLED
+    assert staged.read_state("schedule.json") is None
+
+
+def test_no_tags_are_fetched_while_an_update_is_running(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    staged.write_state("run.json", {"chat_agent_name": "update", "started_at": _NOW})
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("release-tags-fetch.json") is None
+    assert read_installed_version(_NOW) == ""
+
+    # The run ends, and the next read of the channel fetches them.
+    staged.write_state(
+        "run.json",
+        {"chat_agent_name": "update", "started_at": _NOW, "verdict": "REFUSED"},
+    )
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert read_installed_version(_NOW + CHANNEL_READ_INTERVAL_SECONDS) == _INSTALLED
+
+
+def test_tags_that_cannot_be_fetched_are_tried_again_once_a_day_and_only_when_the_channel_is_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+    staged.write_state("settings.json", update_settings_document())
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+
+    def attempted_at() -> float | None:
+        record = staged.read_state("release-tags-fetch.json")
+        return record["attempted_at"] if record is not None else None
+
+    _tick(staged, feed, _NOW)
+    assert attempted_at() == _NOW
+
+    _tick(staged, feed, _NOW + 60)
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+    assert attempted_at() == _NOW
+
+    a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
+    _tick(staged, feed, a_day_later)
+    assert attempted_at() == a_day_later
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_checkout_that_names_its_version_fetches_nothing(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("release-tags-fetch.json") is None
+    assert _armed_target(staged) == _ON_THE_CHANNEL
 
 
 def test_a_version_the_user_skipped_is_not_armed_and_the_next_one_is(

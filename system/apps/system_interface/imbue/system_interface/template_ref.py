@@ -2,7 +2,8 @@
 
 What in the checkout's git names its version, and which of two names wins, is ``workspace_update_control``'s
 (``installed_version``), which the update dispatcher reads the version by as well. This module runs the two git
-commands the shell's way. Nothing is fetched: a checkout that names no version answers ''.
+commands the shell's way. A read fetches nothing: a checkout that names no version answers '', until the
+update dispatcher has fetched the template's release tags into it (``workspace_update_control.release_tags``).
 """
 
 from pathlib import Path

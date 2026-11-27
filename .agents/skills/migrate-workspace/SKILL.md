@@ -406,8 +406,8 @@ share. This workspace's own share, and who may enter it, is set up from the
 desktop's Share panel. Also left behind is what the old workspace recorded of its
 own update runs under `data/.state/update-apply/` (`run.json`, `schedule.json`,
 `schedule-origin.json`, `last-dispatch.json`, `last-start.json`,
-`installed-version.json`, `client-ceiling.json`, `watchdog.json`,
-`dispatch-attempt.json`): this workspace arms its own updates from those files,
+`installed-version.json`, `release-tags-fetch.json`, `client-ceiling.json`,
+`watchdog.json`, `dispatch-attempt.json`): this workspace arms its own updates from those files,
 so a copied one would hold an update back, or start one here that the old
 workspace had scheduled. The update settings (`settings.json`) and the version
 the owner skipped (`skipped-target.json`) do come over. The script owns the list,

@@ -480,6 +480,31 @@ def stage_checkout_at(
             )
 
 
+def stage_template_upstream(
+    checkout_root: Path, upstream_root: Path, *release_tags: str
+) -> None:
+    """Make ``upstream_root`` the template the checkout at ``checkout_root`` updates from: a copy of the
+    checkout's history whose head carries ``release_tags``, which the checkout's ``parent.toml`` names. The
+    checkout itself holds none of the tags, as one made from a published copy of the template does not."""
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-tags", str(checkout_root), str(upstream_root)],
+        check=True,
+        capture_output=True,
+    )
+    for tag in release_tags:
+        subprocess.run(
+            ["git", "tag", tag], cwd=upstream_root, check=True, capture_output=True
+        )
+    write_parent_file(checkout_root, str(upstream_root))
+
+
+def write_parent_file(checkout_root: Path, url: str) -> None:
+    """Have the checkout's ``parent.toml`` name ``url`` as the template it updates from."""
+    parent_file = checkout_root / "system" / "config" / "parent.toml"
+    parent_file.parent.mkdir(parents=True, exist_ok=True)
+    parent_file.write_text('url = %s\nbranch = "main"\n' % json.dumps(url))
+
+
 def listed_agent(name: str, state: str, agent_id: str = "") -> dict[str, str]:
     """An agent as a test hands it to the stub ``mngr list``, or to a decision as the listing gives it."""
     return {"name": name, "state": state, "id": agent_id or f"agent-{uuid4().hex}"}

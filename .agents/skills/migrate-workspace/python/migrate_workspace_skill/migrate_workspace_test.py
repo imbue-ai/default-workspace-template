@@ -518,6 +518,7 @@ def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_r
         "last-dispatch.json",
         "last-start.json",
         "installed-version.json",
+        "release-tags-fetch.json",
         "client-ceiling.json",
         "watchdog.json",
         "dispatch-attempt.json",

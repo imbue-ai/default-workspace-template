@@ -522,8 +522,8 @@ _SECRETS_DIR_BY_LAYOUT = {LAYOUT_CURRENT: ".secrets", LAYOUT_PRE_DECLUTTER: "sec
 # the repository it was asked for, what its boot records of the initial data it
 # was created with, and what its update dispatcher and update
 # routes record of its own runs (the run and its verdict, the armed schedule,
-# the last dispatch and start, the version its checkout was read at, the last
-# version a client named). This workspace's dispatcher arms its own updates
+# the last dispatch and start, the version its checkout was read at, when it
+# last fetched its template's release tags, the last version a client named). This workspace's dispatcher arms its own updates
 # from those files, so a copied one would hold an update back, arm one to the
 # version already here, or start one in this workspace's window. Its boot
 # applies each part of its own initial data once by the record it keeps, so the
@@ -541,6 +541,7 @@ _MACHINE_STATE_EXCLUDED_BY_LAYOUT = {
         ".state/update-apply/last-dispatch.json",
         ".state/update-apply/last-start.json",
         ".state/update-apply/installed-version.json",
+        ".state/update-apply/release-tags-fetch.json",
         ".state/update-apply/client-ceiling.json",
         ".state/update-apply/watchdog.json",
         ".state/update-apply/dispatch-attempt.json",
