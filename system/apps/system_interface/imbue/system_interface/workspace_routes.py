@@ -843,7 +843,8 @@ def write_suggestions() -> ResponseReturnValue:
         raise _suggestions_unavailable(e) from e
     except SuggestionSettingsUnsupportedError as e:
         raise _suggestions_unsupported(e) from e
-    logger.info("Changed the suggestion switches {}", sorted(changes))
+    if changes:
+        logger.info("Changed the suggestion switches {}", sorted(changes))
     return model_response(SuggestionSettingsResponse.model_validate(switches))
 
 
