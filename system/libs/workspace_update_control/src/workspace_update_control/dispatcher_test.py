@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,9 +20,11 @@ from workspace_update_control.dispatcher import (
 )
 from workspace_update_control.testing import (
     STAGED_CREATED_CHAT,
+    RecordingFeed,
     ScriptedToolAnswer,
     StagedUpdateWorkspace,
     armed_schedule,
+    epoch_at,
     labels_of,
     listed_agent,
     run_in_place,
@@ -32,10 +35,6 @@ _LEAD = STAGED_CREATED_CHAT["name"]
 _LEAD_ID = f"agent-{uuid4().hex}"
 _WORKER = "update-self"
 _WORKER_ID = f"agent-{uuid4().hex}"
-
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
 
 
 def _utc(epoch: float) -> str:
@@ -55,7 +54,7 @@ def _utc(epoch: float) -> str:
 def test_the_window_opens_daily_at_its_utc_start(
     now: str, start_minute_utc: int, length_minutes: int, opened_at_utc: str
 ) -> None:
-    bounds = dispatcher.current_window(_epoch(now), start_minute_utc, length_minutes)
+    bounds = dispatcher.current_window(epoch_at(now), start_minute_utc, length_minutes)
 
     assert bounds is not None
     assert _utc(bounds[0]) == opened_at_utc
@@ -75,13 +74,14 @@ def test_outside_the_window_there_is_no_window(
     now: str, start_minute_utc: int, length_minutes: int
 ) -> None:
     assert (
-        dispatcher.current_window(_epoch(now), start_minute_utc, length_minutes) is None
+        dispatcher.current_window(epoch_at(now), start_minute_utc, length_minutes)
+        is None
     )
 
 
-_IN_WINDOW = _epoch("2026-10-20T03:00:00-07:00")
-_WINDOW_OPENED = _epoch("2026-10-20T02:00:00-07:00")
-_AFTER_WINDOW = _epoch("2026-10-20T06:00:00-07:00")
+_IN_WINDOW = epoch_at("2026-10-20T03:00:00-07:00")
+_WINDOW_OPENED = epoch_at("2026-10-20T02:00:00-07:00")
+_AFTER_WINDOW = epoch_at("2026-10-20T06:00:00-07:00")
 
 
 def _schedule(**fields: Any) -> dict[str, Any]:
@@ -481,6 +481,18 @@ def test_a_tick_retires_the_schedule_once_its_run_has_a_verdict(
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_schedule_armed_again_between_a_ticks_read_and_its_retiring_stays_armed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    read_by_the_tick = _schedule()
+    armed_again = _schedule(armed_at=_IN_WINDOW)
+    staged.write_state("schedule.json", armed_again)
+
+    assert dispatcher._retire_schedule(read_by_the_tick) is False
+
+    assert staged.read_state("schedule.json") == armed_again
+
+
 def _messenger_that_first(
     staged: StagedUpdateWorkspace, change_to_schedule: str, exit_code: int
 ) -> None:
@@ -595,6 +607,7 @@ def test_a_run_whose_chat_was_renamed_is_neither_closed_out_nor_counted_as_over(
         read_agents=staged.read_listed_agents,
         run_in_background=run_in_place,
         clock=lambda: _IN_WINDOW,
+        fetch_channel_file=RecordingFeed(None),
     )
 
     assert staged.tool_calls("update_self.py") == []
@@ -1281,3 +1294,25 @@ def test_every_process_of_a_lead_that_registers_two_is_held(
             "is_worker": False,
             _HELD_AGENT_ID_KEY: _LEAD_ID,
         }
+
+
+def test_the_state_lock_admits_its_holder_again_and_keeps_another_thread_waiting(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    is_taken_by_the_other = threading.Event()
+
+    def take_it() -> None:
+        with dispatcher.state_lock():
+            is_taken_by_the_other.set()
+
+    other = threading.Thread(target=take_it)
+    with dispatcher.state_lock():
+        with dispatcher.state_lock():
+            pass
+        other.start()
+
+        # The hold taken again has ended, and the first one still stands.
+        assert is_taken_by_the_other.wait(0.3) is False
+
+    other.join(10)
+    assert is_taken_by_the_other.is_set()

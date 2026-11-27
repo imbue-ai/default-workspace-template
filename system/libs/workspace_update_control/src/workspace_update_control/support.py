@@ -5,6 +5,9 @@ from typing import Final
 # Relative to the workspace root, which the shell and cron's tick both run from.
 # own-process: other-tree -- the shell imported its code when it started, so an import would read the busy chats with the code from before an update the shell did not restart for
 BACKGROUND_TASKS_CLI_PATH: Final[str] = "system/scripts/background_tasks.py"
+# What ``run_command`` answers as the exit code of a command that could not start or overran its timeout: the
+# shell's own code for a command it could not run.
+COMMAND_NOT_RUN_EXIT_CODE: Final[int] = 127
 
 
 def run_command(
@@ -27,7 +30,7 @@ def run_command(
     except (OSError, subprocess.TimeoutExpired) as e:
         return subprocess.CompletedProcess(
             list(argv),
-            returncode=127,
+            returncode=COMMAND_NOT_RUN_EXIT_CODE,
             stdout="",
             stderr="failed to run %s: %s" % (argv[0], e),
         )

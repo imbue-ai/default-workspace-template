@@ -1,6 +1,7 @@
 """Who may call an app's routes at all: the provenance check every workspace app installs ahead of its routes
-(``workspace_layout.identity``: a page of another origin is refused, and a request with no identity header is admitted
-from loopback alone, under a loopback ``Host``), and the 400 for a present identity header no proxy stamped."""
+(``workspace_layout.identity``: a page of another origin is refused, apart from the web client's on the routes an app
+names for it, and a request with no identity header is admitted from loopback alone, under a loopback ``Host``), and
+the 400 for a present identity header no proxy stamped."""
 
 from collections.abc import Set as AbstractSet
 from typing import Final
@@ -23,7 +24,7 @@ from app_schema.routes import error_response
 HTTP_FORBIDDEN: Final[int] = 403
 
 
-def request_provenance() -> RequestProvenance:
+def request_provenance(web_client_rules: AbstractSet[str]) -> RequestProvenance:
     """The current request's provenance, as the server saw it."""
     return RequestProvenance(
         method=request.method,
@@ -32,6 +33,8 @@ def request_provenance() -> RequestProvenance:
         fetch_mode=request.headers.get(FETCH_MODE_HEADER),
         host=request.host,
         remote_address=request.remote_addr,
+        is_web_client_route=request.url_rule is not None
+        and request.url_rule.rule in web_client_rules,
     )
 
 
@@ -48,14 +51,28 @@ def install_request_guard(app: Flask, exempt_rules: AbstractSet[str]) -> None:
 
     Install it before any other request hook, so nothing runs for a request it refuses. ``exempt_rules`` are the
     Flask rules of routes meant for pages of other origins (a module served with a CORS header), which the check
-    skips.
+    skips. No route of ``app`` may be called from the hosted web client's page.
+    """
+    install_request_guard_with_web_client_routes(
+        app, exempt_rules, web_client_rules=frozenset()
+    )
+
+
+def install_request_guard_with_web_client_routes(
+    app: Flask, exempt_rules: AbstractSet[str], web_client_rules: AbstractSet[str]
+) -> None:
+    """``install_request_guard`` for an app with routes the hosted web client's page may call.
+
+    ``web_client_rules`` are the Flask rules of those routes. A request to one of them from another origin is
+    admitted when the share gateway vouches that the web client's page sent it; every other request from another
+    origin is refused, the web client's own to any other route included.
     """
 
     @app.before_request
     def refuse_requests_of_unknown_provenance() -> ResponseReturnValue | None:
         if request.url_rule is not None and request.url_rule.rule in exempt_rules:
             return None
-        provenance = request_provenance()
+        provenance = request_provenance(web_client_rules)
         refusal = describe_provenance_refusal(provenance)
         if refusal is None:
             return None

@@ -35,6 +35,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from share_gateway.web_client import AGENT_ROUTE_PATH_PREFIX
+from share_gateway.web_client import WEB_CLIENT_ALLOWED_HEADERS
+from share_gateway.web_client import WEB_CLIENT_ALLOWED_METHODS
+from share_gateway.web_client import WEB_CLIENT_PREFLIGHT_MAX_AGE_SECONDS
+from share_gateway.web_client import WEB_CLIENT_ROUTE_PATH_PREFIX
+
 
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
@@ -108,6 +114,73 @@ def build_label_to_name(apps: Sequence[RegisteredApp]) -> dict[str, str]:
 def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
     """The names of the registered services a per-service grant may admit a visitor to."""
     return frozenset(app.name for app in apps if app.is_grantable)
+
+
+def build_internal_app_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
+    """The names of the registered apps only a workspace-level grant admits a visitor to."""
+    return frozenset(app.name for app in apps if not app.is_grantable)
+
+
+def _render_web_client_access(name: str, hosts: Sequence[str], path_prefix: str, chrome_origin: str) -> str:
+    """The directives that let the web client's page call the paths under ``path_prefix`` on ``hosts``.
+
+    Two of the three things ``share_gateway.web_client`` lists: caddy answers the browser's permission check itself,
+    and every answer to a request that names the web client's origin carries that origin and the credentials
+    allowance, but for the loading page of ``handle_errors``, which runs a handler chain of its own. The
+    ``handle`` must come before any other that matches the same request.
+    """
+    matched_hosts = " ".join(hosts)
+    return f"""\
+    @{name} {{
+        host {matched_hosts}
+        path {path_prefix}*
+        header Origin {chrome_origin}
+    }}
+    header @{name} {{
+        Access-Control-Allow-Origin "{chrome_origin}"
+        Access-Control-Allow-Credentials "true"
+        +Vary "Origin"
+        defer
+    }}
+    @{name}_permission_check {{
+        method OPTIONS
+        host {matched_hosts}
+        path {path_prefix}*
+        header Origin {chrome_origin}
+    }}
+    handle @{name}_permission_check {{
+        header Access-Control-Allow-Methods "{WEB_CLIENT_ALLOWED_METHODS}"
+        header Access-Control-Allow-Headers "{WEB_CLIENT_ALLOWED_HEADERS}"
+        header Access-Control-Max-Age "{WEB_CLIENT_PREFLIGHT_MAX_AGE_SECONDS}"
+        respond 204
+    }}
+"""
+
+
+def render_web_client_access(
+    workspace_domain: str, apps: Sequence[RegisteredApp], auth_label: str, chrome_origin: str
+) -> str:
+    """What lets the hosted web client's page call the workspace routes and the visiting-agent routes, or nothing
+    for a share with no web client."""
+    if not chrome_origin:
+        return ""
+    internal_hosts = [f"{app.label}.{workspace_domain}" for app in sorted(apps, key=_name_of) if not app.is_grantable]
+    blocks = [
+        _render_web_client_access(
+            "web_client_agent_routes", [f"{auth_label}.{workspace_domain}"], AGENT_ROUTE_PATH_PREFIX, chrome_origin
+        )
+    ]
+    if internal_hosts:
+        blocks.append(
+            _render_web_client_access(
+                "web_client_workspace_routes", internal_hosts, WEB_CLIENT_ROUTE_PATH_PREFIX, chrome_origin
+            )
+        )
+    return "\n".join(blocks)
+
+
+def _name_of(app: RegisteredApp) -> str:
+    return app.name
 
 
 APPS_TOML_PATH = Path("data/.state/apps.toml")
@@ -215,6 +288,7 @@ def render_caddyfile(
     gateway_backend = f"127.0.0.1:{gateway_port}"
     frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
     site_hardening_headers = _render_hardening_headers(indent="    ")
+    web_client_access = render_web_client_access(workspace_domain, apps, auth_label, chrome_origin)
     compression = render_compression(indent="    ")
     error_hardening_headers = _render_hardening_headers(indent="        ")
 
@@ -332,6 +406,11 @@ https://*.{workspace_domain}:{https_port} {{
         reverse_proxy {gateway_backend}
     }}
 
+    # The hosted web client's page calls the workspace routes and the
+    # visiting-agent routes itself (share_gateway.web_client). Ahead of the
+    # auth label's routes and of the auth step, so the browser's permission
+    # check, which carries no session, is answered here.
+{web_client_access}
     # The dedicated auth label is the ONE origin exposing the public /_auth/*
     # surface (the login callback that creates the session). Confining it here
     # -- rather than site-wide -- leaves every app label's path space entirely

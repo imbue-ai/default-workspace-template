@@ -37,8 +37,8 @@ def test_the_description_holds_every_workspace_route_and_no_other(app: Flask) ->
     described = {(method.upper(), path) for path, path_item in description["paths"].items() for method in path_item}
     assert described == set(WORKSPACE_ROUTE_TABLE)
     status_answer = description["components"]["schemas"]["WorkspaceStatusResponse"]
-    assert set(status_answer["required"]) == {"schema", "template_ref", "operations"}
-    assert len(WORKSPACE_OPERATIONS) == 16
+    assert set(status_answer["required"]) == {"schema", "template_ref", "operations", "compatibility", "initial_data"}
+    assert len(WORKSPACE_OPERATIONS) == 21
 
 
 def test_every_route_but_the_status_names_its_own_operation_of_those_the_status_lists(app: Flask) -> None:
@@ -85,7 +85,7 @@ def test_a_removed_route_a_removed_answer_field_and_a_newly_required_request_fie
     del current["components"]["schemas"]["SharingStateResponse"]["properties"]["is_shared"]
     del current["components"]["schemas"]["GrantListModel"]["properties"]["email_domains"]
     del current["components"]["schemas"]["UpdateLivenessAgent"]["properties"]["chat_id"]
-    current["components"]["schemas"]["UpdateStartRequest"]["required"].append("override_ref")
+    current["components"]["schemas"]["UpdateStartRequest"]["required"] = ["ceiling"]
     current["paths"]["/api/workspace/update/skip"]["post"][OPERATION_KEY] = "update.skip.version"
 
     breaks = description_compatibility_breaks(current, frozen)
@@ -96,5 +96,5 @@ def test_a_removed_route_a_removed_answer_field_and_a_newly_required_request_fie
     assert "GET /api/workspace/sharing (200).grants.workspace no longer answers the field 'email_domains'" in breaks
     assert "GET /api/workspace/sharing (200).grants.services no longer answers the field 'email_domains'" in breaks
     assert "GET /api/workspace/update/liveness (200).agents no longer answers the field 'chat_id'" in breaks
-    assert "POST /api/workspace/update/start now requires the request field 'override_ref'" in breaks
+    assert "POST /api/workspace/update/start now requires the request field 'ceiling'" in breaks
     assert "POST /api/workspace/update/skip no longer serves the operation 'update.skip'" in breaks

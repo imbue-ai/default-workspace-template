@@ -585,6 +585,11 @@ def main() -> None:
                 record_share_domain(materials_module.SHARE_DOMAIN_FILE, materials.workspace_domain)
             except OSError as exc:
                 _log(f"Could not record the share domain in {materials_module.SHARE_DOMAIN_FILE}: {exc}")
+            if materials.is_chrome_origin_refused:
+                _log(
+                    f"{materials_module.MATERIALS_FILE} names a SHARE_CHROME_ORIGIN that is not a plain http(s) "
+                    "origin; the share runs with no web client access"
+                )
 
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")

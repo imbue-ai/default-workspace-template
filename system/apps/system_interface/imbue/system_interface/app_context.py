@@ -3,6 +3,9 @@ from pathlib import Path
 from flask import Flask
 from flask import current_app
 from pydantic import Field
+from workspace_backup_setup.state import backup_lease_path
+from workspace_update_control.channel import ChannelFileFetcher
+from workspace_update_control.channel import fetch_channel_file
 from workspace_update_control.protocol import LIVE_CRON_DIRECTORY
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -76,6 +79,16 @@ class SystemInterfaceState(MutableModel):
         default=Path(LIVE_CRON_DIRECTORY),
         description="The directory the cron daemon reads its drop-ins from, where the update routes install the "
         "dispatcher's line; another one only where a test stands in for it",
+    )
+    backup_lease_path: Path = Field(
+        default_factory=backup_lease_path,
+        description="The file the backup lease is kept in, which keeps two backup operations apart; another one only "
+        "where a test stands in for /run",
+    )
+    channel_file_fetcher: ChannelFileFetcher = Field(
+        default=fetch_channel_file,
+        description="Reads a release channel's file off the feed, for an update request that names no version in a "
+        "workspace that has read none yet; another one only where a test stands in for the feed",
     )
 
     def shutdown(self) -> None:

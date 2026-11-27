@@ -1,6 +1,8 @@
 import json
 import stat
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from app_schema.testing import CROSS_SITE_FETCH_HEADERS
@@ -9,32 +11,51 @@ from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
 from host_backup.config import RESTIC_ENV_PATH
+from host_backup.config import parse_restic_env_file
 from share_grants.document import SHARE_ENV_RELATIVE_PATH
 from share_grants.document import SHARE_GRANTS_RELATIVE_PATH
 from share_grants.document import SHARE_IDENTITIES_RELATIVE_PATH
 from share_grants.grants import load_grants
-from workspace_backup_setup.setup import PENDING_ENV_RELATIVE_PATH
-from workspace_backup_setup.testing import FAKE_RESTIC_HOLDS
+from workspace_backup_setup.env_files import PENDING_ENV_RELATIVE_PATH
+from workspace_backup_setup.env_files import env_digest
+from workspace_backup_setup.env_files import kept_envs
+from workspace_backup_setup.program import BackupSetupProgram
+from workspace_backup_setup.state import SETUP_STATE_RELATIVE_PATH
+from workspace_backup_setup.state import WORKSPACE_ID_ENV
+from workspace_backup_setup.testing import FAKE_RESTIC_FINDS_A_REPOSITORY
+from workspace_backup_setup.testing import IMBUE_CLOUD_REPOSITORY
+from workspace_backup_setup.testing import WORKSPACE_ID
 from workspace_backup_setup.testing import fake_restic_calls
-from workspace_backup_setup.testing import release_fake_restic
-from workspace_backup_setup.testing import restic_env_text
+from workspace_backup_setup.testing import imbue_cloud_request
+from workspace_backup_setup.testing import own_storage_request
+from workspace_backup_setup.testing import refuse_fake_restic_token
 from workspace_backup_setup.testing import set_fake_restic_mode
 from workspace_backup_setup.verification import BACKUP_TOML_RELATIVE_PATH
+from workspace_bare_scripts.backup_lease import HOLDER_SETUP
+from workspace_bare_scripts.backup_lease import release_lease
+from workspace_bare_scripts.backup_lease import take_lease
+from workspace_initial_data.status import InitialDataRecord
+from workspace_initial_data.status import InitialDataStatus
+from workspace_initial_data.status import applied_status
+from workspace_initial_data.status import failed_status
+from workspace_initial_data.status import write_initial_data_record
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
 from workspace_layout.identity import RequestIdentity
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_profile.timezone import USER_TIMEZONE_RELATIVE_PATH
 
-from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.workspace_api_models import WORKSPACE_COMPATIBILITY
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
+from imbue.system_interface.workspace_routes import BACKUPS_ROUTE
 from imbue.system_interface.workspace_routes import BACKUP_CREDENTIALS_ROUTE
-from imbue.system_interface.workspace_routes import BACKUP_SETUP_ROUTE
+from imbue.system_interface.workspace_routes import BACKUP_DESTINATION_ROUTE
 from imbue.system_interface.workspace_routes import BACKUP_VERIFICATION_ROUTE
 from imbue.system_interface.workspace_routes import PROFILE_ROUTE
 from imbue.system_interface.workspace_routes import SHARING_GRANTS_ROUTE
@@ -44,25 +65,64 @@ from imbue.system_interface.workspace_routes import TIMEZONE_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_ENV_TEXT = restic_env_text("rest:https://backups.example/workspace-5f3c", "correct-horse-battery-staple-91f2")
+_OWNER = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+_GRANTEE = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
+# A workspace's share address, which is where a page of another origin reaches the shell through the gateway.
+_SHARE_BASE_URL = "https://shell-5f3c.ws.example"
+_VISITING_AGENT = RequestIdentity(owner=False, agent_id="grant-51c0", agent_name="scout", granter="user-owner-9c21")
+_STORAGE_REFUSED = "The storage does not accept the credentials this workspace holds for it."
+# The apps of ``write_two_app_registry`` as the sharing read lists them: neither is internal.
+_TWO_SHAREABLE_APPS = [
+    {"name": "terminal", "label": "", "display_name": "Terminal", "is_system": False},
+    {"name": "files", "label": "", "display_name": "Files", "is_system": False},
+]
 
 
 def _workspace_root(app: Flask) -> Path:
     return state_of(app).shell.repo_root
 
 
-def _backup_state(client: FlaskClient) -> str:
-    return client.get(BACKUP_SETUP_ROUTE).get_json()["state"]
+def _backups(client: FlaskClient) -> dict[str, Any]:
+    return client.get(BACKUPS_ROUTE).get_json()
+
+
+def _run_backup_setup(app: Flask) -> None:
+    """One pass of the supervised ``backup-setup`` program over the app's workspace."""
+    BackupSetupProgram(
+        _workspace_root(app),
+        lease_path=state_of(app).backup_lease_path,
+        clock=time.time,
+        workspace_id=WORKSPACE_ID,
+    ).run_pass()
+
+
+@pytest.fixture
+def backup_workspace(app: Flask, fake_restic_control: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The app's workspace as the backup routes see it: it knows its own id, and restic is a stand-in. Answers the
+    stand-in's control directory."""
+    monkeypatch.setenv(WORKSPACE_ID_ENV, WORKSPACE_ID)
+    return fake_restic_control
 
 
 # What admits a request
 
 
 @pytest.mark.parametrize(("method", "path"), sorted(WORKSPACE_ROUTE_TABLE))
+@pytest.mark.parametrize(
+    ("stamped", "reached_at"),
+    [
+        ({}, None),
+        # Through the share, with a session the gateway accepted, from a page it did not vouch for.
+        (identity_headers(_OWNER), _SHARE_BASE_URL),
+    ],
+    ids=["with-no-identity", "as-an-owner-the-gateway-did-not-vouch-for"],
+)
 def test_every_workspace_route_is_refused_from_a_page_of_another_origin(
-    client: FlaskClient, app: Flask, method: str, path: str
+    client: FlaskClient, app: Flask, method: str, path: str, stamped: dict[str, str], reached_at: str | None
 ) -> None:
-    response = client.open(path, method=method, headers=CROSS_SITE_FETCH_HEADERS, json={})
+    response = client.open(
+        path, method=method, headers={**CROSS_SITE_FETCH_HEADERS, **stamped}, base_url=reached_at, json={}
+    )
 
     assert response.status_code == 403
     assert response.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
@@ -84,9 +144,7 @@ def test_every_workspace_route_refuses_an_identity_header_that_does_not_parse(
 
 
 def test_a_grantee_of_the_whole_workspace_is_admitted_as_the_owner_is(client: FlaskClient) -> None:
-    grantee = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
-
-    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(grantee), json={"zone": "Europe/Berlin"})
+    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(_GRANTEE), json={"zone": "Europe/Berlin"})
 
     assert response.status_code == 200
     assert response.get_json() == {"zone": "Europe/Berlin", "is_written": True}
@@ -99,7 +157,32 @@ def test_the_status_names_every_operation_and_no_version_for_a_tree_that_names_n
     response = client.get(STATUS_ROUTE, headers=OWNER_IDENTITY_HEADERS)
 
     assert response.status_code == 200
-    assert response.get_json() == {"schema": 1, "template_ref": "", "operations": list(WORKSPACE_OPERATIONS)}
+    assert response.get_json() == {
+        "schema": 1,
+        "template_ref": "",
+        "operations": list(WORKSPACE_OPERATIONS),
+        "compatibility": 1,
+        "initial_data": {"state": "NONE", "detail": "", "applied_at": None},
+    }
+    assert WORKSPACE_COMPATIBILITY == 1
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        applied_status(1_795_000_000.5),
+        failed_status("timezone: zone is an IANA timezone name, and is_replacing true or false"),
+    ],
+)
+def test_the_status_says_how_the_initial_data_the_boot_found_stands(
+    client: FlaskClient, app: Flask, recorded: InitialDataStatus
+) -> None:
+    write_initial_data_record(_workspace_root(app), InitialDataRecord(status=recorded))
+
+    answered = client.get(STATUS_ROUTE, headers=OWNER_IDENTITY_HEADERS).get_json()
+
+    assert answered["initial_data"] == recorded.model_dump(mode="json")
+    assert answered["schema"] == 1
 
 
 def test_every_operation_named_is_named_once() -> None:
@@ -113,7 +196,8 @@ def test_a_preview_shell_names_no_operation_and_refuses_to_change_the_workspace(
     preview = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
     client = preview.test_client()
 
-    assert client.get(STATUS_ROUTE).get_json()["operations"] == []
+    status = client.get(STATUS_ROUTE).get_json()
+    assert (status["operations"], status["compatibility"]) == ([], WORKSPACE_COMPATIBILITY)
     refused = client.put(TIMEZONE_ROUTE, json={"zone": "Europe/Berlin"})
 
     assert refused.status_code == 403
@@ -125,7 +209,44 @@ def test_a_preview_shell_names_no_operation_and_refuses_to_change_the_workspace(
 
 
 def test_reading_the_sharing_state_of_a_workspace_that_never_shared(client: FlaskClient) -> None:
-    assert client.get(SHARING_ROUTE).get_json() == {"is_shared": False, "grants": None, "grants_error": ""}
+    assert client.get(SHARING_ROUTE).get_json() == {
+        "is_shared": False,
+        "grants": None,
+        "grants_error": "",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
+    }
+
+
+def test_the_sharing_state_lists_the_apps_that_can_be_shared_and_no_internal_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry = write_two_app_registry(
+        tmp_path,
+        registry_row_toml(
+            "system_interface", "http://localhost:8000", is_internal=True, label="system-interface-k2j9"
+        ),
+        registry_row_toml(
+            "getting-started",
+            "http://localhost:7400",
+            is_system=True,
+            display_name="Getting Started",
+            label="getting-started-x7q2",
+        ),
+        registry_row_toml("terminal-pty", "http://localhost:7682", is_internal=True, is_system=True),
+        registry_row_toml("my_notes", "http://localhost:9100", display_name="My notes", label="my-notes-p4m1"),
+    )
+    client = shell_application(tmp_path, build_inventory(registry, broadcaster), broadcaster).test_client()
+
+    assert client.get(SHARING_ROUTE).get_json()["shareable_apps"] == [
+        *_TWO_SHAREABLE_APPS,
+        {
+            "name": "getting-started",
+            "label": "getting-started-x7q2",
+            "display_name": "Getting Started",
+            "is_system": True,
+        },
+        {"name": "my_notes", "label": "my-notes-p4m1", "display_name": "My notes", "is_system": False},
+    ]
 
 
 def test_reading_the_sharing_state_answers_the_grants_and_whether_the_workspace_is_shared(
@@ -146,13 +267,19 @@ def test_reading_the_sharing_state_answers_the_grants_and_whether_the_workspace_
             "services": {"web": {"users": [], "emails": ["carol@example.com"], "email_domains": []}},
         },
         "grants_error": "",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
     }
 
 
 def test_a_grants_file_that_cannot_be_read_is_reported_and_is_not_replaced(client: FlaskClient, app: Flask) -> None:
     (_workspace_root(app) / SHARE_GRANTS_RELATIVE_PATH).mkdir(parents=True)
 
-    assert client.get(SHARING_ROUTE).get_json() == {"is_shared": False, "grants": None, "grants_error": "UNREADABLE"}
+    assert client.get(SHARING_ROUTE).get_json() == {
+        "is_shared": False,
+        "grants": None,
+        "grants_error": "UNREADABLE",
+        "shareable_apps": _TWO_SHAREABLE_APPS,
+    }
     refused = client.put(SHARING_GRANTS_ROUTE, json={"grants": {"workspace": {"users": ["user-1"]}}})
 
     assert refused.status_code == 500
@@ -281,6 +408,36 @@ def test_the_profile_snapshot_is_written_as_it_was_sent(client: FlaskClient, app
     assert json.loads((_workspace_root(app) / SNAPSHOT_RELATIVE_PATH).read_text()) == document
 
 
+def test_a_profile_snapshot_that_only_differs_in_when_it_was_written_leaves_the_stored_one_alone(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A client sends the snapshot whenever it opens the workspace, and the shell watches the file."""
+    document = {
+        "snapshot_format": 1,
+        "account_id": "account-123",
+        "owner_user_id": "account-123",
+        "written_at": "2026-11-24T00:00:00+00:00",
+        "written_by": "web",
+        "keybindings": {"shell": {"open": ["meta+k"]}},
+    }
+    snapshot_path = _workspace_root(app) / SNAPSHOT_RELATIVE_PATH
+    client.put(PROFILE_ROUTE, json=document)
+    written = snapshot_path.stat()
+
+    reopened = client.put(PROFILE_ROUTE, json={**document, "written_at": "2026-11-25T09:30:00+00:00"})
+
+    assert reopened.status_code == 200
+    assert reopened.get_json() == {"is_written": False}
+    assert (snapshot_path.stat().st_ino, snapshot_path.stat().st_mtime_ns) == (written.st_ino, written.st_mtime_ns)
+    assert json.loads(snapshot_path.read_text())["written_at"] == "2026-11-24T00:00:00+00:00"
+
+    changed = {**document, "written_at": "2026-11-25T09:31:00+00:00", "keybindings": {"shell": {"open": ["meta+j"]}}}
+    rebound = client.put(PROFILE_ROUTE, json=changed)
+
+    assert rebound.get_json() == {"is_written": True}
+    assert json.loads(snapshot_path.read_text()) == changed
+
+
 @pytest.mark.parametrize("snapshot_format", [None, "1", 1.5, True])
 def test_a_profile_snapshot_without_a_whole_number_format_is_refused(
     client: FlaskClient, app: Flask, snapshot_format: object
@@ -319,62 +476,294 @@ def test_a_name_that_is_not_a_timezone_is_refused(client: FlaskClient, app: Flas
 # Backups
 
 
-def test_backup_credentials_are_answered_at_once_and_written_when_the_repository_is_ready(
-    client: FlaskClient, app: Flask, fake_restic_control: Path
+def test_the_backup_state_of_a_workspace_nothing_was_asked_of(client: FlaskClient) -> None:
+    assert _backups(client) == {
+        "destination": "NONE",
+        "setup": {"state": "NONE", "detail": "", "started_at": None, "finished_at": None, "retry_at": None},
+        "is_configured": False,
+        "is_verification_enabled": True,
+        "repository": "",
+        "credentials_digest": "",
+        "lease": None,
+    }
+
+
+def test_a_destination_is_answered_at_once_and_set_up_by_the_workspace_itself(
+    client: FlaskClient, app: Flask, backup_workspace: Path
 ) -> None:
     root = _workspace_root(app)
-    set_fake_restic_mode(fake_restic_control, FAKE_RESTIC_HOLDS)
 
-    answered = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": _ENV_TEXT})
+    answered = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
 
     assert answered.status_code == 202
-    assert answered.get_json()["state"] == "INITIALIZING"
-    assert "env_text" not in answered.get_data(as_text=True)
-    wait_for(lambda: len(fake_restic_calls(fake_restic_control)) == 1, error_message="restic was never run")
-    assert _backup_state(client) == "INITIALIZING"
+    asked = answered.get_json()
+    assert (asked["destination"], asked["setup"]["state"]) == ("IMBUE_CLOUD", "INITIALIZING")
+    assert (asked["repository"], asked["is_configured"]) == (IMBUE_CLOUD_REPOSITORY, False)
+    assert "token-a" not in answered.get_data(as_text=True)
+    assert asked == _backups(client)
     assert not (root / RESTIC_ENV_PATH).exists()
-    refused = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": _ENV_TEXT})
-    assert refused.status_code == 409
-    assert refused.get_json()["code"] == "SETUP_RUNNING"
-    assert client.delete(BACKUP_CREDENTIALS_ROUTE).status_code == 409
+    assert stat.S_IMODE((root / PENDING_ENV_RELATIVE_PATH).stat().st_mode) == 0o600
 
-    release_fake_restic(fake_restic_control)
-    wait_for(lambda: _backup_state(client) == "READY", error_message="the backup setup never became ready")
+    _run_backup_setup(app)
 
-    assert (root / RESTIC_ENV_PATH).read_text() == _ENV_TEXT
+    ready = _backups(client)
+    env_text = (root / RESTIC_ENV_PATH).read_text()
+    assert (ready["setup"]["state"], ready["is_configured"], ready["lease"]) == ("READY", True, None)
+    assert ready["credentials_digest"] == env_digest(env_text)
     assert stat.S_IMODE((root / RESTIC_ENV_PATH).stat().st_mode) == 0o600
+    assert "RESTIC_REST_PASSWORD=token-a\n" in env_text
     assert not (root / PENDING_ENV_RELATIVE_PATH).exists()
-    again = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": _ENV_TEXT})
-    assert again.status_code == 200
-    assert again.get_json()["state"] == "READY"
-    assert len(fake_restic_calls(fake_restic_control)) == 1
 
 
-def test_backup_credentials_that_name_no_repository_are_refused(
-    client: FlaskClient, fake_restic_control: Path
+def test_a_repeat_of_the_same_destination_changes_nothing_and_answers_the_state(
+    client: FlaskClient, app: Flask, backup_workspace: Path
 ) -> None:
-    refused = client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": "RESTIC_PASSWORD=only-a-password\n"})
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    ready = _backups(client)
+    calls = fake_restic_calls(backup_workspace)
 
-    assert refused.status_code == 400
-    assert refused.get_json() == {"detail": "The credentials do not set RESTIC_REPOSITORY.", "code": "INVALID_CREDENTIALS"}
-    assert fake_restic_calls(fake_restic_control) == []
-    assert _backup_state(client) == "NONE"
+    again = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    with_no_storage = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "IMBUE_CLOUD"})
+    _run_backup_setup(app)
+
+    assert (again.status_code, with_no_storage.status_code) == (200, 200)
+    assert again.get_json() == with_no_storage.get_json() == ready == _backups(client)
+    # The pass a program makes when it starts checks the credentials in use, and nothing else.
+    assert fake_restic_calls(backup_workspace)[len(calls) :] == [f"{IMBUE_CLOUD_REPOSITORY}|--no-lock cat config"]
 
 
-def test_removing_the_backup_credentials_moves_them_aside(
-    client: FlaskClient, app: Flask, fake_restic_control: Path
+def test_a_destination_with_no_storage_awaits_it_and_is_set_up_from_what_was_kept_once_there_is_some(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    awaiting = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "IMBUE_CLOUD"})
+
+    assert awaiting.status_code == 200
+    assert awaiting.get_json()["setup"] == {
+        "state": "AWAITING_STORAGE",
+        "detail": "This workspace holds no storage credentials for the destination.",
+        "started_at": None,
+        "finished_at": None,
+        "retry_at": None,
+    }
+
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    env_text = (_workspace_root(app) / RESTIC_ENV_PATH).read_text()
+    client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"})
+    _run_backup_setup(app)
+    assert _backups(client)["is_configured"] is False
+
+    set_fake_restic_mode(backup_workspace, FAKE_RESTIC_FINDS_A_REPOSITORY)
+    from_kept = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "IMBUE_CLOUD"})
+    _run_backup_setup(app)
+
+    assert (from_kept.status_code, from_kept.get_json()["setup"]["state"]) == (202, "INITIALIZING")
+    assert _backups(client)["setup"]["state"] == "READY"
+    assert (_workspace_root(app) / RESTIC_ENV_PATH).read_text() == env_text
+
+
+def test_none_moves_restic_env_aside_and_keeps_it(client: FlaskClient, app: Flask, backup_workspace: Path) -> None:
+    root = _workspace_root(app)
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    installed = parse_restic_env_file((root / RESTIC_ENV_PATH).read_text())
+
+    answered = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"})
+    _run_backup_setup(app)
+
+    assert answered.status_code == 202
+    assert (answered.get_json()["destination"], answered.get_json()["setup"]["state"]) == ("NONE", "NONE")
+    off = _backups(client)
+    assert (off["destination"], off["is_configured"], off["credentials_digest"], off["repository"]) == (
+        "NONE",
+        False,
+        "",
+        "",
+    )
+    assert not (root / RESTIC_ENV_PATH).exists()
+    assert kept_envs(root) == [installed]
+    assert client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"}).status_code == 200
+
+
+def test_storage_for_the_repository_in_use_is_taken_only_when_the_storage_refuses_what_is_held(
+    client: FlaskClient, app: Flask, backup_workspace: Path
 ) -> None:
     root = _workspace_root(app)
-    client.put(BACKUP_CREDENTIALS_ROUTE, json={"env_text": _ENV_TEXT})
-    wait_for(lambda: _backup_state(client) == "READY", error_message="the backup setup never became ready")
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    held_text = (root / RESTIC_ENV_PATH).read_text()
+    set_fake_restic_mode(backup_workspace, FAKE_RESTIC_FINDS_A_REPOSITORY)
 
-    assert client.delete(BACKUP_CREDENTIALS_ROUTE).get_json() == {"is_removed": True}
+    offered = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-b"))
+    _run_backup_setup(app)
 
-    assert not (root / RESTIC_ENV_PATH).exists()
-    moved = list((root / RESTIC_ENV_PATH).parent.glob("restic.env.2*"))
-    assert [path.read_text() for path in moved] == [_ENV_TEXT]
-    assert _backup_state(client) == "NONE"
-    assert client.delete(BACKUP_CREDENTIALS_ROUTE).get_json() == {"is_removed": False}
+    assert offered.status_code == 202
+    assert _backups(client)["setup"]["state"] == "READY"
+    assert (root / RESTIC_ENV_PATH).read_text() == held_text
+
+    refuse_fake_restic_token(backup_workspace, "token-a")
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-c"))
+    _run_backup_setup(app)
+
+    taken = parse_restic_env_file((root / RESTIC_ENV_PATH).read_text())
+    held = parse_restic_env_file(held_text)
+    assert _backups(client)["setup"]["state"] == "READY"
+    assert taken == {**held, "RESTIC_REST_PASSWORD": "token-c"}
+
+
+def test_a_storage_that_refuses_what_was_offered_leaves_the_workspace_awaiting_storage(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    refuse_fake_restic_token(backup_workspace, "token-a")
+
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+
+    state = _backups(client)
+    assert (state["destination"], state["setup"]["state"], state["setup"]["detail"]) == (
+        "IMBUE_CLOUD",
+        "AWAITING_STORAGE",
+        _STORAGE_REFUSED,
+    )
+    assert state["is_configured"] is False
+
+
+@pytest.mark.parametrize(
+    ("body", "code", "said"),
+    [
+        (
+            own_storage_request("s3:https://s3.example/bucket", {"RESTIC_PASSWORD": "typed-password"}),
+            "INVALID_DESTINATION",
+            "RESTIC_PASSWORD must not be among the storage's variables",
+        ),
+        ({"destination": "TAPE"}, "INVALID_DESTINATION", "'TAPE' is not a destination this workspace knows"),
+        ({"destination": "NONE", "own_storage": {"repository": "s3:b"}}, "INVALID_DESTINATION", "NONE takes neither"),
+        ({}, "INVALID_REQUEST", "destination"),
+        (
+            {
+                "destination": "OWN_STORAGE",
+                "own_storage": {"repository": "s3:b", "backend_env": {"AZURE_ACCOUNT_KEY: typed-password": 7}},
+            },
+            "INVALID_REQUEST",
+            "own_storage.backend_env.a variable",
+        ),
+        ({"destination": "NONE", "env_text": "RESTIC_PASSWORD=typed-password"}, "INVALID_REQUEST", "env_text"),
+    ],
+)
+def test_a_destination_the_workspace_cannot_take_is_refused(
+    client: FlaskClient, app: Flask, body: dict[str, object], code: str, said: str
+) -> None:
+    refused = client.put(BACKUP_DESTINATION_ROUTE, json=body)
+
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == code
+    assert said in refused.get_json()["detail"]
+    assert "typed-password" not in refused.get_data(as_text=True)
+    assert not (_workspace_root(app) / "data").exists()
+
+
+def test_a_destination_the_workspace_cannot_record_fails_without_quoting_its_storage(
+    client: FlaskClient, app: Flask, backup_workspace: Path, loguru_records: list[str]
+) -> None:
+    root = _workspace_root(app)
+    # A file where the setup keeps its record, so the record's directory cannot be made.
+    setup_directory = root / SETUP_STATE_RELATIVE_PATH.parent
+    setup_directory.parent.mkdir(parents=True, exist_ok=True)
+    setup_directory.write_text("")
+
+    failed = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+
+    assert failed.status_code == 500
+    assert failed.get_json()["code"] == "WRITE_FAILED"
+    assert "token-a" not in failed.get_data(as_text=True)
+    errors = [record for record in loguru_records if record.startswith("ERROR")]
+    assert len(errors) == 1 and errors[0].startswith("ERROR Could not record the backup destination")
+    assert not any("token-a" in record for record in loguru_records)
+    assert not (root / PENDING_ENV_RELATIVE_PATH).exists()
+
+
+def test_a_change_of_destination_is_refused_while_a_backup_operation_runs_and_names_its_holder(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    lease_path = state_of(app).backup_lease_path
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    taken = take_lease(lease_path, "restore", time.time())
+
+    refused = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"})
+    same = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+
+    assert refused.status_code == 409
+    assert refused.get_json() == {
+        "detail": "A backup operation is running (restore); the destination cannot change until it ends.",
+        "code": "BACKUP_OPERATION_RUNNING",
+        "lease": {"holder": "restore", "taken_at": taken.taken_at, "expires_at": taken.expires_at},
+    }
+    assert same.status_code == 200
+    assert same.get_json()["lease"] == {
+        "holder": "restore",
+        "taken_at": taken.taken_at,
+        "expires_at": taken.expires_at,
+    }
+    assert (same.get_json()["destination"], same.get_json()["is_configured"]) == ("IMBUE_CLOUD", True)
+
+    release_lease(lease_path, "restore", time.time())
+    assert client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"}).status_code == 202
+    assert _backups(client)["lease"] is None
+
+
+def test_backups_are_turned_off_while_the_workspaces_own_setup_holds_the_backup_lease(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    taken = take_lease(state_of(app).backup_lease_path, HOLDER_SETUP, time.time())
+
+    answered = client.put(BACKUP_DESTINATION_ROUTE, json={"destination": "NONE"})
+
+    assert answered.status_code == 202
+    off = answered.get_json()
+    assert (off["destination"], off["setup"]["state"]) == ("NONE", "NONE")
+    assert off["lease"] == {"holder": "setup", "taken_at": taken.taken_at, "expires_at": taken.expires_at}
+
+
+def test_the_backup_credentials_are_answered_to_the_owner_with_the_digest_the_state_answers(
+    client: FlaskClient, app: Flask, backup_workspace: Path
+) -> None:
+    assert client.get(BACKUP_CREDENTIALS_ROUTE, headers=OWNER_IDENTITY_HEADERS).get_json() == {
+        "env_text": "",
+        "digest": "",
+    }
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+    env_text = (_workspace_root(app) / RESTIC_ENV_PATH).read_text()
+
+    through_a_proxy = client.get(BACKUP_CREDENTIALS_ROUTE, headers=OWNER_IDENTITY_HEADERS)
+    from_inside_the_workspace = client.get(BACKUP_CREDENTIALS_ROUTE)
+
+    assert through_a_proxy.status_code == 200
+    assert through_a_proxy.headers["Cache-Control"] == "no-store"
+    assert through_a_proxy.get_json() == from_inside_the_workspace.get_json()
+    assert through_a_proxy.get_json() == {"env_text": env_text, "digest": _backups(client)["credentials_digest"]}
+    assert through_a_proxy.get_json()["digest"] == env_digest(env_text) != ""
+
+
+@pytest.mark.parametrize("identity", [_GRANTEE, _VISITING_AGENT], ids=["grantee", "visiting-agent"])
+def test_the_backup_credentials_are_refused_to_anyone_but_the_owner(
+    client: FlaskClient, app: Flask, backup_workspace: Path, identity: RequestIdentity
+) -> None:
+    client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+    _run_backup_setup(app)
+
+    refused = client.get(BACKUP_CREDENTIALS_ROUTE, headers=identity_headers(identity))
+
+    assert refused.status_code == 403
+    assert refused.get_json() == {
+        "detail": "Only the workspace's owner may read its backup credentials.",
+        "code": "OWNER_ONLY",
+    }
+    assert client.get(BACKUPS_ROUTE, headers=identity_headers(identity)).status_code == 200
 
 
 def test_backup_verification_is_turned_off_and_on_in_the_workspaces_own_config(
@@ -386,6 +775,7 @@ def test_backup_verification_is_turned_off_and_on_in_the_workspaces_own_config(
 
     assert client.put(BACKUP_VERIFICATION_ROUTE, json={"is_enabled": False}).get_json() == {"is_enabled": False}
     assert backup_toml.read_text() == "verification_disabled = true\n# mine\ninterval_seconds = 900\n"
+    assert _backups(client)["is_verification_enabled"] is False
 
     assert client.put(BACKUP_VERIFICATION_ROUTE, json={"is_enabled": True}).get_json() == {"is_enabled": True}
     assert backup_toml.read_text() == "verification_disabled = false\n# mine\ninterval_seconds = 900\n"

@@ -14,6 +14,7 @@ from workspace_update_control.testing import (
     StagedUpdateWorkspace,
     armed_schedule,
     listed_agent,
+    update_settings_document,
 )
 
 _LIBRARY_SOURCE = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ _ENTRY_FILE = (
     / "scripts"
     / "update_dispatcher_tick.py"
 )
+_CRON_ENTRY_FILE = _ENTRY_FILE.with_name("install_update_dispatcher_cron.py")
 _LEAD = STAGED_CREATED_CHAT["name"]
 _ALL_DAY = {"window_start_minute_utc": 0, "window_length_minutes": 24 * 60}
 
@@ -57,6 +59,25 @@ def test_the_tick_runs_one_minute_of_the_dispatcher_at_the_time_it_is_run(
     assert schedule is not None
     assert schedule["marked_chat"] == _LEAD
     assert before <= schedule["marked_at"] <= time.time()
+
+
+def test_the_tick_runs_the_workspaces_own_arming_which_reads_its_channel_off_the_feed(
+    staged: StagedUpdateWorkspace, local_feed: str
+) -> None:
+    # Arming off, so the minute reads the channel and writes no cron line of this machine's.
+    staged.write_state(
+        "settings.json",
+        update_settings_document(
+            feed_base_url=local_feed, is_auto_update_enabled=False
+        ),
+    )
+
+    tick.main()
+
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert channel_version["template_ref"] == "minds-v0.10.5"
+    assert staged.read_state("schedule.json") is None
 
 
 def test_the_entry_file_runs_the_tick_with_no_venv_in_the_workspace_it_is_run_from(
@@ -118,3 +139,40 @@ def test_the_cron_line_runs_the_tick_from_the_workspace_root_and_keeps_its_outpu
         line.endswith(f"restarted stopped lead {_LEAD} (restart 1)")
         for line in log_lines
     )
+
+
+def test_the_boots_entry_file_writes_the_one_cron_line_the_update_routes_write(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    """A workspace no client has asked anything of gets the dispatcher's line at boot, with no venv."""
+    completed = subprocess.run(
+        [sys.executable, "-S", "-s", str(_CRON_ENTRY_FILE), str(staged.live_cron_dir)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        cwd=staged.root,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    line = control.cron_line(str(staged.root.resolve()))
+    assert [path.name for path in staged.live_cron_dir.iterdir()] == [
+        "update-self-dispatch"
+    ]
+    assert (staged.live_cron_dir / "update-self-dispatch").read_text() == line
+    durable = staged.root / "data" / ".state" / "cron.d" / "update-self-dispatch"
+    assert durable.read_text() == line
+
+    # A client that arms afterwards writes the same line under the same name: there is still one.
+    assert control.install_cron_entry(str(staged.live_cron_dir)) is True
+    assert [path.name for path in staged.live_cron_dir.iterdir()] == [
+        "update-self-dispatch"
+    ]
+    assert (staged.live_cron_dir / "update-self-dispatch").read_text() == line
+
+
+def test_writing_the_cron_line_in_a_workspace_with_no_cron_says_so_by_its_exit_status(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    assert tick.install_cron_line(str(staged.root / "no-such-cron-directory")) == 1
+    assert not (staged.root / "data").exists()

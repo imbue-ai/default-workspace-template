@@ -106,10 +106,13 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/onboarding_activity/",
     "system/libs/share_grants/",
     "system/libs/workspace_backup_setup/",
+    "system/libs/workspace_initial_data/",
     "system/libs/workspace_layout/",
     "system/libs/workspace_profile/",
     "system/libs/workspace_themes/",
     "system/libs/workspace_update_control/",
+    # The backup lease, which workspace_backup_setup reads for the backup routes.
+    "system/scripts/workspace_bare_scripts/backup_lease",
     "system/services/host_backup/",
     "system/services/oom_priority/",
 )
@@ -137,6 +140,7 @@ _BACKEND_MANIFESTS = frozenset(
         "system/libs/onboarding_activity/pyproject.toml",
         "system/libs/share_grants/pyproject.toml",
         "system/libs/workspace_backup_setup/pyproject.toml",
+        "system/libs/workspace_initial_data/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
         "system/libs/workspace_profile/pyproject.toml",
         "system/libs/workspace_themes/pyproject.toml",

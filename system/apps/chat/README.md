@@ -587,6 +587,17 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+A new workspace opens its own first chat, with no client asking (`first_boot_welcome.py`): the
+bootstrap leaves `data/.state/chat/owes_welcome_chat` on a workspace's first boot, and this app,
+once it has read its agent list, opens the first-run chat below and removes the file. A workspace
+that already existed when it took this build is owed none. An Imbue Studio app from before this
+still posts its own first-run seed when a workspace is ready. Whichever of the two comes second
+finds the chat there: the seed route answers a seed with `is_first_run` the chat that exists, and
+this app reads the taken name as the chat having been opened. A seed that carries turns of its own
+is not answered that chat. Where the workspace's own first chat already wears the main chat's
+name, the route answers it 409 and leaves that chat as it is, so an app that still seeds its
+onboarding conversation opens no second first chat and its turns are not shown.
+
 A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
 app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
 (the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the
@@ -990,7 +1001,9 @@ composer and the lines in the transcript, and the new-chat switch what
 `GET /api/suggestions/new-chat` answers. `PUT /api/settings` replaces the settings whole, so a
 writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions` takes
 either switch or both, changes only those (one left out or null stays as it is), and answers
-the settings as `GET /api/settings` does. The settings file and both routes drop a field the
+the settings as `GET /api/settings` does. `GET /api/settings/suggestions` reads them at the same
+path, which the manifest names as `suggestion_settings_path`: the shell's workspace routes
+(`GET` and `PUT /api/workspace/suggestions`) pass a client's read and write there. The settings file and both `PUT` routes drop a field the
 settings do not hold, so a file or a writer that carries one keeps every other value. Each
 placement's strip shows the workspace's owner its own link on its line ("disable suggestions"
 on the next-step line while its pills are shown, "disable new chat suggestions" on the

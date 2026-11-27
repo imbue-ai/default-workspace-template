@@ -47,6 +47,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.launcher_rank is None
     assert row.pin is None
     assert row.window_closed_path is None
+    assert row.suggestion_settings_path is None
     assert row.message_handlers == ()
     assert row.keybindings == ()
 
@@ -71,6 +72,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
+        'suggestion_settings_path = "/api/settings/suggestions"\n'
         'message_handlers = [{type = "minds:focus-chat", path = "/api/focus-chat"}, '
         '{type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/"]}]\n'
         'keybindings = [{id = "rename", label = "Rename the selected entry", default_chords = ["f2"]}]\n'
@@ -82,6 +84,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     row = rows[0]
     assert row.icon == APP_ICON_MARKUP
     assert row.window_closed_path == "/api/window-closed"
+    assert row.suggestion_settings_path == "/api/settings/suggestions"
     assert row.stop_when_no_windows is True
     assert row.uses_microphone is True
     assert row.seeds_shortcuts is False

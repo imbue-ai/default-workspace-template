@@ -42,6 +42,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
+| `suggestion_settings_path` | string | no | absent | A path shaped like a launch path, declared by the one app that holds the workspace's suggestion switches. `GET` there answers `{"settings": {...}}` holding `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`, and `PUT` there with either switch or both changes those and answers the same. The shell's workspace routes pass a client's read and write to it (section 5.7), and ask the first registered app that declares one. |
 | `message_handlers` | array of tables | no | `[]` | Each `{type, path}` or `{type, show, showing?, reload_when_raised?}`: `type` is a message type the app takes, a lowercase prefix, `:`, and a lowercase kebab-case name (at most 64 characters; `minds:focus-chat`, `open:file`), unique within the manifest and never `shell:` (the app contract's own prefix). A type names what the message means, not who sends it: the minds chrome and apps' pages send them alike (section 5.6). With `path`, a route under the app's origin shaped like a launch path, the shell posts every message of that type there. With `show`, a page template, the shell shows the page of the app it builds from the message; `showing`, a list of page templates, names the app's other pages that count as already showing it; `reload_when_raised` (boolean, default `false`) has a window the show raises at the `show` page itself reloaded, while one at a `showing` page is only raised (section 5.6). A page template is a path with `{field}` placeholders (a field name: a letter, then letters, digits, and `_`) naming the message's fields, optionally ending in a fixed query string; it starts with a single `/` or a placeholder (whose value is itself a rooted path), carries no fragment, and holds nothing a URL would escape outside its placeholders. A handler gives exactly one of `path` and `show`, and `showing` and `reload_when_raised` only beside `show`. |
 | `keybindings` | array of tables | no | `[]` | Each `{id, label, default_chords?}`: an action the keyboard can trigger in the app, which the Keyboard shortcuts dialog lists for re-binding (section 5.1). `id` matches `^[a-z0-9][a-z0-9_-]{0,63}$`, unique within the manifest, and is the key a person's chosen chords are stored under, so it stays stable across releases; `label` is one line of at most 80 characters saying what the action does; `default_chords` (default `[]`, unbound) are the chords that trigger it out of the box, in the `workspace_profile` library's canonical grammar (modifiers in ctrl/alt/shift/meta order), which the app's own resolved-chords route and the shell's catalog both check. |
 | `references`, `scope`, `wiring` | | | | Unchanged. |
@@ -75,7 +76,7 @@ The critical built-ins declare their `[preview]` tables (the workspace app model
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `description`, `api_schema_path`, `critical`, `stop_when_no_windows`, `uses_microphone`, `system`, `priority`, `default_shortcuts` (array of inline tables `{launch, mode}`; a row an older registration wrote may carry one `default_shortcut` inline table instead, read as a list of one), `seeds_shortcuts` (written when the manifest gives it; absent reads as `true`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?, mention_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?, reload_when_raised?}`, as the manifest gives them), and `keybindings` (array of inline tables `{id, label, default_chords}`, `default_chords` written as `[]` for an unbound action) from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `description`, `api_schema_path`, `critical`, `stop_when_no_windows`, `uses_microphone`, `system`, `priority`, `default_shortcuts` (array of inline tables `{launch, mode}`; a row an older registration wrote may carry one `default_shortcut` inline table instead, read as a list of one), `seeds_shortcuts` (written when the manifest gives it; absent reads as `true`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?, mention_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, `suggestion_settings_path`, `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?, reload_when_raised?}`, as the manifest gives them), and `keybindings` (array of inline tables `{id, label, default_chords}`, `default_chords` written as `[]` for an unbound action) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -291,7 +292,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "system", "program", "critical", "stop_when_no_windows", "uses_microphone", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param", "mention_param", "app_params"}], "default_shortcuts": [{"launch", "mode"}, ...], "launcher_rank", "pin", "message_handlers": [{"type", "path", "show", "showing", "reload_when_raised"}, ...], "is_running", "share_url"}`, `pin` the manifest table or `null`, each launch path's `text_param`, `draft_param`, and `mention_param` the declared param name or `null` and its `app_params` the `{"name", "display_name"}` pair or `null`, `message_handlers` the row's handlers (`[]` when it registers none), and `share_url` the app's address on the domain the workspace was last shared under (`https://<label>.<domain>/`), or `null` for a workspace never shared or a row with no label. The share gateway records that domain in `data/.state/share_domain` whenever it reads a share and never removes it, so the address outlives an unshare (a re-share keeps the domain); the shell reads the file with every inventory read, so a first share reaches the clients on the next liveness sweep. The `apps_updated` push (section 6) carries the same objects.
 
-The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). On every route, a present header that does not parse is refused with `400`; only a missing or blank header reads as the owner of a workspace that has not shared, and only from loopback under a loopback `Host`; a request a browser marks as a page of another origin's is refused with `403` before any route runs, other than a GET or HEAD navigation and the two `_static` modules (`app_schema.request_guard`, over `workspace_layout.identity`). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
+The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). On every route, a present header that does not parse is refused with `400`; only a missing or blank header reads as the owner of a workspace that has not shared, and only from loopback under a loopback `Host`; a request a browser marks as a page of another origin's is refused with `403` before any route runs, other than a GET or HEAD navigation, the two `_static` modules, and a request to a workspace route (section 5.7) whose header carries `"is_from_web_client": true`, which the share gateway stamps on a request the hosted web client's page sent with a session the gateway accepted (`app_schema.request_guard`, over `workspace_layout.identity`). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
 `desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
 On a visiting user's first arrival the shell creates that desktop and answers it as `created_desktop`: named after the user (their profile's `display_name` as section 5.1 resolves it, else the local part of their `email`, else `Guest`; suffixed ` 2`, ` 3`, ... until neither the name nor its id is taken), with the first free glyph and that glyph's colour, owned by the user (its `owner` is their participant key, section 4.1), holding the first desktop's shortcuts, its wallpaper, and one new window at the path of each of its settled windows; it is recorded in `users.json`, broadcast as `desktops_updated`, and the client is recorded on it with its `user_id`.
 A later client of the same user lands on that desktop; a returning client keeps the desktop it was on, when it last arrived as that same user (a client whose record names another user, or none, lands on the user's desktop).
@@ -318,12 +319,21 @@ The shell also sends `minds:highlight-chrome {anchor}` (contract version 9) whil
 
 ### 5.7 Workspace routes
 
-The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app's backend, through mngr's forward), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
+The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app, through mngr's forward, and the hosted web client), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
 `system/apps/system_interface/workspace_routes_api.json` is their full description (every request and answer, as an OpenAPI document, each route naming its operation under `x-workspace-operation`), and is what a client is checked against; this section says what holds across them.
 
-`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...]}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty) and the name of every operation the shell has a route for.
+`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...], "compatibility": 1, "initial_data": {...}}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty), the name of every operation the shell has a route for, the template's compatibility number, and how the workspace's initial data stands.
 A client asks before the first operation it sends a workspace and calls a route only for an operation named there, so a workspace whose shell names fewer is still served by the client's older path.
 A preview shell names none, and answers every route that changes the workspace `403` with the code `PREVIEW`: it serves a copy, and cannot change the live workspace.
+
+`compatibility` is one whole number the template holds in one place (`WORKSPACE_COMPATIBILITY` in `workspace_api_models.py`), and a status without it means 1.
+It is raised only by a change a client built before it could not work with: a route that changes in a way the frozen descriptions forbid, a format a client's own programs write, or a page the embed contract cannot carry.
+A change every supported client still works with leaves it alone, and it is never lowered.
+A client is built with the highest number it knows. One that reads a higher number still opens the workspace and stops, starts and destroys it, and refuses everything else it would do inside it rather than read a missing operation as a template too old to have it and run its older command.
+
+`initial_data` is `{"state", "detail", "applied_at"}`: whether the workspace's boot applied the document it was handed when it was created (below).
+`state` is `NONE` when the boot found no document and has applied none, `APPLIED`, or `FAILED`; `detail` says why for `FAILED`, naming each part that is not written, and is empty otherwise; `applied_at` is when it was applied, in seconds since the epoch, and null unless `APPLIED`.
+A status without the member is a template from before the initial data, which ignores the document. The status keeps its schema, since the member is an addition.
 
 | Operation | Route |
 |---|---|
@@ -331,9 +341,9 @@ A preview shell names none, and answers every route that changes the workspace `
 | `sharing.grants.write` | `PUT /api/workspace/sharing/grants` |
 | `profile.write` | `PUT /api/workspace/profile` |
 | `timezone.write` | `PUT /api/workspace/timezone` |
-| `backups.credentials.write` | `PUT /api/workspace/backups/credentials` |
-| `backups.credentials.remove` | `DELETE /api/workspace/backups/credentials` |
-| `backups.setup.read` | `GET /api/workspace/backups/setup` |
+| `backups.read` | `GET /api/workspace/backups` |
+| `backups.destination.write` | `PUT /api/workspace/backups/destination` |
+| `backups.credentials.read` | `GET /api/workspace/backups/credentials` |
 | `backups.verification.write` | `PUT /api/workspace/backups/verification` |
 | `update.read` | `GET /api/workspace/update` |
 | `update.start` | `POST /api/workspace/update/start` |
@@ -343,18 +353,132 @@ A preview shell names none, and answers every route that changes the workspace `
 | `update.skip` | `POST /api/workspace/update/skip` |
 | `update.dismiss` | `POST /api/workspace/update/dismissals` |
 | `update.liveness.read` | `GET /api/workspace/update/liveness` |
+| `update.settings.write` | `PUT /api/workspace/update/settings` |
+| `suggestions.read` | `GET /api/workspace/suggestions` |
+| `suggestions.write` | `PUT /api/workspace/suggestions` |
+| `apps.read` | `GET /api/workspace/apps` |
+| `wallpaper.read` | `GET /api/workspace/wallpaper` |
 
 A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
-A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
-A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry.
+The one exception is `GET /api/workspace/backups/credentials`, which answers a secret to a client outside the workspace and so answers the owner alone (`403` with the code `OWNER_ONLY` otherwise).
+A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_DESTINATION`, `BACKUP_OPERATION_RUNNING`, `OWNER_ONLY`, `INVALID_UPDATE_SETTINGS`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`, `SUGGESTIONS_UNAVAILABLE`, `SUGGESTIONS_UNSUPPORTED`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
+A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry, and a `BACKUP_OPERATION_RUNNING` carries `lease`, who holds the backup lease.
 
 Two routes answer before their work is done, and a client reads on:
 
-- `PUT /api/workspace/backups/credentials` takes the whole of `restic.env` and answers `202` with the setup's state `INITIALIZING` (`200` with `READY` when those credentials are already in place); `restic.env` is written only once the repository is initialised, so the backup service never sees credentials for a repository that is not. `GET /api/workspace/backups/setup` then says `NONE`, `INITIALIZING`, `READY`, or `FAILED` with restic's own words, the credentials' values redacted. An initialisation whose process is gone reads as `FAILED`, and sending the credentials again is safe.
+- `PUT /api/workspace/backups/destination` names where the backups go and answers the backup state, under `202` when the request left the workspace something to do and under `200` when it did not. `GET /api/workspace/backups` then says how the setup stands.
 - `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then holds the attempt under `last_start`, with its outcome once it has one. An attempt whose process is gone reads as `CREATE_FAILED`.
 
-A read route changes nothing in the workspace.
+**The workspace sets up its own backups.**
+A client names where the backups go and supplies the storage credentials that destination needs, and nothing else: the workspace makes the repository's password, initialises the repository, installs `data/.secrets/restic.env`, and tries again by itself when any of that fails.
+The supervised `backup-setup` program does it (`system/libs/workspace_backup_setup/`; supervisord knows it as `backup_setup`), so a setup outlasts a restart of the shell, and one the program was stopped in is taken up when it starts.
+
+The body of `PUT /api/workspace/backups/destination` is `{"destination"}` with the storage where the client has some:
+
+| `destination` | What comes with it |
+|---|---|
+| `IMBUE_CLOUD` | `imbue_cloud_storage`: `{"repository_url", "rest_username", "rest_password"}`, as the connector's `POST /backups/repositories` answers them |
+| `OWN_STORAGE` | `own_storage`: `{"repository", "backend_env"}`, the variables of the storage as the user typed them |
+| `NONE` | Nothing: backups are off |
+
+- A request for what the workspace already holds changes nothing and answers the state, except that a setup that had failed is tried again at once.
+- A request that would change something is refused with `409` and the code `BACKUP_OPERATION_RUNNING`, naming the holder, while another backup operation holds the backup lease. The workspace's own setup holding it refuses nothing: the request replaces what the setup was asked, and an attempt under way ends without installing anything, so backups can be turned off or sent elsewhere while an attempt hangs.
+- A destination named with no storage is set up from what the workspace kept for it, and reads `AWAITING_STORAGE` when it kept nothing.
+- Storage offered for the repository the workspace already uses is taken only once the workspace finds that the storage refuses what it holds: a repository at the backup store has one token, and a client that asks the connector for another ends the first.
+- `NONE` moves `restic.env` aside to `restic.env.<timestamp>`, which the workspace keeps, and the backup service goes idle. Until the new destination is ready, a change of destination leaves the previous one in use.
+- A password among the variables of the user's own storage is refused with `400` and the code `INVALID_DESTINATION`, as is a destination the workspace does not know.
+
+`GET /api/workspace/backups` answers everything a client reads about the backups:
+
+| Field | Meaning |
+|---|---|
+| `destination` | `NONE`, `IMBUE_CLOUD` or `OWN_STORAGE` |
+| `setup` | How the setup stands: `state`, `detail`, `started_at`, `finished_at` and `retry_at` |
+| `is_configured` | Whether `restic.env` is in place, which is what the backup service runs on |
+| `is_verification_enabled` | The verification flag |
+| `repository` | The address of the destination's repository, with any credential in it taken out; `""` when there is none or the workspace does not know it yet |
+| `credentials_digest` | The SHA-256, in hex, of the text of the `restic.env` in use; `""` when there is none |
+| `lease` | Who holds the backup lease: `holder`, `taken_at` and `expires_at`; null when nobody does |
+
+| `setup.state` | Meaning |
+|---|---|
+| `NONE` | No destination is chosen |
+| `AWAITING_STORAGE` | A destination is chosen, and the workspace holds no storage credentials that work for it |
+| `INITIALIZING` | An attempt at the setup is running, or about to |
+| `READY` | `restic.env` is in place for the destination |
+| `FAILED` | The last attempt failed; `detail` says what failed, with the credentials' values redacted, and `retry_at` when the next one starts |
+
+A failed setup is tried again after a minute, then after twice as long each time, up to an hour, for as long as the destination stands.
+Once an hour, and when it starts, `backup-setup` checks that the credentials in use still open the repository; a storage that refuses them leaves the setup `AWAITING_STORAGE`, with `restic.env` where it is.
+
+`GET /api/workspace/backups/credentials` answers `{"env_text", "digest"}`, the whole text of the `restic.env` in use and the digest the state answers as `credentials_digest` (both `""` when there is none), to the owner alone. The workspace makes the repository's password, so this is how an owner's client comes to hold a copy: it reads the credentials when the digest differs from that of its own copy.
+
+A `restic.env` the workspace's program did not write is taken as the destination. An Imbue Studio desktop from before these routes writes the file by its own command, and again from its own copy when it updates the backup service; a current desktop's restore and its migration of the backup store write it too, and a current desktop's update of the backup service writes none into a workspace that has the backup lease. The setup then reads `READY` for the repository the file names, the destination's kind is read off the file (Imbue Cloud where the repository is a `rest:` address whose user name is the workspace's own id, storage of the user's own otherwise), and a file such a writer moved aside reads as `NONE`.
+
+**One backup operation at a time.**
+The workspace holds a backup lease: a file at `/run/backup-operation.lease` that names its holder, when it was taken, and when it expires. It lasts ten minutes from when it was taken or last renewed, and one past its expiry is free. Under `/run` it outlasts the workspace's services being stopped and does not outlast a reboot.
+The workspace's own setup takes it as `setup`. A program of the Imbue Studio desktop that changes backups (`restore`, `backup-service-update`, `store-migration`) takes it through `python3 system/scripts/backup_lease.py`, run from the workspace root: `take --holder <name>`, `renew --holder <name>`, `release --holder <name>`, `read`, and `hold --holder <name> [--keep] -- <command>`, which runs a command under the lease, renews it every minute for as long as the command runs, and gives it back when the command ends unless `--keep` is given.
+`take`, `renew`, `release` and `read` each print one JSON line, the lease as it stands or `null`. `take` and `renew` exit 75 when the caller does not hold the lease afterwards, and `hold` exits 75 without running its command when someone else holds it, and with the command's exit code otherwise. `hold` prints the lease only when it exits 75, naming who holds it: otherwise its output is its command's own.
+
+`GET /api/workspace/sharing` also lists the apps that can be shared by themselves, as `shareable_apps`: every registered app that is not internal, in the registry's order, each `{"name", "label", "display_name", "is_system"}` (its grants' key, its origin label, the name a person reads, and whether it is part of the workspace itself). An internal app is reached only through a share of the whole workspace.
+`PUT /api/workspace/profile` leaves the stored snapshot alone when the one sent equals it apart from `written_at`, and answers `is_written: false` then: a client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a change that did not happen.
+
+**The workspace arms its own updates.**
+`PUT /api/workspace/update/settings` stores the update settings and answers them as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in, as the account sets them), and `window_start_hour_here` and `window_end_hour_here` (this workspace's own hours, which win over the account's: both set, or both null when it has none).
+Settings that cannot be the workspace's are refused with `INVALID_UPDATE_SETTINGS`.
+The hours are read in the timezone the workspace records (`data/.state/user_timezone`), and in UTC when it records none.
+
+The three settings that are the workspace's own (`is_auto_update_enabled_here`, `window_start_hour_here`, `window_end_hour_here`) are optional in a request.
+One a request leaves out keeps its stored value, and one sent as null is cleared.
+A client that writes the account's settings into a workspace leaves all three out, so it cannot wipe an answer the owner gave in another client, and neither can a client from before a setting existed.
+Every other setting is required, and an answer carries them all.
+
+The update dispatcher, which cron runs every minute, reads `<feed_base_url>/<channel>-web.json` at most once an hour and keeps the version it names (`templateRef`). That is the channel's version: the newest version the workspace may take.
+While arming is on, nothing is armed or running, and no decision waits for the user, the dispatcher arms a schedule for the channel's version when the workspace is behind it, unless the user skipped that version or a run already went out for it.
+A channel file that cannot be read arms nothing, and the last version read stays on display.
+The dispatcher's cron line is written at every boot as well as by the routes, so a workspace no client has asked anything of runs it.
+A write of the update settings is one of the routes that write it: a desktop from before these routes points the line at the dispatcher it ships, which arms nothing by itself, and a current client writes the settings each time it opens the workspace.
+
+In `POST /api/workspace/update/start`, `PUT` and `PATCH /api/workspace/update/schedule`, the values a client used to compute are optional, and one left out is the workspace's own:
+
+- `ceiling` left out is the channel's version. When the workspace has read none and cannot, the answer is `200` with the outcome `NO_CHANNEL_VERSION`, unless the request names a version the user chose (`override_ref`), which needs no other.
+- `window_start_minute_utc` and `window_length_minutes` left out (together) are the settings' window. With no settings the answer is the outcome `NO_UPDATE_SETTINGS`.
+- `is_backup_configured` left out is whether the workspace holds `data/.secrets/restic.env`.
+
+A schedule armed with the workspace's own values keeps them current: the dispatcher rewrites them when the channel moves, the settings change, or the timezone's offset does. A `PATCH` rewrites each value it leaves out with the workspace's own, and leaves it as it is where the workspace has none.
+
+A request that names `ceiling` is from a desktop app built before the workspace read its channel, and is served as it always was. Such a desktop sweeps every 300 seconds and names its newest version when it arms, starts, or refreshes an armed schedule (a sweep that finds nothing armed only reads), so the workspace holds itself to that version for 15 minutes after the last such request: it arms no update past it, takes the older of the two for a request that names none, and leaves an armed schedule to that desktop's own refreshes. A refresh that names a release the checkout is at or past leaves the version of a schedule the workspace filled in itself as it is, and rewrites the window and the backup flag.
+
+`GET /api/workspace/update` also answers `settings` (null when no client has written any) and `channel_version`: `{"channel", "template_ref", "read_at", "checked_at", "error"}`, the version as the workspace last read it and how the last read went (null when it has read nothing for the settings' channel), so a client shows what is available without reading the feed.
+
+A read route changes nothing in the workspace, and reads no feed.
 The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
+
+**The initial data.**
+Whoever creates a workspace leaves one JSON file of mode 0600 in the machine's host directory, `$MNGR_HOST_DIR/initial_data.json`: `{"schema": 1, "profile", "timezone", "update_settings", "backups"}`.
+Each part has the shape of the request of the route that writes the same thing (`PUT /api/workspace/profile`, `PUT /api/workspace/timezone`, `PUT /api/workspace/update/settings`, and `PUT /api/workspace/backups/destination`, which names where the workspace's backups go), and a part that is left out, or null, writes nothing.
+The boot sequence applies it each time the workspace's services are started, after the workspace's Python packages are in place and before the clock is set (`apply-initial-data`, `system/libs/workspace_initial_data`), by handing each part to the writer its route calls; the timezone is recorded only where none is, and is in force from that very start.
+A zone the workspace's tz database does not know is no refusal of the `timezone` part, since whoever builds the document cannot know that database: the part counts as applied, no zone is written, and the workspace keeps UTC until a client writes a zone through `PUT /api/workspace/timezone`, which still refuses such a zone with `INVALID_TIMEZONE`.
+A `timezone` part of the wrong shape (no `zone`, or a `zone` that is no text) is refused.
+The trigger is the file being there, not a first boot: a pool machine's first boot is over when it is baked, and its document is written when it is adopted, before its services are started again.
+When every part is written the step records that in `data/.state/initial_data/state.json` and deletes the document, which holds storage credentials.
+A document that does not parse, whose `schema` is above 1, or a part of which its writer refuses, is left where it is with the reason recorded, and the boot goes on; a part its writer refuses does not stop the others, and no reason quotes a credential of the document.
+Each part is applied at most once: the next start tries the parts that were refused and no other, so it never puts the create's value back over what the owner chose since, and never names the create's backup destination again after the owner turned backups off.
+The step keeps the document's digest and how far each part has come beside the status, and records that a part is about to be written before it writes it. A part the step was interrupted in the middle of is therefore not written again either: its `FAILED` stands, and the document is deleted once no part is left to try.
+The backup part is handed to the function `PUT /api/workspace/backups/destination` calls, under that route's rules: the destination and its storage are recorded for `backup-setup`, and a destination named while another backup operation holds the backup lease fails the part, which the next start tries again.
+The status route answers how it stands, as `initial_data` (above).
+
+**Suggestions.**
+The workspace's two suggestion switches are the settings of one of its apps, which names where they are read and changed in its manifest (`suggestion_settings_path`, section 2).
+`GET /api/workspace/suggestions` answers `{"is_next_step_suggestions_enabled", "is_new_chat_suggestions_enabled"}`, and `PUT /api/workspace/suggestions` changes the switches its body names, leaves one it does not name (or names as null), and answers both.
+The shell passes each request to that app over loopback, sending a write exactly the switches the client named, so the app keeps the one lock on its settings and tells its own open pages of a change.
+When the app is not running, does not answer within 10 seconds, or answers something other than its settings, the answer is `503` with the code `SUGGESTIONS_UNAVAILABLE`, and asking again later is right.
+When no registered app declares the path, or the one that does has no such route or answers settings without the switches, which is an app from before it could, the answer is `501` with the code `SUGGESTIONS_UNSUPPORTED`.
+
+**Apps and the wallpaper.**
+`GET /api/workspace/apps` answers `{"apps": [...]}`: every registered app that is not internal, in the registry's order, each `{"name", "label", "display_name", "is_system", "icon"}`. They are the apps `shareable_apps` lists, each with the SVG markup of its registry row as `icon`, or `''` when it has none. The apps with `is_system` false are the ones built on the workspace, which a client lists as the workspace's own. An icon is the app's own markup, so a client draws it as an image (a `data:` address), where nothing in it runs.
+`GET /api/workspace/wallpaper` answers the image the workspace's first desktop wears, as `GET /api/desktops` orders them, under the image's own content type, and `204` with no body when that desktop wears its theme's default, the workspace has no desktop yet, or the image is gone. The image carries an `ETag` and `Cache-Control: private, no-cache`, so a browser that holds it asks again and is answered `304` while it has not changed, with no header of the page's own. The read creates no desktop.
+Neither loosens the request guard: each is a workspace route, called from the web client's own code with the workspace's session, and an image element of another site is refused the wallpaper as it is refused `/wallpapers/<kind>/<name>`.
 
 ## 6. The WebSocket
 

@@ -15,7 +15,8 @@ The workspace's cron runs it every minute, flock-serialized, from the workspace 
   and hands them back to the template's own banding once it has one.
 
 This module also holds what the workspace's update routes (``control``) share with the tick: the
-state files, the agents listing, the account check, and the update chat's create.
+state files, the agents listing, the account check, and the update chat's create. What arms a
+schedule with no client present is the tick's other half, ``arming``.
 
 It is a port of the dispatcher the Imbue Studio desktop app ships into a workspace
 (``workspace_programs/update_dispatcher.py`` in the mngr repository). A desktop from before the
@@ -27,6 +28,7 @@ Everything here is standard library only and runs with no venv: the tick is the 
 running update, which may have broken the venv.
 """
 
+import fcntl
 import functools
 import json
 import os
@@ -36,11 +38,13 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import StrEnum, auto
 from pathlib import Path
@@ -78,6 +82,9 @@ from workspace_update_control.support import (
 )
 
 DISPATCHER_LOG_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dispatcher.log"
+_STATE_LOCK_PATH: Final[str] = f"{UPDATE_STATE_DIR}/state.lock"
+# How many holds of the state lock the running thread has, so that only its outermost one locks and unlocks.
+_state_lock_holds = threading.local()
 _WATCHDOG_STATE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/watchdog.json"
 # The id the last create of an update chat labelled it with, written before the create runs.
 _DISPATCH_ATTEMPT_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dispatch-attempt.json"
@@ -280,6 +287,36 @@ def write_json_atomically(path: str, data: Mapping[str, object]) -> None:
     with os.fdopen(handle, "w", encoding="utf-8") as out:
         out.write(json.dumps(data, indent=2) + "\n")
     os.replace(scratch, path)
+
+
+@contextmanager
+def state_lock() -> Generator[None, None, None]:
+    """Hold the lock that orders every read-then-write of the schedule, the update settings and the skipped
+    version, among the tick, the shell and the boot.
+
+    It is held around reads and writes of those files alone, never while a chat is created or the feed is read,
+    so a tick waits behind it for a file write and not for minutes. It is a file of its own, not the one cron's
+    line tests before it runs a tick. A thread that holds it may take it again, so a function that takes it may
+    call another that does. The update program an Imbue Studio desktop from before the update routes ships takes
+    no such lock.
+    """
+    depth = getattr(_state_lock_holds, "depth", 0)
+    if depth:
+        _state_lock_holds.depth = depth + 1
+        try:
+            yield
+        finally:
+            _state_lock_holds.depth = depth
+        return
+    os.makedirs(UPDATE_STATE_DIR, exist_ok=True)
+    with open(_STATE_LOCK_PATH, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        _state_lock_holds.depth = 1
+        try:
+            yield
+        finally:
+            _state_lock_holds.depth = 0
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def write_file_if_changed(path: str, content: bytes, mode: int | None) -> bool:
@@ -1219,16 +1256,33 @@ def _save_schedule_marks(schedule: Mapping[str, object]) -> None:
     A tick can work for minutes. A cancel that removed the file meanwhile stays cancelled, an arm
     or refresh that rewrote the app's fields keeps them, and a re-arm keeps only the marks.
     """
-    current = read_json_object(SCHEDULE_FILE_PATH)
-    if current is None:
-        write_log_line(
-            "the schedule was cancelled while this tick worked; leaving it cancelled"
-        )
-        return
-    is_rearmed = current.get("armed_at") != schedule.get("armed_at")
-    fields = _SCHEDULE_MARK_FIELDS if is_rearmed else _DISPATCHER_SCHEDULE_FIELDS
-    current.update({key: schedule.get(key) for key in fields})
-    write_json_atomically(SCHEDULE_FILE_PATH, current)
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None:
+            write_log_line(
+                "the schedule was cancelled while this tick worked; leaving it cancelled"
+            )
+            return
+        is_rearmed = current.get("armed_at") != schedule.get("armed_at")
+        fields = _SCHEDULE_MARK_FIELDS if is_rearmed else _DISPATCHER_SCHEDULE_FIELDS
+        current.update({key: schedule.get(key) for key in fields})
+        write_json_atomically(SCHEDULE_FILE_PATH, current)
+
+
+def _retire_schedule(schedule: Mapping[str, object]) -> bool:
+    """Remove the schedule file while it is the one ``schedule`` was read from; whether it was removed.
+
+    A schedule armed again since that read is not the one the tick decided to retire, and stays.
+    """
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None or current.get("armed_at") != schedule.get("armed_at"):
+            return False
+        try:
+            os.remove(SCHEDULE_FILE_PATH)
+        except FileNotFoundError:
+            return False
+        return True
 
 
 def _is_marked_lead_gone(
@@ -1263,14 +1317,11 @@ def _tick_schedule(now: float, agent_environment: AgentEnvironment) -> None:
     window = current_window(now, *window_bounds)
     match action:
         case ScheduleAction.REMOVE:
-            try:
-                os.remove(SCHEDULE_FILE_PATH)
-            except FileNotFoundError:
-                return
-            write_log_line(
-                "retired the schedule: the run it covers has a verdict (%s)"
-                % _run_verdict(run)
-            )
+            if _retire_schedule(schedule):
+                write_log_line(
+                    "retired the schedule: the run it covers has a verdict (%s)"
+                    % _run_verdict(run)
+                )
         case ScheduleAction.RECORD_SKIP:
             reason = str(schedule.get("pending_skip_reason") or SKIP_WINDOW_CLOSED)
             schedule.update(

@@ -73,6 +73,7 @@ members = [
     "update-self-skill",
     "use-ai-integration-skill",
     "workspace-backup-setup",
+    "workspace-initial-data",
     "workspace-layout",
     "workspace-profile",
     "workspace-scripts",
@@ -4359,6 +4360,7 @@ dependencies = [
     { name = "watchdog" },
     { name = "werkzeug" },
     { name = "workspace-backup-setup" },
+    { name = "workspace-initial-data" },
     { name = "workspace-layout" },
     { name = "workspace-profile" },
     { name = "workspace-themes" },
@@ -4407,6 +4409,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "workspace-backup-setup", editable = "system/libs/workspace_backup_setup" },
+    { name = "workspace-initial-data", editable = "system/libs/workspace_initial_data" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
@@ -4998,7 +5001,9 @@ source = { editable = "system/libs/workspace_backup_setup" }
 dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
+    { name = "loguru" },
     { name = "pydantic" },
+    { name = "workspace-scripts" },
 ]
 
 [package.dev-dependencies]
@@ -5011,7 +5016,44 @@ dev = [
 requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=65093d119f2572bd8983593546061cca320093ee" },
+    { name = "loguru", specifier = ">=0.7.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "workspace-scripts", editable = "system/scripts" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "ty", specifier = "==0.0.87" },
+]
+
+[[package]]
+name = "workspace-initial-data"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_initial_data" }
+dependencies = [
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "workspace-backup-setup" },
+    { name = "workspace-profile" },
+    { name = "workspace-update-control" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-executable-tmp" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=65093d119f2572bd8983593546061cca320093ee" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "workspace-backup-setup", editable = "system/libs/workspace_backup_setup" },
+    { name = "workspace-profile", editable = "system/libs/workspace_profile" },
+    { name = "workspace-update-control", editable = "system/libs/workspace_update_control" },
 ]
 
 [package.metadata.requires-dev]

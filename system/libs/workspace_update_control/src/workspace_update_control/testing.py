@@ -3,22 +3,34 @@
 import json
 import os
 import stat
+import subprocess
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 from uuid import uuid4
 
 import pytest
 
+from workspace_update_control import control
 from workspace_update_control.agents import agent_events_path
+from workspace_update_control.channel import (
+    ChannelFileFetcher,
+    ChannelFileUnreadableError,
+)
 from workspace_update_control.dispatcher import (
     AGENT_PIDS_DIR,
     AgentEnvironment,
     list_agents,
     run_tick,
 )
-from workspace_update_control.protocol import UPDATE_STATE_DIR
+from workspace_update_control.protocol import (
+    BACKUP_CREDENTIALS_FILE_PATH,
+    UPDATE_STATE_DIR,
+)
+from workspace_update_control.settings import OWN_SETTING_NAMES
 from workspace_update_control.stub_programs_testing import (
     STUB_MNGR_SOURCE,
     STUB_TOOL_SOURCE,
@@ -38,6 +50,121 @@ STAGED_CREATED_CHAT: Final[dict[str, str]] = {
     "name": "Update-to-v090",
     "display_name": "Update to v0.9.0",
 }
+
+
+# Where the staged update settings say the release channels' files are published.
+STAGED_FEED_BASE_URL: Final[str] = "https://feed.example/updates"
+
+
+class RecordingFeed:
+    """A stand-in for the release feed: names ``template_ref`` for every channel (or cannot be read, when it is
+    None), and remembers each address it was asked for."""
+
+    def __init__(self, template_ref: str | None) -> None:
+        self.template_ref = template_ref
+        self.asked: list[str] = []
+
+    def __call__(self, url: str) -> str:
+        self.asked.append(url)
+        if self.template_ref is None:
+            raise ChannelFileUnreadableError("the feed is down")
+        return json.dumps({"templateRef": self.template_ref})
+
+
+# The channels the local feed publishes no readable file for: one whose request it takes and never answers,
+# one whose file it sends a byte at a time for as long as the feed is up, and one whose file is larger than any
+# channel's file.
+SILENT_FEED_CHANNEL: Final[str] = "silent"
+DRIPPING_FEED_CHANNEL: Final[str] = "dripping"
+OVERSIZED_FEED_CHANNEL: Final[str] = "oversized"
+_DRIP_INTERVAL_SECONDS: Final[float] = 0.02
+_OVERSIZED_FILE_BYTES: Final[int] = 128 * 1024
+
+
+class LocalFeedServer(ThreadingHTTPServer):
+    """The local feed's server, which tells its handlers when the feed is taken down, so that one still holding
+    a request ends with it."""
+
+    def __init__(self, address: tuple[str, int]) -> None:
+        super().__init__(address, LocalFeedHandler)
+        self.is_taken_down = threading.Event()
+
+
+class LocalFeedHandler(BaseHTTPRequestHandler):
+    """A feed that publishes the stable channel's file, naming ``minds-v0.10.5``, misbehaves for the channels
+    named above, and publishes no other."""
+
+    def do_GET(self) -> None:
+        if self.path == "/stable-web.json":
+            self._send_file(b'{"templateRef": "minds-v0.10.5"}')
+            return
+        if self.path == f"/{SILENT_FEED_CHANNEL}-web.json":
+            self._is_taken_down().wait()
+            return
+        if self.path == f"/{DRIPPING_FEED_CHANNEL}-web.json":
+            self._drip_file()
+            return
+        if self.path == f"/{OVERSIZED_FEED_CHANNEL}-web.json":
+            self._send_file(b" " * _OVERSIZED_FILE_BYTES)
+            return
+        self.send_error(404)
+
+    def _send_file(self, body: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _drip_file(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(_OVERSIZED_FILE_BYTES))
+        self.end_headers()
+        is_taken_down = self._is_taken_down()
+        try:
+            while not is_taken_down.wait(_DRIP_INTERVAL_SECONDS):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+        except OSError:
+            # The reader went away.
+            pass
+
+    def _is_taken_down(self) -> threading.Event:
+        server = self.server
+        assert isinstance(server, LocalFeedServer)
+        return server.is_taken_down
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def update_settings_document(**fields: Any) -> dict[str, Any]:
+    """Update settings as a client that names every one sends them: the stable channel, arming on, a window of
+    02:00 to 05:00, nothing of the workspace's own, with ``fields`` over them."""
+    return {
+        "channel": "stable",
+        "feed_base_url": STAGED_FEED_BASE_URL,
+        "is_auto_update_enabled": True,
+        "is_auto_update_enabled_here": None,
+        "window_start_hour": 2,
+        "window_end_hour": 5,
+        "window_start_hour_here": None,
+        "window_end_hour_here": None,
+        **fields,
+    }
+
+
+def the_accounts_settings(**fields: Any) -> dict[str, Any]:
+    """Update settings as a client sends them when it writes the account's: none of the workspace's own."""
+    return {
+        name: value
+        for name, value in update_settings_document(**fields).items()
+        if name not in OWN_SETTING_NAMES
+    }
+
+
+def epoch_at(iso: str) -> float:
+    """The moment the ISO 8601 text ``iso`` names, in seconds since the epoch."""
+    return datetime.fromisoformat(iso).timestamp()
 
 
 class ScriptedToolAnswer(NamedTuple):
@@ -153,6 +280,35 @@ class StagedUpdateWorkspace(NamedTuple):
     def read_state(self, name: str) -> dict[str, Any] | None:
         path = self.state_path(name)
         return json.loads(path.read_text()) if path.exists() else None
+
+    def write_backup_credentials(self) -> None:
+        """Leave the workspace holding backup credentials, which is how it tells that it has backups."""
+        path = self.root / BACKUP_CREDENTIALS_FILE_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("RESTIC_REPOSITORY=x\n")
+
+    def write_failed_run(self, target_ref: str, dispatched_at: float) -> float:
+        """Leave the records of a run that went out for ``target_ref`` at ``dispatched_at`` and ended stuck;
+        when that run began."""
+        started_at = dispatched_at + 60
+        self.write_state(
+            "last-dispatch.json",
+            {
+                "chat_agent_name": "update-that-failed",
+                "chat_id": "",
+                "target_ref": target_ref,
+                "dispatched_at": dispatched_at,
+            },
+        )
+        self.write_state(
+            "run.json",
+            {
+                "chat_agent_name": "update-that-failed",
+                "started_at": started_at,
+                "verdict": "STUCK",
+            },
+        )
+        return started_at
 
     def dispatcher_log_lines(self) -> list[str]:
         log_path = self.state_path("dispatcher.log")
@@ -272,6 +428,56 @@ def stage_update_workspace(
     monkeypatch.setenv("STUB_CREATED_AGENT_ID", staged.bare_created_agent_id)
     monkeypatch.chdir(root)
     return staged
+
+
+def arm_schedule_in(
+    staged: StagedUpdateWorkspace,
+    feed: ChannelFileFetcher,
+    *,
+    now: float,
+    ceiling: str | None = None,
+    override_ref: str = "",
+    window: tuple[int, int] | None = None,
+    is_backup_configured: bool | None = None,
+    is_auto_armed: bool = False,
+) -> dict[str, Any]:
+    """Arm the staged workspace's schedule at ``now`` as a client does: ``window`` is the start minute in UTC
+    and the length in minutes, and a value left out is left to the workspace."""
+    return control.arm_schedule(
+        ceiling=ceiling,
+        override_ref=override_ref,
+        window_start_minute_utc=window[0] if window is not None else None,
+        window_length_minutes=window[1] if window is not None else None,
+        is_backup_configured=is_backup_configured,
+        is_auto_armed=is_auto_armed,
+        is_armed_schedule_kept=False,
+        now=now,
+        live_cron_dir=str(staged.live_cron_dir),
+        agent_environment=AgentEnvironment(),
+        fetch_channel_file=feed,
+    )
+
+
+def stage_checkout_at(
+    repo_root: Path, *commit_subjects_and_tags: tuple[str, str]
+) -> None:
+    """Make ``repo_root`` a checkout with one empty commit per ``(subject, tag)``, in order; a tag of '' tags
+    nothing."""
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run(
+        [*git, "init", "--quiet"], cwd=repo_root, check=True, capture_output=True
+    )
+    for subject, tag in commit_subjects_and_tags:
+        subprocess.run(
+            [*git, "commit", "--allow-empty", "--quiet", "-m", subject],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        )
+        if tag:
+            subprocess.run(
+                [*git, "tag", tag], cwd=repo_root, check=True, capture_output=True
+            )
 
 
 def listed_agent(name: str, state: str, agent_id: str = "") -> dict[str, str]:

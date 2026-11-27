@@ -23,8 +23,21 @@ service.
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
-   may start by itself; a workspace that already existed never gets it.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+   may start by itself; a workspace that already existed never gets it. It also
+   writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open
+   the workspace's welcome chat once it is running.
+3. **Initial data** - on every boot, once the workspace's Python packages are
+   in place and before the clock is set, runs `apply-initial-data`
+   (`system/libs/workspace_initial_data`), which applies the document whoever
+   created the workspace left at `$MNGR_HOST_DIR/initial_data.json`: the profile
+   snapshot, the timezone, the update settings and the backup destination. The
+   document being there is the trigger, not a first boot: a pool host's first
+   boot is over when it is baked, and its document is written when it is
+   adopted, before its services are started again. A boot that finds none does
+   nothing. A document a part of which cannot be applied is left for the next
+   boot, which tries that part again and writes no part a second time, and the
+   boot goes on; `GET /api/workspace/status` says how it stands.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

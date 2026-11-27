@@ -16,6 +16,28 @@ DISMISSALS_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dismissals.json"
 # library reads it; the dispatcher a desktop ships does not.
 LAST_START_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/last-start.json"
 
+# What a workspace that arms its own updates keeps, each in a file only this library writes. A desktop from
+# before these files ships a program that reads none of them.
+# The update settings a client wrote: the release channel, where its file is read from, whether updates are armed
+# by the workspace, and the hours they may start in.
+UPDATE_SETTINGS_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/settings.json"
+# The channel's version as the workspace last read it, and how the last read went. The update-self skill reads
+# this file for its default target, so its keys are that skill's too.
+CHANNEL_VERSION_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/channel-version.json"
+# The newest version a client last named in a request, and when: a desktop from before the workspace armed its own
+# updates, which the dispatcher does not arm past while that desktop keeps asking.
+CLIENT_CEILING_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/client-ceiling.json"
+# Which values of the armed schedule the workspace filled in itself, and so keeps current.
+SCHEDULE_ORIGIN_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/schedule-origin.json"
+# The version of the checkout as the dispatcher last read it from git.
+INSTALLED_VERSION_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/installed-version.json"
+
+# The user's timezone as the workspace records it (``workspace_profile.timezone`` writes it), which the update
+# window's hours are read in.
+USER_TIMEZONE_FILE_PATH: Final[str] = "data/.state/user_timezone"
+# The backup credentials, whose presence is whether the workspace has backups to fall back on.
+BACKUP_CREDENTIALS_FILE_PATH: Final[str] = "data/.secrets/restic.env"
+
 # The cron drop-in that runs the dispatcher's tick, in the directory the cron daemon reads.
 DISPATCHER_CRON_NAME: Final[str] = "update-self-dispatch"
 LIVE_CRON_DIRECTORY: Final[str] = "/etc/cron.d"
@@ -37,6 +59,13 @@ OUTCOME_NO_CRON: Final[str] = "NO_CRON"
 OUTCOME_TOO_OLD_TO_UPDATE: Final[str] = "TOO_OLD_TO_UPDATE"
 # A start that passed its checks: the update's chat is being created, and ``last-start.json`` says how it went.
 OUTCOME_STARTING: Final[str] = "STARTING"
+# A request named no version and the workspace has read none for its release channel.
+OUTCOME_NO_CHANNEL_VERSION: Final[str] = "NO_CHANNEL_VERSION"
+# A request named no update window and the workspace holds no update settings to take one from.
+OUTCOME_NO_UPDATE_SETTINGS: Final[str] = "NO_UPDATE_SETTINGS"
+# The workspace's own arm found a schedule armed already and left it as it stands. No route answers this: an
+# arm a client asks for replaces whatever is armed.
+OUTCOME_ALREADY_ARMED: Final[str] = "ALREADY_ARMED"
 
 # Why a window closed without its scheduled run starting (the desktop's ``UpdateSkipReason``).
 SKIP_UPDATE_IN_FLIGHT: Final[str] = "UPDATE_IN_FLIGHT"

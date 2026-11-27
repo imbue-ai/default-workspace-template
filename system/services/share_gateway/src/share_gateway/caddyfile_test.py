@@ -5,6 +5,8 @@ import shutil
 import socket
 import subprocess
 import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -14,10 +16,13 @@ import pytest
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_internal_app_names
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.caddyfile import render_compression
+from share_gateway.caddyfile import render_web_client_access
+from share_gateway.testing import origins_that_look_like
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _AUTH_LABEL = "auth-x7k9q2w1"
@@ -328,24 +333,30 @@ def _caddy_binary() -> str | None:
     return shutil.which("caddy")
 
 
-def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
-    """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
-    would start it. Skipped where no caddy is installed; the workspace image and CI's both install the pinned one."""
-    caddy = _caddy_binary()
-    if caddy is None:
-        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+def _adapted_by_caddy(caddy: str, rendered: str, tmp_path: Path) -> dict:
+    """``rendered`` as ``caddy adapt`` reads it: the configuration the gateway's caddy would run."""
     caddyfile = tmp_path / "Caddyfile"
-    caddyfile.write_text(_render())
-
+    caddyfile.write_text(rendered)
     adapted = subprocess.run(
         [caddy, "adapt", "--config", str(caddyfile), "--adapter", "caddyfile"],
         capture_output=True,
         text=True,
         timeout=60,
     )
-
     assert adapted.returncode == 0, adapted.stderr
-    logs = json.loads(adapted.stdout)["logging"]["logs"]
+    return json.loads(adapted.stdout)
+
+
+def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
+    """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
+    would start it. Skipped where no caddy is installed; the workspace image and CI's both install the pinned one."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+
+    adapted = _adapted_by_caddy(caddy, _render(), tmp_path)
+
+    logs = adapted["logging"]["logs"]
     (access_log,) = [log for name, log in logs.items() if name != "default"]
     assert access_log["writer"] == {
         "filename": "/state/share_gateway/access.log",
@@ -355,7 +366,7 @@ def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_
         "roll_size_mb": 8,
     }
     assert access_log["encoder"]["format"] == "filter" and access_log["encoder"]["wrap"] == {"format": "json"}
-    (server,) = json.loads(adapted.stdout)["apps"]["http"]["servers"].values()
+    (server,) = adapted["apps"]["http"]["servers"].values()
     encoders = [
         handler for route in server["routes"] for handler in _handlers_of(route) if handler["handler"] == "encode"
     ]
@@ -440,27 +451,15 @@ def _request(
     return connection.getresponse()
 
 
-def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(tmp_path: Path) -> None:
-    """The rendered compression, run by caddy in front of an app: a plain GET is compressed, while a HEAD keeps the
-    real length, a ranged request gets a plain 206, and an event stream's headers arrive while it is still quiet,
-    before its first event. Skipped where no caddy is installed, as the adapt test is."""
-    caddy = _caddy_binary()
-    if caddy is None:
-        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
-    backend = ThreadingHTTPServer(("127.0.0.1", 0), _AppBackend)
-    threading.Thread(target=backend.serve_forever, daemon=True).start()
-    port = _free_port()
+@contextmanager
+def _caddy_running(caddy: str, caddyfile_text: str, tmp_path: Path) -> Generator[None, None, None]:
+    """Run caddy on ``caddyfile_text`` for as long as the block lasts, entered once caddy is serving it."""
     caddyfile = tmp_path / "Caddyfile"
-    caddyfile.write_text(
-        "{\n    admin off\n    auto_https off\n}\n"
-        f"http://127.0.0.1:{port} {{\n{render_compression(indent='    ')}\n"
-        f"    reverse_proxy 127.0.0.1:{backend.server_port}\n}}\n"
-    )
+    caddyfile.write_text(caddyfile_text)
     caddy_env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
-    # Caddy connects back to this listener once its config is running, so the requests below never race its start.
+    # Caddy connects back to this listener once its config is running, so no request races its start.
     ready = socket.create_server(("127.0.0.1", 0))
     ready.settimeout(15)
-    _STREAM_RELEASED.clear()
     with (tmp_path / "caddy.log").open("w") as caddy_log:
         server = subprocess.Popen(
             [
@@ -482,32 +481,344 @@ def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(
             ready.accept()[0].close()
         except TimeoutError:
             pytest.fail((tmp_path / "caddy.log").read_text())
-
-        whole = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip"})
-        assert whole.getheader("Content-Encoding") == "gzip"
-        assert len(whole.read()) < len(_APP_SCRIPT)
-
-        head = _request(port, "HEAD", "/app.js", {"Accept-Encoding": "gzip"})
-        assert head.getheader("Content-Encoding") is None
-        assert head.getheader("Content-Length") == str(len(_APP_SCRIPT))
-
-        # Well past the size caddy starts compressing at, so only the matcher keeps the range plain.
-        ranged = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip", "Range": "bytes=0-9999"})
-        assert ranged.status == 206
-        assert ranged.getheader("Content-Encoding") is None
-        assert ranged.read() == _APP_SCRIPT[:10000]
-
-        # The headers arrive while the stream has sent nothing yet: an encoder holding them would time this out,
-        # well before the app gives up waiting and sends its event anyway.
-        stream = _request(
-            port, "GET", "/events", {"Accept-Encoding": "gzip", "Accept": "text/event-stream"}, timeout_seconds=5
-        )
-        assert stream.getheader("Content-Encoding") is None
-        _STREAM_RELEASED.set()
-        assert stream.read() == b"data: hello\n\n"
+        yield
     finally:
-        _STREAM_RELEASED.set()
         ready.close()
         server.terminate()
         server.wait(timeout=10)
+
+
+def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(tmp_path: Path) -> None:
+    """The rendered compression, run by caddy in front of an app: a plain GET is compressed, while a HEAD keeps the
+    real length, a ranged request gets a plain 206, and an event stream's headers arrive while it is still quiet,
+    before its first event. Skipped where no caddy is installed, as the adapt test is."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _AppBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    caddyfile_text = (
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://127.0.0.1:{port} {{\n{render_compression(indent='    ')}\n"
+        f"    reverse_proxy 127.0.0.1:{backend.server_port}\n}}\n"
+    )
+    _STREAM_RELEASED.clear()
+    try:
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            whole = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip"})
+            assert whole.getheader("Content-Encoding") == "gzip"
+            assert len(whole.read()) < len(_APP_SCRIPT)
+
+            head = _request(port, "HEAD", "/app.js", {"Accept-Encoding": "gzip"})
+            assert head.getheader("Content-Encoding") is None
+            assert head.getheader("Content-Length") == str(len(_APP_SCRIPT))
+
+            # Well past the size caddy starts compressing at, so only the matcher keeps the range plain.
+            ranged = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip", "Range": "bytes=0-9999"})
+            assert ranged.status == 206
+            assert ranged.getheader("Content-Encoding") is None
+            assert ranged.read() == _APP_SCRIPT[:10000]
+
+            # The headers arrive while the stream has sent nothing yet: an encoder holding them would time this
+            # out, well before the app gives up waiting and sends its event anyway.
+            stream = _request(
+                port, "GET", "/events", {"Accept-Encoding": "gzip", "Accept": "text/event-stream"}, timeout_seconds=5
+            )
+            assert stream.getheader("Content-Encoding") is None
+            _STREAM_RELEASED.set()
+            assert stream.read() == b"data: hello\n\n"
+    finally:
+        _STREAM_RELEASED.set()
         backend.shutdown()
+
+
+# The apps of ``_APPS_TOML``, with the shell registered as a workspace registers it: internal.
+_APPS_TOML_WITH_AN_INTERNAL_APP = """
+[[apps]]
+name = "system_interface"
+url = "http://localhost:8000"
+label = "shell-dddd4444"
+internal = true
+
+[[apps]]
+name = "terminal"
+url = "http://localhost:7681"
+label = "terminal-bbbb2222"
+
+[[apps]]
+name = "my-app"
+url = "http://127.0.0.1:5000"
+label = "my-app-cccc3333"
+"""
+_INTERNAL_HOST = f"shell-dddd4444.{_DOMAIN}"
+_GRANTABLE_HOST = f"my-app-cccc3333.{_DOMAIN}"
+_AUTH_HOST = f"{_AUTH_LABEL}.{_DOMAIN}"
+
+
+def test_caddyfile_lets_the_web_client_call_the_workspace_routes_of_internal_apps_alone() -> None:
+    rendered = _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP)
+
+    matcher = rendered.split("@web_client_workspace_routes {", 1)[1].split("}", 1)[0]
+    assert f"host {_INTERNAL_HOST}\n" in matcher
+    assert "path /api/workspace/*" in matcher
+    assert f"header Origin {_CHROME_ORIGIN}" in matcher
+    # An app a per-app grant admits a visitor to is never one of the hosts.
+    assert _GRANTABLE_HOST not in matcher
+    assert f'Access-Control-Allow-Origin "{_CHROME_ORIGIN}"' in rendered
+    assert 'Access-Control-Allow-Credentials "true"' in rendered
+    # The permission check is answered ahead of the auth label's routes and of the auth step.
+    assert rendered.index("handle @web_client_workspace_routes_permission_check") < rendered.index("handle @auth")
+    assert rendered.index("handle @web_client_agent_routes_permission_check") < rendered.index("handle @auth")
+    assert rendered.index("handle @web_client_workspace_routes_permission_check") < rendered.index(
+        "forward_auth 127.0.0.1"
+    )
+
+
+def _web_client_permission_check(host: str, path: str) -> dict:
+    """The matcher caddy adapts for the web client's permission check of ``path`` on ``host``."""
+    return {"header": {"Origin": [_CHROME_ORIGIN]}, "host": [host], "method": ["OPTIONS"], "path": [path]}
+
+
+def test_caddy_orders_the_web_clients_permission_checks_and_the_identity_strip_ahead_of_the_auth_step(
+    tmp_path: Path,
+) -> None:
+    """Caddy orders a site block's directives by its own rules, so where the rendered file states one decides
+    nothing. In the whole file as caddy adapts it, the permission check of each set of routes the web client
+    calls is answered ahead of the auth label's routes and of the step that asks for a session, and an identity
+    header that arrives is deleted ahead of that step, which is what keeps a client from setting the web client's
+    mark. Skipped where no caddy is installed, as the adapt test is."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+
+    adapted = _adapted_by_caddy(caddy, _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP), tmp_path)
+
+    (server,) = adapted["apps"]["http"]["servers"].values()
+    (site,) = server["routes"]
+    (site_handler,) = site["handle"]
+    # The site's handle blocks are one group, of which the first whose matcher fits a request is the only one run.
+    handle_routes = [route for route in site_handler["routes"] if "group" in route]
+    assert len({route["group"] for route in handle_routes}) == 1
+    matchers = [route.get("match") for route in handle_routes]
+    workspace_check = [_web_client_permission_check(_INTERNAL_HOST, "/api/workspace/*")]
+    agent_check = [_web_client_permission_check(_AUTH_HOST, "/_agent/*")]
+    auth_label = [{"host": [_AUTH_HOST]}]
+    assert matchers[-1] is None
+    assert matchers.index(workspace_check) < matchers.index(auth_label)
+    assert matchers.index(agent_check) < matchers.index(auth_label)
+    for check in (workspace_check, agent_check):
+        answer = _handlers_of(handle_routes[matchers.index(check)])[-1]
+        assert answer == {"handler": "static_response", "status_code": 204}
+
+    (behind_the_auth_step,) = handle_routes[-1]["handle"]
+    first_handlers = behind_the_auth_step["routes"][0]["handle"]
+    assert first_handlers[0] == {"handler": "headers", "request": {"delete": ["X-Imbue-Identity"]}}
+    assert first_handlers[1]["handler"] == "reverse_proxy"
+    assert first_handlers[1]["rewrite"]["uri"] == "/_auth/verify"
+
+
+def test_caddyfile_lets_the_web_client_call_the_agent_routes_on_the_auth_label() -> None:
+    rendered = _render()
+
+    matcher = rendered.split("@web_client_agent_routes {", 1)[1].split("}", 1)[0]
+    assert f"host {_AUTH_HOST}\n" in matcher
+    assert "path /_agent/*" in matcher
+    # With no internal app registered there is no workspace route to call.
+    assert "@web_client_workspace_routes" not in rendered
+
+
+def test_caddyfile_names_no_other_origin_when_the_share_carries_no_web_client() -> None:
+    rendered = _render(apps_toml=_APPS_TOML_WITH_AN_INTERNAL_APP, chrome_origin="")
+
+    assert "Access-Control-Allow-Origin" not in rendered
+    assert "@web_client" not in rendered
+
+
+def test_only_an_internal_row_is_an_internal_app() -> None:
+    apps = parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP)
+
+    assert build_internal_app_names(apps) == frozenset({"system_interface"})
+
+
+class _RecordingBackend(BaseHTTPRequestHandler):
+    """An app behind the share that answers every request and records which ones reached it."""
+
+    protocol_version = "HTTP/1.1"
+    reached: list[tuple[str, str]] = []
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _answer(self) -> None:
+        type(self).reached.append((self.command, self.path))
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = _answer
+    do_PUT = _answer
+    do_OPTIONS = _answer
+
+
+def test_caddy_answers_the_web_clients_permission_check_and_lets_it_read_answers(tmp_path: Path) -> None:
+    """The rendered web client access, run by caddy in front of an app: the browser's permission check is answered
+    by caddy and never reaches the app, an answer to the web client's origin carries the headers that let its page
+    read it, and no other origin, path or host gets either. Skipped where no caddy is installed."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    _RecordingBackend.reached = []
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    access = render_web_client_access(
+        _DOMAIN, parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP), _AUTH_LABEL, _CHROME_ORIGIN
+    )
+    caddyfile_text = (
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://:{port} {{\n{access}\n"
+        f"    handle {{\n        reverse_proxy 127.0.0.1:{backend.server_port}\n    }}\n}}\n"
+    )
+
+    def ask(method: str, host: str, path: str, origin: str) -> http.client.HTTPResponse:
+        response = _request(port, method, path, {"Host": host, "Origin": origin})
+        response.read()
+        return response
+
+    try:
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            check = ask("OPTIONS", _INTERNAL_HOST, "/api/workspace/update/schedule", _CHROME_ORIGIN)
+            assert check.status == 204
+            assert check.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert check.getheader("Access-Control-Allow-Credentials") == "true"
+            assert check.getheader("Access-Control-Allow-Methods") == "GET, POST, PUT, PATCH, DELETE"
+            assert check.getheader("Access-Control-Allow-Headers") == "Content-Type"
+            assert _RecordingBackend.reached == []
+
+            call = ask("PUT", _INTERNAL_HOST, "/api/workspace/profile", _CHROME_ORIGIN)
+            assert call.status == 200
+            assert call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert call.getheader("Access-Control-Allow-Credentials") == "true"
+            assert {value.strip() for value in (call.getheader("Vary") or "").split(",")} == {
+                "Accept-Encoding",
+                "Origin",
+            }
+
+            agent_check = ask("OPTIONS", _AUTH_HOST, "/_agent/grants/agent-1", _CHROME_ORIGIN)
+            assert agent_check.status == 204
+            agent_call = ask("GET", _AUTH_HOST, "/_agent/grants", _CHROME_ORIGIN)
+            assert agent_call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
+            assert _RecordingBackend.reached == [("PUT", "/api/workspace/profile"), ("GET", "/_agent/grants")]
+
+            # Another origin, one that only looks like the web client's, another path, and an app a per-app grant
+            # admits to: each reaches the app as it always did, permission check included, and its answer names no
+            # origin.
+            _RecordingBackend.reached = []
+            unanswered = (
+                *(
+                    (method, _INTERNAL_HOST, "/api/workspace/profile", origin)
+                    for origin in ("https://evil.example.com", *origins_that_look_like(_CHROME_ORIGIN))
+                    for method in ("OPTIONS", "PUT")
+                ),
+                ("OPTIONS", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+                ("PUT", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
+                ("OPTIONS", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+                ("PUT", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+                ("OPTIONS", _INTERNAL_HOST, "/_agent/grants", _CHROME_ORIGIN),
+            )
+            for method, host, path, origin in unanswered:
+                other = ask(method, host, path, origin)
+                assert other.status == 200, (method, host, path, origin)
+                assert other.getheader("Access-Control-Allow-Origin") is None, (method, host, path, origin)
+            assert _RecordingBackend.reached == [(method, path) for method, _host, path, _origin in unanswered]
+    finally:
+        backend.shutdown()
+
+
+_WALLPAPER_IMAGE = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8
+_WALLPAPER_ETAG = '"1795000000.0-2056-1234567"'
+
+
+class _ImageBackend(BaseHTTPRequestHandler):
+    """The shell behind the share, as far as a route that answers no JSON goes: an image a browser may keep, nothing
+    to a browser that holds it already, and nothing where there is no image."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        if self.path == "/api/workspace/none":
+            self.send_response(204)
+            self.end_headers()
+            return
+        is_held = self.headers.get("If-None-Match") == _WALLPAPER_ETAG
+        self.send_response(304 if is_held else 200)
+        self.send_header("ETag", _WALLPAPER_ETAG)
+        self.send_header("Cache-Control", "private, no-cache")
+        if is_held:
+            self.end_headers()
+            return
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(_WALLPAPER_IMAGE)))
+        self.end_headers()
+        self.wfile.write(_WALLPAPER_IMAGE)
+
+
+def test_caddy_lets_the_web_client_read_a_workspace_routes_answer_that_is_no_json(tmp_path: Path) -> None:
+    """The headers that let the web client's page read an answer are added by the request's path and origin, not by
+    what the answer is: an image, the 304 a browser that holds it gets, and an answer with no body all carry them,
+    and the image arrives as the app sent it, with what a browser needs to keep it. Skipped where no caddy is
+    installed."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _ImageBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    access = render_web_client_access(
+        _DOMAIN, parse_registered_apps(_APPS_TOML_WITH_AN_INTERNAL_APP), _AUTH_LABEL, _CHROME_ORIGIN
+    )
+    compression = render_compression(indent="    ")
+    caddyfile_text = (
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://:{port} {{\n{compression}\n{access}\n"
+        f"    handle {{\n        reverse_proxy 127.0.0.1:{backend.server_port}\n    }}\n}}\n"
+    )
+
+    def ask(path: str, headers: dict[str, str]) -> tuple[http.client.HTTPResponse, bytes]:
+        response = _request(port, "GET", path, {"Host": _INTERNAL_HOST, "Accept-Encoding": "gzip, zstd", **headers})
+        return response, response.read()
+
+    try:
+        with _caddy_running(caddy, caddyfile_text, tmp_path):
+            image, image_body = ask("/api/workspace/wallpaper", {"Origin": _CHROME_ORIGIN})
+            held, held_body = ask(
+                "/api/workspace/wallpaper", {"Origin": _CHROME_ORIGIN, "If-None-Match": _WALLPAPER_ETAG}
+            )
+            none, none_body = ask("/api/workspace/none", {"Origin": _CHROME_ORIGIN})
+            elsewhere, _elsewhere_body = ask("/api/workspace/wallpaper", {"Origin": "https://evil.example.com"})
+    finally:
+        backend.shutdown()
+
+    assert (image.status, image_body) == (200, _WALLPAPER_IMAGE)
+    assert image.getheader("Content-Type") == "image/png"
+    assert image.getheader("Content-Encoding") is None
+    assert (held.status, held_body) == (304, b"")
+    assert (none.status, none_body) == (204, b"")
+    for answer in (image, held, none):
+        assert answer.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN, answer.status
+        assert answer.getheader("Access-Control-Allow-Credentials") == "true", answer.status
+        assert "Origin" in {value.strip() for value in (answer.getheader("Vary") or "").split(",")}, answer.status
+    for answer in (image, held):
+        assert answer.getheader("ETag") == _WALLPAPER_ETAG
+        assert answer.getheader("Cache-Control") == "private, no-cache"
+    # A page of any other origin is given nothing to read the image with.
+    assert elsewhere.status == 200
+    assert elsewhere.getheader("Access-Control-Allow-Origin") is None

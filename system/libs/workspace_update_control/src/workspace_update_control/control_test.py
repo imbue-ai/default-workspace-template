@@ -17,8 +17,10 @@ from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.testing import (
     SERVICES_AGENT_ID,
     STAGED_CREATED_CHAT,
+    RecordingFeed,
     ScriptedToolAnswer,
     StagedUpdateWorkspace,
+    arm_schedule_in,
     full_state_line,
     labels_of,
     listed_agent,
@@ -46,16 +48,15 @@ def _arm(
     is_auto_armed: bool = False,
     now: float = _NOW,
 ) -> dict[str, Any]:
-    return control.arm_schedule(
+    return arm_schedule_in(
+        staged,
+        RecordingFeed(None),
+        now=now,
         ceiling=ceiling,
         override_ref=override_ref,
-        window_start_minute_utc=9 * 60,
-        window_length_minutes=3 * 60,
+        window=(9 * 60, 3 * 60),
         is_backup_configured=True,
         is_auto_armed=is_auto_armed,
-        now=now,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
     )
 
 
@@ -78,6 +79,7 @@ def _start(
         read_agents=read_agents or staged.read_listed_agents,
         run_in_background=run_in_background,
         clock=lambda: _FINISHED_AT,
+        fetch_channel_file=RecordingFeed(None),
     )
 
 
@@ -289,7 +291,9 @@ def test_refreshing_an_armed_schedule_rewrites_the_clients_values_and_keeps_the_
         window_start_minute_utc=21 * 60 + 30,
         window_length_minutes=4 * 60,
         is_backup_configured=False,
+        now=_NOW,
         live_cron_dir=str(staged.live_cron_dir),
+        fetch_channel_file=RecordingFeed(None),
     )
 
     refreshed = {
@@ -319,7 +323,9 @@ def test_refreshing_with_the_values_already_there_leaves_the_schedule_file_as_it
         window_start_minute_utc=9 * 60,
         window_length_minutes=3 * 60,
         is_backup_configured=True,
+        now=_NOW,
         live_cron_dir=str(staged.live_cron_dir),
+        fetch_channel_file=RecordingFeed(None),
     )
 
     assert answer == {"is_armed": True, "schedule": schedule}
@@ -334,11 +340,14 @@ def test_refreshing_with_nothing_armed_writes_neither_a_schedule_nor_the_cron_li
         window_start_minute_utc=9 * 60,
         window_length_minutes=3 * 60,
         is_backup_configured=True,
+        now=_NOW,
         live_cron_dir=str(staged.live_cron_dir),
+        fetch_channel_file=RecordingFeed(None),
     )
 
     assert answer == {"is_armed": False, "schedule": None}
-    assert not (staged.root / "data").exists()
+    assert staged.read_state("schedule.json") is None
+    assert not _durable_cron_file(staged).exists()
     assert not _live_cron_file(staged).exists()
 
 
@@ -365,6 +374,11 @@ def test_skipping_a_version_cancels_the_schedule_and_records_the_skip(
     assert answer == {"is_cancelled": True, "skipped_target": recorded}
     assert staged.read_state("skipped-target.json") == recorded
     assert staged.read_state("schedule.json") is None
+    # The skip is on record before the schedule goes, so no minute of the dispatcher finds neither.
+    logged = [line.split(" ", 1)[1] for line in staged.dispatcher_log_lines()]
+    assert logged.index(
+        f"recorded the skipped update target {_CEILING}"
+    ) < logged.index("cancelled the schedule")
 
 
 @pytest.mark.parametrize(
@@ -1226,6 +1240,8 @@ def test_reading_a_workspace_with_nothing_armed_answers_nothing_and_writes_nothi
     answer = _read(staged)
 
     assert answer == {
+        "settings": None,
+        "channel_version": None,
         "schedule": None,
         "run": None,
         "last_dispatch": None,
@@ -1257,6 +1273,8 @@ def test_reading_answers_every_record_as_it_stands_and_changes_none(
     answer = _read(staged)
 
     assert answer == {
+        "settings": None,
+        "channel_version": None,
         "schedule": staged.read_state("schedule.json"),
         "run": run,
         "last_dispatch": staged.read_state("last-dispatch.json"),

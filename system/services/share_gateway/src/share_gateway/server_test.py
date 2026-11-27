@@ -48,6 +48,7 @@ from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
+from share_gateway.testing import origins_that_look_like
 from share_gateway.testing import set_cookies_by_name
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
@@ -114,6 +115,7 @@ def _make_harness(
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=chrome_origin,
+        is_chrome_origin_refused=False,
     )
     pending_logins = PendingLoginRegistry()
     app = build_gateway_app(
@@ -818,6 +820,7 @@ def test_health_owner_detail_includes_the_service_label_map(tmp_path: Path) -> N
     body = resp.get_json()
     assert body["owner"] is True
     assert body["services"] == {name: label for label, name in _LABELS.items()}
+    assert body["auth_label"] == _AUTH_LABEL
 
 
 def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> None:
@@ -830,6 +833,7 @@ def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> No
     body = resp.get_json()
     assert body["owner"] is False
     assert "services" not in body
+    assert "auth_label" not in body
 
 
 def test_post_with_the_chrome_origin_is_allowed(tmp_path: Path) -> None:
@@ -891,6 +895,7 @@ def test_connect_info_answers_what_the_stack_holds_without_caching(
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=_CHROME_ORIGIN,
+        is_chrome_origin_refused=False,
     )
     answers: list[dict[str, object]] = [
         {"ice_servers": [], "candidates": []},
@@ -1034,3 +1039,144 @@ def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
     assert _counted_keys(misconfigured_counter) == [
         ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, DENIED_GRANTS_MISCONFIGURED, 1)
     ]
+
+
+_WEB_CLIENT_MARK = "is_from_web_client"
+
+
+def _owner_session(harness: _GatewayHarness) -> None:
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True, user_id="user-owner-9c21")
+    )
+
+
+def test_verify_vouches_for_the_web_clients_call_to_a_workspace_route(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile?x=1", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 200
+    assert _identity_header(resp) == {
+        "owner": True,
+        "user_id": "user-owner-9c21",
+        "email": "owner@example.com",
+        _WEB_CLIENT_MARK: True,
+    }
+
+
+def test_verify_vouches_for_a_whole_workspace_grantee_as_it_does_for_the_owner(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 200
+    assert _identity_header(resp)[_WEB_CLIENT_MARK] is True
+    assert _identity_header(resp)["owner"] is False
+
+
+@pytest.mark.parametrize(
+    ("host", "uri", "origin"),
+    [
+        # Another path of the same app.
+        (_SHELL_HOST, "/api/chats", _CHROME_ORIGIN),
+        (_SHELL_HOST, "/api/workspacex/profile", _CHROME_ORIGIN),
+        # The workspace's own page, and a request that names no origin.
+        (_SHELL_HOST, "/api/workspace/profile", f"https://{_SHELL_HOST}"),
+        (_SHELL_HOST, "/api/workspace/profile", None),
+        # An app a per-app grant admits a visitor to.
+        (_WEB_HOST, "/api/workspace/profile", _CHROME_ORIGIN),
+    ],
+)
+def test_verify_vouches_for_no_other_request(tmp_path: Path, host: str, uri: str, origin: str | None) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=host, method="PUT", uri=uri, origin=origin, accept="*/*")
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)
+
+
+@pytest.mark.parametrize("origin", origins_that_look_like(_CHROME_ORIGIN))
+def test_verify_vouches_for_no_origin_that_only_looks_like_the_web_clients(tmp_path: Path, origin: str) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    read = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin=origin, accept="*/*"
+        ),
+    )
+    written = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=origin, accept="*/*"
+        ),
+    )
+
+    # A read is safe from any origin, and reaches the app without the word its guard admits another origin on.
+    assert read.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(read)
+    assert written.status_code == 403
+    assert IDENTITY_HEADER not in written.headers
+
+
+def test_verify_never_vouches_without_a_session_it_accepted(tmp_path: Path) -> None:
+    """A program that is not a browser can send any Origin, and gains nothing by it."""
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=_CHROME_ORIGIN, accept="*/*"
+        ),
+    )
+
+    assert resp.status_code == 401
+    assert IDENTITY_HEADER not in resp.headers
+
+
+def test_verify_never_vouches_when_the_share_carries_no_web_client(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin="")
+    _owner_session(harness)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin="", accept="*/*"),
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)
+
+
+def test_verify_never_vouches_for_a_visiting_agent(tmp_path: Path) -> None:
+    agent = AgentIdentity(agent_id="agent-1", agent_name="helper", granter="owner@example.com")
+    harness = _make_harness(tmp_path, admit_agent=lambda token, service: agent)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers={
+            **_verify_headers(
+                host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=_CHROME_ORIGIN, accept="*/*"
+            ),
+            "Authorization": "Bearer admission-token",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(resp)
