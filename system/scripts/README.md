@@ -86,6 +86,10 @@ needs a directory put on `sys.path`, and each stub says which. See
   after a restart docker made on its own; it records the restart as a
   `container_restarted` event through
   `workspace_bare_scripts/record_container_restart.py`).
+- The update dispatcher's tick: `update_dispatcher_tick.py`, one minute of
+  `system/libs/workspace_update_control`'s dispatcher, which the
+  `update-self-dispatch` cron line runs from the workspace root with the system
+  `python3`. The shell's update routes write that line.
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`. A changelog
   consolidation branch owes no entry.
 

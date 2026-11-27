@@ -102,8 +102,27 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   owner's "everywhere" save also `unsent.json`, delivered to the account
   through the latchkey gateway's `minds-workspaces-account-settings` verb,
   whose first use files one permission request). Every save, and a watch on
-  the account's profile snapshot (`data/.state/profile/account.json`, written
-  from outside the workspace), says `keybindings_changed`.
+  the account's profile snapshot (`data/.state/profile/account.json`, which a
+  client writes through the profile route below), says `keybindings_changed`.
+- The workspace routes (`/api/workspace/...`, contracts section 5.7; the code
+  is `workspace_routes.py`): the state a workspace owns, read and changed by a
+  client outside it where a client used to run a command in the workspace.
+  `GET /api/workspace/status` names the version of the checkout and every
+  operation the shell has a route for, and a client calls a route only for an
+  operation named there. The rest are who the workspace is shared with
+  (`sharing`, `sharing/grants`), the profile snapshot and the user's timezone
+  (`profile`, `timezone`), the backup credentials, the initialisation of the
+  repository they name and whether backups are verified
+  (`backups/credentials|setup|verification`), and the updates
+  (`update`, `update/start|schedule|skip|dismissals|liveness`). What each one
+  does lives in a library (`share_grants`, `workspace_profile`,
+  `workspace_backup_setup`, `workspace_update_control`). A preview shell names
+  no operation and refuses every route that changes the workspace.
+  `workspace_routes_api.json` beside this file is the description of these
+  routes a client is checked against: a test regenerates it from the route
+  table and fails when the two differ, and holds it to every copy under
+  `workspace_routes_api_frozen/`, so a route a released client calls keeps
+  taking that client's requests and answering what it reads.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.

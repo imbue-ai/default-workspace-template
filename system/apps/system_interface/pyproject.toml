@@ -39,6 +39,9 @@ dependencies = [
     "workspace-layout",
     # Resolves account-keyed settings (keybindings) for a request identity.
     "workspace-profile",
+    # What the workspace routes do: a workspace's backup configuration and its updates, as a client asks for them.
+    "workspace-backup-setup",
+    "workspace-update-control",
 ]
 license = {text = "FCL-1.0-MIT"}
 license-files = [

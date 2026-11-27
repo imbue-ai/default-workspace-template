@@ -319,6 +319,46 @@ The shell page announces `opensLinks: true`, `opensCustomSchemeLinks: true`, `re
 
 The shell also sends `minds:highlight-chrome {anchor}` (contract version 9) while a show-around tour card, or a page's coach card (`shell:show-coach-card`, section 7), is about a control of the Imbue Studio chrome: `anchor` is `workspace-switcher`, `permissions`, `settings`, `share`, or `help`, and `null` clears the ring when the card goes. It is fire-and-forget; the card's words never depend on the ring, so a chrome that does not know the message, or a plain-browser visit with no chrome, reads the same.
 
+### 5.7 Workspace routes
+
+The routes under `/api/workspace/` are for a client outside the workspace (the Imbue Studio desktop app's backend, through mngr's forward), not for the shell's pages: each reads or changes state the workspace owns, where a client used to run a command in the workspace.
+`system/apps/system_interface/workspace_routes_api.json` is their full description (every request and answer, as an OpenAPI document, each route naming its operation under `x-workspace-operation`), and is what a client is checked against; this section says what holds across them.
+
+`GET /api/workspace/status` answers `{"schema": 1, "template_ref", "operations": [...]}`: the version of the checkout (the ref its newest `update-self` merge names, or its nearest `minds-v*` tag when there is no such merge or the tag is a newer release, else empty) and the name of every operation the shell has a route for.
+A client asks before the first operation it sends a workspace and calls a route only for an operation named there, so a workspace whose shell names fewer is still served by the client's older path.
+A preview shell names none, and answers every route that changes the workspace `403` with the code `PREVIEW`: it serves a copy, and cannot change the live workspace.
+
+| Operation | Route |
+|---|---|
+| `sharing.read` | `GET /api/workspace/sharing` |
+| `sharing.grants.write` | `PUT /api/workspace/sharing/grants` |
+| `profile.write` | `PUT /api/workspace/profile` |
+| `timezone.write` | `PUT /api/workspace/timezone` |
+| `backups.credentials.write` | `PUT /api/workspace/backups/credentials` |
+| `backups.credentials.remove` | `DELETE /api/workspace/backups/credentials` |
+| `backups.setup.read` | `GET /api/workspace/backups/setup` |
+| `backups.verification.write` | `PUT /api/workspace/backups/verification` |
+| `update.read` | `GET /api/workspace/update` |
+| `update.start` | `POST /api/workspace/update/start` |
+| `update.schedule.write` | `PUT /api/workspace/update/schedule` |
+| `update.schedule.refresh` | `PATCH /api/workspace/update/schedule` |
+| `update.schedule.cancel` | `DELETE /api/workspace/update/schedule` |
+| `update.skip` | `POST /api/workspace/update/skip` |
+| `update.dismiss` | `POST /api/workspace/update/dismissals` |
+| `update.liveness.read` | `GET /api/workspace/update/liveness` |
+
+A route asks for no more than the request guard does: it reads the requester's identity, so an identity header that does not parse is refused, and it does not ask for the owner, since whoever a proxy admits to the shell already reaches the terminal and every file a route writes.
+A refusal is `{"detail", "code"}` under a 4xx (`INVALID_REQUEST`, `PREVIEW`, `INVALID_GRANTS`, `INVALID_PROFILE`, `INVALID_TIMEZONE`, `INVALID_CREDENTIALS`, `SETUP_RUNNING`), a route that could not do what it was asked is the same under a 5xx (`GRANTS_UNREADABLE`, `WRITE_FAILED`, `NOT_AT_WORKSPACE_ROOT`), and an answer that describes what the workspace did, including that it declined, is a 200 with an `outcome`.
+A refused grants document also carries `refusals`, one `{"scope", "kind", "value", "message"}` per entry.
+
+Two routes answer before their work is done, and a client reads on:
+
+- `PUT /api/workspace/backups/credentials` takes the whole of `restic.env` and answers `202` with the setup's state `INITIALIZING` (`200` with `READY` when those credentials are already in place); `restic.env` is written only once the repository is initialised, so the backup service never sees credentials for a repository that is not. `GET /api/workspace/backups/setup` then says `NONE`, `INITIALIZING`, `READY`, or `FAILED` with restic's own words, the credentials' values redacted. An initialisation whose process is gone reads as `FAILED`, and sending the credentials again is safe.
+- `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then holds the attempt under `last_start`, with its outcome once it has one. An attempt whose process is gone reads as `CREATE_FAILED`.
+
+A read route changes nothing in the workspace.
+The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
+
 ## 6. The WebSocket
 
 Route `/api/ws`, one connection per browser window.
@@ -353,7 +393,7 @@ Outbound:
 | `avatar_selection_changed` | `{"design"}` | after the selection is written |
 | `update_notice_changed` | `{"notice": notice \| null}` | on connect (after `avatar_status`), and whenever `data/.state/update-apply/last-good.json` is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document `GET /api/updates/pending` answers (section 5.1) |
 | `themes_changed` | `{"catalog"}` | when a theme's files change or a theme folder is added or removed, and after `POST /api/themes/default` sets the workspace's default theme; `catalog` is the `GET /api/themes` document (the workspace-themes plan, section 5.2) |
-| `keybindings_changed` | `{}` | after every keybindings save, reset, or discard (section 5.1), and whenever the account's profile snapshot (`data/.state/profile/account.json`, written from outside the workspace) changes; a window re-fetches `GET /api/keybindings/me` and sends `shell:keybindings-changed` (section 7) to every page it frames |
+| `keybindings_changed` | `{}` | after every keybindings save, reset, or discard (section 5.1), and whenever the account's profile snapshot (`data/.state/profile/account.json`, which a client writes through the profile route, section 5.7) changes; a window re-fetches `GET /api/keybindings/me` and sends `shell:keybindings-changed` (section 7) to every page it frames |
 | `presence_updated` | `{"users": [present_user, ...]}` | on connect, when a heartbeat brings a user into the connected set, when the shell's sweep (every 10 seconds) finds that a user's heartbeats have stopped, and when a background profile fetch changed what the profile cache answers (section 5.1) |
 | `roster_updated` | `{"participants": [participant, ...]}` (the document of `GET /api/roster`, section 5.1) | on connect (after `presence_updated`), whenever `presence_updated` goes out, whenever a heartbeat moves a person's newest input time, and whenever a grants file or the gateway's last-seen record changes (a burst of file events is announced once, a second later); never when the document equals the one last pushed |
 | `clients_updated` | `{}` | after a window's socket registers its client (its first `client_state` report), after a registered window's socket closes, and after the shell prunes a client it has not seen; a page re-reads `GET /api/clients` on it, so the ring on a viewed desktop's owner (concepts.md section 2.8) follows a viewer whose window closed |

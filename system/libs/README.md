@@ -56,6 +56,15 @@ README for details.
   job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
+- `workspace_backup_setup/` - A workspace's backup configuration as a client
+  sets it up through the shell's backup routes: it initialises the restic
+  repository the credentials name, writes `restic.env` once that is ready,
+  and sets whether backups are verified.
+- `workspace_update_control/` - A workspace's updates as a client asks for
+  them through the shell's update routes (start one, schedule one, skip a
+  version, read it all), and the dispatcher cron runs every minute through
+  `system/scripts/update_dispatcher_tick.py` to start a scheduled update and
+  watch over a running one. Stdlib-only, so the tick runs with no venv.
 
 Apps live in `system/apps/`; standalone background services live in
 `system/services/`.

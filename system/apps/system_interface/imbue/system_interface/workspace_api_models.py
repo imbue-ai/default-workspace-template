@@ -1,0 +1,391 @@
+"""The request and answer models of the workspace routes (``/api/workspace/...``): the state a workspace owns, as a
+client outside it reads and changes it.
+
+A client is the Imbue Studio desktop's backend or the hosted web client. Every request carries every value the route
+acts on, so a client that keeps nothing between requests can call it. The routes' description is checked in beside
+the app (``workspace_routes_api.json``), and a client is held to it: a path, a field of an answer, and the meaning of
+an operation's name never change while a client that uses them is supported.
+"""
+
+from typing import Final
+
+from app_schema.api_schema import ErrorResponse
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import SecretStr
+from pydantic import StrictBool
+from pydantic import StrictInt
+
+from imbue.imbue_common.frozen_model import FrozenModel
+
+WORKSPACE_STATUS_SCHEMA: Final[int] = 1
+
+# The operations a workspace on this template serves, each named for good: a release adds names and never renames
+# one. A client calls a route only for an operation its workspace names.
+OPERATION_SHARING_READ: Final[str] = "sharing.read"
+OPERATION_SHARING_GRANTS_WRITE: Final[str] = "sharing.grants.write"
+OPERATION_PROFILE_WRITE: Final[str] = "profile.write"
+OPERATION_TIMEZONE_WRITE: Final[str] = "timezone.write"
+OPERATION_BACKUPS_CREDENTIALS_WRITE: Final[str] = "backups.credentials.write"
+OPERATION_BACKUPS_CREDENTIALS_REMOVE: Final[str] = "backups.credentials.remove"
+OPERATION_BACKUPS_SETUP_READ: Final[str] = "backups.setup.read"
+OPERATION_BACKUPS_VERIFICATION_WRITE: Final[str] = "backups.verification.write"
+OPERATION_UPDATE_READ: Final[str] = "update.read"
+OPERATION_UPDATE_START: Final[str] = "update.start"
+OPERATION_UPDATE_SCHEDULE_WRITE: Final[str] = "update.schedule.write"
+OPERATION_UPDATE_SCHEDULE_CANCEL: Final[str] = "update.schedule.cancel"
+OPERATION_UPDATE_SCHEDULE_REFRESH: Final[str] = "update.schedule.refresh"
+OPERATION_UPDATE_SKIP: Final[str] = "update.skip"
+OPERATION_UPDATE_DISMISS: Final[str] = "update.dismiss"
+OPERATION_UPDATE_LIVENESS_READ: Final[str] = "update.liveness.read"
+
+WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
+    OPERATION_SHARING_READ,
+    OPERATION_SHARING_GRANTS_WRITE,
+    OPERATION_PROFILE_WRITE,
+    OPERATION_TIMEZONE_WRITE,
+    OPERATION_BACKUPS_CREDENTIALS_WRITE,
+    OPERATION_BACKUPS_CREDENTIALS_REMOVE,
+    OPERATION_BACKUPS_SETUP_READ,
+    OPERATION_BACKUPS_VERIFICATION_WRITE,
+    OPERATION_UPDATE_READ,
+    OPERATION_UPDATE_START,
+    OPERATION_UPDATE_SCHEDULE_WRITE,
+    OPERATION_UPDATE_SCHEDULE_CANCEL,
+    OPERATION_UPDATE_SCHEDULE_REFRESH,
+    OPERATION_UPDATE_SKIP,
+    OPERATION_UPDATE_DISMISS,
+    OPERATION_UPDATE_LIVENESS_READ,
+)
+
+# The codes a workspace route's refusal or failure carries beside its ``detail``, for a caller that acts on it.
+CODE_INVALID_REQUEST: Final[str] = "INVALID_REQUEST"
+CODE_PREVIEW: Final[str] = "PREVIEW"
+CODE_INVALID_GRANTS: Final[str] = "INVALID_GRANTS"
+CODE_GRANTS_UNREADABLE: Final[str] = "GRANTS_UNREADABLE"
+CODE_INVALID_PROFILE: Final[str] = "INVALID_PROFILE"
+CODE_INVALID_TIMEZONE: Final[str] = "INVALID_TIMEZONE"
+CODE_INVALID_CREDENTIALS: Final[str] = "INVALID_CREDENTIALS"
+CODE_SETUP_RUNNING: Final[str] = "SETUP_RUNNING"
+CODE_WRITE_FAILED: Final[str] = "WRITE_FAILED"
+CODE_NOT_AT_WORKSPACE_ROOT: Final[str] = "NOT_AT_WORKSPACE_ROOT"
+
+GRANTS_ERROR_UNREADABLE: Final[str] = "UNREADABLE"
+# The key a grants document holds its per-app lists under, on the wire as in the grants file.
+GRANTS_PER_APP_KEY: Final[str] = "services"
+
+
+class WorkspaceRouteError(ErrorResponse):
+    """What a workspace route answers when it refuses a request (4xx) or could not do what it was asked (5xx)."""
+
+    code: str = Field(description="An upper-case code naming the refusal or failure, for a caller that acts on it")
+
+
+class GrantRefusalEntry(FrozenModel):
+    """One entry a grants document may not carry, and why."""
+
+    scope: str = Field(description="'workspace', or the name of the app whose list carried the entry")
+    kind: str = Field(description="'user', 'email' or 'email_domain'")
+    value: str = Field(description="The entry exactly as the caller sent it")
+    message: str = Field(description="Why the entry was refused")
+
+
+class InvalidGrantsError(WorkspaceRouteError):
+    """A grants document whose shape is wrong: every entry refused, so a client can mark each row."""
+
+    refusals: tuple[GrantRefusalEntry, ...] = Field(description="The entries refused, workspace scope first")
+
+
+class WorkspaceStatusResponse(FrozenModel):
+    """What the workspace serves: the version of its checkout, and the operations it has a route for."""
+
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    status_schema: int = Field(alias="schema", description="The shape of this answer; 1")
+    template_ref: str = Field(
+        description="The version of the workspace's checkout: the ref its newest update-self merge names, or its "
+        "nearest minds-v* tag when there is no such merge or the tag is a newer release; '' when it names none"
+    )
+    operations: tuple[str, ...] = Field(description="The name of every operation this workspace serves a route for")
+
+
+class GrantListModel(FrozenModel):
+    """One sharing scope's allow-list: user ids, exact emails (invitations), and whole email domains."""
+
+    users: tuple[str, ...] = Field(default=(), description="User ids granted access (matched before emails)")
+    emails: tuple[str, ...] = Field(
+        default=(), description="Exact email addresses granted access; the gateway turns each into a user id"
+    )
+    email_domains: tuple[str, ...] = Field(default=(), description="Whole email domains granted access")
+
+
+class GrantsDocumentModel(FrozenModel):
+    """The whole grants document, in the shape of ``share_grants.toml``."""
+
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    workspace: GrantListModel = Field(
+        default_factory=GrantListModel, description="Who is admitted to the whole workspace"
+    )
+    # Named for the grants file's own word for its per-app tables on the wire.
+    apps: dict[str, GrantListModel] = Field(
+        default_factory=dict,
+        alias=GRANTS_PER_APP_KEY,
+        description="Who is admitted to one app alone, by the app's name",
+    )
+
+
+class SharingStateResponse(FrozenModel):
+    """Whether the workspace holds share materials, and its grants."""
+
+    is_shared: bool = Field(description="Whether share.env exists, the share stack's on-switch")
+    grants: GrantsDocumentModel | None = Field(
+        description="The grants document; null when there is no grants file, or it holds something else, so that a "
+        "save replaces it"
+    )
+    grants_error: str = Field(
+        description="'UNREADABLE' when the grants file is there and cannot be read; '' otherwise"
+    )
+
+
+class GrantedIdentityModel(FrozenModel):
+    """What the client knows of one granted account: what the shell names it from before it first arrives."""
+
+    email: str | None = Field(default=None, description="The account's email; null when the client knows none")
+    display_name: str | None = Field(
+        default=None, description="The account's display name; null when the client knows none"
+    )
+
+
+class ReplaceGrantsRequest(FrozenModel):
+    """The grants to store, whole, with what the client knows of each granted account."""
+
+    grants: GrantsDocumentModel = Field(description="The whole grants document")
+    identities: dict[str, GrantedIdentityModel] = Field(
+        default_factory=dict, description="Each granted account's email and display name, by user id"
+    )
+
+
+class GrantsStoredResponse(FrozenModel):
+    """The grants document as it was stored: trimmed, lowercased, and each list in order."""
+
+    grants: GrantsDocumentModel = Field(description="The stored document")
+
+
+class ProfileSnapshotRequest(FrozenModel):
+    """The profile snapshot to write, as it is: its header fields, and whatever settings it carries beside them."""
+
+    model_config = ConfigDict(extra="allow")
+
+    snapshot_format: StrictInt = Field(
+        description="The snapshot's shape version; one newer than this template is kept"
+    )
+
+
+class ProfileWrittenResponse(FrozenModel):
+    """What writing the profile snapshot answers."""
+
+    is_written: bool = Field(description="Whether the snapshot was written")
+
+
+class TimezoneRequest(FrozenModel):
+    """The user's timezone to record."""
+
+    zone: str = Field(description="An IANA timezone name")
+    is_replacing: StrictBool = Field(
+        default=False, description="Whether to replace a zone already on record; false writes only when there is none"
+    )
+
+
+class TimezoneResponse(FrozenModel):
+    """The timezone now on record, applied when the container next boots."""
+
+    zone: str = Field(description="The zone now recorded")
+    is_written: bool = Field(description="Whether this request wrote it")
+
+
+class BackupCredentialsRequest(FrozenModel):
+    """The backup credentials: the whole of ``restic.env``."""
+
+    env_text: SecretStr = Field(
+        description="The contents of restic.env: the repository, its password, the backend keys"
+    )
+
+
+class BackupCredentialsRemovedResponse(FrozenModel):
+    """What removing the backup credentials answers."""
+
+    is_removed: bool = Field(description="Whether there was a restic.env to move aside")
+
+
+class BackupVerificationModel(FrozenModel):
+    """Whether a client checks this workspace's backups."""
+
+    is_enabled: StrictBool = Field(description="Whether backup verification is on")
+
+
+class UpdateStartRequest(FrozenModel):
+    """The values an update started now runs with."""
+
+    ceiling: str = Field(
+        min_length=1, description="The newest template version the client knows; an update goes no further"
+    )
+    override_ref: str = Field(default="", description="A version the user typed; the target is this, or the ceiling")
+    is_backup_configured: StrictBool = Field(
+        description="Whether the client holds backup credentials for the workspace"
+    )
+
+
+class UpdateScheduleRefreshRequest(FrozenModel):
+    """The client's own values in a schedule: what a refresh rewrites in an armed one."""
+
+    ceiling: str = Field(
+        min_length=1, description="The newest template version the client knows; an update goes no further"
+    )
+    window_start_minute_utc: StrictInt = Field(
+        ge=0, lt=24 * 60, description="Minutes past UTC midnight the update window opens at"
+    )
+    window_length_minutes: StrictInt = Field(ge=0, lt=24 * 60, description="How long the window stays open")
+    is_backup_configured: StrictBool = Field(
+        description="Whether the client holds backup credentials for the workspace"
+    )
+
+
+class UpdateScheduleRequest(UpdateScheduleRefreshRequest):
+    """Everything a schedule is armed with."""
+
+    override_ref: str = Field(default="", description="A version the user typed; the target is this, or the ceiling")
+    is_auto_armed: StrictBool = Field(description="Whether the client armed the schedule by itself")
+
+
+class UpdateSkipRequest(FrozenModel):
+    """The version the user chose to skip for this workspace."""
+
+    target_ref: str = Field(min_length=1, description="The version skipped")
+    skipped_at: float = Field(
+        description="When the user chose it, seconds since the epoch; of two skips the later is kept"
+    )
+
+
+class UpdateDismissalsRequest(FrozenModel):
+    """Which run's note or outcome the user dismissed, by the run's start."""
+
+    note_run_started_at: float | None = Field(
+        default=None, description="The start of the run whose note was dismissed, seconds since the epoch"
+    )
+    outcome_run_started_at: float | None = Field(
+        default=None, description="The start of the run whose outcome was dismissed, seconds since the epoch"
+    )
+
+
+class UpdateOutcomeResponse(FrozenModel):
+    """What starting an update or arming a schedule came to.
+
+    ``outcome`` is one of ``STARTING``, ``CREATED``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``,
+    ``CHAT_APP_UNREACHABLE``, ``CREATE_FAILED``, ``NO_CRON`` and ``TOO_OLD_TO_UPDATE``; a later template may add one.
+    """
+
+    outcome: str = Field(description="What the request came to")
+    detail: str = Field(default="", description="One line about it")
+    chat_agent_name: str = Field(default="", description="The update's chat an ALREADY_RUNNING names; '' otherwise")
+    chat_id: str = Field(default="", description="That chat's id, for opening it; '' when unknown")
+    run_started_at: float | None = Field(
+        default=None, description="When an ALREADY_RUNNING run began, seconds since the epoch; null when unsaid"
+    )
+    attempt_id: str = Field(
+        default="", description="The start attempt a STARTING began (or one already under way); '' otherwise"
+    )
+    schedule: dict[str, object] | None = Field(
+        default=None, description="The schedule file as arming left it; null for a start"
+    )
+
+
+class UpdateStartAttempt(FrozenModel):
+    """The last attempt at starting an update now, and how creating its chat went."""
+
+    attempt_id: str = Field(description="The attempt's id, which the start answered")
+    outcome: str | None = Field(
+        description="CREATED, CHAT_APP_UNREACHABLE, CREATE_FAILED or NEEDS_SIGN_IN once the attempt has ended; null "
+        "while the chat is being created"
+    )
+    detail: str = Field(default="", description="One line about the outcome")
+    chat_agent_name: str = Field(default="", description="The update's chat, once created")
+    chat_id: str = Field(default="", description="That chat's id; '' when unknown")
+    started_at: float | None = Field(default=None, description="When the attempt began, seconds since the epoch")
+    finished_at: float | None = Field(default=None, description="When it ended; null while it runs")
+
+
+class UpdateStateResponse(FrozenModel):
+    """Everything a client reads about the workspace's updates. The files are answered as they are on disk."""
+
+    schedule: dict[str, object] | None = Field(description="The armed schedule's file; null when none is armed")
+    run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
+    last_dispatch: dict[str, object] | None = Field(description="The record of the update chat last created")
+    run_chat_id: str | None = Field(
+        description="The id of the chat the run record names, looked up when the last dispatch does not name it: '' "
+        "when the workspace lists no such chat, null when there was nothing to look up or the agents could not be read"
+    )
+    is_signed_in: bool | None = Field(
+        description="Whether an AI account is signed in; null unless asked (check_sign_in=1) or the schedule's skip "
+        "says none was"
+    )
+    skipped_target: dict[str, object] | None = Field(description="The skipped-version file; null when none")
+    dismissals: dict[str, object] | None = Field(description="The dismissals file; null when none")
+    last_start: UpdateStartAttempt | None = Field(description="The last start attempt; null when there was none")
+
+
+class UpdateScheduleRefreshedResponse(FrozenModel):
+    """What refreshing the schedule answers."""
+
+    is_armed: bool = Field(description="Whether a schedule is armed; a refresh does nothing when none is")
+    schedule: dict[str, object] | None = Field(description="The schedule file as the refresh left it")
+
+
+class UpdateScheduleCancelledResponse(FrozenModel):
+    """What cancelling the schedule answers."""
+
+    is_cancelled: bool = Field(description="Whether there was a schedule to cancel")
+
+
+class UpdateSkippedResponse(FrozenModel):
+    """What skipping a version answers."""
+
+    is_cancelled: bool = Field(description="Whether there was a schedule to cancel")
+    skipped_target: dict[str, object] = Field(description="The skipped-version file as it now stands")
+
+
+class UpdateDismissalsResponse(FrozenModel):
+    """What recording a dismissal answers."""
+
+    dismissals: dict[str, object] | None = Field(description="The dismissals file as it now stands; null when none")
+
+
+class UpdateLivenessAgent(FrozenModel):
+    """One of the workspace's agents, as the observer's event file lists it."""
+
+    name: str = Field(description="The agent's name")
+    state: str = Field(description="Its lifecycle state as mngr reports it; '' when the file does not say")
+    agent_id: str = Field(description="Its id")
+    chat_id: str = Field(description="The chat it takes messages for, when it is labelled with one; '' otherwise")
+
+
+class UpdateBusyChat(FrozenModel):
+    """One chat waiting on background tasks."""
+
+    chat_id: str = Field(description="The chat")
+    agent_id: str = Field(description="The chat's active agent's id; '' when unknown")
+    agent_name: str = Field(description="The chat's active agent's name; '' when unknown")
+    is_busy: bool = Field(description="Whether a task still pending will start the agent's next turn")
+
+
+class UpdateLivenessResponse(FrozenModel):
+    """What tells whether a running update is still alive, in one answer."""
+
+    run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
+    agents: tuple[UpdateLivenessAgent, ...] | None = Field(
+        description="The workspace's agents; null when they could not be read, which a caller counts as alive"
+    )
+    busy_chats: tuple[UpdateBusyChat, ...] = Field(description="The chats waiting on background tasks")
+    is_watchdog_installed: bool = Field(
+        description="Whether the dispatcher's cron line is installed, so a stopped lead is brought back"
+    )

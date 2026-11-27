@@ -4,8 +4,13 @@ Reads the workspace profile snapshot (`data/.state/profile/account.json`) that a
 outside the workspace -- the Imbue Studio desktop, or the hosted web chrome -- materializes
 from the workspace's account, and resolves account-keyed settings for a request identity.
 
-The snapshot is read-only inside the workspace: it names the workspace's account and owner
-and carries the account-keyed settings the built-in apps consume (the keybindings, today).
+Nothing inside the workspace composes the snapshot: it names the workspace's account and owner
+and carries the account-keyed settings the built-in apps consume (the keybindings, today), and
+the shell's profile route (`PUT /api/workspace/profile`) writes it as the client sent it
+(`write_workspace_profile_snapshot`, which refuses a document that is not a snapshot's shape
+and keeps one of a format newer than this library knows). `timezone.py` reads and records the
+user's IANA timezone (`data/.state/user_timezone`) for the shell's timezone route, by default
+only when none is recorded.
 The workspace's own layer lives under `data/system/profile/`: per-user override files
 (`overrides/users/<user_id>.json`, written by the workspace only) and the shell's unsent
 account changes (`unsent.json`), which overlay the owner's snapshot values until they are
