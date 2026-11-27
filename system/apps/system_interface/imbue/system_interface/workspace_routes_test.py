@@ -20,6 +20,7 @@ from workspace_backup_setup.env_files import PENDING_ENV_RELATIVE_PATH
 from workspace_backup_setup.env_files import env_digest
 from workspace_backup_setup.env_files import kept_envs
 from workspace_backup_setup.program import BackupSetupProgram
+from workspace_backup_setup.state import SETUP_STATE_RELATIVE_PATH
 from workspace_backup_setup.state import WORKSPACE_ID_ENV
 from workspace_backup_setup.testing import FAKE_RESTIC_FINDS_A_REPOSITORY
 from workspace_backup_setup.testing import IMBUE_CLOUD_REPOSITORY
@@ -660,6 +661,26 @@ def test_a_destination_the_workspace_cannot_take_is_refused(
     assert said in refused.get_json()["detail"]
     assert "typed-password" not in refused.get_data(as_text=True)
     assert not (_workspace_root(app) / "data").exists()
+
+
+def test_a_destination_the_workspace_cannot_record_fails_without_quoting_its_storage(
+    client: FlaskClient, app: Flask, backup_workspace: Path, loguru_records: list[str]
+) -> None:
+    root = _workspace_root(app)
+    # A file where the setup keeps its record, so the record's directory cannot be made.
+    setup_directory = root / SETUP_STATE_RELATIVE_PATH.parent
+    setup_directory.parent.mkdir(parents=True, exist_ok=True)
+    setup_directory.write_text("")
+
+    failed = client.put(BACKUP_DESTINATION_ROUTE, json=imbue_cloud_request("token-a"))
+
+    assert failed.status_code == 500
+    assert failed.get_json()["code"] == "WRITE_FAILED"
+    assert "token-a" not in failed.get_data(as_text=True)
+    errors = [record for record in loguru_records if record.startswith("ERROR")]
+    assert len(errors) == 1 and errors[0].startswith("ERROR Could not record the backup destination")
+    assert not any("token-a" in record for record in loguru_records)
+    assert not (root / PENDING_ENV_RELATIVE_PATH).exists()
 
 
 def test_a_change_of_destination_is_refused_while_a_backup_operation_runs_and_names_its_holder(

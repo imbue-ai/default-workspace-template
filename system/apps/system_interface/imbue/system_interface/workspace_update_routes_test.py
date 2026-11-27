@@ -358,6 +358,22 @@ def test_settings_that_cannot_be_the_workspaces_are_refused_and_change_nothing(
     assert staged_update_workspace.read_state("settings.json") is None
 
 
+def test_settings_that_cannot_be_written_fail_the_write_and_say_so(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace, loguru_records: list[str]
+) -> None:
+    # A directory where the settings are stored, which a write cannot replace.
+    staged_update_workspace.state_path("settings.json").mkdir(parents=True)
+
+    failed = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+
+    assert failed.status_code == 500
+    assert failed.get_json()["code"] == "WRITE_FAILED"
+    assert failed.get_json()["detail"].startswith("The update settings could not be written: ")
+    assert [record for record in loguru_records if record.startswith("ERROR")] == [
+        "ERROR Could not write the update settings"
+    ]
+
+
 def test_a_schedule_armed_with_nothing_named_takes_the_channels_version_and_the_settings_window(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
