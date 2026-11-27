@@ -639,6 +639,14 @@ def test_a_storage_that_refuses_what_was_offered_leaves_the_workspace_awaiting_s
         ({"destination": "TAPE"}, "INVALID_DESTINATION", "'TAPE' is not a destination this workspace knows"),
         ({"destination": "NONE", "own_storage": {"repository": "s3:b"}}, "INVALID_DESTINATION", "NONE takes neither"),
         ({}, "INVALID_REQUEST", "destination"),
+        (
+            {
+                "destination": "OWN_STORAGE",
+                "own_storage": {"repository": "s3:b", "backend_env": {"AZURE_ACCOUNT_KEY: typed-password": 7}},
+            },
+            "INVALID_REQUEST",
+            "own_storage.backend_env.a variable",
+        ),
         ({"destination": "NONE", "env_text": "RESTIC_PASSWORD=typed-password"}, "INVALID_REQUEST", "env_text"),
     ],
 )

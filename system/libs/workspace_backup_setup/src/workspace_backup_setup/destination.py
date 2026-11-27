@@ -195,16 +195,20 @@ def _place_of(loc: tuple[int | str, ...]) -> str:
     return ".".join(parts) or "the request"
 
 
+def describe_request_problems(error: ValidationError) -> str:
+    """Where a request is not a ``BackupDestinationRequest`` and why, quoting no value of the storage."""
+    return "; ".join(
+        f"{_place_of(problem['loc'])}: {problem['msg']}"
+        for problem in error.errors(include_input=False, include_url=False)
+    )
+
+
 def _checked_destination(body: Mapping[str, object]) -> _Destination:
     try:
         request = BackupDestinationRequest.model_validate(dict(body))
     except ValidationError as e:
-        problems = "; ".join(
-            f"{_place_of(error['loc'])}: {error['msg']}"
-            for error in e.errors(include_input=False, include_url=False)
-        )
         raise InvalidBackupDestinationError(
-            f"The destination is not one this workspace can take ({problems})."
+            f"The destination is not one this workspace can take ({describe_request_problems(e)})."
         ) from e
     try:
         kind = BackupDestinationKind(request.destination)

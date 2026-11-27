@@ -38,6 +38,7 @@ from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import BaseModel
+from pydantic import ValidationError
 from share_grants.document import GrantEntries
 from share_grants.document import GrantedIdentityEntry
 from share_grants.document import grant_entries
@@ -50,6 +51,7 @@ from share_grants.document import replace_grants
 from share_grants.grants import GrantList
 from share_grants.grants import Grants
 from workspace_backup_setup.destination import BackupDestinationRequest
+from workspace_backup_setup.destination import describe_request_problems
 from workspace_backup_setup.destination import request_backup_destination
 from workspace_backup_setup.errors import BackupOperationRunningError
 from workspace_backup_setup.errors import InvalidBackupDestinationError
@@ -249,6 +251,18 @@ def _body(model: type[_RequestModel]) -> _RequestModel:
         return parse_request_body(model)
     except InvalidRequestBodyError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from e
+
+
+def _backup_destination_body() -> BackupDestinationRequest:
+    """The body of a request that names a backup destination; one of another shape is refused in the backup
+    setup's own words, which leave out a variable's name that is no name: a line typed ``NAME: value`` arrives
+    as a name that holds the value."""
+    try:
+        return parse_request_body(BackupDestinationRequest)
+    except InvalidRequestBodyError as e:
+        problems = e.__cause__
+        detail = describe_request_problems(problems) if isinstance(problems, ValidationError) else str(e)
+        raise WorkspaceRouteRefusal(detail, CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from None
 
 
 def _run_in_background(work: Callable[[], None]) -> None:
@@ -470,7 +484,7 @@ def write_backup_destination() -> ResponseReturnValue:
     own storage, are refused with 400 INVALID_DESTINATION.
     """
     _admit(is_changing_the_workspace=True)
-    body = _body(BackupDestinationRequest)
+    body = _backup_destination_body()
     try:
         outcome = request_backup_destination(
             _workspace_root(),
