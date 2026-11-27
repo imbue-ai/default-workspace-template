@@ -67,7 +67,9 @@ merged.
 - **The app cannot take in a skill it needs**, or cannot do without something
   else that exists only in this workspace (the report names it). Decide with
   the user whether the app is worth publishing without it ("Which skills" in
-  `skills-the-app-needs.md`); if not, it cannot be published as it is.
+  `skills-the-app-needs.md`). If it is, tell the worker to leave it out and
+  to take out of the app whatever needs it, and wait for its next report; if
+  not, the app cannot be published as it is.
 - **Anything else.** When the report shows a fix you can describe, send it to
   the worker as a message and wait for its next report. Otherwise tell the
   user plainly that nothing was published, and why.
