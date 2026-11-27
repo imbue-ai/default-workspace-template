@@ -4,7 +4,8 @@ What to do when a step of a publish meets something other than the expected
 result: an app that cannot be published, what an earlier attempt left behind,
 a worker that reports it is stuck, each other `result` of
 `app-install publish assemble`, `push` and `record`, and a publish the user
-calls off. Step numbers are SKILL.md's.
+calls off. Its last section is how a published app is made public. Step
+numbers are SKILL.md's.
 
 ## Contents
 
