@@ -83,15 +83,15 @@ def parse_channel_file(text: str) -> str:
     return template_ref.strip()
 
 
-def _read_address(url: str, texts: list[str], failures: list[str]) -> None:
+def _read_address(
+    url: str, timeout_seconds: float, texts: list[str], failures: list[str]
+) -> None:
     if not url.startswith(("https://", "http://")):
         failures.append("%s is not an http address" % url)
         return
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(
-            request, timeout=_FETCH_TIMEOUT_SECONDS
-        ) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read(_MAX_CHANNEL_FILE_BYTES + 1)
     except (OSError, http.client.HTTPException, ValueError) as exc:
         failures.append(str(exc) or type(exc).__name__)
@@ -105,8 +105,10 @@ def _read_address(url: str, texts: list[str], failures: list[str]) -> None:
         failures.append(str(exc))
 
 
-def fetch_channel_file(url: str) -> str:
-    """Read the channel's file at ``url`` off the feed, within ``_FETCH_TIMEOUT_SECONDS`` however the feed behaves.
+def fetch_channel_file(
+    url: str, timeout_seconds: float = _FETCH_TIMEOUT_SECONDS
+) -> str:
+    """Read the channel's file at ``url`` off the feed, within ``timeout_seconds`` however the feed behaves.
 
     The read runs on a thread of its own and is given up on when the time is out: a socket's own timeout bounds
     one wait on it, not a name lookup that hangs or a feed that sends a byte at a time.
@@ -115,18 +117,18 @@ def fetch_channel_file(url: str) -> str:
     failures: list[str] = []
     reader = threading.Thread(
         target=_read_address,
-        args=(url, texts, failures),
+        args=(url, timeout_seconds, texts, failures),
         daemon=True,
         name="channel-file-read",
     )
     reader.start()
-    reader.join(_FETCH_TIMEOUT_SECONDS)
+    reader.join(timeout_seconds)
     if texts:
         return texts[0]
     raise ChannelFileUnreadableError(
         failures[0]
         if failures
-        else "%s did not answer in %d seconds" % (url, _FETCH_TIMEOUT_SECONDS)
+        else "%s did not answer in %g seconds" % (url, timeout_seconds)
     )
 
 

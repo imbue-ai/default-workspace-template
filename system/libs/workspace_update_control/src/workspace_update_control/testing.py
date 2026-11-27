@@ -4,9 +4,10 @@ import json
 import os
 import stat
 import subprocess
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 from uuid import uuid4
@@ -62,18 +63,67 @@ class RecordingFeed:
         return json.dumps({"templateRef": self.template_ref})
 
 
+# The channels the local feed publishes no readable file for: one whose request it takes and never answers,
+# one whose file it sends a byte at a time for as long as the feed is up, and one whose file is larger than any
+# channel's file.
+SILENT_FEED_CHANNEL: Final[str] = "silent"
+DRIPPING_FEED_CHANNEL: Final[str] = "dripping"
+OVERSIZED_FEED_CHANNEL: Final[str] = "oversized"
+_DRIP_INTERVAL_SECONDS: Final[float] = 0.02
+_OVERSIZED_FILE_BYTES: Final[int] = 128 * 1024
+
+
+class LocalFeedServer(ThreadingHTTPServer):
+    """The local feed's server, which tells its handlers when the feed is taken down, so that one still holding
+    a request ends with it."""
+
+    def __init__(self, address: tuple[str, int]) -> None:
+        super().__init__(address, LocalFeedHandler)
+        self.is_taken_down = threading.Event()
+
+
 class LocalFeedHandler(BaseHTTPRequestHandler):
-    """A feed that publishes the stable channel's file, naming ``minds-v0.10.5``, and no other."""
+    """A feed that publishes the stable channel's file, naming ``minds-v0.10.5``, misbehaves for the channels
+    named above, and publishes no other."""
 
     def do_GET(self) -> None:
         if self.path == "/stable-web.json":
-            body = b'{"templateRef": "minds-v0.10.5"}'
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_file(b'{"templateRef": "minds-v0.10.5"}')
+            return
+        if self.path == f"/{SILENT_FEED_CHANNEL}-web.json":
+            self._is_taken_down().wait()
+            return
+        if self.path == f"/{DRIPPING_FEED_CHANNEL}-web.json":
+            self._drip_file()
+            return
+        if self.path == f"/{OVERSIZED_FEED_CHANNEL}-web.json":
+            self._send_file(b" " * _OVERSIZED_FILE_BYTES)
             return
         self.send_error(404)
+
+    def _send_file(self, body: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _drip_file(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(_OVERSIZED_FILE_BYTES))
+        self.end_headers()
+        is_taken_down = self._is_taken_down()
+        try:
+            while not is_taken_down.wait(_DRIP_INTERVAL_SECONDS):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+        except OSError:
+            # The reader went away.
+            pass
+
+    def _is_taken_down(self) -> threading.Event:
+        server = self.server
+        assert isinstance(server, LocalFeedServer)
+        return server.is_taken_down
 
     def log_message(self, format: str, *args: object) -> None:
         pass
