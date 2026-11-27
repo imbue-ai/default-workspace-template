@@ -531,6 +531,12 @@ def _stage_a_workspace_with_none_of_its_templates_tags(
     return RecordingFeed(_ON_THE_CHANNEL)
 
 
+def _tag_fetch_attempted_at(staged: StagedUpdateWorkspace) -> float | None:
+    """When the staged workspace last tried to fetch its template's release tags; None when it never did."""
+    record = staged.read_state("release-tags-fetch.json")
+    return record["attempted_at"] if record is not None else None
+
+
 def test_a_checkout_with_none_of_its_templates_tags_fetches_them_and_arms_in_the_same_minute(
     staged: StagedUpdateWorkspace,
 ) -> None:
@@ -586,26 +592,22 @@ def test_tags_that_cannot_be_fetched_are_tried_again_once_a_day_and_only_when_th
     staged.write_state("settings.json", update_settings_document())
     feed = RecordingFeed(_ON_THE_CHANNEL)
 
-    def attempted_at() -> float | None:
-        record = staged.read_state("release-tags-fetch.json")
-        return record["attempted_at"] if record is not None else None
-
     _tick(staged, feed, _NOW)
-    assert attempted_at() == _NOW
+    assert _tag_fetch_attempted_at(staged) == _NOW
 
     _tick(staged, feed, _NOW + 60)
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
-    assert attempted_at() == _NOW
+    assert _tag_fetch_attempted_at(staged) == _NOW
 
     # The channel is read a minute before the day is out, so the minute the day is out in reads nothing.
     a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
     _tick(staged, feed, a_day_later - 60)
     _tick(staged, feed, a_day_later)
-    assert attempted_at() == _NOW
+    assert _tag_fetch_attempted_at(staged) == _NOW
 
     the_next_read = a_day_later - 60 + CHANNEL_READ_INTERVAL_SECONDS
     _tick(staged, feed, the_next_read)
-    assert attempted_at() == the_next_read
+    assert _tag_fetch_attempted_at(staged) == the_next_read
     assert staged.read_state("schedule.json") is None
 
 
@@ -631,18 +633,14 @@ def test_tags_that_cannot_be_fetched_with_no_feed_named_are_still_tried_only_onc
     staged.write_state("settings.json", update_settings_document(feed_base_url=""))
     feed = RecordingFeed(_ON_THE_CHANNEL)
 
-    def attempted_at() -> float | None:
-        record = staged.read_state("release-tags-fetch.json")
-        return record["attempted_at"] if record is not None else None
-
     _tick(staged, feed, _NOW)
     _tick(staged, feed, _NOW + 60)
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
-    assert attempted_at() == _NOW
+    assert _tag_fetch_attempted_at(staged) == _NOW
 
     a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
     _tick(staged, feed, a_day_later)
-    assert attempted_at() == a_day_later
+    assert _tag_fetch_attempted_at(staged) == a_day_later
 
 
 def test_a_checkout_that_names_its_version_fetches_nothing(
