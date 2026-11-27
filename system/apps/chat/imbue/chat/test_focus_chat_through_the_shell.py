@@ -15,7 +15,6 @@ from workspace_layout.primitives import ClientId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import running_workspace
-from imbue.system_interface.testing import find_free_port
 
 _HOME_DESKTOP_ID = "home"
 _CLIENT_ID = "client-4f1d"
@@ -54,7 +53,7 @@ def _placements(workspace: RunningWorkspace) -> list[dict[str, Any]]:
 def test_a_focus_chat_opens_the_chat_root_on_the_chat_and_then_moves_that_window_to_another_chat(
     tmp_path: Path,
 ) -> None:
-    with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
+    with running_workspace(tmp_path) as workspace:
         broadcaster = workspace.shell_state.shell.broadcaster
         client_queue = broadcaster.register()
         broadcaster.set_client_info(client_queue, _CLIENT_ID, _HOME_DESKTOP_ID)
@@ -84,7 +83,7 @@ def test_a_focus_chat_opens_the_chat_root_on_the_chat_and_then_moves_that_window
 def test_a_focus_chat_with_no_chat_raises_the_pinned_chat_root_and_never_moves_it_off_its_chat(
     tmp_path: Path,
 ) -> None:
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), is_chat_pinned=True) as workspace:
+    with running_workspace(tmp_path, is_chat_pinned=True) as workspace:
         broadcaster = workspace.shell_state.shell.broadcaster
         client_queue = broadcaster.register()
         broadcaster.set_client_info(client_queue, _CLIENT_ID, _HOME_DESKTOP_ID)

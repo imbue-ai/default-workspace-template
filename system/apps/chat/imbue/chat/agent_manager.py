@@ -3746,22 +3746,25 @@ class AgentManager:
             report_undelivered=self._report_undelivered_held_send,
         )
 
-    def _new_chat_send_delivery(self, capabilities: HandoffCapabilities, chat_id: ChatId) -> HeldSendDelivery:
-        """How a send that waited for a chat's agent to be created reaches it: as any held send does, and with the
-        seeded conversation ahead of it when the launch left that pending (``carry_pending_seed``), as a send
-        through the message route carries it. A room's send carries none, there as here."""
+    def _kept_send_delivery(self, capabilities: HandoffCapabilities, chat_id: ChatId) -> HeldSendDelivery:
+        """How a send kept for a chat being created reaches the agent it landed as: the first one a seeded chat's
+        agent takes carries the conversation the chat opened on when its launch brought none, as that send does
+        through the message route (``carry_pending_seed``)."""
         delivery = self._held_send_delivery(capabilities)
-        return HeldSendDelivery(
-            deliver=lambda agent_info, text, message_id: (
-                capabilities.deliver(agent_info, text, message_id)
-                if agent_info.harness is HarnessType.ROOM
-                else self.carry_pending_seed(
-                    chat_id, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
-                )
-            ),
-            sleep=delivery.sleep,
-            is_stopping=delivery.is_stopping,
-            report_undelivered=delivery.report_undelivered,
+        return delivery.model_copy_update(
+            to_update(
+                delivery.field_ref().deliver,
+                lambda agent_info, text, message_id: self._deliver_carrying_pending_seed(
+                    capabilities, chat_id, agent_info, text, message_id
+                ),
+            )
+        )
+
+    def _deliver_carrying_pending_seed(
+        self, capabilities: HandoffCapabilities, chat_id: ChatId, agent_info: AgentInfo, text: str, message_id: str
+    ) -> SendOutcome:
+        return self.carry_pending_seed(
+            chat_id, agent_info.harness, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
         )
 
     def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
@@ -3859,16 +3862,24 @@ class AgentManager:
         )
         return entry
 
-    def carry_pending_seed(self, chat_id: ChatId, message: str, deliver: Callable[[str], SendOutcome]) -> SendOutcome:
+    def carry_pending_seed(
+        self,
+        chat_id: ChatId,
+        # The harness of the agent the message is for.
+        harness: HarnessType,
+        message: str,
+        deliver: Callable[[str], SendOutcome],
+    ) -> SendOutcome:
         """Deliver ``message`` to ``chat_id`` through ``deliver``, with the seeded conversation ahead of it when
         the chat's agent was launched without it (``create_chat`` with no message) and this is the first send
         since, else as given. The seed is marked delivered only once ``deliver`` says the message went through:
         a send the harness refused or could not take yet (its daemon still starting, as it may be right after
         the launch) leaves the conversation for the next send rather than losing it. A slash command is
         delivered as typed and leaves the seed pending, since a block ahead of it would turn the command into
-        prose. One send carries the seed at a time: a send that overlaps a carrying one (the route serializes
-        nothing, and two clients can post at once) goes as typed, and the seed stays pending for the next send
-        if the carrying one was refused."""
+        prose. So is a room's send: a room has no agent to need the context, and its page shows the seeded
+        conversation as the chat's earlier segments already. One send carries the seed at a time: a send that
+        overlaps a carrying one (the route serializes nothing, and two clients can post at once) goes as typed,
+        and the seed stays pending for the next send if the carrying one was refused."""
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
             is_seed_carried = (
@@ -3876,6 +3887,7 @@ class AgentManager:
                 and record.is_seed_pending
                 and chat_id not in self._seed_carries_in_flight
                 and not is_slash_command(message)
+                and harness is not HarnessType.ROOM
             )
             if is_seed_carried:
                 self._seed_carries_in_flight.add(chat_id)
@@ -5876,7 +5888,7 @@ class AgentManager:
         through the send path a held send takes; a refusal is logged the same way, and only a
         first message that landed is told of. The first message goes as the launch made it; a
         held send carries the seeded conversation when the launch left it pending
-        (``_new_chat_send_delivery``).
+        (``_kept_send_delivery``).
         """
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -5909,8 +5921,9 @@ class AgentManager:
             )
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
+        kept_send_delivery = self._kept_send_delivery(capabilities, chat_id)
         for held in held_sends:
-            deliver_held_send(self._new_chat_send_delivery(capabilities, chat_id), agent_info, held, chat_id)
+            deliver_held_send(kept_send_delivery, agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can

@@ -867,7 +867,7 @@ def test_a_seeded_chat_launched_as_the_user_signs_in_starts_silent_and_its_first
     """The sign-in that makes the workspace's first account launches the welcome chat's agent before the user has
     typed: the create carries no message, the record marks the seed as pending, and the first send since carries
     the conversation ahead of the user's words, once it has gone through; a slash command goes as typed and leaves
-    the seed pending, and so does a send the harness could not take yet."""
+    the seed pending, and so do a send to a room and one the harness could not take yet."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
@@ -889,23 +889,39 @@ def test_a_seeded_chat_launched_as_the_user_signs_in_starts_silent_and_its_first
 
         delivered: list[str] = []
         assert (
-            manager.carry_pending_seed(chat_id, "/model opus", _delivering(delivered, SendOutcome.OK))
+            manager.carry_pending_seed(
+                chat_id, HarnessType.CLAUDE, "/model opus", _delivering(delivered, SendOutcome.OK)
+            )
             is SendOutcome.OK
         )
         assert delivered == ["/model opus"]
         assert _is_seed_pending(store, chat_id) is True
         assert (
-            manager.carry_pending_seed(chat_id, "1", _delivering(delivered, SendOutcome.NOT_READY))
+            manager.carry_pending_seed(
+                chat_id, HarnessType.ROOM, "just say hi", _delivering(delivered, SendOutcome.OK)
+            )
+            is SendOutcome.OK
+        )
+        assert delivered[-1] == "just say hi"
+        assert _is_seed_pending(store, chat_id) is True
+        assert (
+            manager.carry_pending_seed(chat_id, HarnessType.CLAUDE, "1", _delivering(delivered, SendOutcome.NOT_READY))
             is SendOutcome.NOT_READY
         )
         assert delivered[-1].startswith(f"<{SEED_CONTEXT_TAG}>")
         assert _is_seed_pending(store, chat_id) is True
-        assert manager.carry_pending_seed(chat_id, "1", _delivering(delivered, SendOutcome.OK)) is SendOutcome.OK
+        assert (
+            manager.carry_pending_seed(chat_id, HarnessType.CLAUDE, "1", _delivering(delivered, SendOutcome.OK))
+            is SendOutcome.OK
+        )
         carried = delivered[-1]
         assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
         assert "Wait.. what is honest software?" in carried
         assert _is_seed_pending(store, chat_id) is False
-        assert manager.carry_pending_seed(chat_id, "2", _delivering(delivered, SendOutcome.OK)) is SendOutcome.OK
+        assert (
+            manager.carry_pending_seed(chat_id, HarnessType.CLAUDE, "2", _delivering(delivered, SendOutcome.OK))
+            is SendOutcome.OK
+        )
         assert delivered[-1] == "2"
     finally:
         manager.stop()
@@ -932,13 +948,87 @@ def test_a_send_that_overlaps_the_one_carrying_the_seed_goes_as_typed(
 
         def deliver_while_another_send_arrives(text: str) -> SendOutcome:
             delivered.append(text)
-            assert manager.carry_pending_seed(chat_id, "2", _delivering(delivered, SendOutcome.OK)) is SendOutcome.OK
+            assert (
+                manager.carry_pending_seed(chat_id, HarnessType.CLAUDE, "2", _delivering(delivered, SendOutcome.OK))
+                is SendOutcome.OK
+            )
             return SendOutcome.OK
 
-        assert manager.carry_pending_seed(chat_id, "1", deliver_while_another_send_arrives) is SendOutcome.OK
+        assert (
+            manager.carry_pending_seed(chat_id, HarnessType.CLAUDE, "1", deliver_while_another_send_arrives)
+            is SendOutcome.OK
+        )
         assert delivered[0].startswith(f"<{SEED_CONTEXT_TAG}>") and delivered[0].endswith("\n1")
         assert delivered[1] == "2"
         assert _is_seed_pending(store, chat_id) is False
+    finally:
+        manager.stop()
+
+
+def test_a_send_kept_while_a_seeded_chats_silent_launch_ran_carries_the_conversation_as_the_agent_lands(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send the chat app kept while the silent launch's create ran is the first send since: it carries the
+    seeded conversation ahead of the user's words as the agent lands, and the send kept behind it goes as typed."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    delivered: list[str] = []
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=lambda agent_info, text, message_id: delivered.append(text) or SendOutcome.OK,
+        )
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-1", "1", HeldSendOrigin.CLIENT)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-2", "2", HeldSendOrigin.CLIENT)
+
+        gate.touch()
+        wait_until_true(lambda: len(delivered) == 2, 10, "the delivery of the sends kept for the agent")
+
+        carried, plain = delivered
+        assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
+        assert "Wait.. what is honest software?" in carried
+        assert plain == "2"
+        assert _is_seed_pending(store, chat_id) is False
+    finally:
+        manager.stop()
+
+
+def test_a_send_kept_while_a_seeded_chat_was_made_a_room_is_appended_as_typed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A room has no agent to need the seeded conversation, and its page shows it as the chat's earlier segment:
+    the send kept for it lands as typed and the seed stays pending, as a send to the room does."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    delivered: list[str] = []
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=lambda agent_info, text, message_id: delivered.append(text) or SendOutcome.OK,
+        )
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, kind=ChatKind.ROOM)
+        assert manager.hold_send_for_chat_being_created(chat_id, "m-1", "just say hi", HeldSendOrigin.CLIENT)
+
+        gate.touch()
+        wait_until_true(lambda: len(delivered) == 1, 10, "the delivery of the send kept for the room")
+
+        assert delivered == ["just say hi"]
+        assert _is_seed_pending(store, chat_id) is True
     finally:
         manager.stop()
 
@@ -966,7 +1056,9 @@ def test_a_send_to_an_unseeded_or_unknown_chat_is_delivered_as_given(
     delivered: list[str] = []
     try:
         assert (
-            manager.carry_pending_seed(ChatId("agent-nobody"), "hello", _delivering(delivered, SendOutcome.OK))
+            manager.carry_pending_seed(
+                ChatId("agent-nobody"), HarnessType.CLAUDE, "hello", _delivering(delivered, SendOutcome.OK)
+            )
             is SendOutcome.OK
         )
         assert delivered == ["hello"]
@@ -1003,7 +1095,9 @@ def test_a_first_run_chat_started_as_its_owner_leaves_the_provider_page_is_sent_
 
         delivered: list[str] = []
         assert (
-            manager.carry_pending_seed(chat_id, START_FEATURES_LABEL, _delivering(delivered, SendOutcome.OK))
+            manager.carry_pending_seed(
+                chat_id, HarnessType.CLAUDE, START_FEATURES_LABEL, _delivering(delivered, SendOutcome.OK)
+            )
             is SendOutcome.OK
         )
         (carried,) = delivered

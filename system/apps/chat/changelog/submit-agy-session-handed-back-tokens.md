@@ -1,1 +1,0 @@
-- Switching an Antigravity chat to another provider, and pressing Stop in one, no longer fails with "Internal server error: 'AntigravityHarnessSession' object has no attribute '_handed_back_tokens'".

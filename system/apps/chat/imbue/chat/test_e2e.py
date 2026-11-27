@@ -103,7 +103,6 @@ from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
-from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
 
@@ -183,8 +182,6 @@ def _running_e2e_server(
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
         tmp_path,
-        find_free_port(),
-        find_free_port(),
         session_events=session_events,
         additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
@@ -2335,7 +2332,7 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
     text = "did you get this?"
     sent: list[str] = []
     messenger = scripted_send_mngr_messenger([SendFailureKind.SUBMISSION_UNCONFIRMED], sent)
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+    with running_workspace(tmp_path, messenger=messenger) as server:
         _allow_mngr_config_in_pytest(tmp_path)
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -2413,7 +2410,7 @@ def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(tmp_path: P
     folder."""
     sent: list[str] = []
     messenger = scripted_send_mngr_messenger([], sent)
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+    with running_workspace(tmp_path, messenger=messenger) as server:
         _allow_mngr_config_in_pytest(tmp_path)
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -2443,7 +2440,7 @@ def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(tmp_path: P
 @pytest.mark.timeout(120, func_only=False)
 def test_a_long_paste_goes_back_into_the_box_as_text(tmp_path: Path, page: Page) -> None:
     """The chip's "Paste as text" puts the whole paste back where the caret is and deletes its uploaded copy."""
-    with running_workspace(tmp_path, find_free_port(), find_free_port()) as server:
+    with running_workspace(tmp_path) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
         textbox = chat.locator(".message-input-textbox")
@@ -2479,7 +2476,7 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
         failure_reason=f"Timeout waiting for message submission evidence: no evidence probe confirmed the submission "
         f"within 30s\npane content:\n❯ {text}",
     )
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+    with running_workspace(tmp_path, messenger=messenger) as server:
         _allow_mngr_config_in_pytest(tmp_path)
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -2517,7 +2514,7 @@ def test_an_unconfirmed_message_whose_turn_lands_leaves_the_composer_and_closes_
     messenger = scripted_send_mngr_messenger(
         [SendFailureKind.SUBMISSION_UNCONFIRMED, SendFailureKind.SUBMISSION_UNCONFIRMED], sent
     )
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+    with running_workspace(tmp_path, messenger=messenger) as server:
         _allow_mngr_config_in_pytest(tmp_path)
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -2637,8 +2634,6 @@ def test_a_new_workspace_with_nothing_signed_in_shows_the_provider_chooser_befor
     lands under the same chooser, whose page opens no second one."""
     with running_workspace(
         tmp_path,
-        find_free_port(),
-        find_free_port(),
         is_account_signed_in=False,
         is_first_listing_running=True,
         is_chat_pinned=True,
@@ -2685,8 +2680,6 @@ def test_the_provider_chooser_shown_at_entry_closes_reopens_from_the_empty_list_
     welcome chat's own notice offers it."""
     with running_workspace(
         tmp_path,
-        find_free_port(),
-        find_free_port(),
         is_account_signed_in=False,
         is_first_listing_running=True,
         is_chat_pinned=True,
@@ -2803,7 +2796,7 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
     release_create = tmp_path / "release-create"
     monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     messenger = RecordingMngrMessenger()
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+    with running_workspace(tmp_path, messenger=messenger) as server:
         try:
             chat = _start_new_chat(page, server)
             # The create is held until released below, so the long wait only covers the chat page's socket,
@@ -2826,6 +2819,48 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         box_once_landed = bubble.bounding_box()
         assert box_once_landed is not None
         assert box_once_landed["y"] == box_while_starting["y"]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_from_the_launcher_as_the_first_run_provider_page_is_left_is_sent_to_the_main_chat(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new workspace's owner presses Next on the provider page, which starts the main chat's agent, and sends a
+    message with the launcher's Enter before that agent is up: the message shows in the main chat as a sent one,
+    the composer stays empty, and the agent takes it as it lands, with the welcome ahead of it."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, messenger=messenger, is_chat_pinned=True) as server:
+        main_chat_id = server.chat_state.agent_manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True).chat_id
+        try:
+            _land(page, server)
+            # Entering the workspace, the Imbue Studio app asks for the chat list, whose page tells the shell the
+            # provider page is owed.
+            _post_chat_json(server, "/api/focus-chat", {"type": "minds:focus-chat", "client_id": _client_id(page)})
+            page.frame_locator("#first-run-cover").locator("#first-run-next").click(timeout=30000)
+            expect(page.locator("#first-run-cover")).to_have_count(0, timeout=15000)
+
+            launcher_field = page.locator("[data-launcher-field] textarea")
+            launcher_field.fill("Write hello.py")
+            main_chat_row = page.locator(f'[data-launcher-overlay] [data-launch="{CHAT_APP_NAME}:main"]')
+            expect(main_chat_row).to_have_attribute("data-highlighted", "true", timeout=10000)
+            launcher_field.press("Enter")
+
+            chat = _chat(page, main_chat_id)
+            # The long wait covers the chat page's socket connecting and bringing the provisional record; the
+            # create itself is held until released below.
+            expect(chat.locator(".held-send", has_text="Write hello.py")).to_be_visible(timeout=45000)
+            expect(chat.locator(".message-input-textbox")).to_have_value("")
+            assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
+        finally:
+            release_create.touch()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=30.0, error_message="the message never reached the agent")
+        ((_agent_id, delivered),) = messenger.sent
+        assert FIRST_RUN_WELCOME[0].text in delivered
+        assert delivered.endswith("\nWrite hello.py")
+        expect(chat.locator(".message-input-textbox")).to_have_value("")
 
 
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
@@ -2945,8 +2980,6 @@ def _switched_workspace(
 ) -> AbstractContextManager[RunningWorkspace]:
     return running_workspace(
         tmp_path,
-        find_free_port(),
-        find_free_port(),
         session_events=session_events,
         additional_accounts=additional_accounts,
         messenger=messenger,
@@ -4156,8 +4189,6 @@ def _running_onboarding_workspace(tmp_path: Path) -> Generator[RunningWorkspace,
         )
         with running_workspace(
             tmp_path,
-            find_free_port(),
-            find_free_port(),
             extra_rows=(checklist_row,),
             is_chat_pinned=True,
             chat_message_handlers=[
@@ -4464,7 +4495,7 @@ def test_the_tour_waits_for_the_first_conversation_to_leave_its_tree_and_starts_
     """In a new workspace whose first-run chat is still following its tree, an agent going to work starts no tour:
     the chat root told the shell the conversation is under way. The message that ends the tree reaches the shell
     through the chat list's push, and the tour's first card pops out while that same stretch of work goes on."""
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), is_chat_pinned=True) as server:
+    with running_workspace(tmp_path, is_chat_pinned=True) as server:
         server.state_dir.mkdir(parents=True, exist_ok=True)
         # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
         (server.state_dir / OFFER_TOUR_FILENAME).touch()
