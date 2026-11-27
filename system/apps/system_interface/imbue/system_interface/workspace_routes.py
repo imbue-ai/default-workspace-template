@@ -882,8 +882,8 @@ def read_apps() -> ResponseReturnValue:
 
 def read_wallpaper() -> ResponseReturnValue:
     """The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own
-    content type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop
-    yet.
+    content type; 204 with no body when that desktop wears its theme's default, the workspace has no desktop
+    yet, or the image is gone.
 
     The image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again
     and is answered 304 while it has not changed. A page of another origin reads it with a credentialed request
