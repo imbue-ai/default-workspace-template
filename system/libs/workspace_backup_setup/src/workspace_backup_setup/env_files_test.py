@@ -261,6 +261,30 @@ def test_a_kept_password_is_found_when_the_credential_in_the_repositorys_address
     )
 
 
+def test_a_kept_password_is_found_when_the_repository_is_named_again_with_or_without_its_final_slash(
+    workspace_root: Path,
+) -> None:
+    kept = {
+        "RESTIC_REPOSITORY": "s3:https://s3.example/bucket",
+        "RESTIC_PASSWORD": "own-password",
+    }
+    install_restic_env(workspace_root, render_restic_env(kept), _NOW)
+    keep_restic_env_aside(workspace_root, _NOW + 10.0)
+
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket/")
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket")
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(workspace_root, "s3:https://s3.example/bucket2")
+        is None
+    )
+
+
 def test_dropped_pending_credentials_are_kept_only_when_they_hold_a_password(
     workspace_root: Path,
 ) -> None:

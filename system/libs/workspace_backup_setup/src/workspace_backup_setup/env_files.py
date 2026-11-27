@@ -282,16 +282,20 @@ def kept_env_for_destination(
 def kept_password_for_repository(workspace_root: Path, repository: str) -> str | None:
     """The password this workspace keeps for ``repository``: the one in use, else the newest kept aside.
 
-    A credential written into the address is the storage's and not the repository's, so an address that
-    differs only in it names the same repository.
+    A credential written into the address is the storage's and not the repository's, and restic takes an
+    address with a final slash or without one, so an address that differs only in those names the same
+    repository.
     """
-    address = repository_without_credentials(repository)
+    address = _address_restic_opens(repository)
     in_use_text = read_restic_env_text(workspace_root)
     in_use = parse_restic_env_file(in_use_text) if in_use_text is not None else {}
     for env_values in (in_use, *kept_envs(workspace_root)):
-        kept_address = repository_without_credentials(
-            env_values.get(REPOSITORY_KEY, "")
-        )
+        kept_address = _address_restic_opens(env_values.get(REPOSITORY_KEY, ""))
         if kept_address == address and env_values.get(PASSWORD_KEY):
             return env_values[PASSWORD_KEY]
     return None
+
+
+def _address_restic_opens(repository: str) -> str:
+    address = repository_without_credentials(repository)
+    return address.rstrip("/") or address
