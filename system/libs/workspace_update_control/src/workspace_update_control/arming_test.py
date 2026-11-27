@@ -454,9 +454,15 @@ def test_tags_that_cannot_be_fetched_are_tried_again_once_a_day_and_only_when_th
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
     assert attempted_at() == _NOW
 
+    # The channel is read a minute before the day is out, so the minute the day is out in reads nothing.
     a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
+    _tick(staged, feed, a_day_later - 60)
     _tick(staged, feed, a_day_later)
-    assert attempted_at() == a_day_later
+    assert attempted_at() == _NOW
+
+    the_next_read = a_day_later - 60 + CHANNEL_READ_INTERVAL_SECONDS
+    _tick(staged, feed, the_next_read)
+    assert attempted_at() == the_next_read
     assert staged.read_state("schedule.json") is None
 
 
