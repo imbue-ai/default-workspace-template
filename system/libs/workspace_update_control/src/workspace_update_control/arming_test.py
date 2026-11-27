@@ -508,6 +508,22 @@ def test_a_schedule_armed_for_a_channel_left_stands_while_a_client_that_names_it
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_schedule_the_workspace_armed_stands_once_it_holds_no_update_settings(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    armed = staged.read_state("schedule.json")
+    origin = staged.read_state("schedule-origin.json")
+    assert armed is not None and origin is not None
+    staged.state_path("settings.json").unlink()
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert staged.read_state("schedule.json") == armed
+    assert staged.read_state("schedule-origin.json") == origin
+
+
 def test_a_checkout_that_names_no_version_arms_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:
