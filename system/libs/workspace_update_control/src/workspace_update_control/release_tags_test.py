@@ -188,6 +188,34 @@ def test_a_parent_toml_that_names_no_template_fetches_nothing(
     assert staged.read_state(_FETCH_RECORD) is None
 
 
+def test_a_parent_toml_that_cannot_be_read_is_logged_and_the_upstream_remote_is_still_fetched_from(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    upstream = _stage_a_checkout_with_none_of_its_templates_tags(staged)
+    parent_file = staged.root / "system" / "config" / "parent.toml"
+    parent_file.write_text("url = not toml\n")
+
+    assert fetch_release_tags(_NOW) is False
+
+    assert staged.read_state(_FETCH_RECORD) is None
+    unreadable = [
+        line
+        for line in staged.dispatcher_log_lines()
+        if "could not read system/config/parent.toml" in line
+    ]
+    assert len(unreadable) == 1
+
+    subprocess.run(
+        ["git", "remote", "add", "upstream", str(upstream)],
+        check=True,
+        capture_output=True,
+    )
+
+    assert fetch_release_tags(_NOW) is True
+
+    assert read_installed_ref(".") == _RELEASE
+
+
 def test_a_failed_fetch_is_logged_without_the_credentials_its_address_holds(
     staged: StagedUpdateWorkspace,
 ) -> None:
