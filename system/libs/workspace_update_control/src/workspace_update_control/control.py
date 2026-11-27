@@ -484,20 +484,25 @@ def _epoch(value: object) -> float | None:
 
 
 def skip_target(*, target_ref: str, skipped_at: float) -> dict[str, object]:
-    """Cancel the schedule and record ``target_ref`` as skipped; of two skips the later ``skipped_at`` is kept."""
-    is_cancelled = bool(cancel_schedule()["is_cancelled"])
+    """Record ``target_ref`` as skipped and cancel the schedule; of two skips the later ``skipped_at`` is kept.
+
+    The skip is on record before the schedule goes: a minute of the dispatcher that found nothing armed and
+    nothing skipped would arm the version again.
+    """
     existing = read_json_object(SKIPPED_TARGET_FILE_PATH)
     existing_at = _epoch(existing.get("skipped_at")) if existing is not None else None
     if existing is not None and existing_at is not None and existing_at > skipped_at:
-        return {"is_cancelled": is_cancelled, "skipped_target": existing}
-    recorded: dict[str, object] = {
-        "schema": UPDATE_PROGRAM_SCHEMA,
-        "target_ref": target_ref,
-        "skipped_at": skipped_at,
-    }
-    write_json_atomically(SKIPPED_TARGET_FILE_PATH, recorded)
-    write_log_line("recorded the skipped update target %s" % target_ref)
-    return {"is_cancelled": is_cancelled, "skipped_target": recorded}
+        kept = existing
+    else:
+        kept = {
+            "schema": UPDATE_PROGRAM_SCHEMA,
+            "target_ref": target_ref,
+            "skipped_at": skipped_at,
+        }
+        write_json_atomically(SKIPPED_TARGET_FILE_PATH, kept)
+        write_log_line("recorded the skipped update target %s" % target_ref)
+    is_cancelled = bool(cancel_schedule()["is_cancelled"])
+    return {"is_cancelled": is_cancelled, "skipped_target": kept}
 
 
 def record_dismissals(

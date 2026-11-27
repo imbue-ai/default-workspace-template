@@ -375,6 +375,11 @@ def test_skipping_a_version_cancels_the_schedule_and_records_the_skip(
     assert answer == {"is_cancelled": True, "skipped_target": recorded}
     assert staged.read_state("skipped-target.json") == recorded
     assert staged.read_state("schedule.json") is None
+    # The skip is on record before the schedule goes, so no minute of the dispatcher finds neither.
+    logged = [line.split(" ", 1)[1] for line in staged.dispatcher_log_lines()]
+    assert logged.index(
+        f"recorded the skipped update target {_CEILING}"
+    ) < logged.index("cancelled the schedule")
 
 
 @pytest.mark.parametrize(
