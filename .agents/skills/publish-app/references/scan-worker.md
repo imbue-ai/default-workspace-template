@@ -305,9 +305,7 @@ without one is refused:
   `.agents/skills/publish-app/assets/MIT-LICENSE.txt` to
   `system/apps/<package>/LICENSE` and fill in its second line: `<year>` is
   this year, and `<holder>` the account the repository goes under (the
-  `<owner>` in your task's `repository`). When your task's "derived from"
-  names a repository, most of the app is someone else's work: put that
-  repository's owner first (`<their owner> and <owner>`).
+  `<owner>` in your task's `repository`).
 - **The app has one**: leave it exactly as it is. An app that was installed
   and changed keeps the license it came with, and the README's license line
   names that one.
