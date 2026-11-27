@@ -94,8 +94,8 @@ assemble is what gets pushed.
 
 - `secrets_found`: `findings` names each file, never the value. Have the
   worker remove the value from the app (a secret belongs in `data/.secrets/`,
-  declared under `[[secrets]]`) or, when the file should not be public at
-  all, add it to `[publish] exclude`; then assemble again. Tell the user in
+  declared under `[[secrets]]`) or, when the file should not be published
+  at all, add it to `[publish] exclude`; then assemble again. Tell the user in
   one plain sentence what was found and that it is being taken out. If the
   value was ever saved in the app's history, tell them it is still in the
   app's private dev repository, when it has one, and that a real key should

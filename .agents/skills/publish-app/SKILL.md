@@ -137,7 +137,7 @@ Work out the proposal first:
   not start with `-`. On a later publish it is the one in the record's
   `published_repo_url`, and is not asked again.
 - **What to leave out.** Anything in the app's directory the user would not
-  want public: internal notes, drafts, sample data about real people. Each
+  want shared: internal notes, drafts, sample data about real people. Each
   becomes a glob in the manifest's `[publish] exclude`.
 
 Then send ONE message saying, in plain language (with what "At the scope
