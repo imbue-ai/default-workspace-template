@@ -201,6 +201,6 @@ says who can see it now (`is_private`). To make it public:
 2. Run `uv run --no-sync app-install publish visibility <name> --make-public`.
    `is_changed` is true when it was private and is public now. On `refused`,
    `detail` says why: an app that was never published has no repository to
-   make public, and a missing GitHub permission is requested as "Somewhere to
-   publish to" in `github-access.md` says.
+   make public, and a missing GitHub permission is requested as "Asking for
+   the access" in `github-access.md` says.
 3. Give the user the address again.
