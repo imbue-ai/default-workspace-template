@@ -49,8 +49,9 @@ SKILL.md's rule, under "Removing an app or service".
      switch, a schedule the user gave it, its run history), by the routine's
      id, so a later routine of that id takes it over.
    - `kept_repositories`: the app's repositories on GitHub (its private dev
-     repository and, when it was published, its public one), which nothing
-     here touches. People who installed the app from the public one keep it.
+     repository and, when it was published, its published one), which
+     nothing here touches. People who installed the app from the published
+     one keep it.
    - `dependents`: the apps still in the workspace that list this one under
      `[[dependencies]]`. They were not removed and may no longer work.
 
