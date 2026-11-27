@@ -20,10 +20,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
-# toolchain AND invokes the sibling installers (secret scanners, agy,
-# owner-exec, earlyoom), so every provisioning path -- docker-built images, Lima
-# VMs, and the update apply's live re-run -- gets every global binary from one
-# common script; system/test_provisioner_single_entry.py holds it to that.
+# toolchain AND invokes the sibling installers, so every provisioning path --
+# docker-built images, Lima VMs, and the update apply's live re-run -- gets every
+# global binary from one common script; system/test_provisioner_single_entry.py
+# holds it to that.
 # Copied with its sibling _provision_guard.sh (which setup_system.sh sources
 # via `dirname "$0"`) and those installers (which it invokes the same way) and
 # nothing else, so this expensive, stable layer caches against these scripts +
@@ -49,10 +49,11 @@ COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-se
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 COPY system/scripts/agy_install.sh /usr/local/bin/default-workspace-template-install-agy
+COPY system/scripts/install_grok.sh /usr/local/bin/default-workspace-template-install-grok
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 COPY system/scripts/install_earlyoom.sh /usr/local/bin/default-workspace-template-install-earlyoom
 COPY system/scripts/install_agent_plugins.sh /usr/local/bin/default-workspace-template-install-agent-plugins
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-grok /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
