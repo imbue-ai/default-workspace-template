@@ -63,6 +63,9 @@ OUTCOME_STARTING: Final[str] = "STARTING"
 OUTCOME_NO_CHANNEL_VERSION: Final[str] = "NO_CHANNEL_VERSION"
 # A request named no update window and the workspace holds no update settings to take one from.
 OUTCOME_NO_UPDATE_SETTINGS: Final[str] = "NO_UPDATE_SETTINGS"
+# The workspace's own arm found a schedule armed already and left it as it stands. No route answers this: an
+# arm a client asks for replaces whatever is armed.
+OUTCOME_ALREADY_ARMED: Final[str] = "ALREADY_ARMED"
 
 # Why a window closed without its scheduled run starting (the desktop's ``UpdateSkipReason``).
 SKIP_UPDATE_IN_FLIGHT: Final[str] = "UPDATE_IN_FLIGHT"

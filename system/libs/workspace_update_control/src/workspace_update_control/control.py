@@ -63,6 +63,7 @@ from workspace_update_control.protocol import (
     DURABLE_CRON_PATH,
     LAST_DISPATCH_FILE_PATH,
     LAST_START_FILE_PATH,
+    OUTCOME_ALREADY_ARMED,
     OUTCOME_ALREADY_RUNNING,
     OUTCOME_ARMED,
     OUTCOME_CREATE_FAILED,
@@ -241,6 +242,7 @@ def arm_schedule(
     window_length_minutes: int | None,
     is_backup_configured: bool | None,
     is_auto_armed: bool,
+    is_armed_schedule_kept: bool,
     now: float,
     live_cron_dir: str,
     agent_environment: AgentEnvironment,
@@ -252,6 +254,11 @@ def arm_schedule(
     A value passed as None is the workspace's own (the channel's version, the settings' window, whether it holds
     backup credentials), and the schedule then keeps it current. With no version to be had the answer is
     ``NO_CHANNEL_VERSION``, unless the user named one, and with no window ``NO_UPDATE_SETTINGS``.
+
+    With ``is_armed_schedule_kept`` a schedule that is armed already is left as it stands, and the answer is
+    ``ALREADY_ARMED`` with that schedule. That is the workspace's own arm, which it decides on after finding
+    nothing armed: a schedule armed since then is one somebody asked for. An arm a client asks for replaces
+    whatever is armed.
     """
     if ceiling is not None:
         record_client_ceiling(ceiling, now)
@@ -296,7 +303,11 @@ def arm_schedule(
             "schedule": read_json_object(SCHEDULE_FILE_PATH),
         }
     with state_lock():
-        existing = read_json_object(SCHEDULE_FILE_PATH) or {}
+        standing = read_json_object(SCHEDULE_FILE_PATH)
+        if is_armed_schedule_kept and standing is not None:
+            write_log_line("armed nothing: a schedule is armed already, and stands")
+            return {**create_result(OUTCOME_ALREADY_ARMED), "schedule": standing}
+        existing = standing or {}
         schedule: dict[str, object] = {
             "schema": UPDATE_PROGRAM_SCHEMA,
             "armed_at": now,

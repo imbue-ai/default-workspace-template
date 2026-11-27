@@ -4,7 +4,7 @@ import json
 import os
 import shlex
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
@@ -27,6 +27,7 @@ from workspace_update_control.testing import (
     RecordingFeed,
     StagedUpdateWorkspace,
     arm_schedule_in,
+    armed_schedule,
     epoch_at,
     stage_checkout_at,
     stage_update_workspace,
@@ -674,22 +675,34 @@ def test_a_self_armed_schedule_for_a_skipped_version_is_cancelled(
     assert staged.read_state("schedule.json") is None
 
 
+def _write_when_git_runs(
+    staged: StagedUpdateWorkspace, name: str, content: Mapping[str, Any]
+) -> None:
+    """Have every run of git first write ``content`` to the state file ``name``.
+
+    The minute reads the checkout's version from git after it has read the workspace's own files and before it
+    arms, so that is a write that lands between the two.
+    """
+    git = shutil.which("git")
+    assert git is not None
+    written = shlex.quote(json.dumps(dict(content)))
+    wrapper = staged.bin_dir / "git"
+    wrapper.write_text(
+        f"#!/bin/sh\nprintf '%s' {written} > {shlex.quote(str(staged.state_path(name)))}\n"
+        f'exec {shlex.quote(git)} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+
+
 def test_a_skip_recorded_while_the_minute_decides_leaves_nothing_armed(
     staged: StagedUpdateWorkspace,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    git = shutil.which("git")
-    assert git is not None
-    skip = json.dumps({"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW})
-    skip_path = staged.state_path("skipped-target.json")
-    # The minute reads the checkout's version after it has read the skip, so a git that records a skip first is
-    # a skip that lands between that read and the arm.
-    wrapper = staged.bin_dir / "git"
-    wrapper.write_text(
-        f"#!/bin/sh\nprintf '%s' {shlex.quote(skip)} > {shlex.quote(str(skip_path))}\n"
-        f'exec {shlex.quote(git)} "$@"\n'
+    _write_when_git_runs(
+        staged,
+        "skipped-target.json",
+        {"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW},
     )
-    wrapper.chmod(0o755)
 
     _tick(staged, feed, _NOW)
 
@@ -700,6 +713,28 @@ def test_a_skip_recorded_while_the_minute_decides_leaves_nothing_armed(
     _tick(staged, feed, _NOW + 60)
 
     assert staged.read_state("schedule.json") is None
+
+
+def test_a_schedule_the_user_arms_while_the_minute_decides_stands_as_they_armed_it(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    armed_by_the_user = armed_schedule(
+        _NOW + 1, ceiling="minds-v0.9.5", is_backup_configured=True, is_auto_armed=False
+    )
+    _write_when_git_runs(staged, "schedule.json", armed_by_the_user)
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
+    assert staged.read_state("schedule-origin.json") is None
+    assert not any(
+        "for the workspace itself" in line for line in staged.dispatcher_log_lines()
+    )
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
 
 
 def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(

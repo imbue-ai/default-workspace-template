@@ -254,7 +254,8 @@ def tick_self_arming(
     skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
     version. One that stands at a version the user skipped is cancelled as well. A skip cancels whatever is armed
     when it is recorded, so one recorded while a minute was deciding finds nothing to cancel: that minute reads
-    the skip again once it has armed, and cancels what it armed.
+    the skip again once it has armed, and cancels what it armed. A schedule armed while a minute was deciding
+    stands as it was armed: the minute arms only where none is armed when it comes to write.
     """
     settings = read_update_settings()
     if settings is None:
@@ -304,6 +305,7 @@ def tick_self_arming(
         window_length_minutes=None,
         is_backup_configured=None,
         is_auto_armed=True,
+        is_armed_schedule_kept=True,
         now=now,
         live_cron_dir=live_cron_dir,
         agent_environment=agent_environment,

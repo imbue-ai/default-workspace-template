@@ -698,6 +698,7 @@ def arm_update_schedule() -> ResponseReturnValue:
         window_length_minutes=window[1] if window is not None else None,
         is_backup_configured=body.is_backup_configured,
         is_auto_armed=body.is_auto_armed,
+        is_armed_schedule_kept=False,
         now=time.time(),
         live_cron_dir=str(get_state().live_cron_directory),
         agent_environment=AgentEnvironment(),

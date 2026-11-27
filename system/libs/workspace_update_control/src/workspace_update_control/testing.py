@@ -450,6 +450,7 @@ def arm_schedule_in(
         window_length_minutes=window[1] if window is not None else None,
         is_backup_configured=is_backup_configured,
         is_auto_armed=is_auto_armed,
+        is_armed_schedule_kept=False,
         now=now,
         live_cron_dir=str(staged.live_cron_dir),
         agent_environment=AgentEnvironment(),

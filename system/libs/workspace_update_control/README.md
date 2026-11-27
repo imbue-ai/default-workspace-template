@@ -66,7 +66,8 @@ the dispatcher is made in both places, until no supported desktop ships that
 program. This library's own reads-then-writes of the schedule, the update settings
 and the skipped version take one lock (`state.lock`, `dispatcher.state_lock`), so a
 cancel or a skip that lands while the tick or another request is writing is not
-undone; that desktop's program takes none. The lock is held for file reads and
+undone, and a schedule armed while the tick was deciding to arm one of its own
+stands as it was armed; that desktop's program takes none. The lock is held for file reads and
 writes alone, never while a chat is created or the feed is read, and it is not the
 lock cron's line tests. `last-start.json` is this library's alone, and so are the
 files a workspace that arms its own updates keeps: `settings.json`,
