@@ -8,10 +8,10 @@ metadata:
 # Publish an app
 
 A published app is a small repository named after the app, private unless the
-user wants it public, with the app's directory at its root: its code, the skills and routines it carries, its
-`app.toml` and `README.md`. It holds one commit per published version, and it
-is what `install-app` installs from. This skill makes the first version and
-every later one.
+user wants it public, with the app's directory at its root: its code, the
+skills and routines it carries, its `app.toml` and `README.md`. It holds one
+commit per published version, and it is what `install-app` installs from.
+This skill makes the first version and every later one.
 
 A background worker prepares the version on a branch; you run the
 conversation, the checks and the push. Each step that needs no judgement is a

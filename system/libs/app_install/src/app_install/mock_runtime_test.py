@@ -99,7 +99,8 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
         )
 
     def create_published_repository(self, name: str, description: str, is_private: bool) -> CreatedRepository:
-        self.calls.append(f"create_published_repository {name} {description!r} {'private' if is_private else 'public'}")
+        visibility = "private" if is_private else "public"
+        self.calls.append(f"create_published_repository {name} {description!r} {visibility}")
         self.is_published_private = is_private
         if name in self.taken_repository_names:
             raise PublishedNameTakenError(f"the repo was not created: name already exists on this account ({name})")

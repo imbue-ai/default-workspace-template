@@ -141,9 +141,9 @@ git branch -D "mngr/<slug>"
 ## After a push
 
 `pushed` means the version is on GitHub. On a first publish the push created
-the repository (`is_private` says whether it is private), closed its issues, wiki, projects, discussions and
-outside pull requests, and gave it the topic `imbue-studio-app`. Before
-step 8:
+the repository (`is_private` says whether it is private), closed its issues,
+wiki, projects, discussions and outside pull requests, and gave it the topic
+`imbue-studio-app`. Before step 8:
 
 - **Check `is_tag_pushed`.** When it is false the version has no tag, and
   whoever installs or updates the app is given the highest tag, so they would

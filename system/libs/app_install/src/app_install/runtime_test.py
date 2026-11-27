@@ -42,7 +42,9 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
         tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"names": ["imbue-studio-app"]}'
     )
 
-    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=False)
+    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository(
+        "notes", "Keep short notes", is_private=False
+    )
 
     assert created.model_dump() == {
         "url": "https://github.com/octo/notes",
@@ -145,7 +147,9 @@ def test_a_topic_that_is_not_set_is_a_problem_of_a_repository_that_was_created(
         tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"message": "Not Found"}'
     )
 
-    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=False)
+    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository(
+        "notes", "Keep short notes", is_private=False
+    )
 
     assert created.url == "https://github.com/octo/notes"
     assert "the topic was not set" in created.topic_problem
