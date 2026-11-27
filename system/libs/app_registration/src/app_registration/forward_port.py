@@ -26,7 +26,7 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode), ``seeds_shortcuts``,
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show with showing and
+default_mode when given), ``window_closed_path``, ``suggestion_settings_path``, ``message_handlers`` (type, and path or show with showing and
 reload_when_raised), ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]``
 table's mode, when the manifest has one); the icon is read from the file the manifest names, relative to the manifest.
 Every manifest field is authoritative on every call, so a re-registration with a changed manifest updates the row.
@@ -34,9 +34,9 @@ Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
 ``--name --url`` without a manifest registers rows for things with no app
-directory (owner-exec, the VM exec service, previews, isolated test servers);
-``--display-name`` gives such a row the label users read, since the raw service
-name is what the workspace falls back to.
+directory (previews, isolated test servers); ``--display-name`` gives such a
+row the label users read, since the raw service name is what the workspace
+falls back to.
 
 Icons
 -----
@@ -194,6 +194,7 @@ _MANIFEST_STRING_KEYS = (
     "priority",
     "program",
     "window_closed_path",
+    "suggestion_settings_path",
 )
 _MANIFEST_BOOL_KEYS = (
     "critical",
@@ -238,6 +239,7 @@ _MANIFEST_OWNED_KEYS = (
     "launch_paths",
     "pin",
     "window_closed_path",
+    "suggestion_settings_path",
     "message_handlers",
     "keybindings",
     "theming_mode",
@@ -1186,7 +1188,8 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, system, launcher_rank, default_shortcut, "
-            "launch_paths with their text_param, pin, window_closed_path, message_handlers, keybindings) are copied "
+            "launch_paths with their text_param, pin, window_closed_path, suggestion_settings_path, "
+            "message_handlers, keybindings) are copied "
             "onto the row on every call."
         ),
     )

@@ -87,8 +87,8 @@ def protect_from_memory_shed(repo_root: Path) -> None:
     losing the apply mid-motion is the half-applied state this design exists to
     prevent. It takes the band of the system interface it is replacing rather
     than one of its own, so an apply staged onto an older tree bands itself
-    exactly as it does here; the authority paths that would repair a failed
-    apply (owner-exec, the terminal) sit below it either way. The write
+    exactly as it does here; the terminal, the authority path that would repair
+    a failed apply, sits below it either way. The write
     succeeds from any launcher in the workspace -- a chat agent, the recovery
     cron, a terminal: the kernel only refuses an ``oom_score_adj`` below the
     lowest value the process has ever held (inherited across fork), and nothing

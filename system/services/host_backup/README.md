@@ -73,11 +73,14 @@ is rewritten out of history by its path pattern.
 - Single long-running tick loop run as the `host-backup` supervisord program
   (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
-- The repository is created (and keyed) by Imbue Studio, not by
-  host_backup: Imbue Studio runs `restic init` from outside the workspace -- the
-  workspace's own random password is the repository's single key -- and
-  injects the resulting `restic.env`. host_backup just backs up to the
-  existing repository -- it does not probe-then-init.
+- The repository is created (and keyed) by the workspace's own `backup-setup`
+  program (`system/libs/workspace_backup_setup`), not by host_backup: a client
+  names where the backups go and supplies the storage credentials, and
+  `backup-setup` makes the repository's password, which is its single key,
+  runs `restic init`, and writes `restic.env` only once the repository is
+  ready. An Imbue Studio from before that program makes the password and runs
+  `restic init` from outside the workspace, and injects the file. host_backup
+  just backs up to the existing repository -- it does not probe-then-init.
 - Each tick reads two optional on-disk inputs:
   - `data/system/backup.toml`: purely *user* settings -- backup interval,
     retention, exclude patterns. Optional: when absent the service runs on
@@ -91,8 +94,9 @@ is rewritten out of history by its path pattern.
     restic reads from the environment: `RESTIC_REST_USERNAME` /
     `RESTIC_REST_PASSWORD` for the backup store (a `rest:` repository), or e.g.
     `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for an S3 backend. Written
-    only by the Imbue Studio app (injected whole); a missing file means backups
-    are not configured.
+    by the workspace's `backup-setup` program, or injected whole by an Imbue
+    Studio app from before it (and by a current one's restore); a missing file
+    means backups are not configured.
     `restic.env` is gitignored (rides nothing). `backup.toml` is *not*
     gitignored (everything under data/ is), so it survives via these restic
     backups themselves when
@@ -153,9 +157,9 @@ is rewritten out of history by its path pattern.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - `backup.toml` also carries `verification_disabled` (default `false`): the
-  Imbue Studio app's per-workspace switch for its own exec-based verification of
-  this service. The app writes and reads it; the service itself ignores it and
-  keeps backing up either way.
+  Imbue Studio app's per-workspace switch for its own verification of
+  this service. The app sets it through the shell's backup verification route
+  and reads it; the service itself ignores it and keeps backing up either way.
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
   its `extra_excludes` list (default empty; for adding patterns without
@@ -309,9 +313,11 @@ log stays bounded. Rotating only there keeps each tick's events in one file.
 ## First-run setup
 
 In the Imbue Studio app the whole `data/.secrets/restic.env` is written for you
-when you pick a backup provider on the create form -- Imbue Studio initializes the
-repository (`restic init`, keyed solely by the workspace's own random
-password) from outside the workspace and injects the file. For Imbue Cloud
+when you pick a backup provider on the create form -- the workspace's
+`backup-setup` program makes the repository's password, initializes the
+repository (`restic init`, keyed solely by that password) and writes the file,
+or an Imbue Studio from before that program does all three from outside the
+workspace. For Imbue Cloud
 backups it holds `RESTIC_REPOSITORY=rest:https://<backup store>/<user>/<workspace>/`
 plus `RESTIC_REST_USERNAME` / `RESTIC_REST_PASSWORD`. To configure
 backups by hand instead, populate
@@ -347,6 +353,13 @@ library alone:
   (`apps/minds/imbue/minds/workspace_programs/backup_support.py` in the mngr
   repo) to tell an in-flight tick from a finished one, so a new terminal event
   type must land there too.
+- what the workspace's `backup-setup` program calls
+  (`system/libs/workspace_backup_setup`), which keeps running across an update
+  that puts an older or a newer version of this service in place:
+  `RESTIC_ENV_PATH` and `parse_restic_env_file(content)` in
+  `host_backup/config.py`, and `init_repo(env_overrides)` and
+  `run_restic(args, *, env_overrides, timeout_seconds)` in
+  `host_backup/restic.py`. Every release has them in that shape.
 
 Dependency changes are absorbed by regenerating `uv.lock` on the workspace
 with a plain `uv sync`. `host_backup/config.py` additionally keeps no-op

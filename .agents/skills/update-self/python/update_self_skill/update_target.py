@@ -1,5 +1,5 @@
-"""Which ref to update to: the ``minds-v*`` release the Imbue Studio app driving the
-workspace was built against, or an explicit override.
+"""Which ref to update to: the ``minds-v*`` release the workspace's release channel is
+on, or an explicit override.
 """
 
 from __future__ import annotations
@@ -16,14 +16,13 @@ from typing import Collection, NamedTuple, Sequence
 _TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
 
 
-class AppVersionNotReleasedError(Exception):
-    """Raised when the release this workspace's app was built against cannot be had.
+class CeilingNotReleasedError(Exception):
+    """Raised when the release this workspace is to update to cannot be had.
 
-    A fault, unlike :class:`NoUpdateTargetError`: either the app named no release
-    at all, or it named one the template upstream does not carry. Both mean the
-    pair this workspace is supposed to run was never published as claimed, so the
-    skill reports it and lets the user decide, rather than quietly taking a
-    release nobody verified against this app.
+    A fault, unlike :class:`NoUpdateTargetError`: either the ceiling names no
+    release at all, or it names one the template upstream does not carry. Both
+    mean the release was never published as claimed, so the skill reports it and
+    lets the user decide, rather than quietly taking some other release.
     """
 
 
@@ -43,17 +42,17 @@ class ResolvedTarget(NamedTuple):
     the remote, qualified), or ``ref`` (any other override passed straight
     through for git to validate).
 
-    ``app_version`` is the template ref the app reported, passed through as
-    given. ``None`` means none was supplied, which only a direct caller does.
-    ``exceeds_ceiling`` marks an override the app cannot vouch for: newer than
-    it, or a branch/commit carrying no version to compare -- the one place the
-    app's version is still a ceiling, since only an override can pass it. The
-    default path never sets it.
+    ``ceiling`` is the newest release the workspace may take: the one its release
+    channel is on, or the one the message that started the pass pinned, passed
+    through as given. ``None`` means there is none to compare against, which an
+    override in a workspace that has read no channel leaves. ``exceeds_ceiling``
+    marks an override nothing vouches for: newer than the ceiling, or a
+    branch/commit carrying no version to compare. The default path never sets it.
     """
 
     ref: str
     kind: str
-    app_version: str | None = None
+    ceiling: str | None = None
     # Serialized as ``exceeds_ceiling``: every released SKILL.md reads that key,
     # and a rename would read as "false" to all of them.
     exceeds_ceiling: bool = False
@@ -101,12 +100,12 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
 def parse_version(tag: str) -> Version | None:
     """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
 
-    Prereleases parse because an app on ``minds-v0.4.0-rc1`` has a real version:
-    it names that template as its target like any other release, and it vouches
+    Prereleases parse because a ceiling of ``minds-v0.4.0-rc1`` is a real version:
+    it names that template as the target like any other release, and it vouches
     for an override the same way.
 
     Ordering follows semver: a prerelease sorts below its own release, so an
-    override of ``minds-v0.4.0`` under a ``minds-v0.4.0-rc1`` app exceeds it.
+    override of ``minds-v0.4.0`` under a ``minds-v0.4.0-rc1`` ceiling exceeds it.
 
     Returns ``None`` only for something that is not a release tag at all (a
     branch name, a bare commit) -- there is genuinely no version to compare.
@@ -124,15 +123,15 @@ def parse_version(tag: str) -> Version | None:
     )
 
 
-def _is_at_or_below_app_version(ref: str, app_version: str | None) -> bool:
-    """Whether ``ref`` is provably a release at or below the app's version.
+def _is_at_or_below_ceiling(ref: str, ceiling: str | None) -> bool:
+    """Whether ``ref`` is provably a release at or below the ceiling.
 
     Both sides go through :func:`parse_version`, so a prerelease on either side
     compares properly rather than being written off. False for something with no
-    version at all -- a branch or a bare commit -- which the app cannot vouch
-    for. True when there is no app version to compare against.
+    version at all -- a branch or a bare commit -- which the ceiling cannot vouch
+    for. True when there is no ceiling to compare against.
     """
-    target_version = parse_version(app_version) if app_version is not None else None
+    target_version = parse_version(ceiling) if ceiling is not None else None
     if target_version is None:
         return True
     ref_version = parse_version(ref)
@@ -143,16 +142,15 @@ def resolve_target(
     override: str | None,
     tags: Sequence[str],
     remote: str = "upstream",
-    app_version: str | None = None,
+    ceiling: str | None = None,
     remote_branches: Collection[str] = (),
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
-    With no override the target is the app's own release: the ``minds-v*`` tag
-    named by ``app_version``, which must exist upstream. Anything else is a fault
+    With no override the target is the ceiling itself: the ``minds-v*`` tag
+    named by ``ceiling``, which must exist upstream. Anything else is a fault
     for the skill to judge, not a thing to work around here -- picking some
-    other release would hand the workspace a template that no one verified
-    against this app.
+    other release would hand the workspace a template nobody chose for it.
 
     An override naming a branch of ``remote`` (``main`` always does; the rest are
     ``remote_branches``, the names under ``refs/remotes/<remote>/``) is
@@ -167,38 +165,114 @@ def resolve_target(
     already qualified themselves).
 
     An override is never silently blocked -- the user asked for it by name -- but
-    one that is not provably at or below the app's version comes back with
+    one that is not provably at or below the ceiling comes back with
     ``exceeds_ceiling`` set, which the skill turns into an explicit user
     confirmation before anything is merged.
     """
     if override is None:
-        if app_version is None or parse_version(app_version) is None:
-            raise AppVersionNotReleasedError(
-                f"this workspace's Imbue Studio app reports {app_version!r}, which is not a release "
-                f"tag, so there is no release to match. A dev build reports its branch "
-                f"this way. Decide what this workspace should take and pass it as "
-                f"--override, or update the app to a release."
+        if ceiling is None or parse_version(ceiling) is None:
+            raise CeilingNotReleasedError(
+                f"the version this workspace may update to is given as {ceiling!r}, which "
+                f"is not a release tag, so there is no release to match. A development "
+                f"build of Imbue Studio names its branch this way. Decide what this "
+                f"workspace should take and pass it as --override."
             )
-        if app_version not in set(tags):
-            raise AppVersionNotReleasedError(
-                f"this workspace's Imbue Studio app is {app_version}, but the template upstream has no "
-                f"such tag, so the release this app was built against cannot be fetched. "
+        if ceiling not in set(tags):
+            raise CeilingNotReleasedError(
+                f"this workspace is to update to {ceiling}, but the template upstream has no "
+                f"such tag, so that release cannot be fetched. "
                 f"Something is wrong with that release, not with this workspace: report it "
                 f"rather than updating to a different version, unless the user names one."
             )
-        return ResolvedTarget(app_version, "tag", app_version, False)
-    exceeds = not _is_at_or_below_app_version(override, app_version)
+        return ResolvedTarget(ceiling, "tag", ceiling, False)
+    exceeds = not _is_at_or_below_ceiling(override, ceiling)
     if override in set(tags):
-        return ResolvedTarget(override, "tag", app_version, exceeds)
+        return ResolvedTarget(override, "tag", ceiling, exceeds)
     if override == "main" or override in set(remote_branches):
-        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
-    return ResolvedTarget(override, "ref", app_version, exceeds)
+        return ResolvedTarget(f"{remote}/{override}", "branch", ceiling, exceeds)
+    return ResolvedTarget(override, "ref", ceiling, exceeds)
 
 
 def already_current_message(ref: str) -> str:
     return f"this workspace is already on {ref}; nothing to update"
 
 
+# What the workspace keeps about its release channel, relative to its root: the update
+# settings a client wrote (the channel, and the feed its file is read from), and the
+# version the workspace's update dispatcher last read for that channel off the feed, at
+# most once an hour. Both are written by ``system/libs/workspace_update_control``; this
+# skill runs from a staged copy with no library beside it, so it reads the two files itself.
+_UPDATE_SETTINGS_PATH = Path("data/.state/update-apply/settings.json")
+_CHANNEL_VERSION_PATH = Path("data/.state/update-apply/channel-version.json")
+
+
+class ChannelVersionUnavailableError(Exception):
+    """Raised when the workspace has read no version for its release channel.
+
+    Never downgraded to "take the newest release upstream": the channel's version
+    is the newest the workspace may take, and which release to take without one
+    is the user's to say.
+    """
+
+
+def _read_json_object(path: Path) -> dict[str, object] | None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def read_channel_template_ref(repo_root: Path) -> str:
+    """Return the release the workspace's release channel is on, as the workspace last read it.
+
+    The workspace reads its channel's file itself, so this asks nothing outside
+    it: a workspace whose owner has no Imbue Studio desktop app running is
+    answered like any other. Each way of having no version says what to do next,
+    because the user's next action differs.
+    """
+    settings = _read_json_object(repo_root / _UPDATE_SETTINGS_PATH)
+    if settings is None:
+        raise ChannelVersionUnavailableError(
+            "this workspace holds no update settings, so it follows no release channel "
+            "and there is no release to update to by default. Imbue Studio writes them "
+            "when it opens the workspace: open the workspace there and run the update "
+            "again, or name the version to update to."
+        )
+    channel = settings.get("channel")
+    feed_base_url = settings.get("feed_base_url")
+    if not isinstance(feed_base_url, str) or not feed_base_url:
+        raise ChannelVersionUnavailableError(
+            "this workspace's update settings name no release feed, so it reads no version "
+            f"for its release channel ({channel}) and there is no release to update to by "
+            "default. Name the version to update to."
+        )
+    read = _read_json_object(repo_root / _CHANNEL_VERSION_PATH) or {}
+    is_this_channels = (
+        read.get("channel") == channel and read.get("feed_base_url") == feed_base_url
+    )
+    template_ref = read.get("template_ref") if is_this_channels else None
+    if isinstance(template_ref, str) and template_ref:
+        return template_ref
+    why = read.get("error") if is_this_channels else None
+    raise ChannelVersionUnavailableError(
+        f"this workspace has read no version for its release channel ({channel})"
+        + (f": {why}" if isinstance(why, str) and why else "")
+        + ". It asks the release feed at most once an hour, so run the update again "
+        "later, or name the version to update to."
+    )
+
+
+def is_workspace_without_update_settings(repo_root: Path) -> bool:
+    """Whether no client has written update settings into this workspace, so it follows no release channel."""
+    return _read_json_object(repo_root / _UPDATE_SETTINGS_PATH) is None
+
+
+# CLEANUP: everything below, with ``is_workspace_without_update_settings`` above and their use in
+# ``update_self.py``, goes once no supported Imbue Studio desktop app predates the update settings
+# (the first with them is the one that ships phase 5 of the web and desktop consolidation). Such
+# an app writes no settings into a workspace, so a workspace it alone drives follows no channel,
+# and an update started by hand there asks that app which release it supports.
 # The Imbue Studio app's version route, addressed through the latchkey gateway's
 # ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
 # permissions baseline (``minds-app-version-read``), so this needs no grant and
@@ -221,16 +295,17 @@ _APP_VERSION_TIMEOUT_SECONDS = 60
 _APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 
 
-class AppVersionUnavailableError(Exception):
+class DesktopVersionUnavailableError(Exception):
     """Raised when the Imbue Studio app's own version could not be read.
 
-    Never downgraded to "no version to match": an app that cannot answer is very
-    often an app too old to *have* this route, which is exactly the case that
-    matching the app protects against.
+    The message says what the user can do about the app (update it, start it). A
+    pass that named no version fails with it beside the missing channel. An
+    override proceeds with no ceiling: the user named the version, and nothing
+    is left to compare it against.
     """
 
 
-def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
+def fetch_desktop_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
     """Return the newest workspace-template ref the running Imbue Studio app supports.
 
     Goes through ``latchkey curl``, which injects the gateway credentials and
@@ -259,12 +334,12 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
                 timeout=_APP_VERSION_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
-            raise AppVersionUnavailableError(
+            raise DesktopVersionUnavailableError(
                 f"could not reach the Imbue Studio app to read its version ({e}). The app may be "
                 f"closed or the gateway down; retry once it is running."
             ) from e
         if result.returncode != 0:
-            raise AppVersionUnavailableError(
+            raise DesktopVersionUnavailableError(
                 f"could not reach the Imbue Studio app to read its version (latchkey curl exited "
                 f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
                 f"gateway down; retry once it is running."
@@ -273,23 +348,23 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
         body = Path(body_file.name).read_text()
 
     if status in _APP_TOO_OLD_STATUSES:
-        raise AppVersionUnavailableError(
+        raise DesktopVersionUnavailableError(
             "this workspace's Imbue Studio app is too old to report its version (it answered "
             f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
             "may safely update. Update the Imbue Studio app itself first."
         )
     if status != "200":
-        raise AppVersionUnavailableError(
+        raise DesktopVersionUnavailableError(
             f"the Imbue Studio app returned HTTP {status} for its version ({body.strip()[:200]})."
         )
     try:
         template_ref = json.loads(body)["workspace_template_ref"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        raise AppVersionUnavailableError(
+        raise DesktopVersionUnavailableError(
             f"the Imbue Studio app's version response could not be parsed ({e}): {body.strip()[:200]}"
         ) from e
     if not isinstance(template_ref, str) or not template_ref:
-        raise AppVersionUnavailableError(
+        raise DesktopVersionUnavailableError(
             f"the Imbue Studio app reported an empty workspace_template_ref: {body.strip()[:200]}"
         )
     return template_ref

@@ -1,0 +1,1 @@
+- A test of the desktops listing uses the terminal's pty as its internal app, in place of owner-exec.

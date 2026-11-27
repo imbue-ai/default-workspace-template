@@ -2,8 +2,9 @@
 """Entry point for :mod:`app_registration.forward_port`.
 
 Kept as a stub: app program lines run this path with ``python3``, including those of apps
-users scaffolded, which no release rewrites, and update-self and agents run it to remove an
-app. It puts app_registration's source on sys.path, which only an entry file may do.
+users scaffolded, which no release rewrites, and update-self, agents and the workspace's boot
+run it to remove an app. It puts app_registration's source on sys.path, which only an entry
+file may do.
 """
 
 import sys

@@ -108,6 +108,7 @@ from imbue.system_interface.shell.tour import TOUR_ROUTE
 from imbue.system_interface.shell.tour import TourProgress
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpapersListing
+from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 
 PRESENCE_PATH: Final[str] = "/api/presence"
 PRESENCE_HEARTBEAT_PATH: Final[str] = "/api/presence/heartbeat"
@@ -273,4 +274,6 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", KEYBINDINGS_DELIVER_ROUTE): RouteModels(
         request_model=DeliverKeybindingsRequest, response_model=KeybindingsDeliveryOutcome
     ),
+    # The workspace routes: the state the workspace owns, as a client outside it reads and changes it
+    **WORKSPACE_ROUTE_TABLE,
 }

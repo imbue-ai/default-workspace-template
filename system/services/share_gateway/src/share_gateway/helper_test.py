@@ -1,4 +1,4 @@
-"""The served helper's own test suite (Node's test runner over the vendored owner-exec vectors), run from pytest."""
+"""The served helper's own test suite (Node's test runner), run from pytest."""
 
 import subprocess
 from pathlib import Path
@@ -29,4 +29,4 @@ def test_helper_is_the_file_the_gateway_serves_and_prints_usage() -> None:
     usage = result.stdout.decode("utf-8")
     assert "wsvisit join <auth-origin> <code>" in usage and "wsvisit run" in usage
     # The whole header comment, to its last sentence, not a line count that drifts.
-    assert usage.rstrip().endswith("retrying once.")
+    assert usage.rstrip().endswith("a command that had already started.")

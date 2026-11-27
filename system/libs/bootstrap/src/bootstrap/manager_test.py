@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,18 +19,25 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
+    APP_REGISTRATION_SCRIPT,
     BOOTSTRAP_COMPLETED_EVENT,
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    MAIN_BRANCH_SIGNAL,
+    RETIRED_STATE_FILES,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
+    RUNTIME_CRON_DIR,
+    STATE_DIR,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
+    UPDATE_DISPATCHER_CRON_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
     _apply_container_timezone,
+    _apply_initial_data,
     _configure_git_global,
     _ensure_git_identity,
     _initialize_workspace_main_branch,
@@ -37,10 +46,12 @@ from bootstrap.manager import (
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
+    _remove_retired_registrations,
     _set_container_timezone,
     _supervisord_environment,
     _wake_update_dri_agent,
     _write_routines_tick_cron_entry,
+    _write_update_dispatcher_cron_entry,
     _write_update_recovery_cron_entry,
     main,
 )
@@ -415,6 +426,162 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
 
 
+# _write_update_dispatcher_cron_entry
+
+
+def _stage_the_update_dispatchers_entry(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lay the real cron-line entry and its library out under ``workspace_root`` as the template holds them,
+    with a stand-in ``cron`` on PATH, and make it the working directory."""
+    repo_root = Path(__file__).resolve().parents[5]
+    scripts = workspace_root / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(repo_root / UPDATE_DISPATCHER_CRON_SCRIPT, scripts)
+    library = workspace_root / "system" / "libs" / "workspace_update_control"
+    library.mkdir(parents=True)
+    (library / "src").symlink_to(
+        repo_root / "system" / "libs" / "workspace_update_control" / "src",
+        target_is_directory=True,
+    )
+    bin_dir = workspace_root.parent / "stub-bin"
+    bin_dir.mkdir()
+    (bin_dir / "cron").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "cron").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.chdir(workspace_root)
+
+
+def test_the_update_dispatchers_cron_entry_is_written_at_boot_under_its_one_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A workspace no client has armed or started an update in has no line yet, so until the boot
+    # writes it nothing there runs the dispatcher that arms the workspace's own updates.
+    workspace_root = tmp_path / "workspace"
+    _stage_the_update_dispatchers_entry(workspace_root, monkeypatch)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _write_update_dispatcher_cron_entry(target_dir=target)
+    _install_runtime_cron_entries(target_dir=target)
+
+    assert [entry.name for entry in target.iterdir()] == ["update-self-dispatch"]
+    entry = (target / "update-self-dispatch").read_text()
+    assert (
+        f"cd {workspace_root.resolve()} && python3 system/scripts/update_dispatcher_tick.py"
+        in entry
+    )
+    # The durable copy is the one the routes write, so a later boot installs the same line again.
+    assert (RUNTIME_CRON_DIR / "update-self-dispatch").read_text() == entry
+
+
+def test_the_update_dispatchers_cron_entry_tolerates_a_tree_without_its_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This runs on the path to supervisord; a boot that reaches the services is worth more than
+    # the line.
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _write_update_dispatcher_cron_entry(target_dir=target)
+
+    assert list(target.iterdir()) == []
+
+
+# _remove_retired_registrations
+
+
+_REGISTRY_WITH_RETIRED_ROWS = (
+    '[[apps]]\nname = "chat"\nurl = "http://localhost:8010"\n\n'
+    '[[apps]]\nname = "owner-exec"\nurl = "http://127.0.0.1:8793"\ninternal = true\n\n'
+    '[[apps]]\nname = "vm-exec"\nurl = "http://127.0.0.1:8794"\ninternal = true\n\n'
+    '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\n'
+)
+
+
+def _stage_the_registration_entry(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lay the real registration entry and its library out under ``workspace_root`` as the template holds
+    them, and make it the working directory."""
+    repo_root = Path(__file__).resolve().parents[5]
+    scripts = workspace_root / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(repo_root / APP_REGISTRATION_SCRIPT, scripts)
+    library = workspace_root / "system" / "libs" / "app_registration"
+    library.mkdir(parents=True)
+    (library / "src").symlink_to(
+        repo_root / "system" / "libs" / "app_registration" / "src",
+        target_is_directory=True,
+    )
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    monkeypatch.chdir(workspace_root)
+
+
+def _registered_names() -> list[str]:
+    registry = tomllib.loads((STATE_DIR / "apps.toml").read_text())
+    return [row["name"] for row in registry["apps"]]
+
+
+def test_the_boot_removes_the_rows_and_state_of_the_retired_programs_and_leaves_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A workspace updated from a release that ran the owner-exec daemon still holds its row and its
+    # rendered configuration, and one from before that the VM exec service's row; no program of
+    # this release registers either, so nothing else would take them out.
+    _stage_the_registration_entry(tmp_path, monkeypatch)
+    STATE_DIR.mkdir(parents=True)
+    (STATE_DIR / "apps.toml").write_text(_REGISTRY_WITH_RETIRED_ROWS)
+    for state_file in RETIRED_STATE_FILES:
+        state_file.write_text('role = "inner"\n')
+
+    _remove_retired_registrations()
+
+    assert _registered_names() == ["chat", "files"]
+    assert [state_file.exists() for state_file in RETIRED_STATE_FILES] == [False]
+
+    # Every later boot runs it again over a registry that holds none of them.
+    registry_after_the_first_boot = (STATE_DIR / "apps.toml").read_text()
+    _remove_retired_registrations()
+
+    assert (STATE_DIR / "apps.toml").read_text() == registry_after_the_first_boot
+
+
+def test_the_boot_removes_nothing_from_a_workspace_that_never_held_a_retired_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stage_the_registration_entry(tmp_path, monkeypatch)
+    STATE_DIR.mkdir(parents=True)
+    registry = '[[apps]]\nname = "chat"\nurl = "http://localhost:8010"\n'
+    (STATE_DIR / "apps.toml").write_text(registry)
+
+    _remove_retired_registrations()
+
+    assert (STATE_DIR / "apps.toml").read_text() == registry
+
+
+def test_the_boot_reaches_supervisord_when_the_retired_rows_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No registration entry in this tree, so each removal fails; the rows stay and the boot goes on.
+    monkeypatch.chdir(tmp_path)
+    STATE_DIR.mkdir(parents=True)
+    (STATE_DIR / "apps.toml").write_text(_REGISTRY_WITH_RETIRED_ROWS)
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
+    try:
+        _remove_retired_registrations()
+    finally:
+        logger.remove(sink_id)
+
+    assert (STATE_DIR / "apps.toml").read_text() == _REGISTRY_WITH_RETIRED_ROWS
+    assert [line.split(" (exit")[0] for line in warnings] == [
+        "Could not remove the registry row of owner-exec",
+        "Could not remove the registry row of vm-exec",
+    ]
+
+
 # _supervisord_environment
 
 
@@ -629,6 +796,117 @@ def test_set_container_timezone_tolerates_a_non_utf8_file(tmp_path: Path) -> Non
     localtime, _ = _set_timezone_in(tmp_path, None)
 
     assert not localtime.exists()
+
+
+# _apply_initial_data
+
+
+def _stage_the_initial_data_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv_script: str
+) -> Path:
+    """Make ``tmp_path`` the workspace root a boot runs from, with a host dir beside its data and a stand-in ``uv``
+    first on PATH, followed by the bin dir of the venv this suite runs from; answers the host dir."""
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir()
+    (bin_dir / "uv").write_text(uv_script)
+    (bin_dir / "uv").chmod(0o755)
+    venv_bin = Path(sys.executable).parent
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join([str(bin_dir), str(venv_bin), os.environ.get("PATH", "")]),
+    )
+    host_dir = tmp_path / "host-dir"
+    host_dir.mkdir()
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    monkeypatch.chdir(tmp_path)
+    return host_dir
+
+
+# ``uv run --no-sync <entry>`` as the venv this suite runs from resolves it: the entry itself.
+_UV_RUNNING_THE_ENTRY = '#!/bin/sh\nshift 2\nexec "$@"\n'
+
+
+def test_the_boot_applies_the_initial_data_a_machine_long_past_its_first_boot_was_handed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pool host's first boot was its bake. Its document arrives when it is adopted, and the
+    # boot that follows applies it before it sets the clock, so the zone it names is in force
+    # from that boot on.
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, _UV_RUNNING_THE_ENTRY
+    )
+    MAIN_BRANCH_SIGNAL.parent.mkdir(parents=True)
+    MAIN_BRANCH_SIGNAL.touch()
+    document = host_dir / "initial_data.json"
+    document.write_text(
+        json.dumps({"schema": 1, "timezone": {"zone": "America/New_York"}})
+    )
+
+    _apply_initial_data()
+    localtime, timezone_file = _set_timezone_in(tmp_path, None)
+
+    assert timezone_file.read_text() == "America/New_York\n"
+    assert Path(os.readlink(localtime)).name == "New_York"
+    assert not document.exists()
+    assert (
+        json.loads((tmp_path / "data/.state/initial_data/state.json").read_text())[
+            "state"
+        ]
+        == "APPLIED"
+    )
+
+    # A later boot finds no document, and leaves what the owner has changed since alone.
+    timezone_file.write_text("UTC\n")
+    _apply_initial_data()
+
+    assert timezone_file.read_text() == "UTC\n"
+
+
+def test_the_boot_goes_on_when_the_initial_data_cannot_be_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, "#!/bin/sh\necho broken venv >&2\nexit 1\n"
+    )
+    document = host_dir / "initial_data.json"
+    document.write_text('{"schema": 1}')
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        _apply_initial_data()
+
+        # An entry that cannot even be started is no different.
+        monkeypatch.setenv("PATH", str(tmp_path / "no-such-dir"))
+        _apply_initial_data()
+    finally:
+        logger.remove(sink)
+
+    # Left where it is, for the boot that can apply it.
+    assert document.exists()
+    assert len(errors) == 2
+    assert "broken venv" in errors[0]
+
+
+def test_the_boot_goes_on_when_applying_the_initial_data_runs_out_of_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stand-in becomes the sleeping process, so ending it closes the output the boot reads.
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, "#!/bin/sh\nexec sleep 30\n"
+    )
+    document = host_dir / "initial_data.json"
+    document.write_text('{"schema": 1}')
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        _apply_initial_data(timeout_seconds=0.2)
+    finally:
+        logger.remove(sink)
+
+    assert document.exists()
+    assert len(errors) == 1
+    assert "timed out after 0.2 seconds" in errors[0]
+    assert "continuing boot" in errors[0]
 
 
 # _recover_interrupted_update
@@ -916,6 +1194,8 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
         "recover_update",
         "initialize_main_branch",
         "sync_venv",
+        # Before the clock is set, so a timezone the initial data carries is the one this boot applies.
+        "apply_initial_data",
         "set_timezone",
         "converge_environment",
         "install_cron",
@@ -1042,6 +1322,35 @@ def test_a_workspaces_first_boot_offers_it_the_tour(
     assert (tmp_path / "data/.state/system_interface/offer_tour").exists()
 
 
+def test_a_workspaces_first_boot_owes_it_a_welcome_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert (tmp_path / "data/.state/chat/owes_welcome_chat").exists()
+
+
+@pytest.mark.parametrize(
+    "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
+)
+def test_a_workspace_that_booted_before_is_owed_no_welcome_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first_boot_signal: str
+) -> None:
+    # An existing workspace that takes this build in an update has its chats already.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    (tmp_path / "data/.state" / first_boot_signal).touch()
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert not (tmp_path / "data/.state/chat/owes_welcome_chat").exists()
+
+
 @pytest.mark.parametrize(
     "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
 )
@@ -1140,7 +1449,9 @@ def test_routines_tick_cron_entry_states_the_boot_host_dir_for_the_wrapper(
 
     lines = (target / ROUTINES_TICK_CRON_NAME).read_text().splitlines()
     assert lines[0] == "MNGR_HOST_DIR=/mngr"
-    assert lines[1].startswith(f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} ")
+    assert lines[1].startswith(
+        f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} "
+    )
     assert len(lines) == 2
 
 

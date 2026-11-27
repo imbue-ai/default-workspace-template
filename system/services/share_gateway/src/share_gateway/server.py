@@ -42,6 +42,7 @@ from werkzeug.datastructures import Headers
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_internal_app_names
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
@@ -75,6 +76,7 @@ from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
 from share_gateway.session_cookie import verify_session_from_cookies
+from share_gateway.web_client import is_web_client_route_request
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
 
@@ -288,9 +290,13 @@ def build_gateway_app(
         }
         if identity.is_owner:
             # The owner's chrome needs the service origins (unguessable labels)
-            # to reach individual services -- most importantly owner-exec. Only
-            # the owner gets the map; a visitor sees just liveness + backend.
+            # to reach individual services -- most importantly the shell, which
+            # serves the workspace routes. Only the owner gets the map; a
+            # visitor sees just liveness + backend.
             detail["services"] = {name: label for label, name in label_to_name.items()}
+            # The gateway's own agent routes answer only at its auth address, which the owner's
+            # page of another origin has no other way to learn.
+            detail["auth_label"] = auth_label
         return _apply_health_cors(Response(_json_body(detail), mimetype="application/json"))
 
     @app.get("/connect-info")
@@ -428,9 +434,15 @@ def build_gateway_app(
         # authoritative because the gateway sets it after verifying the signed
         # session, and caddy strips any inbound copy before the forward_auth
         # subrequest.
+        is_from_web_client = is_web_client_route_request(
+            chrome_origin,
+            origin_header,
+            forwarded_uri,
+            is_app_internal=service_name in build_internal_app_names(registered_apps),
+        )
         response_headers = {
             "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
-            IDENTITY_HEADER: render_identity_header(identity),
+            IDENTITY_HEADER: render_identity_header(identity, is_from_web_client),
         }
         return _counted(Response(status=200, headers=response_headers), requester_kind, requester_id, OUTCOME_ALLOWED)
 

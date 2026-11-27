@@ -6,22 +6,21 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the release the Imbue Studio app driving
-    this workspace was built against -- the ``minds-v*`` tag it names, and only
-    that one; an explicit override may name a specific tag, an upstream branch
-    (qualified to ``upstream/<branch>``), or any other ref, and is reported back
-    as exceeding the ceiling when it cannot be proven to sit at or below it.
+    Resolve the ref to update to. Default is the release the workspace's release
+    channel is on -- the ``minds-v*`` tag it names, and only that one; an explicit
+    override may name a specific tag, an upstream branch (qualified to
+    ``upstream/<branch>``), or any other ref, and is reported back as exceeding
+    the ceiling when it cannot be proven to sit at or below it.
 
-    The ceiling exists because a workspace's template ships the code the outer
-    app talks to (the system interface, ``mngr``), so updating past
-    the app's own release would leave the workspace speaking a protocol its app
-    does not know. It is read from the app itself (``GET /api/v1/app/version``,
-    baseline-allowed through the latchkey gateway, no grant needed); when it
-    cannot be read, or names a release the upstream does not carry, the command
-    **fails** rather than choosing some other release: that pairing was never
-    verified, and which way out is right is the skill's call. Releases above the
-    app's are treated as absent: only an ``--override`` naming one puts it in
-    the output.
+    The ceiling is the newest release the workspace may take. The workspace reads
+    it itself: its update dispatcher asks the release feed for its channel's
+    version at most once an hour, and this command reads what it last read, so no
+    Imbue Studio app has to be running. A pass the workspace or Imbue Studio
+    started names the ceiling in its first message instead (``--ceiling``). When
+    there is none, or it names a release the upstream does not carry, the command
+    **fails** rather than choosing some other release: which way out is right is
+    the skill's call. Releases above the ceiling are treated as absent: only an
+    ``--override`` naming one puts it in the output.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
@@ -256,11 +255,14 @@ from update_self_skill.update_runtime import (
     Spawner,
 )
 from update_self_skill.update_target import (
-    AppVersionNotReleasedError,
-    AppVersionUnavailableError,
+    CeilingNotReleasedError,
+    ChannelVersionUnavailableError,
+    DesktopVersionUnavailableError,
     NoUpdateTargetError,
     already_current_message,
-    fetch_app_template_ref,
+    fetch_desktop_template_ref,
+    is_workspace_without_update_settings,
+    read_channel_template_ref,
     resolve_target,
 )
 from update_self_skill.update_whats_new import list_whats_new
@@ -344,6 +346,40 @@ def _repo_root(args: argparse.Namespace) -> Path:
     return getattr(args, "repo_root", Path.cwd())
 
 
+def _ceiling(args: argparse.Namespace, repo_root: Path) -> str | None:
+    """The newest release the workspace may take: the one named on the command line, else the one its release
+    channel is on. None only for an override in a workspace that has read no channel: the user named the
+    version, so there being nothing to compare it against is not a fault."""
+    if args.ceiling is not None:
+        return args.ceiling
+    try:
+        return read_channel_template_ref(repo_root)
+    except ChannelVersionUnavailableError as channel_error:
+        try:
+            desktop_ref = _desktop_template_ref(repo_root)
+        except DesktopVersionUnavailableError as desktop_error:
+            if args.override is None:
+                # Opening the workspace in an app that writes no update settings changes nothing, so what
+                # that app answered is the part the user can act on.
+                raise ChannelVersionUnavailableError(
+                    f"{channel_error} The Imbue Studio app was asked instead: {desktop_error}"
+                ) from desktop_error
+            return None
+        if desktop_ref is not None:
+            return desktop_ref
+        if args.override is None:
+            raise
+        return None
+
+
+def _desktop_template_ref(repo_root: Path) -> str | None:
+    """The release a desktop app from before the update settings supports, for a workspace that holds none;
+    None for a workspace that holds settings. ``DesktopVersionUnavailableError`` when no such app answers."""
+    if not is_workspace_without_update_settings(repo_root):
+        return None
+    return fetch_desktop_template_ref()
+
+
 def _cmd_resolve_target(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     tags = _list_names(
@@ -354,9 +390,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    app_version = (
-        args.app_version if args.app_version is not None else fetch_app_template_ref()
-    )
+    ceiling = _ceiling(args, repo_root)
     # A symref (``<remote>/HEAD``) prints as an empty line and drops out: it is
     # not a branch, and qualifying an override of ``HEAD`` would retarget it.
     remote_branches = _list_names(
@@ -373,7 +407,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
         args.override,
         tags,
         remote=args.remote,
-        app_version=app_version,
+        ceiling=ceiling,
         remote_branches=remote_branches,
     )
     # Only the default path: an override was asked for by name, and the rule that
@@ -385,7 +419,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
             {
                 "ref": target.ref,
                 "kind": target.kind,
-                "ceiling": target.app_version,
+                "ceiling": target.ceiling,
                 "exceeds_ceiling": target.exceeds_ceiling,
             }
         )
@@ -1297,7 +1331,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--override",
         default=None,
         help="A tag, a branch of --remote (qualified to <remote>/<branch>), or "
-        "any other ref to update to (default: the release the Imbue Studio app names).",
+        "any other ref to update to (default: the release the workspace's release "
+        "channel is on).",
     )
     resolve_parser.add_argument(
         "--remote", default="upstream", help="Remote to read tags and branches from."
@@ -1310,11 +1345,12 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_parser.add_argument(
         "--app-version",
         "--ceiling",
-        dest="app_version",
+        dest="ceiling",
         default=None,
-        help="The release to update to, standing in for the running Imbue Studio app's "
-        "own (default: ask the app). A ref that is not a release tag is a fault: "
-        "pass --override to say what to take instead.",
+        help="The newest release the workspace may take, and the one it updates to "
+        "(default: the release its release channel is on, as the workspace last "
+        "read it). A ref that is not a release tag is a fault: pass --override to "
+        "say what to take instead.",
     )
     resolve_parser.set_defaults(func=_cmd_resolve_target)
 
@@ -1801,8 +1837,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return args.func(args)
     except (
-        AppVersionNotReleasedError,
-        AppVersionUnavailableError,
+        CeilingNotReleasedError,
+        ChannelVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
         HistoryBridgeError,

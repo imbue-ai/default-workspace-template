@@ -107,6 +107,9 @@ def registry_row_toml(
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
+    suggestion_settings_path: str | None = None,
+    # The SVG markup the app registered as its icon; it may hold double quotes, and no single quote.
+    icon: str | None = None,
     stop_when_no_windows: bool = False,
     uses_microphone: bool = False,
     seeds_shortcuts: bool = True,
@@ -147,6 +150,10 @@ def registry_row_toml(
         )
     if window_closed_path is not None:
         lines.append(f'window_closed_path = "{window_closed_path}"')
+    if suggestion_settings_path is not None:
+        lines.append(f'suggestion_settings_path = "{suggestion_settings_path}"')
+    if icon is not None:
+        lines.append(f"icon = '{icon}'")
     if theming_mode is not None:
         lines.append(f'theming_mode = "{theming_mode}"')
     if message_handlers or shown_message_handlers:
@@ -270,6 +277,7 @@ def builtin_chat_row_toml() -> str:
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
         launch_methods={"new": "POST"},
         pin=("/", "avatar", "independent", "floating"),
+        suggestion_settings_path="/api/settings/suggestions",
     )
 
 
@@ -442,6 +450,26 @@ def message_handling_app(received: list[dict[str, Any]], path: str, status: int)
         return "{}", status
 
     app.add_url_rule(path, view_func=take, methods=["POST"], endpoint="take")
+    return app
+
+
+def suggestion_settings_app(settings: dict[str, Any], received: list[dict[str, Any]], path: str) -> Flask:
+    """An app that holds ``settings``, the workspace's suggestion switches among them, as the app that declares a
+    ``suggestion_settings_path`` does: ``GET path`` answers them, and ``PUT path`` sets the ones its body names,
+    appends the body to ``received``, and answers them."""
+    app = Flask("suggestion-settings")
+
+    def read() -> tuple[dict[str, Any], int]:
+        return {"settings": dict(settings)}, 200
+
+    def change() -> tuple[dict[str, Any], int]:
+        body = request.get_json(force=True)
+        received.append(body)
+        settings.update(body)
+        return {"settings": dict(settings)}, 200
+
+    app.add_url_rule(path, view_func=read, methods=["GET"], endpoint="read")
+    app.add_url_rule(path, view_func=change, methods=["PUT"], endpoint="change")
     return app
 
 

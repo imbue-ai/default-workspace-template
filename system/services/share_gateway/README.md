@@ -185,10 +185,10 @@ email_domains = []
 Workspace-level grants admit every service; per-service grants admit exactly
 that service's origin (the shell and siblings stay 403), and only for an app
 the registry does not mark `internal`. An internal app (the shell itself, the
-terminal's pty, the owner and VM exec services) is reached only through a
-workspace-level grant: a per-service grant on it admits nobody, and a visitor
-whose only grants are on such apps is refused at login. The gateway reads this
-from `data/.state/apps.toml` on every request, beside the label map. Within a
+terminal's pty) is reached only through a workspace-level grant: a per-service
+grant on it admits nobody, and a visitor whose only grants are on such apps is
+refused at login. The gateway reads this from `data/.state/apps.toml` on every
+request, beside the label map. Within a
 scope the visitor's `user_id` is matched against `users` first, then their verified
 email against `emails` (case-insensitive), then its domain against
 `email_domains`. A document written before `users` existed reads as having
@@ -243,6 +243,8 @@ X-Imbue-Identity: {"owner":false,"user_id":"…","email":"…"}
 - `owner` is always present.
 - `user_id` and `email` are always present over a share (a session only
   exists for a signed-in account, and a visitor's email is always verified).
+- `is_from_web_client` is present, and `true`, only on a request the hosted
+  web client's page sent to a workspace route (see "The web client's page").
 - Nothing else. Profile data (display name, profile picture) is not in the
   header: it lives in the connector, and a consumer that renders it looks it up
   by `user_id`.
@@ -258,6 +260,46 @@ it as `{"owner":true}`, never as a visitor.
 
 Services key behavior on `user_id`; `email` is for display beside whatever
 profile they fetch, never a substitute identity.
+
+## The web client's page
+
+The hosted web client (`SHARE_CHROME_ORIGIN`) is a page of another origin than
+the workspace's. It frames the workspace, and it also calls two things itself,
+with the workspace's session cookie: the workspace routes an internal app
+serves (`/api/workspace/...`, the shell's), and the gateway's own
+`/_agent/...` routes. For a request that names the web client's origin and is
+for one of those paths (on an internal app's label for the first, on the auth
+label for the second), and for no other request:
+
+- caddy answers the browser's permission check (`OPTIONS`) itself, with the web
+  client's origin, credentials allowed, the methods `GET`, `POST`, `PUT`,
+  `PATCH` and `DELETE`, and the `Content-Type` header. The check carries no
+  session and never reaches the app, whose request guard would refuse it.
+- caddy adds `Access-Control-Allow-Origin` (the web client's origin) and
+  `Access-Control-Allow-Credentials: true` to every answer of an app or of the
+  auth step, a refusal of the gateway's included, so the page can read a `401`
+  for a lapsed session. The loading page caddy answers when an app's port
+  refuses the connection carries neither, so the page reads it as a workspace
+  that did not answer.
+- `/_auth/verify` checks the session as it does for every request, and marks
+  the identity it stamps on a workspace route's request with
+  `"is_from_web_client": true`. The app's request guard admits a request of
+  another origin on that mark alone, and only on the routes the app names
+  (`app_schema.request_guard`).
+
+The mark does not ask for the owner: a grantee of the whole workspace gets it
+too, as that grantee already reaches the terminal. A program that is not a
+browser can send any `Origin` and gains nothing by it, since it holds no
+session and the mark is set only on a request whose session the gateway
+accepted. A share with no web client (`SHARE_CHROME_ORIGIN` unset) renders
+none of this. Neither does one whose `SHARE_CHROME_ORIGIN` is not a plain
+http(s) origin (a scheme, a host and at most a port): the value is written into
+caddy's matchers, so anything else is read as no web client, the share comes up
+without one, and the gateway's log says so.
+
+`share_gateway/web_client.py` holds the paths, the mark's name and what the
+permission check allows. `system/test_web_client_routes.py` holds them to what
+the shell serves and what its request guard reads.
 
 ## The access log
 
@@ -307,14 +349,16 @@ event envelope (`type` `gateway_request_count`, `source` `gateway_requests`):
 - `outcome` is `allowed` or `denied:<reason>`, the reason one of
   `foreign_host`, `origin`, `agent_access_unconfigured`, `agent_token`,
   `no_session`, `grants_misconfigured` and `no_grant`. A redirect to the
-  broker counts as `denied:no_session`; the hosted chrome's CORS preflight
-  counts as allowed by nobody.
+  broker counts as `denied:no_session`; a CORS preflight of the hosted chrome
+  that reaches the auth step counts as allowed by nobody.
 - `timestamp` is the window's end, when the count became final; a replay of
   the stream is deduplicated by `event_id` downstream.
 
 Never a path, a query string, an address or a header. The auth label's
-`/_auth/*` and `/_agent/*` surfaces, `/_health` and the loading page are
-routed without the auth step and are not counted (the access log has them).
+`/_auth/*` and `/_agent/*` surfaces, `/_health`, the loading page, and the web
+client's permission checks for an internal app's workspace routes
+(`/api/workspace/...`, which caddy answers itself) are routed without the auth
+step and are not counted (the access log has them).
 A window keeps at most 256 distinct keys; every further key folds into one
 `overflow` record, so a flood bounds itself. The stream archives itself at
 32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`
@@ -343,22 +387,27 @@ the same gateway:
 - **The invite.** `POST /_agent/invites` (a session cookie of the owner or of a
   visitor with a workspace-level grant, or the bearer token of a workspace-scope
   agent) mints a one-time code: twelve Crockford base32 characters, fifteen
-  minutes, consumed by one join, burned after five failed attempts. It answers
+  minutes, consumed by one join, burned after five failed attempts. A request
+  that relies on a session cookie, here and on the grant routes below, is held
+  to the Origin policy `/_auth/verify` applies (a non-GET with a foreign
+  `Origin` is answered 403), since caddy routes `/_agent/*` to the gateway
+  without that step. It answers
   the code and the instruction block the inviter copies, rendered from
   `.agents/shared/references/visiting-agents-invite.md`. The scope is chosen at
-  minting: `workspace` (every origin, exec authority) or a list of grantable
-  app names (those origins only, no exec). The desktop mints through
+  minting: `workspace` (every origin, and the routes that run a command and
+  read or write a file) or a list of grantable app names (those origins
+  only). The desktop mints through
   `agent-access invite` over `mngr exec`, which also works while the workspace
   is unpublished.
 - **The join.** `POST /_agent/join` on the auth origin, unauthenticated and rate
   limited per client address, takes `{code, public_key, name}`: the agent's own
   Ed25519 key (generated by the helper and never leaving the agent's machine)
   and the name it chose (held to the granter-written-name rule). It writes the
-  grant, appends a marked `authorized_keys` line for workspace scope, and
-  answers the admission token (shown once, stored hashed), the exec origin,
-  the owner-exec audience (`container:<host-id>`), the container's host public
-  key, and the app origins the scope admits. A key that already holds a grant
-  re-joins: same agent id, a fresh token, the new invite's scope and granter.
+  grant and answers the admission token (shown once, stored hashed) and the
+  app origins the scope admits. The grant is the whole of the agent's
+  authority: nothing is written outside the agent-access files. A key that
+  already holds a grant re-joins: same agent id, a fresh token, the new
+  invite's scope and granter.
 - **Admission.** `/_auth/verify` accepts `Authorization: Bearer <token>` beside
   the session cookie. The token names a grant; the grant's scope decides which
   origins it may reach (workspace scope reaches internal apps too, an app scope
@@ -366,15 +415,66 @@ the same gateway:
   is skipped, since a bearer header is never ambient; and the identity handed on
   is `{"owner":false,"agent_id":...,"agent_name":...,"granter":...}` with no
   `user_id`. Caddy strips the `Authorization` header before the backend sees
-  it, as it strips the session cookie. owner-exec verifies the request
-  signature itself; the gateway never does, so the two cannot drift.
-- **The key lines are reconciled from the grants file** at every start and on
-  every join and revoke (`agent_grants.reconcile_authorized_keys`): one line
-  per unexpired workspace-scope grant, carrying the `imbue-agent-access
-  agent_id=...` marker; every other line of the file is left alone. The
-  read-and-replace holds `~/.ssh/authorized_keys.lock`, the lock every other
-  writer of the file (the desktop's cross-workspace SSH grant) takes around its
-  own read-and-write, so neither can overwrite the other's lines.
+  it, as it strips the session cookie.
+- **Commands and files.** Three routes on the auth origin act with the
+  workspace's own authority. Each answers `Authorization: Bearer <token>`
+  alone, never a session cookie, and only a token whose grant has workspace
+  scope (an app-scoped grant is answered 403); the grant is looked up on every
+  request, so revoking it ends access at the next one. No request is signed
+  and no answer is: the token is a bearer credential with the grant's whole
+  reach, which it already was, since it admits its holder to the terminal.
+  A refusal is `{"error": "..."}`.
+  - `POST /_agent/run` takes `{"command": ["<word>", ...], "cwd": "<dir>",
+    "timeout_seconds": <number>}`. The command is run directly, not through a
+    shell, with no input, as the user the gateway runs as, in `cwd` (the
+    repository root when none is given; a relative one is under it). It may
+    take `timeout_seconds`: 600 when none is given, never less than 1 or more
+    than 3600. The answer is `application/x-ndjson`, one line per line of
+    output as the command writes it, `{"type": "stdout" | "stderr", "data":
+    "<the line>"}`, and a last line with the exit: `{"type": "exit", "code":
+    <n>}` (`-1` for a command a signal ended), `{"type": "exit", "code": null,
+    "timed_out": true}` for one that ran out of time, or `{"type": "exit",
+    "code": null, "error": "..."}` for one that could not be started. A
+    command that ran out of time has what it had written by then, a line it
+    had not ended included, sent before that last line. The
+    command is finished when it has exited and nothing it started still holds
+    its output open.
+  - `POST /_agent/files/read` takes `{"path": "<path>"}` and answers
+    `{"exists": true, "content_b64": "<base64>"}`, or 404 with `{"exists":
+    false}` for a file that is not there. A file over 48 MiB is refused, as is
+    anything that is not a regular file.
+  - `POST /_agent/files/write` takes `{"path": "<path>", "content_b64":
+    "<base64>", "mode": "<octal digits>"}` and answers `{"written": true}`. The
+    file is replaced through a temp file beside it and a rename, its directory
+    is created, and its permission bits are `mode` (`600` when none is given).
+    A request body may be up to 64 MiB.
+
+  A path is taken as written when absolute and under the repository root
+  otherwise; nothing confines it, since a caller that may run any command
+  could reach any file that way. A command is killed with everything it
+  started in its process group when its time runs out, when its caller's
+  connection ends before the command does, and when the gateway stops. Nothing
+  a command prints, no file's contents and no token is logged.
+- **No agent's key is in `authorized_keys`.** At every start the gateway
+  removes each line carrying the `imbue-agent-access agent_id=...` marker
+  (`retired_agent_keys`), which a release that ran the owner-exec daemon wrote
+  for an agent granted the whole workspace; every other line of the file is
+  left alone. The read-and-replace holds `~/.ssh/authorized_keys.lock`, the
+  lock every other writer of the file (the desktop's cross-workspace SSH
+  grant) takes around its own read-and-write, so neither can overwrite the
+  other's lines.
+- **The empty `exec` member.** For a grant of the whole workspace, the join and
+  `me` answers carry `"exec": {"origin": "", "audience": "", "host_public_key":
+  ""}`; for a grant of named apps they carry no `exec`. Nothing reads the
+  values. They are there for a copy of the helper from a release that ran the
+  owner-exec daemon, which signs its `run`, `read` and `write` to the address
+  `exec` names. With the empty values each of those fails on an address it
+  cannot reach, so that copy re-reads `me`, finds that it is not the helper the
+  workspace publishes, and prints its notice to reinstall, every time. With no
+  `exec` at all it reads its grant as covering named apps only and says
+  nothing. The helper this release publishes ignores the member, which goes
+  when no such copy is left in use (`_RETIRED_EXEC_COORDINATES` in
+  `agent_routes`).
 - **The CLI's answers.** `agent-access <command> --json` prints one JSON
   document on stdout; a refusal or a misconfiguration is one JSON object on
   stderr, `{"error": ..., "kind": "refused" | "misconfigured"}`, with exit code
@@ -401,16 +501,20 @@ the same gateway:
   with its SHA-256 to check; `GET /_agent/helper` serves the same file (with
   `X-Helper-Version` and `X-Helper-SHA256` headers) as the fallback for an
   unpublished commit, and the join and `me` answers carry a `helper` object
-  the script compares its own hash against. It joins, signs owner-exec requests
-  per the profile (its tests run against the owner-exec vectors vendored
-  beside it), verifies responses and stream trailers against the pinned host
-  key, reaches an app over the share with `get <app>/<path>` (the admission
-  token as a bearer, sent to the workspace's origins only, waiting out an app
-  that answers 503 with `Retry-After` while it starts), refreshes the skills
-  index when its copy is a day old and prints what
-  changed, and re-reads `me` and retries once on a 403 or a verification
-  failure, except for a `run` whose output already streamed: that is reported
-  rather than run again, and the refreshed addresses serve the next command.
+  the script compares its own hash against, printing a notice to reinstall
+  when they differ. It joins, runs commands and reads and writes files through
+  the routes above with its admission token, reaches an app over the share
+  with `get <app>/<path>` (the admission token as a bearer, sent to the
+  workspace's origins only, waiting out an app that answers 503 with
+  `Retry-After` while it starts), refreshes the skills index when its copy is
+  a day old and prints what changed, and re-reads `me` and retries once when
+  a request fails, except for a `run` that may already have started: that is
+  reported rather than run again. A request the gateway calls wrong (a 400) is
+  a usage error and is not retried. The key the helper generates at its first
+  join is what names the agent to the workspace across joins; the helper signs
+  nothing with it. A copy that is not the one the workspace publishes says so,
+  with where to reinstall it from, each time it joins or a request of its
+  fails.
 - **Grants, revocation, audit.** `GET /_agent/grants` lists what the caller may
   see (the owner everything, anyone else what they granted);
   `DELETE /_agent/grants/<id>` revokes (the owner any, a granter their own).

@@ -15,14 +15,18 @@ renderers, and the file locks every writer of them holds:
   `invites.toml`, the visiting agents admitted by a bearer token and the
   one-time codes they join with (`share_gateway/README.md`, "Visiting
   agents"). The records, their parsers and renderers, the invite codes and
-  admission tokens, the `authorized_keys` reconcile, and the agent-access
-  lock. The one check that needs a key library (that a joining agent's key is
+  admission tokens, and the agent-access lock. The one check that needs a key library (that a joining agent's key is
   an Ed25519 OpenSSH key) is the gateway's own, in its `agent_keys` module.
 - `json_values` -- the `is_json_object` guard both parsers read TOML tables
   with.
 
 The share gateway writes these files and admits visitors by them; the shell
 reads them for the workspace's roster (who may be here) and for which apps
-are shared on their own. Both depend on this library rather than on each
+are shared on their own, and its sharing routes (`/api/workspace/sharing...`)
+read the grants, and replace them and the identities beside them, for a client
+outside the workspace, through `document`: `read_sharing_state`,
+`grant_shape_refusals` (the document's shape, never who an account may share
+with) and `replace_grants`, which holds the same lock every other writer
+does. Both depend on this library rather than on each
 other, so neither carries a copy of the other's parser. It imports nothing
 outside the standard library, so a bare `python3` can use it too.

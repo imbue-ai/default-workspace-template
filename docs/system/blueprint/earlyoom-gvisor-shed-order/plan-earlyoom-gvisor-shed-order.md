@@ -14,7 +14,7 @@
   - Under gVisor, SwapTotal is 0 and VmSwap/VmPTE are absent, so this reduces to `VmRSS + adj * MemTotal / 1000`.
   - The bands stay a soft steer, identical on gVisor and runc: one band point is worth MemTotal/1000 of RSS.
 - **The fork is a drop-in replacement.** It accepts the same flags and keeps the same `-N` contract as the binary existing workspaces run, so it can be swapped into live workspaces without touching their tree.
-- **Workspaces install it during setup, not vendored.** The fork's CI publishes per-arch static binaries plus `.sha256`, like `imbue-ai/owner-exec`.
+- **Workspaces install it during setup, not vendored.** The fork's CI publishes per-arch static binaries plus `.sha256`.
   - A pinned dwt installer, `install_earlyoom.sh`, is chained from `setup_system.sh`. The apt package is dropped.
   - update-self re-runs `setup_system.sh` whenever a chained installer changes, so existing workspaces pick it up through a normal release.
 - **Existing imbue_cloud workspaces get it early.** A new `minds-admin hotpatch-earlyoom` command (gen-2 slices only) swaps the binary in and restarts earlyoom, ahead of the dwt release.
@@ -125,7 +125,7 @@
   - Add an x86_64 job that installs runsc at the production pin (`PINNED_GVISOR_RELEASE` in the monorepo's `libs/mngr_vps/imbue/mngr_vps/host_setup.py`, currently `20260601`).
   - That job runs the built binary under `docker --runtime=runsc` with a memory limit and processes tagged to different bands, then asserts that the kill order follows badness.
   - It runs on push only.
-- `.github/workflows/release.yml` (new, modeled on owner-exec's):
+- `.github/workflows/release.yml` (new):
   - On a `v*` tag, build static binaries (`CFLAGS=-static` via the environment, as upstream's Dockerfile does) for x86_64 and aarch64 (native `ubuntu-24.04-arm` runner).
   - Publish `earlyoom-x86_64-unknown-linux`, `earlyoom-aarch64-unknown-linux` and their `.sha256` files.
   - `VERSION` comes from `git describe`, so the startup line reads `earlyoom v1.9.0-imbue.N`.
@@ -133,12 +133,12 @@
 
 ### default-workspace-template
 
-- `system/scripts/install_earlyoom.sh` (new): modeled on `install_owner_exec.sh`, with per-arch sha256s pinned in the script like `install_dufs.sh`.
+- `system/scripts/install_earlyoom.sh` (new), with per-arch sha256s pinned in the script like `install_dufs.sh`.
   - It pins `EARLYOOM_VERSION`, is idempotent and gated on the version stamp, and installs atomically (`install` to `.new`, then `mv`).
   - The header comment explains how to bump it, and says the `minds-admin hotpatch-earlyoom` pin must move with it.
 - `system/scripts/setup_system.sh`:
   - Drop `earlyoom` from the apt list.
-  - Chain `install_earlyoom.sh` next to the owner-exec and dufs installers, with the same `default-workspace-template-install-earlyoom` fallback.
+  - Chain `install_earlyoom.sh` next to the other installers, with the same `default-workspace-template-install-earlyoom` fallback.
   - Afterwards, `apt-get purge -y earlyoom` if it's installed.
   - In the existing `systemctl` block, disable and mask `earlyoom.service`.
   - Update the comment above the apt list.

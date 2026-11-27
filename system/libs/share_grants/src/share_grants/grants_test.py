@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from share_grants.grants import (
+    GrantList,
+    Grants,
     GrantsError,
     grants_lock_path,
     load_grants,
@@ -175,6 +177,19 @@ def test_render_grants_quotes_awkward_service_names_and_values() -> None:
     grants = parse_grants('[services."my app"]\nemails = ["a\\"b@example.com"]\n')
     reparsed = parse_grants(render_grants(grants))
     assert reparsed.services["my app"].emails == {'a"b@example.com'}
+
+
+@pytest.mark.parametrize(
+    "service_name", ["web", "my_app-2", "café", "²", "ｗｅｂ", "a.b", 'a"b', "a\\b", "two\nlines", "x\x7fy", ""]
+)
+def test_render_grants_writes_a_document_that_parses_whatever_a_service_is_named(service_name: str) -> None:
+    grants = Grants(workspace=GrantList(["user-erin-0001"], [], []), services={service_name: GrantList(["u"], [], [])})
+
+    reparsed = parse_grants(render_grants(grants))
+
+    assert list(reparsed.services) == [service_name]
+    assert reparsed.services[service_name].users == {"u"}
+    assert reparsed.workspace.users == {"user-erin-0001"}
 
 
 def test_upgrade_invites_moves_the_email_to_a_user_grant_in_every_scope() -> None:

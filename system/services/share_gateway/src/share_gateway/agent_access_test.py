@@ -5,7 +5,6 @@ from datetime import timezone
 from pathlib import Path
 
 import pytest
-from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
 from share_grants.agent_grants import AgentGrantsError
 from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
 from share_grants.agent_grants import find_grant_by_token
@@ -34,7 +33,6 @@ def make_paths(tmp_path: Path) -> AgentAccessPaths:
     return AgentAccessPaths(
         grants_path=tmp_path / "secrets" / "grants.toml",
         invites_path=tmp_path / "secrets" / "invites.toml",
-        authorized_keys_path=tmp_path / "ssh" / "authorized_keys",
         events_dir=tmp_path / "events",
     )
 
@@ -46,7 +44,7 @@ def read_events(paths: AgentAccessPaths) -> list[dict[str, object]]:
     return [json.loads(line) for line in events_file.read_text().splitlines() if line]
 
 
-def test_join_consumes_the_invite_writes_the_grant_the_key_line_and_the_events(tmp_path: Path) -> None:
+def test_join_consumes_the_invite_writes_the_grant_and_the_events(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     minted = mint_invite(paths, "workspace", _OWNER, "Josh's Claude", None, _NOW, via="test")
     key_line = new_ed25519_public_key_line() + " agent@laptop"
@@ -62,8 +60,6 @@ def test_join_consumes_the_invite_writes_the_grant_the_key_line_and_the_events(t
     stored = load_agent_grants(paths.grants_path)
     assert stored == [joined.grant]
     assert find_grant_by_token(stored, joined.token, _NOW) == joined.grant
-    keys_text = paths.authorized_keys_path.read_text()
-    assert keys_text == f"{joined.grant.public_key} {AUTHORIZED_KEYS_MARKER} agent_id={joined.grant.agent_id}\n"
     assert paths.grants_path.stat().st_mode & 0o777 == 0o600
     assert [event["type"] for event in read_events(paths)] == ["invite_minted", "joined"]
     joined_event = read_events(paths)[1]
@@ -71,13 +67,12 @@ def test_join_consumes_the_invite_writes_the_grant_the_key_line_and_the_events(t
     assert "token" not in json.dumps(joined_event) or joined.token not in json.dumps(joined_event)
 
 
-def test_join_with_an_app_scope_writes_no_key_line_and_carries_the_invite_expiry(tmp_path: Path) -> None:
+def test_join_with_an_app_scope_carries_the_invite_expiry(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     minted = mint_invite(paths, ["chat"], _OWNER, "", timedelta(days=2), _NOW, via="test")
     joined = join(paths, minted.code, new_ed25519_public_key_line(), "Ada's Codex", _NOW)
     assert joined.grant.scope == ["chat"]
     assert joined.grant.expires_at == _NOW + timedelta(days=2)
-    assert not paths.authorized_keys_path.exists() or paths.authorized_keys_path.read_text() == ""
 
 
 def test_join_refuses_unknown_expired_and_reused_codes_the_same_way(tmp_path: Path) -> None:
@@ -143,11 +138,9 @@ def test_rejoin_with_the_same_key_keeps_the_id_and_rotates_the_token(tmp_path: P
     assert len(stored) == 1
     assert find_grant_by_token(stored, first.token, _NOW) is None
     assert find_grant_by_token(stored, second.token, _NOW) == second.grant
-    # The rejoin narrowed the scope to apps, so the exec line is gone.
-    assert paths.authorized_keys_path.read_text() == ""
 
 
-def test_revoke_is_for_the_owner_or_the_granter_and_removes_the_key_line(tmp_path: Path) -> None:
+def test_revoke_is_for_the_owner_or_the_granter(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     granted_by_visitor = join(
         paths,
@@ -191,11 +184,10 @@ def test_revoke_is_for_the_owner_or_the_granter_and_removes_the_key_line(tmp_pat
         via="test",
     )
     assert load_agent_grants(paths.grants_path) == []
-    assert paths.authorized_keys_path.read_text() == ""
     assert [event["type"] for event in read_events(paths)].count("revoked") == 2
 
 
-def test_reconcile_prunes_expired_grants_and_restores_the_key_lines(tmp_path: Path) -> None:
+def test_reconcile_prunes_expired_grants(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     kept = join(
         paths,
@@ -211,12 +203,8 @@ def test_reconcile_prunes_expired_grants_and_restores_the_key_lines(tmp_path: Pa
         "gone",
         _NOW,
     )
-    paths.authorized_keys_path.write_text("ssh-ed25519 AAAA owner@laptop\n")
     assert reconcile(paths, _NOW + timedelta(hours=2)) is True
     assert [grant.agent_id for grant in load_agent_grants(paths.grants_path)] == [kept.grant.agent_id]
-    lines = paths.authorized_keys_path.read_text().splitlines()
-    assert lines[0] == "ssh-ed25519 AAAA owner@laptop"
-    assert lines[1].endswith(f"agent_id={kept.grant.agent_id}")
     assert reconcile(paths, _NOW + timedelta(hours=2)) is False
     assert "expired" in [event["type"] for event in read_events(paths)]
 

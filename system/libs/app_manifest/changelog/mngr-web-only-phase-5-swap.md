@@ -1,0 +1,1 @@
+- The comment on the reserved app names lists `owner` with the names kept from programs a workspace no longer runs. The name stays reserved.

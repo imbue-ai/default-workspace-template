@@ -155,6 +155,9 @@ members = [
     "system/libs/workspace_layout",
     "system/libs/workspace_profile",
     "system/libs/workspace_themes",
+    "system/libs/workspace_backup_setup",
+    "system/libs/workspace_initial_data",
+    "system/libs/workspace_update_control",
     "system/services/caretaker",
     "system/services/env_converge",
     "system/services/host_backup",
@@ -199,6 +202,9 @@ workspace-profile = { workspace = true }
 latchkey-access = { workspace = true }
 routines = { workspace = true }
 disk-headroom = { workspace = true }
+workspace-backup-setup = { workspace = true }
+workspace-initial-data = { workspace = true }
+workspace-update-control = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 chat = { workspace = true }
 files-app = { workspace = true }

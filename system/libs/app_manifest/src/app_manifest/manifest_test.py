@@ -59,6 +59,7 @@ def _full_manifest_data() -> dict[str, object]:
             "default_mode": "floating",
         },
         "window_closed_path": "/api/window-closed",
+        "suggestion_settings_path": "/api/settings/suggestions",
     }
 
 
@@ -85,6 +86,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.scope is LocationScope.INDEPENDENT
     assert manifest.pin.default_mode is EntryMode.FLOATING
     assert manifest.window_closed_path == "/api/window-closed"
+    assert manifest.suggestion_settings_path == "/api/settings/suggestions"
     assert manifest.stop_when_no_windows is True
     assert manifest.uses_microphone is True
 
@@ -194,6 +196,13 @@ def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
         AppManifest.model_validate(
             {**_full_manifest_data(), "window_closed_path": "/closed?x=1"}
+        )
+
+
+def test_suggestion_settings_path_follows_the_launch_path_rule() -> None:
+    with pytest.raises(ValidationError, match="no query string"):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "suggestion_settings_path": "/settings?x=1"}
         )
 
 
@@ -874,6 +883,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.launcher_rank is None
     assert manifest.pin is None
     assert manifest.window_closed_path is None
+    assert manifest.suggestion_settings_path is None
 
 
 def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
@@ -931,7 +941,7 @@ def test_icon_is_required_unless_internal() -> None:
     with pytest.raises(ValidationError, match="icon is required"):
         AppManifest.model_validate({"name": "news", "display_name": "News"})
 
-    internal = AppManifest.model_validate({"name": "owner-exec", "display_name": "Owner exec", "internal": True})
+    internal = AppManifest.model_validate({"name": "terminal-pty", "display_name": "Terminal pty", "internal": True})
     assert internal.icon is None
 
 

@@ -1691,6 +1691,7 @@ def running_workspace(
                 },
                 pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
                 message_handlers=chat_message_handlers,
+                suggestion_settings_path="/api/settings/suggestions",
                 launch_presets={
                     "main": {"target": "main_chat"},
                     "new": {"target": "new_chat"},

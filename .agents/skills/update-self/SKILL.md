@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the release the running Imbue Studio app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the workspace's release channel is on). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
   exempt-checks: size paths contents
@@ -29,9 +29,9 @@ launch, while they are present). An update that cannot keep something they
 built does not wait: the pass ends with a decision for them (Step 4), and
 their answer, whenever it comes, re-lands it.
 
-The default target is **the release the Imbue Studio app driving this workspace was
-built against**, and only that one: the template ships the code that app talks
-to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
+The default target is **the release this workspace's release channel is on**,
+and only that one. The workspace reads that version itself, so a pass needs no
+Imbue Studio app to be running. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -156,8 +156,8 @@ message.
 **A pinned update.** When the message that started this pass pins the update,
 set `PINNED_CEILING` below to its `Ceiling:`, and `PINNED_OVERRIDE` to its
 `Target:` when the message says the user chose that version. `resolve-target`
-then never asks the app, and an app this pass cannot reach is not a fault.
-Otherwise leave both empty.
+then takes the ceiling from the message. Otherwise leave both empty, and it
+takes the release the workspace last read for its release channel.
 
 Ensure the remote exists, heal a shallow clone, fetch with tags, and resolve:
 
@@ -191,8 +191,8 @@ exit 1` leaves a refusal's `error:` line as the last thing printed. The output
 carries `ref`, `kind`, `ceiling` and `exceeds_ceiling`; an upstream branch name
 such as `main` resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
-above `ceiling` that they did not ask for by name: the Imbue Studio app announces its
-own updates.
+above `ceiling` that they did not ask for by name: the workspace's release
+channel has not reached it.
 
 **If the command exits non-zero, stop.** Its single `error:` line says why no
 target could be chosen. Relay it in plain terms, offer the next step, and
@@ -201,9 +201,10 @@ record the verdict it calls for -- never resolve a ref by hand:
 - **Already on the release it may take.** Nothing is wrong with the workspace:
   `run-status verdict ALREADY_CURRENT`.
 - **A fault**: the ceiling names a release the upstream does not carry, or no
-  release at all, or, on a pass with no pin, the app could not be reached or is
-  too old to report its version. A pinned pass never asks the app for its
-  version, so an app it cannot reach is never a fault for it. Say so plainly and
+  release at all, or, on a pass with no pin, the workspace has read no version
+  for its release channel (it holds no update settings yet, or the channel's
+  file could not be read). A pinned pass takes its ceiling from its message, so
+  that is never a fault for it. Say so plainly and
   record `run-status verdict STUCK --detail "<the error line, in plain
   terms>"`. Do **not** pick another release; only a version the user names
   becomes an `--override`, as an operator testing a dev build would.
@@ -211,7 +212,7 @@ record the verdict it calls for -- never resolve a ref by hand:
   plain terms>"`.
 
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
-this app cannot vouch for. Do not dispatch on it silently: tell them what it
+past the ceiling, or one that cannot be compared with it. Do not dispatch on it silently: tell them what it
 risks and get an explicit go-ahead, unless the message that started this pass
 already carries that confirmation (the Imbue Studio app's "Update to a specific
 version" prompt says so). While you wait for their answer, record the wait, so
@@ -280,7 +281,8 @@ cat /tmp/update-self-recheck.json
 ```
 
 Set `PINNED_CEILING` as Step 2 does: the `Ceiling:` of a message that pinned
-the update, else empty, so a pinned pass never asks the app here either.
+the update, else empty, so the re-check holds the target to the ceiling Step 2
+used.
 
 **If it exits non-zero, stop** and follow what it printed: an `error:` line is
 handled as a Step 2 error, and exit code 75 (a system Python too old for the

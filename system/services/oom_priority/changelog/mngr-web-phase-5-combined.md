@@ -1,0 +1,1 @@
+Phases 4 and 5 of the web and desktop consolidation land together from this branch, on top of `main`. What they change here is described in the entries beside this one, one for each step that touched it: `mngr-web-only-phase-5-build.md`, `mngr-web-only-phase-5-swap.md`.

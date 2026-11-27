@@ -560,6 +560,12 @@ class AppManifest(FrozenModel):
         description="The path under the app's origin the shell posts to when a window of the app closes; "
         "an app whose resources live as long as their windows sweeps on it",
     )
+    suggestion_settings_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin that reads (GET) and changes (PUT) the workspace's "
+        "suggestion switches, for the app that holds them; the shell's workspace routes pass a client's read "
+        "and write there",
+    )
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(),
         description="The messages the app takes, each posted by the shell to a route under the app's origin",

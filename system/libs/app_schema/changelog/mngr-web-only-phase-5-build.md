@@ -1,0 +1,1 @@
+- `install_request_guard_with_web_client_routes(app, exempt_rules, web_client_rules)` installs the request guard for an app with routes the hosted web client's page may call. `install_request_guard(app, exempt_rules)` is unchanged, and an app that uses it admits that page nowhere.
