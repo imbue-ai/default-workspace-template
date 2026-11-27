@@ -52,7 +52,8 @@ where supervisord runs the shell and where the cron line changes to.
   Nothing is fetched into a checkout with no `parent.toml` (it was not made from
   the template) or into a shallow one, and an attempt is made a day after the last
   at the earliest. `arming` asks for it in the minute the channel's version is
-  read, and never while an update is running.
+  read, or in any minute where the settings name no feed to read one from, and
+  never while an update is running.
 - `tick` -- the tick as a program. `system/scripts/update_dispatcher_tick.py` is its
   entry file, which the `update-self-dispatch` cron line runs, and
   `system/scripts/install_update_dispatcher_cron.py` writes that line at boot.

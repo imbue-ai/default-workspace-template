@@ -12,7 +12,8 @@ holds an arm back for as long as it has none (the watchdog closes out a run whos
 behind its channel by a patch alone is armed like any other.
 
 A checkout that names no version cannot be behind anything. In the minute the channel's version is read, the tick
-fetches the template's release tags into such a checkout (``release_tags``), unless an update is running.
+fetches the template's release tags into such a checkout (``release_tags``), unless an update is running. Where
+the settings name no feed there is no such read, and the fetch is due in any minute.
 """
 
 import os
@@ -276,7 +277,8 @@ def tick_self_arming(
     log in the minute the channel's version was read.
 
     A checkout that names no version has the template's release tags fetched into it in the minute the channel's
-    version is read, and again a day later at the earliest while it still names none. Nothing is fetched while an
+    version is read, or in any minute where the settings name no feed to read one from, and again a day later at
+    the earliest while it still names none. Nothing is fetched while an
     update is running, which fetches into the same checkout.
 
     A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
@@ -297,7 +299,10 @@ def tick_self_arming(
     is_channel_read_this_minute = (
         channel_version is not None and channel_version.get("checked_at") == now
     )
-    if is_channel_read_this_minute and not facts.is_run_in_flight:
+    # Settings that name no feed, as a tier that publishes none writes them, come with no read of the channel to
+    # go by. The fetch's own record of its last attempt still spaces the fetches a day apart.
+    is_tag_fetch_minute = is_channel_read_this_minute or not settings.feed_base_url
+    if is_tag_fetch_minute and not facts.is_run_in_flight:
         _fetch_release_tags_where_no_version_is_named(now)
     if facts.is_scheduled:
         self_armed = read_self_armed_schedule(now)

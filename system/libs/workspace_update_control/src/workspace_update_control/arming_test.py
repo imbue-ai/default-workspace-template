@@ -562,6 +562,42 @@ def test_tags_that_cannot_be_fetched_are_tried_again_once_a_day_and_only_when_th
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_workspace_whose_settings_name_no_feed_still_fetches_the_tags_that_name_its_version(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    # What a tier that publishes no release feed writes: there is no channel to read a version for.
+    staged.write_state("settings.json", update_settings_document(feed_base_url=""))
+
+    _tick(staged, feed, _NOW)
+
+    assert feed.asked == []
+    assert read_installed_version(_NOW) == _INSTALLED
+    assert staged.read_state("schedule.json") is None
+
+
+def test_tags_that_cannot_be_fetched_with_no_feed_named_are_still_tried_only_once_a_day(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+    staged.write_state("settings.json", update_settings_document(feed_base_url=""))
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+
+    def attempted_at() -> float | None:
+        record = staged.read_state("release-tags-fetch.json")
+        return record["attempted_at"] if record is not None else None
+
+    _tick(staged, feed, _NOW)
+    _tick(staged, feed, _NOW + 60)
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+    assert attempted_at() == _NOW
+
+    a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
+    _tick(staged, feed, a_day_later)
+    assert attempted_at() == a_day_later
+
+
 def test_a_checkout_that_names_its_version_fetches_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:
