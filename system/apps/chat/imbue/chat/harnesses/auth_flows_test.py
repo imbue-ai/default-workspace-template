@@ -608,6 +608,31 @@ def test_a_successful_re_auth_restarts_the_chats_bound_to_that_account(tmp_path:
     assert restarted == [account.id]
 
 
+def test_every_sign_in_that_lands_is_announced_and_a_failed_one_is_not(tmp_path: Path) -> None:
+    """The account's cloud connections are read when it signs in, a first time or again: the hook hears of each
+    committed sign-in, with the account it landed in."""
+    verdicts = [SignedIn.YES, SignedIn.YES, SignedIn.NO]
+    signed_in: list[str] = []
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: verdicts.pop(0),
+        on_signed_in=lambda account: signed_in.append(account.id),
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "first-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    assert signed_in == [account.id]
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    service.submit_key(again.flow_id, "second-key", "opencode-go")
+    assert signed_in == [account.id, account.id]
+
+    failed = service.start("opencode-go", "api_key", account_id=account.id)
+    assert service.submit_key(failed.flow_id, "bad", "opencode-go").state is FlowState.FAILED
+    assert signed_in == [account.id, account.id]
+
+
 def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
     """The account still holds the credential it had, so its chats are working. Restarting
     them would interrupt turns for no reason."""

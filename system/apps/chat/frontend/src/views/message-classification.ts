@@ -262,8 +262,17 @@ export function isPermissionRequestCall(tc: ToolCall): boolean {
 /** The outcome of a permission request, once it has been resolved:
  *   - "granted"/"denied": the user made a decision.
  *   - "error": the request could not be completed (e.g. the user's sign-in flow
- *     did not finish) -- not a decision, so it reads distinctly on the card. */
-export type PermissionResolution = "granted" | "denied" | "error";
+ *     did not finish) -- not a decision, so it reads distinctly on the card.
+ *   - "cloud_connections": the user turned on their provider account's own
+ *     connections instead of answering, and the request was withdrawn. */
+export type PermissionResolution = "granted" | "denied" | "error" | "cloud_connections";
+
+/** Narrow a wire verdict to a permission card's, or null for any other value. */
+export function asPermissionResolution(verdict: unknown): PermissionResolution | null {
+  return verdict === "granted" || verdict === "denied" || verdict === "error" || verdict === "cloud_connections"
+    ? verdict
+    : null;
+}
 
 /** The verdict a resolution message carries, or null when the message is not one.
  *  The backend matches the latchkey handlers' injected phrasing (authored in the
@@ -274,8 +283,7 @@ export function resolutionOf(event: Pick<UserMessageEvent, "display" | "resoluti
   if (event.display !== "permission_resolution") {
     return null;
   }
-  const verdict = event.resolution;
-  return verdict === "granted" || verdict === "denied" || verdict === "error" ? verdict : null;
+  return asPermissionResolution(event.resolution);
 }
 
 /** The id of the request a resolution message resolves, or null when the message

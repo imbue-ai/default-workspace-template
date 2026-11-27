@@ -22,8 +22,11 @@ so no probe outlives the request that asked.
 import os
 import threading
 import time
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
+from typing import TypeVar
 
 from loguru import logger as _loguru_logger
 
@@ -63,7 +66,10 @@ _PROBE_LOCKS_GUARD: Final[threading.Lock] = threading.Lock()
 
 
 class AccountModelProbeError(RuntimeError):
-    """The account's models could not be read: codex would not start, bind, or answer."""
+    """The account's own codex could not be asked (for its models, or anything else): it would not start, bind, or answer."""
+
+
+_AnswerT = TypeVar("_AnswerT")
 
 
 def _probe_lock(account_dir: Path) -> threading.Lock:
@@ -112,7 +118,9 @@ def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
     One probe of an account at a time; a concurrent caller waits its turn and then runs its own.
     """
     with _probe_lock(account_dir):
-        return _probe_bound_codex(account_dir)
+        return ask_codex_account(
+            account_dir, get_codex_app_server_socket_path(account_dir), lambda client: client.model_list()
+        )
 
 
 def _remove_socket(socket_path: Path) -> None:
@@ -130,29 +138,40 @@ def _remove_socket(socket_path: Path) -> None:
         logger.warning("Could not remove the codex account probe socket {}: {}", socket_path, e)
 
 
-def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
-    """Launch a codex bound to ``account_dir``, ask it for its models, and tear it down."""
-    socket_path = get_codex_app_server_socket_path(account_dir)
+def ask_codex_account(
+    account_dir: Path,
+    socket_path: Path,
+    ask: Callable[[CodexAppServerClient], _AnswerT],
+    config_overrides: Sequence[str] = (),
+    timeout_seconds: float = _PROBE_TIMEOUT_SECONDS,
+) -> _AnswerT:
+    """Launch a codex bound to ``account_dir`` on ``socket_path``, hand ``ask`` its initialized client, and tear it down.
+
+    ``config_overrides`` are ``key=value`` settings for this one daemon, over the account folder's own config.
+    Raises :class:`AccountModelProbeError`. Two daemons cannot share a socket path, so a caller that uses the
+    account's own (``get_codex_app_server_socket_path``) holds its probe lock.
+    """
     _remove_socket(socket_path)
-    command = ["codex", "app-server", "--listen", f"unix://{socket_path}"]
+    override_arguments = [argument for override in config_overrides for argument in ("-c", override)]
+    command = ["codex", *override_arguments, "app-server", "--listen", f"unix://{socket_path}"]
     deadline = time.monotonic() + _SOCKET_WAIT_SECONDS
     try:
-        with ConcurrencyGroup(name="codex-account-model-options") as group:
+        with ConcurrencyGroup(name="codex-account-probe") as group:
             # Unchecked and explicitly terminated: the probe ends by killing a daemon that would
             # otherwise run forever, and SIGTERM is not a failure to report.
             process = group.run_process_in_background(
                 command=command,
                 env=codex_account_environment(account_dir),
                 is_checked_by_group=False,
-                timeout=_PROBE_TIMEOUT_SECONDS,
-                name="codex account model-options probe",
+                timeout=timeout_seconds,
+                name="codex account probe",
             )
             try:
                 _wait_for_socket(socket_path, process, deadline)
                 client = CodexAppServerClient(transport=connect_app_server_transport(socket_path))
                 try:
                     client.initialize(_PROBE_CLIENT_NAME, _PROBE_CLIENT_VERSION)
-                    return client.model_list()
+                    return ask(client)
                 finally:
                     client.close()
             finally:
@@ -161,6 +180,6 @@ def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
     # its ExceptionGroup rather than as itself -- including a missing codex, whose spawn failure
     # ``run_process_in_background`` raises right there in the body.
     except (CodexAppServerError, ConcurrencyExceptionGroup, ConcurrencyGroupError, OSError) as e:
-        raise AccountModelProbeError(f"could not read the models of the codex account at {account_dir}: {e}") from e
+        raise AccountModelProbeError(f"could not ask the codex account at {account_dir}: {e}") from e
     finally:
         _remove_socket(socket_path)

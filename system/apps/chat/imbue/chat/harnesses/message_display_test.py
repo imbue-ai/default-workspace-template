@@ -24,6 +24,7 @@ from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
 from imbue.chat.harnesses.message_display import classify_user_message
+from imbue.chat.harnesses.message_display import format_cloud_connections_notice
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
@@ -361,6 +362,18 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display is not None
     assert display.display == DisplayKind.PERMISSION_RESOLUTION
     assert display.resolution == "denied"
+    assert display.request_id == "evt-9"
+
+
+def test_the_cloud_connections_notice_is_a_resolution_of_the_request_it_names() -> None:
+    """The chat app's own notice draws no row and marks the card of the request it was offered on, as a verdict of
+    its own rather than a grant or a denial."""
+    notice = format_cloud_connections_notice("OpenAI", "evt-9")
+    assert "cloud MCP connections of their OpenAI account" in notice
+    display = classify_user_message(notice)
+    assert display is not None
+    assert display.display == DisplayKind.PERMISSION_RESOLUTION
+    assert display.resolution == "cloud_connections"
     assert display.request_id == "evt-9"
 
 

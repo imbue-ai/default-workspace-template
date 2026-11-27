@@ -25,6 +25,7 @@ from imbue.chat.authors import AuthorStore
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.cloud_connections_bridge import CloudConnectionsChatBridge
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -143,6 +144,8 @@ class ChatAppState(MutableModel):
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    # The router's bridge the cloud-connection routes reach the chats through (attached by ``create_application``).
+    cloud_connections_bridge: CloudConnectionsChatBridge | None = None
     mention_handler: MentionHandler | None = Field(
         default=None,
         description="What a room send's mentions do; attached by ``create_application`` beside the routes",

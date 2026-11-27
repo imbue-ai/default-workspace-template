@@ -27,6 +27,8 @@ dependencies = [
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",
     "pyte>=0.8",
+    # Reads the grants documents to tell whether the workspace is shared (cloud_connections.py).
+    "share-grants",
     "simple-websocket>=1.0",
     # Resolves account-keyed settings (keybindings) for a request identity.
     "workspace-profile",

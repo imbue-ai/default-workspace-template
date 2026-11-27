@@ -285,6 +285,9 @@ class AuthFlowService:
     # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
     # with a 60s timeout each and this service holds one lock across every route.
     _restart_bound_agents: Callable[[str], None]
+    # Told of every account a flow signs in, new or signed in again, once its row is committed.
+    # Injected for the same reasons, and must return at once: it is called under this service's lock.
+    _on_signed_in: Callable[[accounts.Account], None]
     # Whether the first run's provider page is still owed: a sign-in made while it is pins its
     # account as the default when nothing is pinned. Injected for the same reason as the restart.
     _is_first_run_provider_step_pending: Callable[[], bool]
@@ -304,6 +307,7 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        on_signed_in: Callable[[accounts.Account], None] | None = None,
         is_first_run_provider_step_pending: Callable[[], bool] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
@@ -324,6 +328,7 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._on_signed_in = on_signed_in or (lambda _account: None)
         service._is_first_run_provider_step_pending = is_first_run_provider_step_pending or (lambda: False)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
@@ -857,6 +862,7 @@ class AuthFlowService:
             self._home,
             is_default_when_none_pinned=self._is_first_run_provider_step_pending(),
         )
+        self._on_signed_in(account)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
         # daemon re-reading a swapped credential either. One rule for every harness rather than

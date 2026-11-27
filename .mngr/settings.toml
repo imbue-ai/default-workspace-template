@@ -51,6 +51,12 @@ host_env__extend = [
     # connects that service's MCP server as a custom latchkey service, so its
     # credential sits in the same store and is reachable from every harness,
     # rather than through any one harness's own MCP config.
+    # This line of the host's env file is the workspace's one switch for the
+    # provider accounts' own cloud connections, codex's included (see
+    # cli_args under [agent_types.codex]): the chat app rewrites it to true
+    # when the user takes a permission card's offer of them
+    # (system/apps/chat/README.md, "Cloud connections"). Keep it out of the
+    # per-agent `env`: the codex daemon reads an agent's own value over this one.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
@@ -363,7 +369,14 @@ model_reasoning_effort = "medium"
 #   so they never appear in the transcript.
 # - apps = false: disable ChatGPT account app/connector sync -- it's an OAuth side channel
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
-#   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
+#   ENABLE_CLAUDEAI_MCP_SERVERS=false above, which cli_args lets override it). Plugin skills
+#   and hooks are unaffected.
+# The workspace's switch for the ChatGPT account's own apps: the host's env file
+# (ENABLE_CLAUDEAI_MCP_SERVERS under [commands.create] host_env above), read by the shell
+# that starts the agent's codex daemon, which sources that file first. mngr pastes cli_args
+# into that command line unquoted, so the variable is expanded on every start, and a `-c`
+# override wins over the `apps = false` config_overrides writes into the agent's config.toml.
+cli_args = ["-c", "features.apps=${ENABLE_CLAUDEAI_MCP_SERVERS:-false}"]
 config_overrides.suppress_unstable_features_warning = true
 # Do not pin `service_tier` here. The visible `--remote` TUI sends the configured tier with its
 # `thread/resume`, and the app-server rebuilds an idle thread whose tier differs from it, so the

@@ -24,7 +24,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { PermissionResolution, RequestResolution, SecretResolution } from "./message-classification";
-import { isSkillExpansionUserMessage } from "./message-classification";
+import { asPermissionResolution, isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
 import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-card";
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
@@ -46,8 +46,7 @@ function resolutionForCall(
   resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
 ): PermissionResolution | null {
   const details = parsePermissionRequest(toolCall, toolResult);
-  const resolution = details ? resolutionsByRequestId.get(details.requestId) : undefined;
-  return resolution === "granted" || resolution === "denied" || resolution === "error" ? resolution : null;
+  return asPermissionResolution(details ? resolutionsByRequestId.get(details.requestId) : undefined);
 }
 
 /** A secret request's own verdict, by its request id, or null while it awaits an answer. */
