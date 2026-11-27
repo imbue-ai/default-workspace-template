@@ -68,6 +68,12 @@ merged.
   and cannot be shared yet. Tell the user that in their terms (it is built on
   a part of Imbue Studio that is newer than the last release, so sharing it
   has to wait for the next one), and that nothing was published.
+- **The app came from someone else and has no license.** The app was
+  installed from another repository and changed here, and that repository
+  never said on what terms it was shared. Tell the user it cannot be
+  published until whoever made it adds a license to theirs, and that
+  bringing in that newer version (the `update-installed-app` skill) is what
+  makes it publishable.
 - **The app cannot take in a skill it needs**, or cannot do without something
   else that exists only in this workspace (the report names it). Decide with
   the user whether the app is worth publishing without it ("Which skills" in

@@ -309,6 +309,10 @@ without one is refused:
 - **The app has one**: leave it exactly as it is. An app that was installed
   and changed keeps the license it came with, and the README's license line
   names that one.
+- **The app has none and your task's "derived from" names a repository**:
+  write none. Most of the app is someone else's work, and nothing says on
+  what terms they shared it, so it is not yours or the user's to license.
+  Report `stuck` and say so.
 
 ## 7. Check, commit, report
 
