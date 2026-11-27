@@ -460,6 +460,26 @@ def test_a_document_that_cannot_be_deleted_reads_failed_and_the_next_start_delet
     assert stored_settings is not None and stored_settings.channel == "beta"
 
 
+def test_a_document_that_is_gone_when_the_step_comes_to_delete_it_is_applied(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+
+    def _take_the_destination_and_remove_the_document(
+        root: Path, request: Mapping[str, object]
+    ) -> None:
+        backup_destination(root, request)
+        document_path.unlink()
+
+    status = apply_initial_data(
+        host_dir, workspace_root, _take_the_destination_and_remove_the_document, _NOW
+    )
+
+    assert status == _APPLIED
+    assert read_initial_data_status(workspace_root) == _APPLIED
+    assert len(backup_destination.requests) == 1
+
+
 def _put_a_link_to_nowhere_in_the_records_place(
     workspace_root: Path, tmp_path: Path
 ) -> Path:

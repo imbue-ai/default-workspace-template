@@ -349,7 +349,7 @@ def apply_initial_data(
     if not _keep(workspace_root, digest, progress_by_part, outcome):
         return failed_status(f"{reached}, and that could not be recorded.")
     try:
-        document_path.unlink()
+        document_path.unlink(missing_ok=True)
     except OSError as e:
         return _left_for_the_next_start(
             workspace_root,
