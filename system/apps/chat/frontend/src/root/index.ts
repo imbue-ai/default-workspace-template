@@ -92,6 +92,7 @@ import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { FirstRunProvidersPage } from "../views/FirstRunProvidersPage";
+import { connectFirstRunCoverToShell } from "./firstRunCover";
 import { makeFirstConversationReport } from "./firstConversationReport";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -711,8 +712,7 @@ function bootstrap(): void {
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   if (isFirstRunProvidersViewRequested(window.location.search)) {
-    // The shell's cover over a first-run workspace: the provider page alone, with no chats behind it.
-    const cover = connectToShell({ capabilities: { navigation: false, closeChord: false } });
+    const cover = connectFirstRunCoverToShell();
     m.mount(rootElement, { view: () => m(FirstRunProvidersPage, { shell: cover }) });
     return;
   }
