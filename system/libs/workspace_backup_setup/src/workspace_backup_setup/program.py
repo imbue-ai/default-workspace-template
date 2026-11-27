@@ -371,12 +371,15 @@ class BackupSetupProgram:
                     ),
                 )
                 return
-        self._renew()
+        # Without the lease the attempt ends here, and the next pass waits for its holder.
+        if not self._renew():
+            return
         failure = _initialize_repository(pending)
         if failure is not None:
             self._record_failure(attempting, failure)
             return
-        self._renew()
+        if not self._renew():
+            return
         env_text = render_restic_env(pending)
         now = self._clock()
         with setup_lock(self._workspace_root):
@@ -410,7 +413,8 @@ class BackupSetupProgram:
         self._next_credentials_check_at = now + CREDENTIALS_CHECK_INTERVAL_SECONDS
         logger.info("Backups are set up: restic.env is in place")
 
-    def _renew(self) -> None:
+    def _renew(self) -> bool:
+        """Renew the lease before the attempt's next step; False when it ran out and another holder took it."""
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, self._clock())
         except BackupLeaseHeldError as e:
@@ -418,6 +422,8 @@ class BackupSetupProgram:
                 "The backup lease ran out under the setup and {} took it",
                 e.lease.holder,
             )
+            return False
+        return True
 
     def _keep_the_credentials_in_use(
         self, attempting: SetupRecord, in_use_text: str

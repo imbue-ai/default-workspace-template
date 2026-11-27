@@ -799,6 +799,37 @@ def test_storage_kept_for_the_hourly_check_is_tried_as_soon_as_the_backup_lease_
     assert workspace.state().setup.state is BackupSetupState.READY
 
 
+def test_an_attempt_whose_lease_ran_out_and_was_taken_ends_and_is_taken_up_once_the_lease_is_back(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    def _make_a_password_while_the_lease_runs_out_and_a_restore_takes_it() -> str:
+        workspace.clock.advance(601.0)
+        take_lease(workspace.lease_path, "restore", workspace.clock())
+        return workspace.passwords()
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_make_a_password_while_the_lease_runs_out_and_a_restore_takes_it,
+    )
+    workspace.request(imbue_cloud_request("token-a"))
+
+    program.run_pass()
+
+    assert workspace.state().setup.state is BackupSetupState.INITIALIZING
+    assert fake_restic_calls(fake_restic_control) == []
+    held = read_lease(workspace.lease_path, workspace.clock())
+    assert held is not None and held.holder == "restore"
+
+    release_lease(workspace.lease_path, "restore", workspace.clock())
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.READY
+    assert workspace.installed()["RESTIC_PASSWORD"] == "made-password-1"
+    assert workspace.passwords.made == ["made-password-1"]
+
+
 def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
