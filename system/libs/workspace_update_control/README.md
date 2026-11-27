@@ -87,3 +87,10 @@ requests as they always did and record the last one that named a version
 version, a request that names none takes the older of the two, and an armed schedule
 is left to that desktop's refreshes. A workspace no such desktop is asking follows
 its channel.
+
+A desktop from before the update routes asks no route: it runs the program it ships,
+which points the cron line at that program's own dispatcher. That dispatcher reads no
+channel and arms nothing by itself, so while the line names it the workspace follows
+that desktop alone. The workspace's own line is written back when it boots, on an
+arm, a start and a refresh of an armed schedule, and whenever a client writes the
+update settings, which a current client does each time it opens the workspace.

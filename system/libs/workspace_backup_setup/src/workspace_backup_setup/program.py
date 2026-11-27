@@ -271,10 +271,12 @@ class BackupSetupProgram:
         self._awaited_holder = ""
         try:
             with setup_lock(self._workspace_root):
-                if (
-                    read_setup_record(self._workspace_root).request_id
-                    != record.request_id
-                ):
+                # A file another writer put in place since ``record`` was read is the destination, not the
+                # file this turn-off was asked to move: the record taken from it has a request id of its own.
+                current = take_another_writers_file(
+                    self._workspace_root, now, self._workspace_id
+                )
+                if current.request_id != record.request_id:
                     return
                 keep_restic_env_aside(self._workspace_root, now)
                 write_setup_record(
@@ -438,7 +440,9 @@ class BackupSetupProgram:
                 != attempting.request_id
             ):
                 return
-            (self._workspace_root / PENDING_ENV_RELATIVE_PATH).unlink(missing_ok=True)
+            # The record comes first: an unfinished setup with no offer left reads as awaiting storage, which
+            # has a client ask for storage again and so end the credentials that work. An offer left beside
+            # a setup that reads ready is let go at the next check.
             write_setup_record(
                 self._workspace_root,
                 SetupRecord(
@@ -451,6 +455,7 @@ class BackupSetupProgram:
                     installed_digest=env_digest(in_use_text),
                 ),
             )
+            (self._workspace_root / PENDING_ENV_RELATIVE_PATH).unlink(missing_ok=True)
         self._next_credentials_check_at = now + CREDENTIALS_CHECK_INTERVAL_SECONDS
         logger.info(
             "The storage still accepts the credentials in use; the ones offered are let go"

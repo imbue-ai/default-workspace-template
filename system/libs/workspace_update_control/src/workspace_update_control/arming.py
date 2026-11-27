@@ -47,6 +47,7 @@ from workspace_update_control.protocol import (
     DISMISSALS_FILE_PATH,
     INSTALLED_VERSION_FILE_PATH,
     LAST_DISPATCH_FILE_PATH,
+    OUTCOME_ALREADY_ARMED,
     OUTCOME_ARMED,
     RUN_RECORD_PATH,
     SCHEDULE_FILE_PATH,
@@ -247,7 +248,9 @@ def tick_self_arming(
     Reads the channel's version when the last read is an hour old, keeps current the values of an armed schedule
     that are the workspace's own, and arms a schedule for the channel's version when ``should_auto_arm`` says
     so. A channel whose file could not be read arms nothing. Neither does a version past the one a client from
-    before the workspace armed its own updates named, while that client keeps asking.
+    before the workspace armed its own updates named, while that client keeps asking. An arm that is refused,
+    as one is while no AI account is signed in, is tried again every minute, and is written to the dispatcher's
+    log in the minute the channel's version was read.
 
     A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
     skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
@@ -316,6 +319,17 @@ def tick_self_arming(
         fetch_channel_file=fetch_channel_file,
     )
     if answer.get("outcome") != OUTCOME_ARMED:
+        # Said in the minute the channel's version was read, which comes once an hour, and not in each of the
+        # minutes between. A schedule that stands says so itself where it is found.
+        if (
+            answer.get("outcome") != OUTCOME_ALREADY_ARMED
+            and channel_version is not None
+            and channel_version.get("checked_at") == now
+        ):
+            write_log_line(
+                "did not arm the update to %s for the workspace itself: %s (%s)"
+                % (target_ref, answer.get("outcome"), answer.get("detail"))
+            )
         return
     if _read_skipped_target_ref() == target_ref:
         armed = answer.get("schedule")

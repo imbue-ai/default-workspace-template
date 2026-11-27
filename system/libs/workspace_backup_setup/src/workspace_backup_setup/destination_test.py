@@ -1,4 +1,5 @@
 import stat
+import traceback
 from pathlib import Path
 
 import pytest
@@ -336,7 +337,8 @@ def test_a_destination_the_workspace_cannot_take_is_refused_and_changes_nothing(
         _request(workspace_root, lease_path, body)
 
     assert said in str(refused.value)
-    assert "typed-password" not in str(refused.value)
+    # Nor in what a log of the error with its traceback and its causes would hold.
+    assert "typed-password" not in "".join(traceback.format_exception(refused.value))
     assert not (workspace_root / "data").exists()
 
 

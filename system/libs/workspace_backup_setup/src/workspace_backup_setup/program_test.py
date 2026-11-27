@@ -29,6 +29,7 @@ from workspace_backup_setup.state import (
     read_backup_credentials,
     read_backup_state,
     read_setup_record,
+    write_setup_record,
 )
 from workspace_backup_setup.testing import (
     FAKE_RESTIC_FAILS,
@@ -49,6 +50,12 @@ _STORAGE_REFUSED = (
     "The storage does not accept the credentials this workspace holds for it."
 )
 _WRONG_PASSWORD = "The repository is already initialized with a password this workspace does not hold."
+# A ``restic.env`` as a released desktop writes one into the workspace by its own command.
+_DESKTOP_RESTIC_ENV = (
+    "# Managed by Imbue Studio.\n"
+    f"RESTIC_REPOSITORY={IMBUE_CLOUD_REPOSITORY}\nRESTIC_REST_USERNAME={WORKSPACE_ID}\n"
+    "RESTIC_REST_PASSWORD=desktop-token\nRESTIC_PASSWORD=desktop-password\n"
+)
 
 needs_restic = pytest.mark.skipif(
     shutil.which("restic") is None,
@@ -355,6 +362,18 @@ def test_a_setup_the_program_was_stopped_in_is_taken_up_when_it_starts(
     assert fake_restic_calls(fake_restic_control) == [f"{IMBUE_CLOUD_REPOSITORY}|init"]
 
 
+def test_a_program_that_starts_with_nothing_to_do_gives_back_the_lease_a_previous_run_left(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    # A run killed in the middle of a turn-off, after it had moved the file: nothing is left to attempt.
+    take_lease(workspace.lease_path, "setup", workspace.clock())
+
+    workspace.start_program().run_pass()
+
+    assert read_lease(workspace.lease_path, workspace.clock()) is None
+    assert fake_restic_calls(fake_restic_control) == []
+
+
 def test_a_destination_named_during_an_attempt_ends_the_attempt_and_is_set_up_next(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -604,6 +623,39 @@ def test_storage_offered_for_the_repository_in_use_is_let_go_while_the_storage_a
     assert workspace.kept_aside() == []
 
 
+def test_an_offer_left_beside_credentials_recorded_as_kept_is_let_go_by_the_program_that_starts_next(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    """The program records that it keeps the credentials in use before it drops the offer, so one that stops
+    between the two leaves a ready setup with the offer beside it, and never an unfinished one with no storage."""
+    _set_up_imbue_cloud(workspace, "token-a")
+    installed_text = workspace.restic_env.read_text()
+    refuse_fake_restic_token(fake_restic_control, "token-b")
+    workspace.request(imbue_cloud_request("token-b"))
+    asked = read_setup_record(workspace.root)
+    write_setup_record(
+        workspace.root,
+        SetupRecord(
+            request_id=asked.request_id,
+            destination=asked.destination,
+            repository=asked.repository,
+            state=BackupSetupState.READY,
+            installed_digest=env_digest(installed_text),
+        ),
+    )
+    assert (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
+
+    workspace.start_program().run_pass()
+
+    state = workspace.state()
+    assert (state.setup.state, state.credentials_digest) == (
+        BackupSetupState.READY,
+        env_digest(installed_text),
+    )
+    assert workspace.restic_env.read_text() == installed_text
+    assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
+
+
 def test_storage_offered_for_the_repository_in_use_is_taken_once_the_storage_refuses_what_is_held(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -620,6 +672,36 @@ def test_storage_offered_for_the_repository_in_use_is_taken_once_the_storage_ref
     assert workspace.installed() == {**held, "RESTIC_REST_PASSWORD": "token-b"}
     assert workspace.passwords.made == ["made-password-1"]
     assert workspace.kept_aside() == [held]
+
+
+def test_storage_offered_for_the_repository_in_use_is_neither_taken_nor_let_go_while_the_storage_cannot_be_asked(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    program = _set_up_imbue_cloud(workspace, "token-a")
+    installed_text = workspace.restic_env.read_text()
+
+    set_fake_restic_mode(fake_restic_control, FAKE_RESTIC_FAILS)
+    workspace.request(imbue_cloud_request("token-b"))
+    program.run_pass()
+
+    state = workspace.state()
+    assert (state.setup.state, state.setup.retry_at, state.lease) == (
+        BackupSetupState.FAILED,
+        _NOW + 60.0,
+        None,
+    )
+    assert state.setup.detail.startswith(
+        "The credentials in use could not be checked: "
+    )
+    for credential in ("token-a", "token-b", "made-password-1"):
+        assert credential not in state.setup.detail
+    assert workspace.restic_env.read_text() == installed_text
+    offered = read_pending_env(
+        workspace.root, read_setup_record(workspace.root).request_id
+    )
+    assert offered is not None
+    assert offered["RESTIC_REST_PASSWORD"] == "token-b"
+    assert workspace.kept_aside() == []
 
 
 def test_storage_the_storage_refuses_leaves_the_setup_awaiting_storage_until_it_is_accepted(
@@ -740,12 +822,7 @@ def test_a_restic_env_another_writer_put_in_place_is_taken_as_the_destination(
     assert workspace.state().setup.state is BackupSetupState.FAILED
     calls_before = len(fake_restic_calls(fake_restic_control))
 
-    desktop_text = (
-        "# Managed by Imbue Studio.\n"
-        f"RESTIC_REPOSITORY={IMBUE_CLOUD_REPOSITORY}\nRESTIC_REST_USERNAME={WORKSPACE_ID}\n"
-        "RESTIC_REST_PASSWORD=desktop-token\nRESTIC_PASSWORD=desktop-password\n"
-    )
-    workspace.restic_env.write_text(desktop_text)
+    workspace.restic_env.write_text(_DESKTOP_RESTIC_ENV)
     set_fake_restic_mode(fake_restic_control, FAKE_RESTIC_FINDS_A_REPOSITORY)
 
     read_before_the_program_ran = workspace.state()
@@ -767,9 +844,9 @@ def test_a_restic_env_another_writer_put_in_place_is_taken_as_the_destination(
     )
     assert (state.repository, state.credentials_digest) == (
         IMBUE_CLOUD_REPOSITORY,
-        env_digest(desktop_text),
+        env_digest(_DESKTOP_RESTIC_ENV),
     )
-    assert workspace.restic_env.read_text() == desktop_text
+    assert workspace.restic_env.read_text() == _DESKTOP_RESTIC_ENV
     assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
     assert [
         call
@@ -780,6 +857,33 @@ def test_a_restic_env_another_writer_put_in_place_is_taken_as_the_destination(
     assert [kept["RESTIC_PASSWORD"] for kept in workspace.kept_aside()] == [
         "made-password-1"
     ]
+
+
+def test_a_restic_env_another_writer_put_in_place_as_backups_were_being_turned_off_stays_the_destination(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    program = _set_up_imbue_cloud(workspace, "token-a")
+    workspace.request({"destination": "NONE"})
+    record_the_pass_read = read_setup_record(workspace.root)
+    # A writer that takes no lease lands after the pass read the record, and before the turn-off moves the file.
+    workspace.restic_env.write_text(_DESKTOP_RESTIC_ENV)
+
+    program._turn_off(record_the_pass_read)
+
+    assert workspace.restic_env.read_text() == _DESKTOP_RESTIC_ENV
+    assert workspace.kept_aside() == []
+    state = workspace.state()
+    assert (
+        state.destination,
+        state.setup.state,
+        state.credentials_digest,
+        state.lease,
+    ) == (
+        BackupDestinationKind.IMBUE_CLOUD,
+        BackupSetupState.READY,
+        env_digest(_DESKTOP_RESTIC_ENV),
+        None,
+    )
 
 
 def test_a_restic_env_for_another_storage_reads_as_the_users_own(

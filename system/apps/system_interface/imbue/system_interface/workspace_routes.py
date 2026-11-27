@@ -74,6 +74,7 @@ from workspace_update_control.agents import read_observed_agents
 from workspace_update_control.control import AgentsReader
 from workspace_update_control.control import arm_schedule
 from workspace_update_control.control import cancel_schedule
+from workspace_update_control.control import install_cron_entry
 from workspace_update_control.control import read_liveness
 from workspace_update_control.control import read_update_state
 from workspace_update_control.control import record_dismissals
@@ -602,6 +603,8 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
 
     The workspace's own answer on arming and its own hours win over the account's. A request that leaves one of
     those three out keeps the stored value, and one that sends null clears it.
+
+    The cron line that runs the dispatcher is written again too, so that it runs this workspace's own.
     """
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateSettingsModel)
@@ -615,6 +618,13 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
         raise WorkspaceRouteRefusal(
             f"The update settings could not be written: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
         ) from e
+    # CLEANUP: drop this once no supported desktop ships a dispatcher of its own. Such a desktop points the
+    # cron line at the one it ships, which arms nothing by itself, and nothing else puts this workspace's
+    # own back before the next boot. The settings are stored whether or not the line could be written.
+    try:
+        install_cron_entry(str(get_state().live_cron_directory))
+    except OSError as e:
+        logger.warning("Could not write the update dispatcher's cron line: {}", e)
     return model_response(UpdateSettingsModel.model_validate(stored.document()))
 
 
