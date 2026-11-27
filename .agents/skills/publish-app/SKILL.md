@@ -158,9 +158,9 @@ Only after the user replied to the scope gate.
 1. Confirm the GitHub access and read the account the repository goes under
    (`owner`): "Confirming the access" in `references/github-access.md`. End
    your turn if the approval is not there yet.
-2. Dispatch the worker as `references/dispatching-the-worker.md` says: it has
-   the task file and the commands. The worker is `<slug>`, `publish-`
-   followed by the app's name (`publish-notes`), and its branch is
+2. Read `references/dispatching-the-worker.md` and dispatch the worker with
+   the task file and the commands it gives. The worker is `<slug>`,
+   `publish-` followed by the app's name (`publish-notes`), and its branch is
    `mngr/<slug>`. Its own instructions are `references/scan-worker.md`, a
    guide written for it and not for you.
 3. Lead it as the `launch-task` skill says a lead does: its `question` gates,
@@ -243,8 +243,8 @@ uv run --no-sync app-install publish record <name>
 It writes what was published into the app's record. If this step is
 interrupted, or its result is not `recorded` with no `problems`, the app IS
 published: never push again, and read "When recording stops" in
-`references/results.md`. Then do what `references/after-publishing.md` says,
-before you tell the user anything.
+`references/results.md`. Then read `references/after-publishing.md` and do
+what it says, before you tell the user anything.
 
 Then destroy the worker and its branch:
 
