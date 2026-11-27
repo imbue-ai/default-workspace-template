@@ -1,4 +1,4 @@
-"""Backup configuration loading: optional user settings + injected secrets.
+"""Backup configuration loading: optional user settings + the secrets restic runs on.
 
 Two on-disk inputs, both optional from the service's point of view:
 
@@ -377,5 +377,5 @@ def render_default_backup_toml(snapshot: BackupCapabilities) -> str:
 
 
 def write_default_restic_env_template(path: Path = RESTIC_ENV_PATH) -> bool:
-    """Compat no-op: restic.env templates are no longer written (Imbue Studio injects the file)."""
+    """Compat no-op: no restic.env template is written (the workspace's ``backup-setup`` program writes the file)."""
     return False

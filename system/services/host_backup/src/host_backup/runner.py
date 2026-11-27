@@ -219,7 +219,8 @@ def _should_tick_now(
     Reasons: 'startup' (first tick after process start), 'config_change'
     (either file's mtime differs from last seen -- including the file
     appearing or disappearing, since neither file exists until written:
-    Imbue Studio injects restic.env and host-backup-now may create backup.toml),
+    the workspace's backup-setup program writes restic.env and host-backup-now
+    may create backup.toml),
     'interval' (the wall-clock backup interval elapsed).
     """
     if state.last_tick_end_monotonic is None:
