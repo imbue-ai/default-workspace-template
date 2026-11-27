@@ -1269,6 +1269,22 @@ def _save_schedule_marks(schedule: Mapping[str, object]) -> None:
         write_json_atomically(SCHEDULE_FILE_PATH, current)
 
 
+def _retire_schedule(schedule: Mapping[str, object]) -> bool:
+    """Remove the schedule file while it is the one ``schedule`` was read from; whether it was removed.
+
+    A schedule armed again since that read is not the one the tick decided to retire, and stays.
+    """
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None or current.get("armed_at") != schedule.get("armed_at"):
+            return False
+        try:
+            os.remove(SCHEDULE_FILE_PATH)
+        except FileNotFoundError:
+            return False
+        return True
+
+
 def _is_marked_lead_gone(
     schedule: Mapping[str, object],
     agents: Sequence[Mapping[str, str]] | None,
@@ -1301,15 +1317,11 @@ def _tick_schedule(now: float, agent_environment: AgentEnvironment) -> None:
     window = current_window(now, *window_bounds)
     match action:
         case ScheduleAction.REMOVE:
-            with state_lock():
-                try:
-                    os.remove(SCHEDULE_FILE_PATH)
-                except FileNotFoundError:
-                    return
-            write_log_line(
-                "retired the schedule: the run it covers has a verdict (%s)"
-                % _run_verdict(run)
-            )
+            if _retire_schedule(schedule):
+                write_log_line(
+                    "retired the schedule: the run it covers has a verdict (%s)"
+                    % _run_verdict(run)
+                )
         case ScheduleAction.RECORD_SKIP:
             reason = str(schedule.get("pending_skip_reason") or SKIP_WINDOW_CLOSED)
             schedule.update(

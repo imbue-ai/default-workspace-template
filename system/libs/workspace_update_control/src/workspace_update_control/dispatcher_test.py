@@ -481,6 +481,18 @@ def test_a_tick_retires_the_schedule_once_its_run_has_a_verdict(
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_schedule_armed_again_between_a_ticks_read_and_its_retiring_stays_armed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    read_by_the_tick = _schedule()
+    armed_again = _schedule(armed_at=_IN_WINDOW)
+    staged.write_state("schedule.json", armed_again)
+
+    assert dispatcher._retire_schedule(read_by_the_tick) is False
+
+    assert staged.read_state("schedule.json") == armed_again
+
+
 def _messenger_that_first(
     staged: StagedUpdateWorkspace, change_to_schedule: str, exit_code: int
 ) -> None:
