@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from workspace_update_control.channel import (
@@ -16,6 +18,9 @@ from workspace_update_control.channel import (
 )
 from workspace_update_control.settings import UpdateSettings
 from workspace_update_control.testing import (
+    DRIPPING_FEED_CHANNEL,
+    OVERSIZED_FEED_CHANNEL,
+    SILENT_FEED_CHANNEL,
     STAGED_FEED_BASE_URL,
     RecordingFeed,
     StagedUpdateWorkspace,
@@ -245,6 +250,31 @@ def test_the_channels_file_is_read_over_http(local_feed: str) -> None:
 def test_a_channel_the_feed_does_not_publish_is_unreadable(local_feed: str) -> None:
     with pytest.raises(ChannelFileUnreadableError, match="404"):
         fetch_channel_file(channel_file_url(local_feed, "nightly"))
+
+
+@pytest.mark.parametrize(
+    ("channel", "why"),
+    [
+        # The socket's own wait and the read's whole time run out together, so either may say it.
+        (SILENT_FEED_CHANNEL, "did not answer|timed out"),
+        # No single wait on the socket runs out, so only giving the read up ends it.
+        (DRIPPING_FEED_CHANNEL, "did not answer in 0.5 seconds"),
+    ],
+)
+def test_a_feed_that_keeps_the_read_waiting_is_given_up_on_when_the_time_is_out(
+    local_feed: str, channel: str, why: str
+) -> None:
+    started_at = time.monotonic()
+
+    with pytest.raises(ChannelFileUnreadableError, match=why):
+        fetch_channel_file(channel_file_url(local_feed, channel), timeout_seconds=0.5)
+
+    assert time.monotonic() - started_at < 5
+
+
+def test_a_file_larger_than_any_channels_file_is_unreadable(local_feed: str) -> None:
+    with pytest.raises(ChannelFileUnreadableError, match="larger than"):
+        fetch_channel_file(channel_file_url(local_feed, OVERSIZED_FEED_CHANNEL))
 
 
 def test_an_address_that_is_not_http_is_never_opened(

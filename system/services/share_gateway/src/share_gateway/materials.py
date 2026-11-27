@@ -66,6 +66,9 @@ def frpc_config_path(relay_id: str) -> Path:
 
 
 _EXPORT_LINE_PATTERN = re.compile(r"""^export\s+([A-Z0-9_]+)=["']?([^"'\n]*)["']?\s*$""", re.MULTILINE)
+# What a web client's origin is: a scheme, a host and at most a port. The value is written into caddy matchers and
+# a response header, where a space, a ``*`` or a ``{placeholder}`` would mean something else than an origin.
+_WEB_CLIENT_ORIGIN_PATTERN = re.compile(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?")
 
 # No relay endpoint here: the gateway fetches its relay assignment from the
 # connector (relay-token auth) and re-polls, so fleet changes never require
@@ -88,6 +91,7 @@ class ShareMaterials:
         connector_url: str,
         broker_url: str,
         chrome_origin: str,
+        is_chrome_origin_refused: bool,
     ) -> None:
         self.workspace_domain = workspace_domain
         self.relay_token = relay_token
@@ -98,6 +102,8 @@ class ShareMaterials:
         # Empty when the share was created by an older client that did not set
         # SHARE_CHROME_ORIGIN -- embedding + CORS then stay disabled.
         self.chrome_origin = chrome_origin
+        # Whether share.env named a SHARE_CHROME_ORIGIN that is no plain http(s) origin, which reads as none.
+        self.is_chrome_origin_refused = is_chrome_origin_refused
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ShareMaterials):
@@ -106,17 +112,24 @@ class ShareMaterials:
 
 
 def parse_share_materials(text: str) -> ShareMaterials | None:
-    """Parse share.env text into materials; None when any required key is missing or malformed."""
+    """Parse share.env text into materials; None when any required key is missing or malformed.
+
+    A ``SHARE_CHROME_ORIGIN`` that is not a plain http(s) origin (a scheme, a host, at most a port) reads as none:
+    the share runs with no web client, and the materials say that one was refused.
+    """
     values = {match.group(1): match.group(2) for match in _EXPORT_LINE_PATTERN.finditer(text)}
     if any(not values.get(key) for key in _REQUIRED_KEYS):
         return None
+    # Optional: absent for shares created before the hosted-chrome rollout.
+    named_chrome_origin = values.get("SHARE_CHROME_ORIGIN", "").rstrip("/")
+    is_chrome_origin_usable = _WEB_CLIENT_ORIGIN_PATTERN.fullmatch(named_chrome_origin) is not None
     return ShareMaterials(
         workspace_domain=values["SHARE_WORKSPACE_DOMAIN"].lower(),
         relay_token=values["SHARE_RELAY_TOKEN"],
         connector_url=values["SHARE_CONNECTOR_URL"].rstrip("/"),
         broker_url=values["SHARE_BROKER_URL"].rstrip("/"),
-        # Optional: absent for shares created before the hosted-chrome rollout.
-        chrome_origin=values.get("SHARE_CHROME_ORIGIN", "").rstrip("/"),
+        chrome_origin=named_chrome_origin if is_chrome_origin_usable else "",
+        is_chrome_origin_refused=bool(named_chrome_origin) and not is_chrome_origin_usable,
     )
 
 

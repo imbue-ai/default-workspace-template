@@ -22,6 +22,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
 from pydantic import Field, ValidationError
 
+from workspace_initial_data.errors import InitialDataRecordUnreadableError
+
 STATUS_RELATIVE_PATH: Final[Path] = Path("data/.state/initial_data/state.json")
 _STATUS_SCHEMA: Final[int] = 1
 _RECORD_FILE_MODE: Final[int] = 0o644
@@ -102,16 +104,20 @@ class _StoredRecord(FrozenModel):
 
 
 def read_initial_data_record(workspace_root: Path) -> InitialDataRecord:
-    """The record on disk; the record of a workspace that was handed nothing when there is none, or it cannot be
-    read."""
+    """The record on disk; the record of a workspace that was handed nothing when there is none.
+
+    Raises ``InitialDataRecordUnreadableError`` for a record that is there and cannot be read. It is not the
+    record of a workspace that was handed nothing: parts of a document may have been written under it.
+    """
     path = workspace_root / STATUS_RELATIVE_PATH
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return NO_RECORD
     except (OSError, ValueError) as e:
-        logger.warning("Could not read the initial data's record at {}: {}", path, e)
-        return NO_RECORD
+        raise InitialDataRecordUnreadableError(
+            f"Could not read the initial data's record at {path}: {e}"
+        ) from e
     try:
         stored = _StoredRecord.model_validate(
             {
@@ -123,12 +129,9 @@ def read_initial_data_record(workspace_root: Path) -> InitialDataRecord:
             else raw
         )
     except ValidationError as e:
-        logger.warning(
-            "The initial data's record at {} is not a record: {}",
-            path,
-            e.errors()[0]["msg"],
-        )
-        return NO_RECORD
+        raise InitialDataRecordUnreadableError(
+            f"The initial data's record at {path} is not a record: {e.errors()[0]['msg']}"
+        ) from e
     return InitialDataRecord(
         status=InitialDataStatus(
             state=stored.state, detail=stored.detail, applied_at=stored.applied_at
@@ -140,7 +143,11 @@ def read_initial_data_record(workspace_root: Path) -> InitialDataRecord:
 
 def read_initial_data_status(workspace_root: Path) -> InitialDataStatus:
     """The recorded status; ``NONE`` when nothing is recorded, or the record cannot be read."""
-    return read_initial_data_record(workspace_root).status
+    try:
+        return read_initial_data_record(workspace_root).status
+    except InitialDataRecordUnreadableError as e:
+        logger.warning("{}", e)
+        return NO_INITIAL_DATA
 
 
 def write_initial_data_record(workspace_root: Path, record: InitialDataRecord) -> None:

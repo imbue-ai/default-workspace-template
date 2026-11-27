@@ -17,6 +17,7 @@ from workspace_backup_setup.env_files import (
     read_pending_env,
     render_restic_env,
     repository_without_credentials,
+    write_atomically,
     write_pending_env,
 )
 from workspace_backup_setup.testing import IMBUE_CLOUD_REPOSITORY, WORKSPACE_ID
@@ -85,6 +86,10 @@ def test_the_destination_is_read_off_a_restic_env(
             "rest:https://alice:hunter2@rest.example/alice/",
             "rest:https://rest.example/alice/",
         ),
+        (
+            "rest:https://alice:p@ss@rest.example/alice/",
+            "rest:https://rest.example/alice/",
+        ),
         ("rest:https://rest.example/alice/", "rest:https://rest.example/alice/"),
         ("s3:https://s3.example/bucket", "s3:https://s3.example/bucket"),
         ("/srv/backups/repository", "/srv/backups/repository"),
@@ -125,6 +130,28 @@ def test_pending_credentials_are_private_and_read_back_only_for_their_own_reques
     )
     assert read_pending_env(workspace_root, "request-1") == _IMBUE_CLOUD_ENV
     assert read_pending_env(workspace_root, "request-2") is None
+
+
+def test_a_write_that_fails_leaves_no_scratch_file_behind(tmp_path: Path) -> None:
+    target = tmp_path / "restic.env.pending"
+    target.mkdir()
+
+    with pytest.raises(IsADirectoryError):
+        write_atomically(target, "RESTIC_REST_PASSWORD=token-a\n", 0o600)
+
+    assert list(tmp_path.iterdir()) == [target]
+    assert list(target.iterdir()) == []
+
+
+def test_a_write_of_text_no_file_can_hold_leaves_no_scratch_file_behind(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "restic.env.pending"
+
+    with pytest.raises(UnicodeEncodeError):
+        write_atomically(target, "RESTIC_REST_PASSWORD=token-\ud800\n", 0o600)
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_installing_the_same_restic_env_again_leaves_the_file_untouched(
@@ -210,6 +237,30 @@ def test_what_was_kept_is_found_by_destination_and_by_repository(
     )
 
 
+def test_a_kept_password_is_found_when_the_credential_in_the_repositorys_address_changed(
+    workspace_root: Path,
+) -> None:
+    kept = {
+        "RESTIC_REPOSITORY": "rest:https://alice:old-credential@rest.example/alice/",
+        "RESTIC_PASSWORD": "own-password",
+    }
+    install_restic_env(workspace_root, render_restic_env(kept), _NOW)
+    keep_restic_env_aside(workspace_root, _NOW + 10.0)
+
+    assert (
+        kept_password_for_repository(
+            workspace_root, "rest:https://alice:new-credential@rest.example/alice/"
+        )
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(
+            workspace_root, "rest:https://alice:new-credential@rest.example/bob/"
+        )
+        is None
+    )
+
+
 def test_dropped_pending_credentials_are_kept_only_when_they_hold_a_password(
     workspace_root: Path,
 ) -> None:
@@ -230,3 +281,37 @@ def test_dropped_pending_credentials_are_kept_only_when_they_hold_a_password(
 
     assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
     assert kept_envs(workspace_root) == [_IMBUE_CLOUD_ENV]
+
+
+def test_dropped_pending_credentials_whose_password_is_kept_for_the_repository_add_no_copy(
+    workspace_root: Path,
+) -> None:
+    write_pending_env(workspace_root, "request-1", _IMBUE_CLOUD_ENV)
+    drop_pending_env(workspace_root, _NOW)
+    # Storage offered again for the same repository is attempted with the password that was kept.
+    for attempt, token in enumerate(("token-b", "token-c"), start=1):
+        write_pending_env(
+            workspace_root,
+            f"request-{attempt + 1}",
+            {**_IMBUE_CLOUD_ENV, "RESTIC_REST_PASSWORD": token},
+        )
+        drop_pending_env(workspace_root, _NOW + attempt)
+
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    assert kept_envs(workspace_root) == [_IMBUE_CLOUD_ENV]
+
+
+def test_dropped_pending_credentials_with_the_password_in_use_add_no_copy(
+    workspace_root: Path,
+) -> None:
+    install_restic_env(workspace_root, render_restic_env(_IMBUE_CLOUD_ENV), _NOW)
+    write_pending_env(
+        workspace_root,
+        "request-1",
+        {**_IMBUE_CLOUD_ENV, "RESTIC_REST_PASSWORD": "token-b"},
+    )
+
+    drop_pending_env(workspace_root, _NOW + 1.0)
+
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    assert kept_envs(workspace_root) == []

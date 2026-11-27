@@ -508,7 +508,26 @@ def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_r
     assert "--exclude=/.secrets/share.env" in current
     assert "--exclude=/.secrets/share_tls/" in current
     assert "--exclude=/.secrets/agent_access/" in current
-    assert len(current) == len(migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY) + 1
+    # What the source recorded of its own update runs, which this workspace's dispatcher would read as its own.
+    update_records = [
+        "run.json",
+        "schedule.json",
+        "schedule-origin.json",
+        "last-dispatch.json",
+        "last-start.json",
+        "installed-version.json",
+        "client-ceiling.json",
+        "watchdog.json",
+        "dispatch-attempt.json",
+    ]
+    for name in update_records:
+        assert f"--exclude=/.state/update-apply/{name}" in current
+    assert len(current) == len(
+        migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY
+    ) + 1 + len(update_records)
+    # The update settings and the version the owner skipped are the workspace's own, and come over.
+    assert not any("settings.json" in flag for flag in current)
+    assert not any("skipped-target.json" in flag for flag in current)
     # The sign-in file the migration is supposed to carry is not excluded.
     assert not any("anthropic.env" in flag for flag in current)
     # A pre-declutter source keeps its secrets under runtime/secrets/.

@@ -64,7 +64,10 @@ from imbue.system_interface.workspace_routes import TIMEZONE_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
+_OWNER = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 _GRANTEE = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
+# A workspace's share address, which is where a page of another origin reaches the shell through the gateway.
+_SHARE_BASE_URL = "https://shell-5f3c.ws.example"
 _VISITING_AGENT = RequestIdentity(owner=False, agent_id="grant-51c0", agent_name="scout", granter="user-owner-9c21")
 _STORAGE_REFUSED = "The storage does not accept the credentials this workspace holds for it."
 # The apps of ``write_two_app_registry`` as the sharing read lists them: neither is internal.
@@ -104,10 +107,21 @@ def backup_workspace(app: Flask, fake_restic_control: Path, monkeypatch: pytest.
 
 
 @pytest.mark.parametrize(("method", "path"), sorted(WORKSPACE_ROUTE_TABLE))
+@pytest.mark.parametrize(
+    ("stamped", "reached_at"),
+    [
+        ({}, None),
+        # Through the share, with a session the gateway accepted, from a page it did not vouch for.
+        (identity_headers(_OWNER), _SHARE_BASE_URL),
+    ],
+    ids=["with-no-identity", "as-an-owner-the-gateway-did-not-vouch-for"],
+)
 def test_every_workspace_route_is_refused_from_a_page_of_another_origin(
-    client: FlaskClient, app: Flask, method: str, path: str
+    client: FlaskClient, app: Flask, method: str, path: str, stamped: dict[str, str], reached_at: str | None
 ) -> None:
-    response = client.open(path, method=method, headers=CROSS_SITE_FETCH_HEADERS, json={})
+    response = client.open(
+        path, method=method, headers={**CROSS_SITE_FETCH_HEADERS, **stamped}, base_url=reached_at, json={}
+    )
 
     assert response.status_code == 403
     assert response.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
@@ -129,9 +143,7 @@ def test_every_workspace_route_refuses_an_identity_header_that_does_not_parse(
 
 
 def test_a_grantee_of_the_whole_workspace_is_admitted_as_the_owner_is(client: FlaskClient) -> None:
-    grantee = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
-
-    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(grantee), json={"zone": "Europe/Berlin"})
+    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(_GRANTEE), json={"zone": "Europe/Berlin"})
 
     assert response.status_code == 200
     assert response.get_json() == {"zone": "Europe/Berlin", "is_written": True}
@@ -627,6 +639,14 @@ def test_a_storage_that_refuses_what_was_offered_leaves_the_workspace_awaiting_s
         ({"destination": "TAPE"}, "INVALID_DESTINATION", "'TAPE' is not a destination this workspace knows"),
         ({"destination": "NONE", "own_storage": {"repository": "s3:b"}}, "INVALID_DESTINATION", "NONE takes neither"),
         ({}, "INVALID_REQUEST", "destination"),
+        (
+            {
+                "destination": "OWN_STORAGE",
+                "own_storage": {"repository": "s3:b", "backend_env": {"AZURE_ACCOUNT_KEY: typed-password": 7}},
+            },
+            "INVALID_REQUEST",
+            "own_storage.backend_env.a variable",
+        ),
         ({"destination": "NONE", "env_text": "RESTIC_PASSWORD=typed-password"}, "INVALID_REQUEST", "env_text"),
     ],
 )
@@ -702,6 +722,7 @@ def test_the_backup_credentials_are_answered_to_the_owner_with_the_digest_the_st
     from_inside_the_workspace = client.get(BACKUP_CREDENTIALS_ROUTE)
 
     assert through_a_proxy.status_code == 200
+    assert through_a_proxy.headers["Cache-Control"] == "no-store"
     assert through_a_proxy.get_json() == from_inside_the_workspace.get_json()
     assert through_a_proxy.get_json() == {"env_text": env_text, "digest": _backups(client)["credentials_digest"]}
     assert through_a_proxy.get_json()["digest"] == env_digest(env_text) != ""

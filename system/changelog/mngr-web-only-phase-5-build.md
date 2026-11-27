@@ -6,7 +6,7 @@ The desktop interface's contracts, section 5.7, describe the update settings rou
 
 New workspace member `system/libs/workspace_initial_data`, with its entry in the lockfile.
 
-The state docs list the files a workspace that arms its own updates keeps under `data/.state/update-apply/`: `settings.json`, `channel-version.json`, `client-ceiling.json`, `schedule-origin.json` and `installed-version.json`, and where the initial data's state is kept, `data/.state/initial_data/state.json`.
+The state docs list the files a workspace that arms its own updates keeps under `data/.state/update-apply/`: `settings.json`, `channel-version.json`, `client-ceiling.json`, `schedule-origin.json` and `installed-version.json`, where the initial data's state is kept, `data/.state/initial_data/state.json`, and the two files a first boot leaves, `chat/owes_welcome_chat` and `system_interface/offer_tour`.
 
 New program `system/scripts/backup_lease.py` (`backup-lease`): it takes, renews, gives back and reads the workspace's backup lease, a file at `/run/backup-operation.lease` that keeps two backup operations apart, and `hold` runs a command under it, renewed every minute. The workspace's own backup setup takes it, and the Imbue Studio desktop's backup programs run it by its path with no venv. It joins the bare entry lists.
 

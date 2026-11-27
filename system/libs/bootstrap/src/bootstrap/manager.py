@@ -730,7 +730,7 @@ def _sync_workspace_venv() -> None:
 _INITIAL_DATA_TIMEOUT_SECONDS = 120.0
 
 
-def _apply_initial_data() -> None:
+def _apply_initial_data(timeout_seconds: float = _INITIAL_DATA_TIMEOUT_SECONDS) -> None:
     """Apply the document whoever created the workspace left in the host dir, when there is one.
 
     The entry (``apply-initial-data``, system/libs/workspace_initial_data) writes the profile snapshot,
@@ -752,7 +752,7 @@ def _apply_initial_data() -> None:
             ["uv", "run", "--no-sync", "apply-initial-data"],
             capture_output=True,
             text=True,
-            timeout=_INITIAL_DATA_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as e:

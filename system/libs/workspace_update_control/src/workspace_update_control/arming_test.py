@@ -1,6 +1,10 @@
 """The workspace arming its own updates: the decision, and the minute that makes it against a staged workspace."""
 
-from datetime import datetime
+import json
+import os
+import shlex
+import shutil
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
@@ -22,6 +26,9 @@ from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
     StagedUpdateWorkspace,
+    arm_schedule_in,
+    armed_schedule,
+    epoch_at,
     stage_checkout_at,
     stage_update_workspace,
     update_settings_document,
@@ -30,14 +37,9 @@ from workspace_update_control.testing import (
 _INSTALLED = "minds-v0.9.0"
 _ON_THE_CHANNEL = "minds-v0.10.0"
 
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
-
-
 # The staged settings' window is 02:00 to 05:00, read in UTC while the workspace records no timezone.
-_OUTSIDE_THE_WINDOW = _epoch("2026-10-20T12:00:00+00:00")
-_INSIDE_THE_WINDOW = _epoch("2026-10-21T03:00:00+00:00")
+_OUTSIDE_THE_WINDOW = epoch_at("2026-10-20T12:00:00+00:00")
+_INSIDE_THE_WINDOW = epoch_at("2026-10-21T03:00:00+00:00")
 _NOW = _OUTSIDE_THE_WINDOW
 
 _NOTHING_IN_THE_WAY = ArmingFacts(
@@ -225,10 +227,7 @@ def test_the_armed_window_is_the_settings_hours_in_the_workspaces_recorded_timez
     (staged.root / "data" / ".state" / "user_timezone").write_text(
         "America/Los_Angeles\n"
     )
-    (staged.root / "data" / ".secrets").mkdir(parents=True)
-    (staged.root / "data" / ".secrets" / "restic.env").write_text(
-        "RESTIC_REPOSITORY=x\n"
-    )
+    staged.write_backup_credentials()
 
     _tick(staged, feed, _NOW)
 
@@ -357,30 +356,14 @@ def test_a_version_a_run_already_went_out_for_is_not_armed_again(
     staged: StagedUpdateWorkspace,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    staged.write_state(
-        "last-dispatch.json",
-        {
-            "chat_agent_name": "update-to-v0100",
-            "chat_id": "",
-            "target_ref": _ON_THE_CHANNEL,
-            "dispatched_at": _NOW - 24 * 60 * 60,
-        },
-    )
-    staged.write_state(
-        "run.json",
-        {
-            "chat_agent_name": "update-to-v0100",
-            "started_at": _NOW - 24 * 60 * 60 + 60,
-            "verdict": "STUCK",
-        },
-    )
+    run_started_at = staged.write_failed_run(_ON_THE_CHANNEL, _NOW - 24 * 60 * 60)
 
     _tick(staged, feed, _NOW)
 
     assert staged.read_state("schedule.json") is None
 
     control.record_dismissals(
-        note_run_started_at=None, outcome_run_started_at=_NOW - 24 * 60 * 60 + 60
+        note_run_started_at=None, outcome_run_started_at=run_started_at
     )
     _tick(staged, feed, _NOW + 60)
 
@@ -504,6 +487,22 @@ def test_the_checkouts_version_is_read_once_while_the_run_record_stands_still(
     assert read_installed_version(_NOW + 60 * 60) == "minds-v0.10.0"
 
 
+def test_a_read_of_the_checkouts_version_that_git_could_not_make_is_not_kept(
+    staged: StagedUpdateWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", _INSTALLED))
+    path_with_git = os.environ["PATH"]
+    # The stub tools alone, so there is no git to run.
+    monkeypatch.setenv("PATH", str(staged.bin_dir))
+
+    assert read_installed_version(_NOW) == ""
+    assert staged.read_state("installed-version.json") is None
+
+    monkeypatch.setenv("PATH", path_with_git)
+
+    assert read_installed_version(_NOW + 60) == _INSTALLED
+
+
 def test_the_checkouts_version_is_read_again_once_a_run_records_a_verdict(
     staged: StagedUpdateWorkspace,
 ) -> None:
@@ -576,23 +575,214 @@ def test_a_schedule_a_client_armed_with_its_own_values_is_left_to_that_client(
     staged: StagedUpdateWorkspace,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    armed = control.arm_schedule(
-        ceiling="minds-v0.9.5",
-        override_ref="",
-        window_start_minute_utc=9 * 60,
-        window_length_minutes=3 * 60,
-        is_backup_configured=True,
-        is_auto_armed=False,
+    armed = arm_schedule_in(
+        staged,
+        feed,
         now=_NOW - CLIENT_CEILING_HOLD_SECONDS,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=feed,
+        ceiling="minds-v0.9.5",
+        window=(9 * 60, 3 * 60),
+        is_backup_configured=True,
     )["schedule"]
 
     _tick(staged, feed, _NOW)
 
     assert staged.read_state("schedule.json") == armed
     assert staged.read_state("schedule-origin.json") is None
+
+
+def _skip(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    control.skip_target(target_ref=target_ref, skipped_at=_NOW - 60)
+
+
+def _fail_a_run_to(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    """A run that went out for ``target_ref`` a day ago and ended stuck."""
+    staged.write_failed_run(target_ref, _NOW - 24 * 60 * 60)
+
+
+def _hold_nothing_back(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+    ("hold_back", "moved_to", "reason"),
+    [
+        (_skip, "minds-v0.10.1", "was skipped or already tried"),
+        (_fail_a_run_to, "minds-v0.10.1", "was skipped or already tried"),
+        # A channel taken back to the version the workspace is on.
+        (_hold_nothing_back, _INSTALLED, "is not behind"),
+    ],
+    ids=["skipped", "already-tried", "not-behind"],
+)
+def test_a_self_armed_schedule_is_cancelled_when_its_channel_moves_to_a_version_the_workspace_does_not_arm(
+    staged: StagedUpdateWorkspace,
+    hold_back: Callable[[StagedUpdateWorkspace, str], None],
+    moved_to: str,
+    reason: str,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    hold_back(staged, moved_to)
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    feed.template_ref = moved_to
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+    assert any(
+        moved_to in line and "cancelled" in line and reason in line
+        for line in staged.dispatcher_log_lines()
+    )
+
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS + 60)
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_self_armed_schedule_follows_its_channel_back_while_the_checkouts_version_cannot_be_read(
+    staged: StagedUpdateWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    # The stub tools alone, so there is no git to run once the hour's read is out.
+    monkeypatch.setenv("PATH", str(staged.bin_dir))
+
+    feed.template_ref = _INSTALLED
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == _INSTALLED
+
+
+def test_a_self_armed_schedule_for_a_skipped_version_is_cancelled(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    # A skip whose own cancel came ahead of the arm, so the schedule stands at a skipped version.
+    staged.write_state(
+        "skipped-target.json",
+        {"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW},
+    )
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    _tick(staged, feed, _NOW + 120)
+
+    assert staged.read_state("schedule.json") is None
+
+
+def _write_when_git_runs(
+    staged: StagedUpdateWorkspace, name: str, content: Mapping[str, Any]
+) -> None:
+    """Have every run of git first write ``content`` to the state file ``name``.
+
+    The minute reads the checkout's version from git after it has read the workspace's own files and before it
+    arms, so that is a write that lands between the two.
+    """
+    git = shutil.which("git")
+    assert git is not None
+    written = shlex.quote(json.dumps(dict(content)))
+    wrapper = staged.bin_dir / "git"
+    wrapper.write_text(
+        f"#!/bin/sh\nprintf '%s' {written} > {shlex.quote(str(staged.state_path(name)))}\n"
+        f'exec {shlex.quote(git)} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+
+
+def test_a_skip_recorded_while_the_minute_decides_leaves_nothing_armed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _write_when_git_runs(
+        staged,
+        "skipped-target.json",
+        {"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW},
+    )
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("skipped-target.json") is not None
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_schedule_the_user_arms_while_the_minute_decides_stands_as_they_armed_it(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    armed_by_the_user = armed_schedule(
+        _NOW + 1, ceiling="minds-v0.9.5", is_backup_configured=True, is_auto_armed=False
+    )
+    _write_when_git_runs(staged, "schedule.json", armed_by_the_user)
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
+    assert staged.read_state("schedule-origin.json") is None
+    assert not any(
+        "for the workspace itself" in line for line in staged.dispatcher_log_lines()
+    )
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
+
+
+def test_a_schedule_the_user_arms_while_the_minute_decides_to_cancel_its_own_stands_as_they_armed_it(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    armed_by_the_user = armed_schedule(
+        _NOW + 1, ceiling="minds-v0.9.5", is_backup_configured=True, is_auto_armed=False
+    )
+    _write_when_git_runs(staged, "schedule.json", armed_by_the_user)
+
+    # A channel taken back to the version the workspace is on, which the minute learns from git.
+    feed.template_ref = _INSTALLED
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
+    assert not any("cancelled" in line for line in staged.dispatcher_log_lines())
+
+
+def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _skip(staged, "minds-v0.9.9")
+    _tick(staged, feed, _NOW)
+
+    feed.template_ref = "minds-v0.10.1"
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == "minds-v0.10.1"
+
+
+def test_a_schedule_a_client_armed_follows_the_channel_to_a_version_the_workspace_would_not_arm(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _skip(staged, "minds-v0.10.1")
+    arm_schedule_in(staged, feed, now=_NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    feed.template_ref = "minds-v0.10.1"
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    schedule = staged.read_state("schedule.json")
+    assert schedule is not None
+    assert (schedule["ceiling"], schedule["is_auto_armed"]) == ("minds-v0.10.1", False)
 
 
 def _sweep_as_a_client_that_names_its_version(

@@ -80,3 +80,12 @@ def test_a_checkout_is_read_by_its_tag_and_then_by_its_update_self_merge(
 
 def test_a_directory_that_is_no_checkout_names_no_version(tmp_path: Path) -> None:
     assert read_installed_ref(str(tmp_path)) == ""
+
+
+def test_a_checkout_git_cannot_be_run_in_is_no_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_checkout_at(tmp_path, ("the template at a release", "minds-v0.9.0"))
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools-here"))
+
+    assert read_installed_ref(str(tmp_path)) is None

@@ -291,9 +291,10 @@ _APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 class DesktopVersionUnavailableError(Exception):
     """Raised when the Imbue Studio app's own version could not be read.
 
-    Never downgraded to "no version to match": an app that cannot answer is very
-    often an app too old to *have* this route, which is exactly the case that
-    matching the app protects against.
+    The message says what the user can do about the app (update it, start it). A
+    pass that named no version fails with it beside the missing channel. An
+    override proceeds with no ceiling: the user named the version, and nothing
+    is left to compare it against.
     """
 
 

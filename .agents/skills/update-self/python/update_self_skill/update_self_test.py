@@ -10168,6 +10168,47 @@ def test_a_workspace_with_no_update_settings_and_no_desktop_app_says_it_follows_
     assert "holds no update settings" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("status", "exit_code", "why"),
+    [
+        ("404", 0, "too old to report its version"),
+        ("000", 7, "could not reach the Imbue Studio app"),
+    ],
+    ids=["an-app-from-before-the-version-route", "no-app-running"],
+)
+def test_a_workspace_with_no_update_settings_says_why_its_desktop_app_named_no_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    status: str,
+    exit_code: int,
+    why: str,
+) -> None:
+    """Opening the workspace in such an app writes no settings, so what the app answered is what the user can
+    act on."""
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.5",), unmerged_tags=("minds-v0.3.9",)
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "desktop-bin",
+        body="",
+        status=status,
+        exit_code=exit_code,
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "holds no update settings" in captured.err
+    assert why in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_a_workspace_that_follows_a_channel_never_asks_a_desktop_app(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

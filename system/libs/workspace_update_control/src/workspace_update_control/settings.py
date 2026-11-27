@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from workspace_update_control.dispatcher import (
     UPDATE_PROGRAM_SCHEMA,
     read_json_object,
+    state_lock,
     write_json_atomically,
     write_log_line,
 )
@@ -35,8 +36,8 @@ from workspace_update_control.protocol import (
 )
 
 # A channel is named in a URL (``<feed>/<channel>-web.json``), so it is held to what a file name's stem can be.
-_CHANNEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_FEED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^https?://\S+$")
+_CHANNEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_FEED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"https?://\S+")
 _LAST_HOUR_OF_THE_DAY: Final[int] = 23
 _HOURS_PER_DAY: Final[int] = 24
 # The settings that are the workspace's own: a request that leaves one out keeps the stored value, and one that
@@ -102,11 +103,11 @@ def _is_hour(value: object) -> bool:
 
 def _refusal(settings: UpdateSettings) -> str:
     """Why ``settings`` cannot be stored; '' when they can."""
-    if _CHANNEL_PATTERN.match(settings.channel) is None:
+    if _CHANNEL_PATTERN.fullmatch(settings.channel) is None:
         return "channel is a release channel's name: lower-case letters, digits and single dashes."
     if (
         settings.feed_base_url
-        and _FEED_URL_PATTERN.match(settings.feed_base_url) is None
+        and _FEED_URL_PATTERN.fullmatch(settings.feed_base_url) is None
     ):
         return "feed_base_url is an http or https address, or empty where no feed is published."
     if not _is_hour(settings.window_start_hour) or not _is_hour(
@@ -199,13 +200,17 @@ def take_update_settings(sent: Mapping[str, object]) -> UpdateSettings:
     out keeps its stored value, so a client that writes the account's settings, or one from before a setting
     existed, cannot wipe an answer the owner gave in another client; one sent as null is cleared. Every other
     setting is required. Raises ``InvalidUpdateSettingsError`` for settings that cannot be the workspace's.
+
+    The stored settings are read and written under the state lock, so of two clients writing at once neither
+    loses an own setting the other stored.
     """
-    stored = read_update_settings()
-    values = dict(sent)
-    for name in OWN_SETTING_NAMES:
-        if name not in values:
-            values[name] = getattr(stored, name) if stored is not None else None
-    return write_update_settings(_settings_of(values))
+    with state_lock():
+        stored = read_update_settings()
+        values = dict(sent)
+        for name in OWN_SETTING_NAMES:
+            if name not in values:
+                values[name] = getattr(stored, name) if stored is not None else None
+        return write_update_settings(_settings_of(values))
 
 
 def read_update_settings() -> UpdateSettings | None:

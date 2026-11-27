@@ -134,11 +134,19 @@ def _checked_value(name: str, value: str) -> str:
         not value
         or value != value.strip()
         or is_quoted
-        or any(character in value for character in "\r\n\0")
+        or value.splitlines() != [value]
+        or "\0" in value
     ):
         raise InvalidBackupDestinationError(
             f"{name} must be one line that is not empty, does not start or end with a space, and is not quoted."
         )
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        # Half of a surrogate pair, which JSON can carry and a file cannot.
+        raise InvalidBackupDestinationError(
+            f"{name} must be text that a file can hold."
+        ) from None
     return value
 
 
@@ -170,23 +178,37 @@ def _own_storage(storage: OwnStorage) -> dict[str, str]:
                 f"{name} must not be among the storage's variables: name the repository as `repository`."
             )
         if _VARIABLE_NAME.fullmatch(name) is None:
+            # The name is not quoted: a line typed `NAME: value` arrives as a name that holds the value.
             raise InvalidBackupDestinationError(
-                f"{name!r} is not the name of an environment variable."
+                "A variable of the storage has a name that is not the name of an environment variable."
             )
         env_values[name] = _checked_value(name, value.get_secret_value())
     return env_values
+
+
+def _place_of(loc: tuple[int | str, ...]) -> str:
+    """Where in a request a problem is, with a variable's name that is not one left out, as it may hold a value."""
+    parts = [str(part) for part in loc]
+    is_a_variable_named = parts[:2] == ["own_storage", "backend_env"] and len(parts) > 2
+    if is_a_variable_named and _VARIABLE_NAME.fullmatch(parts[2]) is None:
+        parts[2] = "a variable"
+    return ".".join(parts) or "the request"
+
+
+def describe_request_problems(error: ValidationError) -> str:
+    """Where a request is not a ``BackupDestinationRequest`` and why, quoting no value of the storage."""
+    return "; ".join(
+        f"{_place_of(problem['loc'])}: {problem['msg']}"
+        for problem in error.errors(include_input=False, include_url=False)
+    )
 
 
 def _checked_destination(body: Mapping[str, object]) -> _Destination:
     try:
         request = BackupDestinationRequest.model_validate(dict(body))
     except ValidationError as e:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc']) or 'the request'}: {error['msg']}"
-            for error in e.errors(include_input=False, include_url=False)
-        )
         raise InvalidBackupDestinationError(
-            f"The destination is not one this workspace can take ({problems})."
+            f"The destination is not one this workspace can take ({describe_request_problems(e)})."
         ) from e
     try:
         kind = BackupDestinationKind(request.destination)

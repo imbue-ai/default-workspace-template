@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+import threading
+from datetime import timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from workspace_update_control.dispatcher import state_lock
 from workspace_update_control.settings import (
-    OWN_SETTING_NAMES,
     InvalidUpdateSettingsError,
     UpdateSettings,
     is_backup_configured,
@@ -17,16 +18,14 @@ from workspace_update_control.settings import (
 )
 from workspace_update_control.testing import (
     StagedUpdateWorkspace,
+    epoch_at,
+    the_accounts_settings,
     update_settings_document,
 )
 
 
 def _settings(**fields: object) -> UpdateSettings:
     return UpdateSettings(**update_settings_document(**fields))
-
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
 
 
 def test_settings_are_stored_in_a_file_of_their_own_and_read_back_as_written(
@@ -67,6 +66,9 @@ def test_settings_that_did_not_change_are_not_written_again(
     [
         {"channel": ""},
         {"channel": "../stable"},
+        # A final line break, which ``$`` would match ahead of.
+        {"channel": "stable\n"},
+        {"feed_base_url": "https://feed.example\n"},
         {"channel": "Stable"},
         {"feed_base_url": "file:///etc/passwd"},
         {"feed_base_url": "https://feed.example/a b"},
@@ -176,13 +178,13 @@ def test_the_local_hours_become_a_utc_start_minute_and_a_length(
     end_hour: int,
     expected: tuple[int, int],
 ) -> None:
-    assert utc_update_window(start_hour, end_hour, zone, _epoch(now)) == expected
+    assert utc_update_window(start_hour, end_hour, zone, epoch_at(now)) == expected
 
 
 def test_the_window_in_force_is_the_workspaces_own_where_it_has_one(
     staged: StagedUpdateWorkspace,
 ) -> None:
-    now = _epoch("2026-10-20T12:00:00+00:00")
+    now = epoch_at("2026-10-20T12:00:00+00:00")
     of_the_account = _settings()
     of_the_workspace = _settings(window_start_hour_here=22, window_end_hour_here=23)
 
@@ -219,15 +221,6 @@ def test_a_settings_file_from_before_the_workspaces_own_hours_reads_with_none(
     assert stored.is_auto_update_enabled_here is False
 
 
-def _the_accounts_settings(**fields: object) -> dict[str, object]:
-    """Update settings as a client sends them when it writes the account's: none of the workspace's own."""
-    return {
-        name: value
-        for name, value in update_settings_document(**fields).items()
-        if name not in OWN_SETTING_NAMES
-    }
-
-
 def test_a_setting_of_the_workspaces_own_that_a_client_leaves_out_keeps_its_stored_value(
     staged: StagedUpdateWorkspace,
 ) -> None:
@@ -240,7 +233,7 @@ def test_a_setting_of_the_workspaces_own_that_a_client_leaves_out_keeps_its_stor
     )
 
     stored = take_update_settings(
-        _the_accounts_settings(channel="beta", window_start_hour=1)
+        the_accounts_settings(channel="beta", window_start_hour=1)
     )
 
     assert stored == _settings(
@@ -266,7 +259,7 @@ def test_a_setting_of_the_workspaces_own_sent_as_null_is_cleared_and_the_others_
 
     stored = take_update_settings(
         {
-            **_the_accounts_settings(),
+            **the_accounts_settings(),
             "window_start_hour_here": None,
             "window_end_hour_here": None,
         }
@@ -278,7 +271,7 @@ def test_a_setting_of_the_workspaces_own_sent_as_null_is_cleared_and_the_others_
 
     assert (
         take_update_settings(
-            {**_the_accounts_settings(), "is_auto_update_enabled_here": None}
+            {**the_accounts_settings(), "is_auto_update_enabled_here": None}
         ).is_auto_update_enabled_here
         is None
     )
@@ -287,14 +280,14 @@ def test_a_setting_of_the_workspaces_own_sent_as_null_is_cleared_and_the_others_
 def test_a_workspace_with_nothing_stored_takes_the_accounts_settings_with_none_of_its_own(
     staged: StagedUpdateWorkspace,
 ) -> None:
-    assert take_update_settings(_the_accounts_settings()) == _settings()
+    assert take_update_settings(the_accounts_settings()) == _settings()
 
 
 def test_one_of_the_workspaces_own_hours_sent_alone_is_held_to_the_stored_other(
     staged: StagedUpdateWorkspace,
 ) -> None:
     with pytest.raises(InvalidUpdateSettingsError):
-        take_update_settings({**_the_accounts_settings(), "window_start_hour_here": 22})
+        take_update_settings({**the_accounts_settings(), "window_start_hour_here": 22})
     assert read_update_settings() is None
 
     take_update_settings(
@@ -302,14 +295,14 @@ def test_one_of_the_workspaces_own_hours_sent_alone_is_held_to_the_stored_other(
     )
 
     assert take_update_settings(
-        {**_the_accounts_settings(), "window_end_hour_here": 1}
+        {**the_accounts_settings(), "window_end_hour_here": 1}
     ).window_hours == (22, 1)
 
 
 def test_settings_that_leave_out_one_that_is_not_the_workspaces_own_are_refused(
     staged: StagedUpdateWorkspace,
 ) -> None:
-    sent = _the_accounts_settings()
+    sent = the_accounts_settings()
     del sent["feed_base_url"]
 
     with pytest.raises(InvalidUpdateSettingsError, match="feed_base_url"):
@@ -344,7 +337,7 @@ def test_a_setting_that_is_not_of_its_kind_is_refused_and_nothing_is_stored(
 def test_the_window_is_read_in_the_recorded_timezone_and_in_utc_when_none_is_recorded(
     staged: StagedUpdateWorkspace,
 ) -> None:
-    now = _epoch("2026-10-20T12:00:00+00:00")
+    now = epoch_at("2026-10-20T12:00:00+00:00")
 
     assert read_user_zone() is timezone.utc
     assert settings_window(_settings(), now) == (2 * 60, 3 * 60)
@@ -371,9 +364,24 @@ def test_the_workspace_has_backups_when_it_holds_backup_credentials(
 ) -> None:
     assert is_backup_configured() is False
 
-    (staged.root / "data" / ".secrets").mkdir(parents=True)
-    (staged.root / "data" / ".secrets" / "restic.env").write_text(
-        "RESTIC_REPOSITORY=x\n"
-    )
+    staged.write_backup_credentials()
 
     assert is_backup_configured() is True
+
+
+def test_two_writers_of_the_update_settings_wait_for_each_other(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    writer = threading.Thread(
+        target=take_update_settings, args=(update_settings_document(channel="beta"),)
+    )
+
+    with state_lock():
+        writer.start()
+        writer.join(0.3)
+
+        assert writer.is_alive()
+        assert staged.read_state("settings.json") is None
+
+    writer.join(10)
+    assert read_update_settings() == _settings(channel="beta")

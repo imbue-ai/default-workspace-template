@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "file_name": "initial_data.json",
+  "remote_path": "/home/user/.mngr/initial_data.json",
+  "documents": {
+    "imbue_cloud_backups": {
+      "schema": 1,
+      "profile": {
+        "snapshot_format": 1,
+        "account_id": "user-7c4d",
+        "owner_user_id": "user-7c4d",
+        "written_at": "2026-10-28T00:00:00+00:00",
+        "written_by": "device-1",
+        "keybindings": {
+          "chat": {
+            "send": [
+              "ctrl+enter"
+            ]
+          }
+        }
+      },
+      "timezone": {
+        "zone": "Europe/Berlin"
+      },
+      "update_settings": {
+        "channel": "stable",
+        "feed_base_url": "https://updates.example.com",
+        "is_auto_update_enabled": true,
+        "window_start_hour": 2,
+        "window_end_hour": 5
+      },
+      "backups": {
+        "destination": "IMBUE_CLOUD"
+      }
+    },
+    "imbue_cloud_backups_with_storage": {
+      "schema": 1,
+      "profile": {
+        "snapshot_format": 1,
+        "account_id": "user-7c4d",
+        "owner_user_id": "user-7c4d",
+        "written_at": "2026-10-28T00:00:00+00:00",
+        "written_by": "device-1",
+        "keybindings": {
+          "chat": {
+            "send": [
+              "ctrl+enter"
+            ]
+          }
+        }
+      },
+      "timezone": {
+        "zone": "Europe/Berlin"
+      },
+      "update_settings": {
+        "channel": "stable",
+        "feed_base_url": "https://updates.example.com",
+        "is_auto_update_enabled": true,
+        "window_start_hour": 2,
+        "window_end_hour": 5
+      },
+      "backups": {
+        "destination": "IMBUE_CLOUD",
+        "imbue_cloud_storage": {
+          "repository_url": "rest:https://store.example.com/user-7c4d/agent-0123456789abcdef0123456789abcdef/",
+          "rest_username": "agent-0123456789abcdef0123456789abcdef",
+          "rest_password": "the-repository-token"
+        }
+      }
+    },
+    "own_storage_backups": {
+      "schema": 1,
+      "profile": {
+        "snapshot_format": 1,
+        "account_id": "user-7c4d",
+        "owner_user_id": "user-7c4d",
+        "written_at": "2026-10-28T00:00:00+00:00",
+        "written_by": "device-1",
+        "keybindings": {
+          "chat": {
+            "send": [
+              "ctrl+enter"
+            ]
+          }
+        }
+      },
+      "timezone": {
+        "zone": "Europe/Berlin"
+      },
+      "update_settings": {
+        "channel": "stable",
+        "feed_base_url": "https://updates.example.com",
+        "is_auto_update_enabled": true,
+        "window_start_hour": 2,
+        "window_end_hour": 5
+      },
+      "backups": {
+        "destination": "OWN_STORAGE",
+        "own_storage": {
+          "repository": "s3:https://s3.example.com/bucket/workspace",
+          "backend_env": {
+            "AWS_ACCESS_KEY_ID": "access-key",
+            "AWS_SECRET_ACCESS_KEY": "secret-key"
+          }
+        }
+      }
+    },
+    "no_backups": {
+      "schema": 1,
+      "profile": {
+        "snapshot_format": 1,
+        "account_id": "user-7c4d",
+        "owner_user_id": "user-7c4d",
+        "written_at": "2026-10-28T00:00:00+00:00",
+        "written_by": "device-1",
+        "keybindings": {
+          "chat": {
+            "send": [
+              "ctrl+enter"
+            ]
+          }
+        }
+      },
+      "timezone": {
+        "zone": "Europe/Berlin"
+      },
+      "update_settings": {
+        "channel": "stable",
+        "feed_base_url": "https://updates.example.com",
+        "is_auto_update_enabled": true,
+        "window_start_hour": 2,
+        "window_end_hour": 5
+      },
+      "backups": {
+        "destination": "NONE"
+      }
+    },
+    "no_timezone_and_no_backup_choice": {
+      "schema": 1,
+      "profile": {
+        "snapshot_format": 1,
+        "account_id": "local",
+        "owner_user_id": "local",
+        "written_at": "2026-10-28T00:00:00+00:00",
+        "written_by": "device-1",
+        "keybindings": {}
+      },
+      "update_settings": {
+        "channel": "beta",
+        "feed_base_url": "",
+        "is_auto_update_enabled": false,
+        "window_start_hour": 22,
+        "window_end_hour": 6
+      }
+    }
+  }
+}

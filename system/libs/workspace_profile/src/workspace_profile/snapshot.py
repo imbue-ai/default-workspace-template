@@ -2,7 +2,8 @@
 
 One file, ``data/.state/profile/account.json``, whose content comes only from a client outside the
 workspace (the Imbue Studio desktop, or the hosted web chrome): the shell's profile route
-(``PUT /api/workspace/profile``) writes the document a client sends, as it is, and nothing inside
+(``PUT /api/workspace/profile``) writes the document a client sends, as it is, the boot's
+``apply-initial-data`` step writes the one the workspace's initial data carries, and nothing inside
 the workspace decides what it holds. It names the workspace's account and owner, and carries the
 account-keyed settings the workspace's apps consume as extra keys beside the header fields (the
 keybindings, today). It lives under ``data/.state/`` because it is machine state a client rebuilds:

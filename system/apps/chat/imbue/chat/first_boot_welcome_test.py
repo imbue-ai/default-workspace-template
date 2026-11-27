@@ -63,6 +63,20 @@ def test_a_client_that_seeded_first_leaves_the_one_chat_and_the_debt_settled(tmp
     assert not owed.exists()
 
 
+def test_a_client_that_seeded_its_own_turns_first_keeps_its_chat_and_owes_no_provider_page(tmp_path: Path) -> None:
+    chats_root = tmp_path / "chats"
+    manager = _manager_that_knows_its_agents(chats_root)
+    owed = _owe_a_welcome_chat(tmp_path)
+    seeded = manager.seed_chat(MAIN_CHAT_NAME, ())
+
+    open_welcome_chat_owed_from_first_boot(manager, owed, threading.Event())
+
+    assert [chat.chat_id for chat in manager.get_provisional_chats()] == [seeded.chat_id]
+    assert not is_first_run_seed(chats_root / seeded.chat_id)
+    assert manager.is_first_run_provider_step_pending() is False
+    assert not owed.exists()
+
+
 def test_a_client_that_seeds_after_the_workspace_did_is_answered_the_same_chat(tmp_path: Path) -> None:
     manager = _manager_that_knows_its_agents(tmp_path / "chats")
     owed = _owe_a_welcome_chat(tmp_path)

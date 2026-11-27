@@ -6,7 +6,6 @@ from flask import Flask
 from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
-from workspace_update_control.settings import OWN_SETTING_NAMES
 from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import STAGED_FEED_BASE_URL
@@ -15,6 +14,7 @@ from workspace_update_control.testing import full_state_line
 from workspace_update_control.testing import observed_agent
 from workspace_update_control.testing import observed_services_agent
 from workspace_update_control.testing import stage_update_workspace
+from workspace_update_control.testing import the_accounts_settings
 from workspace_update_control.testing import update_settings_document
 from workspace_update_control.testing import write_event_lines
 
@@ -274,13 +274,8 @@ def test_the_update_settings_are_stored_and_answered_as_stored_and_the_read_answ
     assert (state["settings"], state["channel_version"]) == (settings, None)
 
 
-def _the_accounts_settings(**fields: object) -> dict[str, object]:
-    """Update settings as a client sends them when it writes the account's: none of the workspace's own."""
-    return {name: value for name, value in update_settings_document(**fields).items() if name not in OWN_SETTING_NAMES}
-
-
 def test_settings_with_none_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
-    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=_the_accounts_settings())
+    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=the_accounts_settings())
 
     assert stored.get_json() == update_settings_document()
 
@@ -297,7 +292,7 @@ def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_an
     client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(**of_the_workspace))
 
     # A client that writes the account's settings names none of the three, and so does one from before the hours.
-    kept = client.put(UPDATE_SETTINGS_ROUTE, json=_the_accounts_settings(channel="beta"))
+    kept = client.put(UPDATE_SETTINGS_ROUTE, json=the_accounts_settings(channel="beta"))
 
     assert kept.status_code == 200
     assert kept.get_json() == update_settings_document(channel="beta", **of_the_workspace)
@@ -305,7 +300,7 @@ def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_an
 
     cleared = client.put(
         UPDATE_SETTINGS_ROUTE,
-        json={**_the_accounts_settings(channel="beta"), "window_start_hour_here": None, "window_end_hour_here": None},
+        json={**the_accounts_settings(channel="beta"), "window_start_hour_here": None, "window_end_hour_here": None},
     )
 
     assert cleared.get_json() == update_settings_document(channel="beta", is_auto_update_enabled_here=False)

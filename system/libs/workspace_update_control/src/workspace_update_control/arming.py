@@ -23,7 +23,12 @@ from workspace_update_control.channel import (
     read_fresh_client_ceiling,
     refresh_channel_version,
 )
-from workspace_update_control.control import arm_schedule, refresh_followed_schedule
+from workspace_update_control.control import (
+    arm_schedule,
+    cancel_schedule_armed_at,
+    read_self_armed_schedule,
+    refresh_followed_schedule,
+)
 from workspace_update_control.dispatcher import (
     UPDATE_PROGRAM_SCHEMA,
     AgentEnvironment,
@@ -36,6 +41,7 @@ from workspace_update_control.dispatcher import (
 from workspace_update_control.installed_version import (
     is_release_behind,
     read_installed_ref,
+    release_sort_key,
 )
 from workspace_update_control.protocol import (
     DISMISSALS_FILE_PATH,
@@ -80,6 +86,14 @@ class ArmingFacts(NamedTuple):
     last_dispatch: LastDispatch | None
 
 
+def _is_version_held_back(facts: ArmingFacts, target_ref: str) -> bool:
+    """Whether the workspace does not aim at ``target_ref`` by itself: the user skipped it, or a run already
+    went out for it."""
+    return facts.skipped_target_ref == target_ref or (
+        facts.last_dispatch is not None and facts.last_dispatch.target_ref == target_ref
+    )
+
+
 def should_auto_arm(
     facts: ArmingFacts,
     target_ref: str,
@@ -97,14 +111,11 @@ def should_auto_arm(
     """
     if not facts.is_enabled or facts.is_scheduled or facts.is_run_in_flight:
         return False
-    if (
-        facts.shown_verdict == _NEEDS_DECISION_VERDICT
-        or facts.skipped_target_ref == target_ref
+    if facts.shown_verdict == _NEEDS_DECISION_VERDICT or _is_version_held_back(
+        facts, target_ref
     ):
         return False
     last_dispatch = facts.last_dispatch
-    if last_dispatch is not None and last_dispatch.target_ref == target_ref:
-        return False
     if facts.shown_verdict in _FAILURE_VERDICTS and (
         # A failure the last dispatch did not make says nothing of what it aimed at.
         last_dispatch is None
@@ -132,6 +143,12 @@ def _shown_verdict(
     return "" if is_dismissed else verdict
 
 
+def _read_skipped_target_ref() -> str:
+    """The version the user skipped for this workspace; '' when they skipped none."""
+    skipped = read_json_object(SKIPPED_TARGET_FILE_PATH) or {}
+    return str(skipped.get("target_ref") or "")
+
+
 def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
     """The facts of the workspace's own files, with no listing of its agents.
 
@@ -140,7 +157,6 @@ def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
     """
     run = read_json_object(RUN_RECORD_PATH)
     dispatch = read_json_object(LAST_DISPATCH_FILE_PATH)
-    skipped = read_json_object(SKIPPED_TARGET_FILE_PATH) or {}
     is_run_open = (
         run is not None
         and run.get("verdict") is None
@@ -153,7 +169,7 @@ def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
         or pending_dispatched_chat(run, None, now) is not None,
         shown_verdict=_shown_verdict(run, read_json_object(DISMISSALS_FILE_PATH)),
         run_chat_agent_name=str((run or {}).get("chat_agent_name") or ""),
-        skipped_target_ref=str(skipped.get("target_ref") or ""),
+        skipped_target_ref=_read_skipped_target_ref(),
         last_dispatch=LastDispatch(
             target_ref=str(dispatch.get("target_ref") or ""),
             chat_agent_name=str(dispatch.get("chat_agent_name") or ""),
@@ -169,7 +185,10 @@ def _run_identity(run: Mapping[str, object] | None) -> list[object]:
 
 
 def read_installed_version(now: float) -> str:
-    """The version of the checkout, read from git at most once an hour while the run record stands still."""
+    """The version of the checkout, read from git at most once an hour while the run record stands still.
+
+    A read git could not make is not kept, so the next minute asks again; it answers '' for this one.
+    """
     identity = _run_identity(read_json_object(RUN_RECORD_PATH))
     kept = read_json_object(INSTALLED_VERSION_FILE_PATH)
     if kept is not None and kept.get("run_identity") == identity:
@@ -183,6 +202,11 @@ def read_installed_version(now: float) -> str:
         ):
             return template_ref
     template_ref = read_installed_ref(".")
+    if template_ref is None:
+        write_log_line(
+            "could not read the checkout's version from git; asking again next minute"
+        )
+        return ""
     write_json_atomically(
         INSTALLED_VERSION_FILE_PATH,
         {
@@ -193,6 +217,22 @@ def read_installed_version(now: float) -> str:
         },
     )
     return template_ref
+
+
+def _why_not_moved_to(facts: ArmingFacts, moved_to: str, now: float) -> str:
+    """Why the workspace's own schedule does not follow its channel to ``moved_to``; '' when it does.
+
+    A checkout whose version could not be read, or names no release, says nothing of whether the workspace is
+    behind, and the schedule follows.
+    """
+    if _is_version_held_back(facts, moved_to):
+        return "was skipped or already tried"
+    installed_ref = read_installed_version(now)
+    if release_sort_key(installed_ref) is not None and not is_release_behind(
+        installed_ref, moved_to
+    ):
+        return "the workspace is not behind"
+    return ""
 
 
 def tick_self_arming(
@@ -208,6 +248,14 @@ def tick_self_arming(
     that are the workspace's own, and arms a schedule for the channel's version when ``should_auto_arm`` says
     so. A channel whose file could not be read arms nothing. Neither does a version past the one a client from
     before the workspace armed its own updates named, while that client keeps asking.
+
+    A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
+    skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
+    version. One that stands at a version the user skipped is cancelled as well. A skip cancels whatever is armed
+    when it is recorded, so one recorded while a minute was deciding finds nothing to cancel: that minute reads
+    the skip again once it has armed, and cancels what it armed. A schedule armed while a minute was deciding
+    stands as it was armed: the minute arms only where none is armed when it comes to write, and cancels only
+    the schedule it read.
     """
     settings = read_update_settings()
     if settings is None:
@@ -217,6 +265,28 @@ def tick_self_arming(
     )
     facts = read_arming_facts(settings.is_arming_enabled, now)
     if facts.is_scheduled:
+        self_armed = read_self_armed_schedule(now)
+        if self_armed is None:
+            refresh_followed_schedule(now)
+            return
+        armed_for = self_armed.target_ref
+        if armed_for is not None and armed_for == facts.skipped_target_ref:
+            if cancel_schedule_armed_at(self_armed.armed_at):
+                write_log_line(
+                    "cancelled the workspace's own schedule: %s was skipped" % armed_for
+                )
+            return
+        moved_to = self_armed.moved_to
+        why_not_armed = (
+            _why_not_moved_to(facts, moved_to, now) if moved_to is not None else ""
+        )
+        if why_not_armed:
+            if cancel_schedule_armed_at(self_armed.armed_at):
+                write_log_line(
+                    "cancelled the workspace's own schedule: its channel moved to %s, which %s"
+                    % (moved_to, why_not_armed)
+                )
+            return
         refresh_followed_schedule(now)
         return
     if not is_channel_version_current(channel_version):
@@ -239,10 +309,22 @@ def tick_self_arming(
         window_length_minutes=None,
         is_backup_configured=None,
         is_auto_armed=True,
+        is_armed_schedule_kept=True,
         now=now,
         live_cron_dir=live_cron_dir,
         agent_environment=agent_environment,
         fetch_channel_file=fetch_channel_file,
     )
-    if answer.get("outcome") == OUTCOME_ARMED:
-        write_log_line("armed the update to %s for the workspace itself" % target_ref)
+    if answer.get("outcome") != OUTCOME_ARMED:
+        return
+    if _read_skipped_target_ref() == target_ref:
+        armed = answer.get("schedule")
+        if isinstance(armed, Mapping) and cancel_schedule_armed_at(
+            armed.get("armed_at")
+        ):
+            write_log_line(
+                "cancelled the update to %s the workspace had just armed: it was skipped meanwhile"
+                % target_ref
+            )
+        return
+    write_log_line("armed the update to %s for the workspace itself" % target_ref)

@@ -2,14 +2,13 @@ import subprocess
 import sys
 import threading
 from collections.abc import Generator
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 from workspace_update_control.agents import agent_events_path
 from workspace_update_control.testing import (
-    LocalFeedHandler,
+    LocalFeedServer,
     StagedUpdateWorkspace,
     stage_update_workspace,
 )
@@ -37,13 +36,15 @@ def events_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def local_feed() -> Generator[str, None, None]:
-    """The base address of a feed served from this machine, which publishes the stable channel's file alone."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), LocalFeedHandler)
+    """The base address of a feed served from this machine, which publishes the stable channel's file, and
+    misbehaves for the channels ``LocalFeedHandler`` names."""
+    server = LocalFeedServer(("127.0.0.1", 0))
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
+        server.is_taken_down.set()
         server.shutdown()
         server.server_close()
         serving.join()

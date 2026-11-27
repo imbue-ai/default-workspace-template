@@ -11,7 +11,7 @@ from workspace_backup_setup.testing import (
 
 @pytest.fixture
 def fake_restic_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A stand-in ``restic`` first on PATH; the directory its mode, calls, refused tokens and release files live in."""
+    """A stand-in ``restic`` first on PATH; the directory its mode, calls and refused tokens live in."""
     control_directory = tmp_path / "restic-control"
     install_fake_restic(tmp_path / "bin", control_directory)
     monkeypatch.setenv("PATH", path_with_fake_restic_first(tmp_path / "bin"))

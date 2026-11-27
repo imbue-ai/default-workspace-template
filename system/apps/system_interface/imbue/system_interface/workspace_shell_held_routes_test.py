@@ -150,7 +150,7 @@ def test_a_workspace_whose_apps_declare_no_switches_does_not_support_them(client
     assert response.get_json()["code"] == "SUGGESTIONS_UNSUPPORTED"
 
 
-def _app_answering(path: str, body: dict[str, Any] | str, status: int) -> Flask:
+def _app_answering(path: str, body: dict[str, Any] | list[Any] | str, status: int) -> Flask:
     app = Flask("stand-in")
 
     def answer() -> ResponseReturnValue:
@@ -171,11 +171,21 @@ def _app_answering(path: str, body: dict[str, Any] | str, status: int) -> Flask:
             501,
             "SUGGESTIONS_UNSUPPORTED",
         ),
+        (_app_answering(_SETTINGS_PATH, {}, 200), 501, "SUGGESTIONS_UNSUPPORTED"),
+        (_app_answering(_SETTINGS_PATH, {"settings": None}, 200), 501, "SUGGESTIONS_UNSUPPORTED"),
         (
-            _app_answering(_SETTINGS_PATH, {"settings": {**_BOTH_ON, "is_new_chat_suggestions_enabled": "yes"}}, 200),
+            _app_answering(_SETTINGS_PATH, {"settings": {**_BOTH_ON, "is_new_chat_suggestions_enabled": None}}, 200),
             501,
             "SUGGESTIONS_UNSUPPORTED",
         ),
+        # A switch that is there and is no switch is not the app's settings, and neither is an answer of another shape.
+        (
+            _app_answering(_SETTINGS_PATH, {"settings": {**_BOTH_ON, "is_new_chat_suggestions_enabled": "yes"}}, 200),
+            503,
+            "SUGGESTIONS_UNAVAILABLE",
+        ),
+        (_app_answering(_SETTINGS_PATH, [], 200), 503, "SUGGESTIONS_UNAVAILABLE"),
+        (_app_answering(_SETTINGS_PATH, {"settings": "x"}, 200), 503, "SUGGESTIONS_UNAVAILABLE"),
         (
             _app_answering(_SETTINGS_PATH, {"detail": "the settings file is locked"}, 500),
             503,

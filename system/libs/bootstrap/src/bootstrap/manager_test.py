@@ -887,6 +887,28 @@ def test_the_boot_goes_on_when_the_initial_data_cannot_be_applied(
     assert "broken venv" in errors[0]
 
 
+def test_the_boot_goes_on_when_applying_the_initial_data_runs_out_of_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stand-in becomes the sleeping process, so ending it closes the output the boot reads.
+    host_dir = _stage_the_initial_data_entry(
+        tmp_path, monkeypatch, "#!/bin/sh\nexec sleep 30\n"
+    )
+    document = host_dir / "initial_data.json"
+    document.write_text('{"schema": 1}')
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        _apply_initial_data(timeout_seconds=0.2)
+    finally:
+        logger.remove(sink)
+
+    assert document.exists()
+    assert len(errors) == 1
+    assert "timed out after 0.2 seconds" in errors[0]
+    assert "continuing boot" in errors[0]
+
+
 # _recover_interrupted_update
 
 

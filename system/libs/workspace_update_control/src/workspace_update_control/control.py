@@ -22,7 +22,7 @@ import os
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Final
+from typing import Final, NamedTuple
 
 from workspace_update_control.channel import (
     ChannelFileFetcher,
@@ -52,6 +52,7 @@ from workspace_update_control.dispatcher import (
     read_json_object,
     resolve_account,
     run_started_at,
+    state_lock,
     write_file_if_changed,
     write_json_atomically,
     write_log_line,
@@ -62,6 +63,7 @@ from workspace_update_control.protocol import (
     DURABLE_CRON_PATH,
     LAST_DISPATCH_FILE_PATH,
     LAST_START_FILE_PATH,
+    OUTCOME_ALREADY_ARMED,
     OUTCOME_ALREADY_RUNNING,
     OUTCOME_ARMED,
     OUTCOME_CREATE_FAILED,
@@ -79,11 +81,12 @@ from workspace_update_control.protocol import (
     STARTED_BY_IMMEDIATE,
 )
 from workspace_update_control.settings import (
-    is_backup_configured as is_backup_configured_here,
-)
-from workspace_update_control.settings import (
+    UpdateSettings,
     read_update_settings,
     settings_window,
+)
+from workspace_update_control.settings import (
+    is_backup_configured as is_backup_configured_here,
 )
 
 # The workspace's agents as a caller reads them (``agents.read_observed_agents``, or the dispatcher's own
@@ -239,6 +242,7 @@ def arm_schedule(
     window_length_minutes: int | None,
     is_backup_configured: bool | None,
     is_auto_armed: bool,
+    is_armed_schedule_kept: bool,
     now: float,
     live_cron_dir: str,
     agent_environment: AgentEnvironment,
@@ -250,6 +254,11 @@ def arm_schedule(
     A value passed as None is the workspace's own (the channel's version, the settings' window, whether it holds
     backup credentials), and the schedule then keeps it current. With no version to be had the answer is
     ``NO_CHANNEL_VERSION``, unless the user named one, and with no window ``NO_UPDATE_SETTINGS``.
+
+    With ``is_armed_schedule_kept`` a schedule that is armed already is left as it stands, and the answer is
+    ``ALREADY_ARMED`` with that schedule. That is the workspace's own arm, which it decides on after finding
+    nothing armed: a schedule armed since then is one somebody asked for. An arm a client asks for replaces
+    whatever is armed.
     """
     if ceiling is not None:
         record_client_ceiling(ceiling, now)
@@ -293,33 +302,38 @@ def arm_schedule(
             **create_result(OUTCOME_NO_CRON, detail),
             "schedule": read_json_object(SCHEDULE_FILE_PATH),
         }
-    existing = read_json_object(SCHEDULE_FILE_PATH) or {}
-    schedule: dict[str, object] = {
-        "schema": UPDATE_PROGRAM_SCHEMA,
-        "armed_at": now,
-        "marked_chat": existing.get("marked_chat", ""),
-        "marked_at": existing.get("marked_at"),
-        "window_seen_open_at": existing.get("window_seen_open_at"),
-        "pending_skip_reason": "",
-        "next_attempt_at": None,
-        "last_skip_reason": "",
-        "last_skip_at": None,
-        "ceiling": armed_ceiling,
-        "window_start_minute_utc": armed_window_start_minute_utc,
-        "window_length_minutes": armed_window_length_minutes,
-        "is_backup_configured": is_armed_with_backups,
-        "override_ref": override_ref,
-        "is_auto_armed": is_auto_armed,
-    }
-    write_json_atomically(SCHEDULE_FILE_PATH, schedule)
-    _write_schedule_origin(
-        now,
-        {
-            _FOLLOWED_CEILING: ceiling is None and bool(channel_ref),
-            _FOLLOWED_WINDOW: named_window is None,
-            _FOLLOWED_BACKUP: is_backup_configured is None,
-        },
-    )
+    with state_lock():
+        standing = read_json_object(SCHEDULE_FILE_PATH)
+        if is_armed_schedule_kept and standing is not None:
+            write_log_line("armed nothing: a schedule is armed already, and stands")
+            return {**create_result(OUTCOME_ALREADY_ARMED), "schedule": standing}
+        existing = standing or {}
+        schedule: dict[str, object] = {
+            "schema": UPDATE_PROGRAM_SCHEMA,
+            "armed_at": now,
+            "marked_chat": existing.get("marked_chat", ""),
+            "marked_at": existing.get("marked_at"),
+            "window_seen_open_at": existing.get("window_seen_open_at"),
+            "pending_skip_reason": "",
+            "next_attempt_at": None,
+            "last_skip_reason": "",
+            "last_skip_at": None,
+            "ceiling": armed_ceiling,
+            "window_start_minute_utc": armed_window_start_minute_utc,
+            "window_length_minutes": armed_window_length_minutes,
+            "is_backup_configured": is_armed_with_backups,
+            "override_ref": override_ref,
+            "is_auto_armed": is_auto_armed,
+        }
+        write_json_atomically(SCHEDULE_FILE_PATH, schedule)
+        _write_schedule_origin(
+            now,
+            {
+                _FOLLOWED_CEILING: ceiling is None and bool(channel_ref),
+                _FOLLOWED_WINDOW: named_window is None,
+                _FOLLOWED_BACKUP: is_backup_configured is None,
+            },
+        )
     write_log_line(
         "armed a schedule (%d minutes from %02d:%02d UTC, target %s)"
         % (
@@ -333,14 +347,25 @@ def arm_schedule(
 
 
 def _write_schedule_fields(
-    schedule: dict[str, object], fields: Mapping[str, object]
-) -> bool:
-    """Write ``fields`` into the armed ``schedule`` where they differ; whether anything was written."""
-    if all(schedule.get(key) == value for key, value in fields.items()):
-        return False
-    schedule.update(fields)
-    write_json_atomically(SCHEDULE_FILE_PATH, schedule)
-    return True
+    schedule: Mapping[str, object], fields: Mapping[str, object]
+) -> tuple[dict[str, object] | None, bool]:
+    """Write ``fields`` into the armed schedule where they differ: the schedule as it then stands (None when
+    none is armed), and whether anything was written.
+
+    ``schedule`` is the schedule as it was read when ``fields`` were worked out, which can take as long as a read
+    of the feed. The file is read again under the state lock and written as it stands then: a schedule cancelled
+    meanwhile stays cancelled, one armed again meanwhile is left as its arm wrote it, and what the dispatcher
+    marked meanwhile is kept.
+    """
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None or current.get("armed_at") != schedule.get("armed_at"):
+            return current, False
+        if all(current.get(key) == value for key, value in fields.items()):
+            return current, False
+        current.update(fields)
+        write_json_atomically(SCHEDULE_FILE_PATH, current)
+        return current, True
 
 
 def refresh_schedule(
@@ -384,9 +409,67 @@ def refresh_schedule(
         if is_backup_configured is not None
         else is_backup_configured_here()
     )
-    _write_schedule_fields(schedule, fields)
+    refreshed, _ = _write_schedule_fields(schedule, fields)
+    if refreshed is None:
+        return {"is_armed": False, "schedule": None}
     install_cron_entry(live_cron_dir)
-    return {"is_armed": True, "schedule": schedule}
+    return {"is_armed": True, "schedule": refreshed}
+
+
+def _read_followed_schedule(
+    now: float,
+) -> tuple[dict[str, object], dict[str, object]] | None:
+    """The armed schedule and the record of which of its values the workspace filled in itself; None when there
+    is no such schedule, or a client from before the workspace armed its own updates keeps asking."""
+    schedule = read_json_object(SCHEDULE_FILE_PATH)
+    origin = read_json_object(SCHEDULE_ORIGIN_FILE_PATH)
+    if schedule is None or origin is None:
+        return None
+    if origin.get("armed_at") != schedule.get("armed_at"):
+        return None
+    if read_fresh_client_ceiling(now) is not None:
+        return None
+    return schedule, origin
+
+
+def _followed_ceiling(
+    origin: Mapping[str, object], settings: UpdateSettings | None
+) -> str | None:
+    """The version a schedule that follows the channel is kept at; None when it follows none, or the channel's
+    version is not current."""
+    channel_version = read_channel_version(settings)
+    if origin.get(_FOLLOWED_CEILING) is True and is_channel_version_current(
+        channel_version
+    ):
+        return channel_template_ref(channel_version)
+    return None
+
+
+class SelfArmedSchedule(NamedTuple):
+    """One read of a schedule the workspace armed itself."""
+
+    # Which arming it is: a schedule armed again since carries another.
+    armed_at: object
+    # The version it stands at; None when it names none.
+    target_ref: str | None
+    # The version ``refresh_followed_schedule`` is about to move it to; None when it stays at its version.
+    moved_to: str | None
+
+
+def read_self_armed_schedule(now: float) -> SelfArmedSchedule | None:
+    """The schedule the workspace armed itself; None when no such schedule is armed, or a client from before the
+    workspace armed its own updates keeps asking."""
+    followed = _read_followed_schedule(now)
+    if followed is None or followed[0].get("is_auto_armed") is not True:
+        return None
+    schedule, origin = followed
+    ceiling = schedule.get("ceiling")
+    followed_ceiling = _followed_ceiling(origin, read_update_settings())
+    return SelfArmedSchedule(
+        armed_at=schedule.get("armed_at"),
+        target_ref=ceiling if isinstance(ceiling, str) else None,
+        moved_to=followed_ceiling if followed_ceiling != ceiling else None,
+    )
 
 
 def refresh_followed_schedule(now: float) -> None:
@@ -398,46 +481,54 @@ def refresh_followed_schedule(now: float) -> None:
     armed its own updates keeps asking: that client rewrites the schedule with its own values, and the two
     would undo each other.
     """
-    schedule = read_json_object(SCHEDULE_FILE_PATH)
-    origin = read_json_object(SCHEDULE_ORIGIN_FILE_PATH)
-    if schedule is None or origin is None:
+    followed = _read_followed_schedule(now)
+    if followed is None:
         return
-    if origin.get("armed_at") != schedule.get("armed_at"):
-        return
-    if read_fresh_client_ceiling(now) is not None:
-        return
+    schedule, origin = followed
     settings = read_update_settings()
     fields: dict[str, object] = {}
-    channel_version = read_channel_version(settings)
-    if origin.get(_FOLLOWED_CEILING) is True and is_channel_version_current(
-        channel_version
-    ):
-        fields["ceiling"] = channel_template_ref(channel_version)
+    ceiling = _followed_ceiling(origin, settings)
+    if ceiling is not None:
+        fields["ceiling"] = ceiling
     if origin.get(_FOLLOWED_WINDOW) is True and settings is not None:
         fields["window_start_minute_utc"], fields["window_length_minutes"] = (
             settings_window(settings, now)
         )
     if origin.get(_FOLLOWED_BACKUP) is True:
         fields["is_backup_configured"] = is_backup_configured_here()
-    if _write_schedule_fields(schedule, fields):
+    refreshed, is_written = _write_schedule_fields(schedule, fields)
+    if refreshed is not None and is_written:
         write_log_line(
             "brought the armed schedule current (target %s)"
-            % (schedule.get("override_ref") or schedule.get("ceiling"))
+            % (refreshed.get("override_ref") or refreshed.get("ceiling"))
         )
 
 
 def cancel_schedule() -> dict[str, object]:
     """Delete the schedule file, and the record of which of its values were the workspace's; whether there was one."""
-    try:
-        os.remove(SCHEDULE_FILE_PATH)
-    except FileNotFoundError:
-        return {"is_cancelled": False}
-    try:
-        os.remove(SCHEDULE_ORIGIN_FILE_PATH)
-    except FileNotFoundError:
-        pass
+    with state_lock():
+        try:
+            os.remove(SCHEDULE_FILE_PATH)
+        except FileNotFoundError:
+            return {"is_cancelled": False}
+        try:
+            os.remove(SCHEDULE_ORIGIN_FILE_PATH)
+        except FileNotFoundError:
+            pass
     write_log_line("cancelled the schedule")
     return {"is_cancelled": True}
+
+
+def cancel_schedule_armed_at(armed_at: object) -> bool:
+    """Cancel the schedule while it is the one armed at ``armed_at``; whether it was cancelled.
+
+    A schedule armed again since the caller read it is not the one the caller decided to cancel, and stays.
+    """
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None or current.get("armed_at") != armed_at:
+            return False
+        return bool(cancel_schedule()["is_cancelled"])
 
 
 def _epoch(value: object) -> float | None:
@@ -447,20 +538,32 @@ def _epoch(value: object) -> float | None:
 
 
 def skip_target(*, target_ref: str, skipped_at: float) -> dict[str, object]:
-    """Cancel the schedule and record ``target_ref`` as skipped; of two skips the later ``skipped_at`` is kept."""
-    is_cancelled = bool(cancel_schedule()["is_cancelled"])
-    existing = read_json_object(SKIPPED_TARGET_FILE_PATH)
-    existing_at = _epoch(existing.get("skipped_at")) if existing is not None else None
-    if existing is not None and existing_at is not None and existing_at > skipped_at:
-        return {"is_cancelled": is_cancelled, "skipped_target": existing}
-    recorded: dict[str, object] = {
-        "schema": UPDATE_PROGRAM_SCHEMA,
-        "target_ref": target_ref,
-        "skipped_at": skipped_at,
-    }
-    write_json_atomically(SKIPPED_TARGET_FILE_PATH, recorded)
-    write_log_line("recorded the skipped update target %s" % target_ref)
-    return {"is_cancelled": is_cancelled, "skipped_target": recorded}
+    """Record ``target_ref`` as skipped and cancel the schedule; of two skips the later ``skipped_at`` is kept.
+
+    The skip is on record before the schedule goes: a minute of the dispatcher that found nothing armed and
+    nothing skipped would arm the version again.
+    """
+    with state_lock():
+        existing = read_json_object(SKIPPED_TARGET_FILE_PATH)
+        existing_at = (
+            _epoch(existing.get("skipped_at")) if existing is not None else None
+        )
+        if (
+            existing is not None
+            and existing_at is not None
+            and existing_at > skipped_at
+        ):
+            kept = existing
+        else:
+            kept = {
+                "schema": UPDATE_PROGRAM_SCHEMA,
+                "target_ref": target_ref,
+                "skipped_at": skipped_at,
+            }
+            write_json_atomically(SKIPPED_TARGET_FILE_PATH, kept)
+            write_log_line("recorded the skipped update target %s" % target_ref)
+        is_cancelled = bool(cancel_schedule()["is_cancelled"])
+    return {"is_cancelled": is_cancelled, "skipped_target": kept}
 
 
 def record_dismissals(

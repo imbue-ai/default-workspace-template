@@ -44,7 +44,10 @@ from workspace_update_control.settings import (
     take_update_settings,
 )
 
-from workspace_initial_data.errors import InitialDataPartRefusedError
+from workspace_initial_data.errors import (
+    InitialDataPartRefusedError,
+    InitialDataRecordUnreadableError,
+)
 from workspace_initial_data.status import (
     InitialDataRecord,
     InitialDataState,
@@ -53,6 +56,7 @@ from workspace_initial_data.status import (
     applied_status,
     failed_status,
     read_initial_data_record,
+    read_initial_data_status,
     write_initial_data_record,
 )
 
@@ -76,8 +80,12 @@ BackupDestinationRecorder = Callable[[Path, Mapping[str, object]], object]
 _INTERRUPTED_DETAIL: Final[str] = (
     "this part was being written when the step was interrupted, so it is not written again"
 )
+_NOT_AN_OBJECT_DETAIL: Final[str] = "this part is not a JSON object"
 _UNFINISHED_DETAIL: Final[str] = (
     "The step ended before it had applied every part of the document."
+)
+_UNREADABLE_RECORD_DETAIL: Final[str] = (
+    "The record of what was applied cannot be read, so no part of the document is written."
 )
 
 _PartWriter = Callable[[Path, Mapping[str, object]], None]
@@ -135,9 +143,10 @@ def _backup_destination_writer(
     return write
 
 
-def _parts_of(document_bytes: bytes) -> dict[str, Mapping[str, object]]:
-    """The parts the document carries, by name. Raises ``InitialDataPartRefusedError`` for a document that is not
-    one this template applies, with a reason that quotes none of its values."""
+def _parts_of(document_bytes: bytes) -> dict[str, object]:
+    """The parts the document carries, by name, each as the document has it. Raises
+    ``InitialDataPartRefusedError`` for a document that is not one this template applies, with a reason that
+    quotes none of its values."""
     try:
         document = json.loads(document_bytes)
     except json.JSONDecodeError as e:
@@ -158,17 +167,11 @@ def _parts_of(document_bytes: bytes) -> dict[str, Mapping[str, object]]:
             f"The document's schema is {schema}, and this workspace's template applies up to "
             f"{INITIAL_DATA_SCHEMA}."
         )
-    parts: dict[str, Mapping[str, object]] = {}
-    for name in (PROFILE_PART, TIMEZONE_PART, UPDATE_SETTINGS_PART, BACKUPS_PART):
-        part = document.get(name)
-        if part is None:
-            continue
-        if not isinstance(part, dict):
-            raise InitialDataPartRefusedError(
-                f"The document's {name} is not a JSON object."
-            )
-        parts[name] = part
-    return parts
+    return {
+        name: document[name]
+        for name in (PROFILE_PART, TIMEZONE_PART, UPDATE_SETTINGS_PART, BACKUPS_PART)
+        if document.get(name) is not None
+    }
 
 
 def _keep(
@@ -191,6 +194,16 @@ def _keep(
     return True
 
 
+def _restrict(document_path: Path) -> None:
+    """Leave a kept document readable by its owner alone."""
+    try:
+        os.chmod(document_path, _DOCUMENT_FILE_MODE)
+    except OSError as e:
+        logger.warning(
+            "Could not restrict the kept document at {}: {}", document_path, e
+        )
+
+
 def _left_for_the_next_start(
     workspace_root: Path,
     document_path: Path,
@@ -200,12 +213,7 @@ def _left_for_the_next_start(
 ) -> InitialDataStatus:
     """Record why the document is not applied yet, and leave it where it is."""
     logger.error("The initial data at {} is not applied: {}", document_path, detail)
-    try:
-        os.chmod(document_path, _DOCUMENT_FILE_MODE)
-    except OSError as e:
-        logger.warning(
-            "Could not restrict the kept document at {}: {}", document_path, e
-        )
+    _restrict(document_path)
     status = failed_status(detail)
     _keep(workspace_root, document_digest, progress_by_part, status)
     return status
@@ -226,20 +234,31 @@ def apply_initial_data(
 
     With no document nothing is written and the recorded status is answered as it is. A document every part of
     which was written is recorded as applied and deleted, since it holds storage credentials. One that does not
-    parse, whose schema this template does not know, or a part of which its writer refuses, is left where it is
-    with the reason recorded; the parts that could be written are written all the same.
+    parse, whose schema this template does not know, or a part of which is no object or is refused by its writer,
+    is left where it is with the reason recorded; the parts that could be written are written all the same.
 
     A part is written at most once. A later start with the same document tries the parts that were refused and
     leaves every part that was written as the workspace now has it. A part the step was interrupted in the
     middle of is not written again either, and reads as failed from then on. A document left again with the
     bytes of one already applied is deleted and nothing is written.
 
+    While the record of what was applied is there and cannot be read, any part of a document may have been
+    written before, so none is written: the document is left where it is, the record is left as it is, and the
+    answer is failed. With no document the answer is then ``NONE``, as the status reads.
+
     ``record_backup_destination`` takes the backup part: the workspace's own backup setup, which records the
     destination and acts on it once the services run. A destination it refuses, and one named while a backup
     operation holds the backup lease, fail that part as any writer's refusal does.
     """
     document_path = host_dir / INITIAL_DATA_FILE_NAME
-    recorded = read_initial_data_record(workspace_root)
+    try:
+        recorded = read_initial_data_record(workspace_root)
+    except InitialDataRecordUnreadableError as e:
+        if not document_path.exists():
+            return read_initial_data_status(workspace_root)
+        logger.error("The initial data at {} is not applied: {}", document_path, e)
+        _restrict(document_path)
+        return failed_status(_UNREADABLE_RECORD_DETAIL)
     try:
         document_bytes = document_path.read_bytes()
     except FileNotFoundError:
@@ -278,6 +297,9 @@ def apply_initial_data(
     refusals: list[str] = []
     for name, part in parts.items():
         if name in progress_by_part:
+            continue
+        if not isinstance(part, dict):
+            refusals.append(f"{name}: {_NOT_AN_OBJECT_DETAIL}")
             continue
         # Kept before the part is written: were the step to end between the write and its record, a later start
         # would otherwise write the part again, over whatever the user chose in between.
@@ -325,9 +347,10 @@ def apply_initial_data(
         outcome = applied_status(now)
     reached = "; ".join(interrupted) if interrupted else "Every part was written"
     if not _keep(workspace_root, digest, progress_by_part, outcome):
+        _restrict(document_path)
         return failed_status(f"{reached}, and that could not be recorded.")
     try:
-        document_path.unlink()
+        document_path.unlink(missing_ok=True)
     except OSError as e:
         return _left_for_the_next_start(
             workspace_root,

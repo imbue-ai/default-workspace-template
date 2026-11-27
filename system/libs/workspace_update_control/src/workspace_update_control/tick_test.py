@@ -14,6 +14,7 @@ from workspace_update_control.testing import (
     StagedUpdateWorkspace,
     armed_schedule,
     listed_agent,
+    update_settings_document,
 )
 
 _LIBRARY_SOURCE = Path(__file__).resolve().parents[1]
@@ -58,6 +59,25 @@ def test_the_tick_runs_one_minute_of_the_dispatcher_at_the_time_it_is_run(
     assert schedule is not None
     assert schedule["marked_chat"] == _LEAD
     assert before <= schedule["marked_at"] <= time.time()
+
+
+def test_the_tick_runs_the_workspaces_own_arming_which_reads_its_channel_off_the_feed(
+    staged: StagedUpdateWorkspace, local_feed: str
+) -> None:
+    # Arming off, so the minute reads the channel and writes no cron line of this machine's.
+    staged.write_state(
+        "settings.json",
+        update_settings_document(
+            feed_base_url=local_feed, is_auto_update_enabled=False
+        ),
+    )
+
+    tick.main()
+
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert channel_version["template_ref"] == "minds-v0.10.5"
+    assert staged.read_state("schedule.json") is None
 
 
 def test_the_entry_file_runs_the_tick_with_no_venv_in_the_workspace_it_is_run_from(

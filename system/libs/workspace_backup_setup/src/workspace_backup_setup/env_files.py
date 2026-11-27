@@ -43,8 +43,9 @@ _INSTALLED_ENV_HEADER: Final[str] = (
     "# RESTIC_PASSWORD itself; it is the repository's only key.\n"
 )
 _PENDING_REQUEST_PREFIX: Final[str] = "# backup-setup request "
-# A credential written into a repository's address, between the scheme and the host.
-_ADDRESS_CREDENTIAL: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/@]*@")
+# A credential written into a repository's address, between the scheme and the host. A password may itself
+# hold an "@", so the host begins after the last one.
+_ADDRESS_CREDENTIAL: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/]*@")
 
 
 class BackupDestinationKind(UpperCaseStrEnum):
@@ -61,12 +62,31 @@ def env_digest(env_text: str) -> str:
 
 
 def write_atomically(path: Path, text: str, mode: int) -> None:
+    """Put ``text`` at ``path`` in one step, not returning before it is on disk.
+
+    A password is kept this way before a repository is initialised with it, so a file a crash could lose would
+    leave a repository nothing can read. Raises ``OSError`` when it cannot be written, and leaves no scratch
+    file, which would hold the credentials, whatever the write raised.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, scratch = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(handle, "w", encoding="utf-8") as out:
-        out.write(text)
-    os.chmod(scratch, mode)
-    os.replace(scratch, path)
+    is_in_place = False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(scratch, mode)
+        os.replace(scratch, path)
+        is_in_place = True
+    finally:
+        if not is_in_place:
+            Path(scratch).unlink(missing_ok=True)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def read_restic_env_text(workspace_root: Path) -> str | None:
@@ -181,7 +201,8 @@ def drop_pending_env(workspace_root: Path, now: float) -> None:
     """Let go of the credentials of a setup that will not finish.
 
     Ones that hold a password are kept aside instead of deleted: the repository may already be initialised
-    with it, and then it is the only key.
+    with it, and then it is the only key. Where that password is already the one the workspace keeps for the
+    repository, nothing is added: storage offered again and again for one repository leaves one copy.
     """
     pending_path = workspace_root / PENDING_ENV_RELATIVE_PATH
     try:
@@ -190,10 +211,12 @@ def drop_pending_env(workspace_root: Path, now: float) -> None:
         pending_path.unlink(missing_ok=True)
         return
     env_values = parse_restic_env_file(text)
+    password = env_values.get(PASSWORD_KEY)
+    repository = env_values.get(REPOSITORY_KEY)
     if (
-        env_values.get(PASSWORD_KEY)
-        and env_values.get(REPOSITORY_KEY)
-        and env_values not in kept_envs(workspace_root)
+        password
+        and repository
+        and kept_password_for_repository(workspace_root, repository) != password
     ):
         write_atomically(
             _archive_path(workspace_root, now),
@@ -257,12 +280,18 @@ def kept_env_for_destination(
 
 
 def kept_password_for_repository(workspace_root: Path, repository: str) -> str | None:
-    """The password this workspace keeps for ``repository``: the one in use, else the newest kept aside."""
+    """The password this workspace keeps for ``repository``: the one in use, else the newest kept aside.
+
+    A credential written into the address is the storage's and not the repository's, so an address that
+    differs only in it names the same repository.
+    """
+    address = repository_without_credentials(repository)
     in_use_text = read_restic_env_text(workspace_root)
     in_use = parse_restic_env_file(in_use_text) if in_use_text is not None else {}
     for env_values in (in_use, *kept_envs(workspace_root)):
-        if env_values.get(REPOSITORY_KEY) == repository and env_values.get(
-            PASSWORD_KEY
-        ):
+        kept_address = repository_without_credentials(
+            env_values.get(REPOSITORY_KEY, "")
+        )
+        if kept_address == address and env_values.get(PASSWORD_KEY):
             return env_values[PASSWORD_KEY]
     return None

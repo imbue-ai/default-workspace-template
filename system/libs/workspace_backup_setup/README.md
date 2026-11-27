@@ -42,7 +42,10 @@ the user's own storage is refused.
   or makes one (kept on disk before it is used), initialises the repository or
   checks that the password opens the one already there, writes `restic.env`, and
   gives the lease back. A step that fails leaves the setup `FAILED`; it is tried
-  again after a minute, then after twice as long each time, up to an hour. For
+  again after a minute, then after twice as long each time, up to an hour. The
+  exception is a storage that refuses the credentials it is shown: the setup
+  then reads `AWAITING_STORAGE`, the state a client supplies storage for, and
+  the storage that was offered is kept and tried again at the hourly check. For
   `NONE` it moves `restic.env` aside. Once an hour, and when it starts, it checks
   that the credentials in use still open the repository: a storage that refuses
   them leaves the setup `AWAITING_STORAGE` with `restic.env` where it is, and a
@@ -65,8 +68,11 @@ the user's own storage is refused.
 ## What is on disk
 
 - `data/.state/backup_setup/state.json` -- what the workspace was asked and how the
-  setup stands. It holds no credential. Reads and writes of it are serialized by
-  `state.lock` beside it.
+  setup stands. It holds no credential. A read of it that a write follows is
+  serialized with that write by `state.lock` beside it (the destination request and
+  the program); a client's read of the backup state takes no lock, so one made
+  while the program installs the credentials can describe the moment between two
+  of its files, and the next read is right.
 - `data/.secrets/restic.env.pending` (mode 0600) -- the credentials of a setup that
   has not finished: the storage that was offered, and the repository's password
   once it is made.
@@ -76,22 +82,28 @@ the user's own storage is refused.
   kept for it.
 
 Because the request is on disk, `backup-setup` takes its work up again whenever it
-starts. To make it forget a setup it has not finished (a restore does, so a
-workspace restored from a snapshot taken during a change of destination does not
-take that change up again), delete `state.json` and `restic.env.pending` while the
-program is stopped; the `restic.env` then in place is taken as the destination.
+starts. To make it forget a setup it has not finished, remove `state.json` and
+`restic.env.pending` while the program is stopped; the `restic.env` then in place
+is taken as the destination. A pending file that names a repository and a
+password is not deleted for that: it is kept aside as `restic.env.<timestamp>`,
+since the repository may already be initialised with that password, and the
+workspace finds it there when the repository is named again. The Imbue Studio
+desktop's restore does all of this, so a workspace restored from a snapshot taken
+during a change of destination does not take that change up again.
 
 ## A `restic.env` the program did not write
 
-A released Imbue Studio desktop writes `restic.env` by its own command, and so do a
-current desktop's restore, its update of the backup service and its migration of
-the backup store. The record names the digest of the file as the program last left
-it, so a file with another digest is taken as the destination: the setup reads
-`READY` for the repository it names, and a setup the program had not finished is
-dropped. The destination's kind is read off the file: Imbue Cloud where the
-repository is a `rest:` address whose user name is the workspace's own id
-(`MNGR_AGENT_ID`), and storage of the user's own otherwise. A file the record
-expects that is gone is backups turned off.
+A released Imbue Studio desktop writes `restic.env` by its own command, and again
+from its own copy when it updates the backup service. A current desktop's restore
+and its migration of the backup store write it too; a current desktop's update of
+the backup service writes none into a workspace that has the backup lease, which
+every workspace with this program has. The record names the digest of the file as
+the program last left it, so a file with another digest is taken as the
+destination: the setup reads `READY` for the repository it names, and a setup the
+program had not finished is dropped. The destination's kind is read off the file:
+Imbue Cloud where the repository is a `rest:` address whose user name is the
+workspace's own id (`MNGR_AGENT_ID`), and storage of the user's own otherwise. A
+file the record expects that is gone is backups turned off.
 
 ## The backup lease
 

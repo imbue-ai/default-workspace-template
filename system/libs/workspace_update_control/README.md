@@ -63,17 +63,26 @@ desktop from before the workspace's update routes ships into the workspace
 the two wrote the cron line last decides which dispatcher runs, so both must act
 the same on the same files: the formats keep `UPDATE_PROGRAM_SCHEMA`, and a fix to
 the dispatcher is made in both places, until no supported desktop ships that
-program. `last-start.json` is this library's alone, and so are the files a
-workspace that arms its own updates keeps: `settings.json`, `channel-version.json`
+program. This library's own reads-then-writes of the schedule, the update settings
+and the skipped version take one lock (`state.lock`, `dispatcher.state_lock`), so a
+cancel or a skip that lands while the tick or another request is writing is not
+undone, and a schedule armed while the tick was deciding to arm one of its own, or
+to cancel the one it had armed, stands as it was armed; that desktop's program takes none. The lock is held for file reads and
+writes alone, never while a chat is created or the feed is read, and it is not the
+lock cron's line tests. `last-start.json` is this library's alone, and so are the
+files a workspace that arms its own updates keeps: `settings.json`,
+`channel-version.json`
 (which the update-self skill reads for its default target), `client-ceiling.json`,
 `schedule-origin.json` and `installed-version.json`. A desktop from before them
 reads none, and `schedule.json` gains no field for them.
 
 ## A desktop from before the workspace armed its own updates
 
-Such a desktop still sweeps the workspace every 300 seconds, and every request of
-its sweep names the newest version it knows (`ceiling`). The routes serve those
-requests as they always did and record the last one (`client-ceiling.json`). For
+Such a desktop still sweeps the workspace every 300 seconds. Its arm, its start and
+its refresh of an armed schedule name the newest version it knows (`ceiling`); a
+sweep that finds nothing armed only reads, and names none. The routes serve those
+requests as they always did and record the last one that named a version
+(`client-ceiling.json`). For
 `CLIENT_CEILING_HOLD_SECONDS` after it, the dispatcher arms nothing past that
 version, a request that names none takes the older of the two, and an armed schedule
 is left to that desktop's refreshes. A workspace no such desktop is asking follows

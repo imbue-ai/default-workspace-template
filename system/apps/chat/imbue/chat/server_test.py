@@ -95,6 +95,7 @@ from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.first_boot_welcome import open_welcome_chat_owed_from_first_boot
 from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.first_run_tree import write_first_run_tree_step
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
@@ -4097,6 +4098,53 @@ def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_sa
     assert again.get_json()["chat_id"] == chat_id
     assert "I want to use Studio for: Film." in seed_context_message(tmp_path / chat_id, "hello")
     assert len(agent_manager.get_provisional_chats()) == 1
+
+
+class _OpeningTheWelcomeChatUnderASeedAgentManager(AgentManager):
+    """Opens the workspace's own welcome chat right after a first-run seed found no chat to update, as the
+    first-boot thread may between the seed route's look for the chat and its seed."""
+
+    def update_first_run_context(self, first_run_context: str) -> CreatedChat | None:
+        updated = super().update_first_run_context(first_run_context)
+        if updated is None:
+            self.seed_chat(MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context="", is_first_run=True)
+        return updated
+
+
+def test_a_first_run_seed_the_workspaces_own_welcome_chat_got_ahead_of_is_answered_that_chat(tmp_path: Path) -> None:
+    agent_manager = _OpeningTheWelcomeChatUnderASeedAgentManager.build(
+        WebSocketBroadcaster(), chat_files_root=tmp_path
+    )
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post(
+        "/api/chats/seed", json={"turns": [], "is_first_run": True, "context": "I want to use Studio for: Film."}
+    )
+
+    assert response.status_code == 201
+    (welcome_chat,) = agent_manager.get_provisional_chats()
+    assert response.get_json()["chat_id"] == welcome_chat.chat_id
+    assert "I want to use Studio for: Film." in seed_context_message(tmp_path / welcome_chat.chat_id, "hello")
+
+
+def test_a_seed_with_turns_that_meets_the_workspaces_own_welcome_chat_is_refused_and_leaves_that_chat(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    agent_manager.note_agent_list_known()
+    owed = tmp_path / "owes_welcome_chat"
+    owed.touch()
+    open_welcome_chat_owed_from_first_boot(agent_manager, owed, threading.Event())
+    (welcome_chat,) = agent_manager.get_provisional_chats()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post("/api/chats/seed", json=_seed_body())
+
+    assert response.status_code == 409
+    assert [chat.chat_id for chat in agent_manager.get_provisional_chats()] == [welcome_chat.chat_id]
+    events = client.get(f"/api/chats/{welcome_chat.chat_id}/events").get_json()["events"]
+    assert [event["text"] for event in events] == [turn.text for turn in FIRST_RUN_WELCOME]
 
 
 def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:

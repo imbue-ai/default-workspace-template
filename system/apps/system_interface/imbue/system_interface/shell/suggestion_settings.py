@@ -31,6 +31,9 @@ SUGGESTION_SETTINGS_TIMEOUT_SECONDS: Final[float] = 10.0
 _SETTINGS_FIELD: Final[str] = "settings"
 # What an app from before the path answers a request to it with.
 _NO_SUCH_ROUTE_STATUSES: Final[frozenset[int]] = frozenset({404, 405})
+_NOT_ITS_SETTINGS_DETAIL: Final[str] = (
+    "The app that holds the suggestion switches answered something other than its settings."
+)
 
 
 @pure
@@ -47,7 +50,12 @@ def suggestion_settings_url(entries: Sequence[AppInventoryEntry]) -> str:
 
 
 def _switches_answered(response: httpx.Response, url: str) -> dict[str, bool]:
-    """Both switches out of the app's answer; raises for an answer that is not the settings holding them."""
+    """Both switches out of the app's answer.
+
+    An answer that is not the app's settings (another status, another shape, a switch that is no switch) raises
+    ``SuggestionSettingsUnavailableError``. Settings without a switch, and a path the app does not serve, raise
+    ``SuggestionSettingsUnsupportedError``: that is an app from before the switches.
+    """
     if response.status_code in _NO_SUCH_ROUTE_STATUSES:
         raise SuggestionSettingsUnsupportedError(
             "The app that holds the suggestion switches is from before they could be read and changed here."
@@ -60,16 +68,22 @@ def _switches_answered(response: httpx.Response, url: str) -> dict[str, bool]:
     try:
         body: Any = response.json()
     except ValueError as e:
-        raise SuggestionSettingsUnavailableError(
-            "The app that holds the suggestion switches answered something other than its settings."
-        ) from e
-    settings = body.get(_SETTINGS_FIELD) if isinstance(body, dict) else None
-    switches = {name: settings.get(name) for name in SUGGESTION_SWITCHES} if isinstance(settings, dict) else {}
-    if not all(isinstance(switches.get(name), bool) for name in SUGGESTION_SWITCHES):
+        raise SuggestionSettingsUnavailableError(_NOT_ITS_SETTINGS_DETAIL) from e
+    if not isinstance(body, dict):
+        raise SuggestionSettingsUnavailableError(_NOT_ITS_SETTINGS_DETAIL)
+    settings = body.get(_SETTINGS_FIELD)
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict):
+        raise SuggestionSettingsUnavailableError(_NOT_ITS_SETTINGS_DETAIL)
+    switches = {name: settings.get(name) for name in SUGGESTION_SWITCHES}
+    if any(value is not None and not isinstance(value, bool) for value in switches.values()):
+        raise SuggestionSettingsUnavailableError(_NOT_ITS_SETTINGS_DETAIL)
+    if any(value is None for value in switches.values()):
         raise SuggestionSettingsUnsupportedError(
             "The app that holds the suggestion switches answered settings without them."
         )
-    return {name: switches[name] is True for name in SUGGESTION_SWITCHES}
+    return {name: value is True for name, value in switches.items()}
 
 
 def _exchange(method: str, url: str, changes: dict[str, bool] | None) -> dict[str, bool]:
