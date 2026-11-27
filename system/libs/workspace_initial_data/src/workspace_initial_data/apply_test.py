@@ -441,6 +441,45 @@ def test_a_part_the_step_was_killed_after_writing_and_before_recording_is_never_
 def test_a_part_the_step_was_killed_in_does_not_keep_the_refused_parts_from_being_tried(
     workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(timezone={"zone": 7})
+    )
+
+    def _take_the_destination_and_die(
+        root: Path, request: Mapping[str, object]
+    ) -> None:
+        backup_destination(root, request)
+        raise _StepKilled()
+
+    with pytest.raises(_StepKilled):
+        apply_initial_data(
+            host_dir, workspace_root, _take_the_destination_and_die, _NOW
+        )
+    interrupted = "backups: this part was being written when the step was interrupted, so it is not written again"
+    assert read_initial_data_status(workspace_root) == failed_status(
+        f"timezone: zone is an IANA timezone name, and is_replacing true or false; {interrupted}"
+    )
+
+    at_the_next_start = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 60
+    )
+
+    # The timezone's refusal is its writer's of this start, and the document stays for the start after it.
+    assert at_the_next_start == failed_status(
+        f"{interrupted}; timezone: zone is an IANA timezone name, and is_replacing true or false"
+    )
+    assert len(backup_destination.requests) == 1
+    assert document_path.exists()
+    assert read_initial_data_record(workspace_root).progress_by_part == {
+        "profile": PartProgress.WRITTEN,
+        "update_settings": PartProgress.WRITTEN,
+        "backups": PartProgress.WRITING,
+    }
+
+
+def test_a_part_the_step_was_killed_in_does_not_keep_the_parts_not_begun_from_being_written(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
     document_path = write_initial_data_document(host_dir, initial_data_document())
     record = InitialDataRecord(
         status=failed_status("update_settings: interrupted"),
@@ -481,14 +520,20 @@ def test_a_document_left_again_with_the_bytes_of_one_already_applied_is_deleted_
 
 
 def test_every_part_a_writer_refuses_is_named_and_no_value_of_the_document_is_quoted(
-    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+    workspace_root: Path,
+    host_dir: Path,
+    backup_destination: RecordingBackupDestination,
+    logged: list[str],
 ) -> None:
     write_initial_data_document(
         host_dir,
         initial_data_document(
-            profile={"snapshot_format": "1"},
-            timezone={"zone": 7},
-            update_settings={**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "../stable"},
+            profile={"snapshot_format": "1", "account_id": "value-of-the-profile"},
+            timezone={"zone": 7, "note": "value-of-the-timezone"},
+            update_settings={
+                **UPDATE_SETTINGS_PART_DOCUMENT,
+                "channel": "../value-of-the-settings",
+            },
         ),
     )
 
@@ -500,8 +545,15 @@ def test_every_part_a_writer_refuses_is_named_and_no_value_of_the_document_is_qu
         "timezone",
         "update_settings",
     ]
-    assert STORAGE_TOKEN not in status.detail
-    assert STORAGE_TOKEN not in (workspace_root / STATUS_RELATIVE_PATH).read_text()
+    assert any(status.detail in message for message in logged)
+    said = [status.detail, (workspace_root / STATUS_RELATIVE_PATH).read_text(), *logged]
+    for value in (
+        STORAGE_TOKEN,
+        "value-of-the-profile",
+        "value-of-the-timezone",
+        "value-of-the-settings",
+    ):
+        assert not any(value in text for text in said)
     # The backup part was sound, and reached its writer.
     assert len(backup_destination.requests) == 1
 

@@ -1,6 +1,8 @@
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from loguru import logger
 from workspace_backup_setup.state import WORKSPACE_ID_ENV
 from workspace_backup_setup.testing import (
     FAKE_RESTIC_CONTROL_DIR_ENV,
@@ -34,6 +36,17 @@ def host_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def backup_destination() -> RecordingBackupDestination:
     return RecordingBackupDestination()
+
+
+@pytest.fixture
+def logged() -> Iterator[list[str]]:
+    """Every message logged while the test runs, as its sink would write it."""
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG")
+    try:
+        yield messages
+    finally:
+        logger.remove(sink_id)
 
 
 @pytest.fixture
