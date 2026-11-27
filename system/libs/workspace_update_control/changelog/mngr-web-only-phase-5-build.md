@@ -12,4 +12,6 @@ The update dispatcher arms a workspace's own updates, with no client present.
 
 - `tick` runs the arming after the dispatcher's minute, and `install_cron_line_main` writes the dispatcher's cron line for the boot.
 
+- The library's own reads-then-writes of the schedule, the update settings and the skipped version take one lock (`data/.state/update-apply/state.lock`), held for file reads and writes alone. A cancel or a skip that lands while the dispatcher or another request is writing the schedule is not undone, two clients writing the settings at once lose no setting of the workspace's own, and a version skipped while the dispatcher was arming it is not left armed.
+
 No file a released desktop reads or writes changes format.

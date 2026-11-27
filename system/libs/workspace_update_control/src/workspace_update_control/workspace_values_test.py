@@ -1,11 +1,15 @@
 """The update operations asked for by a client that leaves the version, the window or the backup flag to the workspace."""
 
+import json
 from typing import Any
 
 import pytest
 
 from workspace_update_control import control
-from workspace_update_control.channel import CHANNEL_READ_INTERVAL_SECONDS
+from workspace_update_control.channel import (
+    CHANNEL_READ_INTERVAL_SECONDS,
+    ChannelFileFetcher,
+)
 from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.protocol import NO_BACKUP_NOTE
 from workspace_update_control.testing import (
@@ -67,7 +71,7 @@ def _start(
 
 def _refresh(
     staged: StagedUpdateWorkspace,
-    feed: RecordingFeed,
+    feed: ChannelFileFetcher,
     *,
     ceiling: str | None = None,
     window: tuple[int, int] | None = None,
@@ -234,6 +238,94 @@ def test_cancelling_forgets_which_values_were_the_workspaces(
     assert control.cancel_schedule() == {"is_cancelled": True}
 
     assert staged.read_state("schedule-origin.json") is None
+
+
+def test_a_cancel_between_the_dispatchers_read_and_its_write_stays_cancelled(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    staged.write_state("settings.json", update_settings_document())
+    _arm(staged, RecordingFeed(_ON_THE_CHANNEL))
+    followed = control._read_followed_schedule(_NOW + 60)
+    assert followed is not None
+    schedule, _origin = followed
+
+    control.cancel_schedule()
+    written = control._write_schedule_fields(schedule, {"window_length_minutes": 60})
+
+    assert written == (None, False)
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_cancel_that_lands_while_a_refresh_reads_the_feed_stays_cancelled(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    staged.write_state("settings.json", update_settings_document())
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+    _arm(staged, feed)
+
+    def cancel_then_answer(url: str) -> str:
+        control.cancel_schedule()
+        return feed(url)
+
+    answer = _refresh(
+        staged, cancel_then_answer, now=_NOW + CHANNEL_READ_INTERVAL_SECONDS
+    )
+
+    assert answer == {"is_armed": False, "schedule": None}
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_refresh_leaves_alone_a_schedule_armed_again_while_it_read_the_feed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    staged.write_state("settings.json", update_settings_document())
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+    _arm(staged, feed)
+    later = _NOW + CHANNEL_READ_INTERVAL_SECONDS
+    armed_again: list[dict[str, Any]] = []
+
+    def arm_again_then_answer(url: str) -> str:
+        armed_again.append(
+            _arm(
+                staged,
+                feed,
+                ceiling="minds-v0.9.5",
+                window=(9 * 60, 60),
+                is_backup_configured=True,
+                now=later,
+            )["schedule"]
+        )
+        return feed(url)
+
+    answer = _refresh(staged, arm_again_then_answer, now=later)
+
+    assert answer == {"is_armed": True, "schedule": armed_again[0]}
+    assert staged.read_state("schedule.json") == armed_again[0]
+
+
+def test_a_refresh_keeps_what_the_dispatcher_marked_while_it_read_the_feed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    staged.write_state("settings.json", update_settings_document())
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+    _arm(staged, feed)
+
+    def mark_then_answer(url: str) -> str:
+        marked = staged.read_state("schedule.json")
+        assert marked is not None
+        staged.write_state("schedule.json", {**marked, "marked_chat": "update-chat"})
+        return json.dumps({"templateRef": "minds-v0.10.1"})
+
+    answer = _refresh(
+        staged, mark_then_answer, now=_NOW + CHANNEL_READ_INTERVAL_SECONDS
+    )
+
+    schedule = answer["schedule"]
+    assert (schedule["ceiling"], schedule["marked_chat"]) == (
+        "minds-v0.10.1",
+        "update-chat",
+    )
+    assert staged.read_state("schedule.json") == schedule
 
 
 def test_starting_with_no_version_named_updates_to_the_channels_version(

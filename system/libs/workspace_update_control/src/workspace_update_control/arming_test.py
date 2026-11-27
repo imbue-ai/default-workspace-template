@@ -1,6 +1,9 @@
 """The workspace arming its own updates: the decision, and the minute that makes it against a staged workspace."""
 
+import json
 import os
+import shlex
+import shutil
 from collections.abc import Callable
 from typing import Any
 
@@ -647,6 +650,56 @@ def test_a_self_armed_schedule_follows_its_channel_back_while_the_checkouts_vers
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
 
     assert _armed_target(staged) == _INSTALLED
+
+
+def test_a_self_armed_schedule_for_a_skipped_version_is_cancelled(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    # A skip whose own cancel came ahead of the arm, so the schedule stands at a skipped version.
+    staged.write_state(
+        "skipped-target.json",
+        {"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW},
+    )
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    _tick(staged, feed, _NOW + 120)
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_skip_recorded_while_the_minute_decides_leaves_nothing_armed(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    git = shutil.which("git")
+    assert git is not None
+    skip = json.dumps({"schema": 1, "target_ref": _ON_THE_CHANNEL, "skipped_at": _NOW})
+    skip_path = staged.state_path("skipped-target.json")
+    # The minute reads the checkout's version after it has read the skip, so a git that records a skip first is
+    # a skip that lands between that read and the arm.
+    wrapper = staged.bin_dir / "git"
+    wrapper.write_text(
+        f"#!/bin/sh\nprintf '%s' {shlex.quote(skip)} > {shlex.quote(str(skip_path))}\n"
+        f'exec {shlex.quote(git)} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("skipped-target.json") is not None
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    _tick(staged, feed, _NOW + 60)
+
+    assert staged.read_state("schedule.json") is None
 
 
 def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(

@@ -27,6 +27,7 @@ from workspace_update_control.control import (
     arm_schedule,
     cancel_schedule,
     read_self_armed_schedule_move,
+    read_self_armed_schedule_target,
     refresh_followed_schedule,
 )
 from workspace_update_control.dispatcher import (
@@ -143,6 +144,12 @@ def _shown_verdict(
     return "" if is_dismissed else verdict
 
 
+def _read_skipped_target_ref() -> str:
+    """The version the user skipped for this workspace; '' when they skipped none."""
+    skipped = read_json_object(SKIPPED_TARGET_FILE_PATH) or {}
+    return str(skipped.get("target_ref") or "")
+
+
 def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
     """The facts of the workspace's own files, with no listing of its agents.
 
@@ -151,7 +158,6 @@ def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
     """
     run = read_json_object(RUN_RECORD_PATH)
     dispatch = read_json_object(LAST_DISPATCH_FILE_PATH)
-    skipped = read_json_object(SKIPPED_TARGET_FILE_PATH) or {}
     is_run_open = (
         run is not None
         and run.get("verdict") is None
@@ -164,7 +170,7 @@ def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
         or pending_dispatched_chat(run, None, now) is not None,
         shown_verdict=_shown_verdict(run, read_json_object(DISMISSALS_FILE_PATH)),
         run_chat_agent_name=str((run or {}).get("chat_agent_name") or ""),
-        skipped_target_ref=str(skipped.get("target_ref") or ""),
+        skipped_target_ref=_read_skipped_target_ref(),
         last_dispatch=LastDispatch(
             target_ref=str(dispatch.get("target_ref") or ""),
             chat_agent_name=str(dispatch.get("chat_agent_name") or ""),
@@ -246,7 +252,9 @@ def tick_self_arming(
 
     A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
     skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
-    version.
+    version. One that stands at a version the user skipped is cancelled as well. A skip cancels whatever is armed
+    when it is recorded, so one recorded while a minute was deciding finds nothing to cancel: that minute reads
+    the skip again once it has armed, and cancels what it armed.
     """
     settings = read_update_settings()
     if settings is None:
@@ -256,6 +264,13 @@ def tick_self_arming(
     )
     facts = read_arming_facts(settings.is_arming_enabled, now)
     if facts.is_scheduled:
+        armed_for = read_self_armed_schedule_target(now)
+        if armed_for is not None and armed_for == facts.skipped_target_ref:
+            cancel_schedule()
+            write_log_line(
+                "cancelled the workspace's own schedule: %s was skipped" % armed_for
+            )
+            return
         moved_to = read_self_armed_schedule_move(now)
         why_not_armed = (
             _why_not_moved_to(facts, moved_to, now) if moved_to is not None else ""
@@ -294,5 +309,13 @@ def tick_self_arming(
         agent_environment=agent_environment,
         fetch_channel_file=fetch_channel_file,
     )
-    if answer.get("outcome") == OUTCOME_ARMED:
-        write_log_line("armed the update to %s for the workspace itself" % target_ref)
+    if answer.get("outcome") != OUTCOME_ARMED:
+        return
+    if _read_skipped_target_ref() == target_ref:
+        cancel_schedule()
+        write_log_line(
+            "cancelled the update to %s the workspace had just armed: it was skipped meanwhile"
+            % target_ref
+        )
+        return
+    write_log_line("armed the update to %s for the workspace itself" % target_ref)

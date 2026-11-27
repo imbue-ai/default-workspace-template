@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1281,3 +1282,25 @@ def test_every_process_of_a_lead_that_registers_two_is_held(
             "is_worker": False,
             _HELD_AGENT_ID_KEY: _LEAD_ID,
         }
+
+
+def test_the_state_lock_admits_its_holder_again_and_keeps_another_thread_waiting(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    is_taken_by_the_other = threading.Event()
+
+    def take_it() -> None:
+        with dispatcher.state_lock():
+            is_taken_by_the_other.set()
+
+    other = threading.Thread(target=take_it)
+    with dispatcher.state_lock():
+        with dispatcher.state_lock():
+            pass
+        other.start()
+
+        # The hold taken again has ended, and the first one still stands.
+        assert is_taken_by_the_other.wait(0.3) is False
+
+    other.join(10)
+    assert is_taken_by_the_other.is_set()

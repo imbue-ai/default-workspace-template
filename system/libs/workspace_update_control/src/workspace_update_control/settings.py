@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from workspace_update_control.dispatcher import (
     UPDATE_PROGRAM_SCHEMA,
     read_json_object,
+    state_lock,
     write_json_atomically,
     write_log_line,
 )
@@ -199,13 +200,17 @@ def take_update_settings(sent: Mapping[str, object]) -> UpdateSettings:
     out keeps its stored value, so a client that writes the account's settings, or one from before a setting
     existed, cannot wipe an answer the owner gave in another client; one sent as null is cleared. Every other
     setting is required. Raises ``InvalidUpdateSettingsError`` for settings that cannot be the workspace's.
+
+    The stored settings are read and written under the state lock, so of two clients writing at once neither
+    loses an own setting the other stored.
     """
-    stored = read_update_settings()
-    values = dict(sent)
-    for name in OWN_SETTING_NAMES:
-        if name not in values:
-            values[name] = getattr(stored, name) if stored is not None else None
-    return write_update_settings(_settings_of(values))
+    with state_lock():
+        stored = read_update_settings()
+        values = dict(sent)
+        for name in OWN_SETTING_NAMES:
+            if name not in values:
+                values[name] = getattr(stored, name) if stored is not None else None
+        return write_update_settings(_settings_of(values))
 
 
 def read_update_settings() -> UpdateSettings | None:

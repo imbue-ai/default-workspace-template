@@ -1,8 +1,10 @@
+import threading
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from workspace_update_control.dispatcher import state_lock
 from workspace_update_control.settings import (
     InvalidUpdateSettingsError,
     UpdateSettings,
@@ -362,3 +364,21 @@ def test_the_workspace_has_backups_when_it_holds_backup_credentials(
     staged.write_backup_credentials()
 
     assert is_backup_configured() is True
+
+
+def test_two_writers_of_the_update_settings_wait_for_each_other(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    writer = threading.Thread(
+        target=take_update_settings, args=(update_settings_document(channel="beta"),)
+    )
+
+    with state_lock():
+        writer.start()
+        writer.join(0.3)
+
+        assert writer.is_alive()
+        assert staged.read_state("settings.json") is None
+
+    writer.join(10)
+    assert read_update_settings() == _settings(channel="beta")
