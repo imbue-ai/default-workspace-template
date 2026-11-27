@@ -7,8 +7,8 @@ from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
 from workspace_update_control.protocol import DURABLE_CRON_PATH
-from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.protocol import UPDATE_STATE_DIR
+from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import STAGED_FEED_BASE_URL
 from workspace_update_control.testing import StagedUpdateWorkspace
