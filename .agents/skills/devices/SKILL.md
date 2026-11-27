@@ -46,6 +46,16 @@ Unknown device IDs, or no known device at all, result in a 503 response.
 Requests to third-party services ignore the header. For a local workspace,
 there is only one device and the header has no effect.
 
+If the request is routed to more than one device, the response has the
+`X-Latchkey-Multiple-Desktops-Matched: true` header and its body has this form:
+
+    {"responses": [{"device_id", "hostname", "status", "content_type", "body"}, ...]}
+
+`body` holds each device's raw response body as a string. A device that could
+not be reached has an `error` field instead of `content_type` and `body`.
+If the request ends up going to a single device, that device's response is
+returned unchanged, without the header.
+
 
 ## When there is no desktop
 
@@ -57,13 +67,3 @@ retry. Tell the user once, in plain words, that this needs the Imbue Studio
 desktop app running on their computer, and do not call a feature that needs a
 desktop again in the same conversation unless the user says the app is now
 running. Everything that does not need their computer still works.
-
-If the request is routed to more than one device, the response has the
-`X-Latchkey-Multiple-Desktops-Matched: true` header and its body has this form:
-
-    {"responses": [{"device_id", "hostname", "status", "content_type", "body"}, ...]}
-
-`body` holds each device's raw response body as a string. A device that could
-not be reached has an `error` field instead of `content_type` and `body`.
-If the request ends up going to a single device, that device's response is
-returned unchanged, without the header.
