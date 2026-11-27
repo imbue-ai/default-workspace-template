@@ -1,5 +1,6 @@
 """Unit tests for the shared PathWatcher."""
 
+import shutil
 import threading
 import time
 from itertools import pairwise
@@ -148,6 +149,65 @@ def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_
     assert 2 <= len(cycles) <= 6
     gaps = [later - earlier for earlier, later in pairwise(cycles)]
     assert min(gaps) >= interval * 0.9
+
+
+def _has_running_watch_on(shared: SharedWatchObserver, directory: Path) -> bool:
+    observer = shared._observer
+    return observer is not None and any(
+        emitter.watch.path == str(directory) and emitter.should_keep_running() for emitter in list(observer.emitters)
+    )
+
+
+def test_a_watched_directory_that_is_deleted_and_recreated_is_watched_again(tmp_path: Path) -> None:
+    """watchdog stops the watch on a directory that is deleted; the recreated directory gets a fresh one."""
+    watched_dir = tmp_path / "turns"
+    watched_dir.mkdir()
+    shared = SharedWatchObserver.build()
+    watcher = PathWatcher.build((watched_dir,), lambda: None, min_cycle_interval_seconds=0.0, watch_observer=shared)
+    watcher.start()
+    try:
+        wait_until_true(lambda: _has_running_watch_on(shared, watched_dir), 5.0, "a watch on the directory")
+        shutil.rmtree(watched_dir)
+        wait_until_true(
+            lambda: not _has_running_watch_on(shared, watched_dir), 5.0, "the deleted directory's watch stopping"
+        )
+
+        watched_dir.mkdir()
+
+        wait_until_true(
+            lambda: _has_running_watch_on(shared, watched_dir), 5.0, "a fresh watch on the recreated directory"
+        )
+    finally:
+        watcher.stop()
+        shared.close()
+
+
+def test_a_deleted_directory_is_unwatched_for_every_subscriber_and_a_new_subscription_hears_it_again(
+    tmp_path: Path,
+) -> None:
+    watched_dir = tmp_path / "turns"
+    watched_dir.mkdir()
+    shared = SharedWatchObserver.build()
+    first = WakeOnChangeHandler(threading.Event())
+    second = WakeOnChangeHandler(threading.Event())
+    later_changed = threading.Event()
+    try:
+        assert shared.subscribe(watched_dir, True, first)
+        assert shared.subscribe(watched_dir, True, second)
+        assert shared.is_watching(watched_dir, True, first)
+
+        shutil.rmtree(watched_dir)
+        wait_until_true(
+            lambda: not shared.is_watching(watched_dir, True, first), 5.0, "the deleted directory's watch stopping"
+        )
+
+        watched_dir.mkdir()
+        assert shared.subscribe(watched_dir, True, WakeOnChangeHandler(later_changed))
+        (watched_dir / "written-73028.txt").write_text("x")
+        assert later_changed.wait(timeout=5.0)
+        assert not shared.is_watching(watched_dir, True, second)
+    finally:
+        shared.close()
 
 
 def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Path) -> None:
