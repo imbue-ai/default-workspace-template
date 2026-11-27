@@ -78,9 +78,11 @@ reads none, and `schedule.json` gains no field for them.
 
 ## A desktop from before the workspace armed its own updates
 
-Such a desktop still sweeps the workspace every 300 seconds, and every request of
-its sweep names the newest version it knows (`ceiling`). The routes serve those
-requests as they always did and record the last one (`client-ceiling.json`). For
+Such a desktop still sweeps the workspace every 300 seconds. Its arm, its start and
+its refresh of an armed schedule name the newest version it knows (`ceiling`); a
+sweep that finds nothing armed only reads, and names none. The routes serve those
+requests as they always did and record the last one that named a version
+(`client-ceiling.json`). For
 `CLIENT_CEILING_HOLD_SECONDS` after it, the dispatcher arms nothing past that
 version, a request that names none takes the older of the two, and an armed schedule
 is left to that desktop's refreshes. A workspace no such desktop is asking follows

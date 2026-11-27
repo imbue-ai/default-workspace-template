@@ -36,9 +36,9 @@ from workspace_update_control.settings import UpdateSettings
 ChannelFileFetcher = Callable[[str], str]
 
 CHANNEL_READ_INTERVAL_SECONDS: Final[float] = 60 * 60
-# A desktop from before the workspace armed its own updates sweeps every 300 seconds, naming its newest version
-# each time. Its word stands for three sweeps after the last, so one missed sweep does not let the workspace
-# arm past it.
+# A desktop from before the workspace armed its own updates sweeps every 300 seconds, and names its newest
+# version when it arms, starts, or refreshes an armed schedule. Its word stands for three sweeps after the last,
+# so one missed sweep does not let the workspace arm past it.
 # CLEANUP: remove the client's ceiling (this hold, ``client-ceiling.json``, ``record_client_ceiling``,
 # ``read_fresh_client_ceiling`` and ``bounded_by_client_ceiling``) once no supported Imbue Studio desktop names a
 # ``ceiling`` in its requests, which is every desktop from before the workspace armed its own updates.
