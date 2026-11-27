@@ -10186,12 +10186,28 @@ def test_a_workspace_with_no_update_settings_and_no_desktop_app_says_it_follows_
 
 
 @pytest.mark.parametrize(
-    ("status", "exit_code", "why"),
+    ("status", "exit_code", "body", "why"),
     [
-        ("404", 0, "too old to report its version"),
-        ("000", 7, "could not reach the Imbue Studio app"),
+        ("404", 0, "", "too old to report its version"),
+        ("403", 0, "", "too old to report its version"),
+        ("500", 0, "", "returned HTTP 500"),
+        ("200", 0, "<html>", "could not be parsed"),
+        (
+            "200",
+            0,
+            '{"workspace_template_ref": ""}',
+            "reported an empty workspace_template_ref",
+        ),
+        ("000", 7, "", "could not reach the Imbue Studio app"),
     ],
-    ids=["an-app-from-before-the-version-route", "no-app-running"],
+    ids=[
+        "an-app-from-before-the-version-route",
+        "a-gateway-that-denies-the-route",
+        "an-app-that-fails",
+        "an-answer-that-is-not-json",
+        "an-app-that-names-no-release",
+        "no-app-running",
+    ],
 )
 def test_a_workspace_with_no_update_settings_says_why_its_desktop_app_named_no_release(
     monkeypatch: pytest.MonkeyPatch,
@@ -10199,6 +10215,7 @@ def test_a_workspace_with_no_update_settings_says_why_its_desktop_app_named_no_r
     capsys: pytest.CaptureFixture[str],
     status: str,
     exit_code: int,
+    body: str,
     why: str,
 ) -> None:
     """Opening the workspace in such an app writes no settings, so what the app answered is what the user can
@@ -10210,7 +10227,7 @@ def test_a_workspace_with_no_update_settings_says_why_its_desktop_app_named_no_r
     _install_fake_latchkey(
         monkeypatch,
         tmp_path / "desktop-bin",
-        body="",
+        body=body,
         status=status,
         exit_code=exit_code,
     )
