@@ -1043,6 +1043,11 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
 
     assert run("record", "notes")[1]["result"] == "not_pushed"
 
+    # The repository is there already, and a push does not change who can see it.
+    exit_code, kept = run("push", "notes", "--public")
+    assert (exit_code, kept["result"]) == (1, "refused")
+    assert "publish visibility notes --make-public" in str(kept["detail"])
+
     exit_code, pushed = run("push", "notes")
     assert exit_code == 0
     assert pushed["result"] == "pushed"
@@ -1085,14 +1090,43 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
 
 
-def test_the_command_refuses_to_say_who_can_see_an_app_that_was_never_published(tmp_path: Path) -> None:
-    workspace, _published, _runtime = _publisher(tmp_path, is_python=False)
+# A stand-in for latchkey that logs each request and answers as GitHub does for a private repository: private
+# when it is read, public once it is changed.
+_LATCHKEY_ANSWERING_FOR_A_PRIVATE_REPOSITORY = """\
+printf '%s\\n' "$*" >> "$(dirname "$0")/requests"
+case "$*" in
+    *"-X PATCH"*) echo '{"name": "notes", "private": false}' ;;
+    *) echo '{"name": "notes", "private": true}' ;;
+esac
+"""
 
-    result = CliRunner().invoke(main, ["--repo-root", str(workspace), "publish", "visibility", "notes"])
 
-    refusal = json.loads(result.output)
-    assert (result.exit_code, refusal["result"], refusal["name"]) == (1, "refused", "notes")
-    assert "has no published repository yet" in refusal["detail"]
+def test_the_command_says_who_can_see_a_published_app_and_makes_it_public_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    install_fake_latchkey(tmp_path / "bin", _LATCHKEY_ANSWERING_FOR_A_PRIVATE_REPOSITORY)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+    def run(*options: str) -> tuple[int, dict[str, object]]:
+        result = CliRunner().invoke(main, ["--repo-root", str(workspace), "publish", "visibility", "notes", *options])
+        return result.exit_code, json.loads(result.output)
+
+    exit_code, refusal = run()
+    assert (exit_code, refusal["result"], refusal["name"]) == (1, "refused", "notes")
+    assert "has no published repository yet" in str(refusal["detail"])
+    # Nothing is asked of GitHub for an app that has no repository there.
+    assert not (tmp_path / "bin" / "requests").exists()
+
+    _publish(workspace, runtime, "0.1.0")
+    visibility = {"result": "visibility", "name": "notes", "published_repo_url": _PUBLISHED_URL}
+
+    assert run() == (0, {**visibility, "is_private": True, "is_changed": False})
+    assert run("--make-public") == (0, {**visibility, "is_private": False, "is_changed": True})
+    read = "curl -s -X GET https://api.github.com/repos/octo/notes"
+    asked, asked_again, changed = (tmp_path / "bin" / "requests").read_text().splitlines()
+    assert (asked, asked_again) == (read, read)
+    assert "-X PATCH https://api.github.com/repos/octo/notes" in changed and '{"private": false}' in changed
 
 
 def test_the_command_names_each_line_that_names_a_skill_the_app_does_not_carry(
