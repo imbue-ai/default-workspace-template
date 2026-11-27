@@ -77,7 +77,8 @@ new as `$REF`, so 3a's check runs no matter how stale the initiator was. Keep
 3a in any future version of the skill: it, not Step 2, protects a workspace
 arriving from an older template. A workspace arriving from a template from
 before the update settings has read no channel's version, so an unpinned 3a
-there has no ceiling to hold `$REF` to and clears it.
+there has no ceiling to hold `$REF` to when no desktop app answers either, and
+clears it.
 
 3a resolves nothing: it either clears the target Step 2 chose or hands the pass
 back to 2a with the ceiling's answer. When `$REF` becomes the capped ref --
