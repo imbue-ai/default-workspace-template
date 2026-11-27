@@ -417,7 +417,7 @@ def reference_remove_command(repo_root: Path, name: str, path: str) -> None:
 
 @main.group("publish")
 def publish_group() -> None:
-    """The steps of publishing an app to its public repository, which the publish-app skill runs in order."""
+    """The steps of publishing an app to its repository, which the publish-app skill runs in order."""
 
 
 def _published_tree_fields(published: PublishedTree) -> dict[str, object]:

@@ -3,7 +3,7 @@
 An app's published repository holds one commit per published version. Each is the app's directory at one
 workspace commit, less the paths the manifest's ``[publish] exclude`` names, and it is pushed only after the
 secret scan found nothing in exactly that tree. The steps are separate commands because a person decides between
-them: what to publish before the tree is assembled, and whether to make it public before it is pushed.
+them: what to publish before the tree is assembled, and whether it goes out, and to whom, before it is pushed.
 
 - ``compare`` says what changed since the last publish, for the version to be chosen, and each line that names
   a skill of this workspace the app does not carry.
