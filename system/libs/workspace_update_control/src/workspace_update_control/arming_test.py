@@ -861,6 +861,39 @@ def test_a_client_whose_newest_version_is_the_one_installed_holds_the_workspace_
     assert _armed_target(staged) == _ON_THE_CHANNEL
 
 
+def test_a_client_whose_newest_version_the_workspace_is_not_behind_leaves_the_workspaces_own_schedule_at_its_version(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    """A desktop from before the workspace armed its own updates refreshes whatever is armed with its newest
+    version, which a workspace a newer client made is already at or past."""
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _OUTSIDE_THE_WINDOW)
+    swept_at = _INSIDE_THE_WINDOW - 120
+
+    answer: dict[str, Any] = control.refresh_schedule(
+        ceiling=_INSTALLED,
+        window_start_minute_utc=60,
+        window_length_minutes=4 * 60,
+        is_backup_configured=True,
+        now=swept_at,
+        live_cron_dir=str(staged.live_cron_dir),
+        fetch_channel_file=feed,
+    )
+    _tick(staged, feed, swept_at + 60)
+
+    assert staged.read_state("schedule.json") == answer["schedule"]
+    assert (
+        answer["schedule"]["ceiling"],
+        answer["schedule"]["window_start_minute_utc"],
+    ) == (_ON_THE_CHANNEL, 60)
+
+    staged.tick(_INSIDE_THE_WINDOW)
+
+    creates = staged.chat_creates()
+    assert len(creates) == 1
+    assert f"- Target: {_ON_THE_CHANNEL}" in creates[0][-1]
+
+
 def test_a_client_that_names_no_release_holds_arming_back_altogether(
     staged: StagedUpdateWorkspace,
 ) -> None:

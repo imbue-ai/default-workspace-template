@@ -162,6 +162,21 @@ def test_a_file_that_is_no_lease_reads_as_free(lease_path: Path) -> None:
     assert take_lease(lease_path, "restore", _TAKEN_AT).holder == "restore"
 
 
+def test_a_lease_that_cannot_be_written_leaves_no_scratch_file_behind(
+    lease_path: Path,
+) -> None:
+    # A directory where the lease is kept, which a write cannot replace.
+    lease_path.mkdir(parents=True)
+
+    with pytest.raises(OSError):
+        take_lease(lease_path, "restore", _TAKEN_AT)
+
+    assert sorted(entry.name for entry in lease_path.parent.iterdir()) == [
+        lease_path.name,
+        f"{lease_path.name}.lock",
+    ]
+
+
 def test_hold_renews_while_its_command_runs_and_gives_the_lease_back(
     lease_path: Path,
 ) -> None:

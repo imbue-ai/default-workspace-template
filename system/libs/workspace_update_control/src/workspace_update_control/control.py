@@ -57,6 +57,10 @@ from workspace_update_control.dispatcher import (
     write_json_atomically,
     write_log_line,
 )
+from workspace_update_control.installed_version import (
+    read_installed_ref,
+    release_sort_key,
+)
 from workspace_update_control.protocol import (
     DISMISSALS_FILE_PATH,
     DISPATCHER_CRON_NAME,
@@ -368,6 +372,26 @@ def _write_schedule_fields(
         return current, True
 
 
+def _is_followed_ceiling_kept(
+    schedule: Mapping[str, object], client_ceiling: str
+) -> bool:
+    """Whether a client's refresh leaves the version of ``schedule`` as it is: the workspace filled it in
+    itself, and the checkout is at or past the release the client names, which written into the schedule would
+    start an update to what is already installed."""
+    origin = read_json_object(SCHEDULE_ORIGIN_FILE_PATH)
+    if (
+        origin is None
+        or origin.get("armed_at") != schedule.get("armed_at")
+        or origin.get(_FOLLOWED_CEILING) is not True
+    ):
+        return False
+    client_key = release_sort_key(client_ceiling)
+    if client_key is None:
+        return False
+    installed_key = release_sort_key(read_installed_ref(".") or "")
+    return installed_key is not None and installed_key >= client_key
+
+
 def refresh_schedule(
     *,
     ceiling: str | None,
@@ -382,7 +406,8 @@ def refresh_schedule(
 
     A value passed as None is rewritten with the workspace's own, and left as it is where the workspace has none
     (no version read for its channel, no update settings). The version the user typed, whether the client armed
-    it by itself, and the dispatcher's own record stay as they are.
+    it by itself, and the dispatcher's own record stay as they are. So does a version the workspace filled in
+    itself, where the client names a release the checkout is at or past.
     """
     if ceiling is not None:
         record_client_ceiling(ceiling, now)
@@ -390,11 +415,12 @@ def refresh_schedule(
     if schedule is None:
         return {"is_armed": False, "schedule": None}
     fields: dict[str, object] = {}
-    refreshed_ceiling = (
-        ceiling
-        if ceiling is not None
-        else _channel_version_for_request(now, fetch_channel_file)
-    )
+    if ceiling is None:
+        refreshed_ceiling = _channel_version_for_request(now, fetch_channel_file)
+    elif _is_followed_ceiling_kept(schedule, ceiling):
+        refreshed_ceiling = ""
+    else:
+        refreshed_ceiling = ceiling
     if refreshed_ceiling:
         fields["ceiling"] = refreshed_ceiling
     window = (

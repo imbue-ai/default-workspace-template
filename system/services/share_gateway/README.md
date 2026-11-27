@@ -276,8 +276,11 @@ label for the second), and for no other request:
   `PATCH` and `DELETE`, and the `Content-Type` header. The check carries no
   session and never reaches the app, whose request guard would refuse it.
 - caddy adds `Access-Control-Allow-Origin` (the web client's origin) and
-  `Access-Control-Allow-Credentials: true` to every answer, a refusal of the
-  gateway's included, so the page can read a `401` for a lapsed session.
+  `Access-Control-Allow-Credentials: true` to every answer of an app or of the
+  auth step, a refusal of the gateway's included, so the page can read a `401`
+  for a lapsed session. The loading page caddy answers when an app's port
+  refuses the connection carries neither, so the page reads it as a workspace
+  that did not answer.
 - `/_auth/verify` checks the session as it does for every request, and marks
   the identity it stamps on a workspace route's request with
   `"is_from_web_client": true`. The app's request guard admits a request of

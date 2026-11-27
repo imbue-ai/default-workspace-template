@@ -126,7 +126,8 @@ def _render_web_client_access(name: str, hosts: Sequence[str], path_prefix: str,
 
     Two of the three things ``share_gateway.web_client`` lists: caddy answers the browser's permission check itself,
     and every answer to a request that names the web client's origin carries that origin and the credentials
-    allowance. The ``handle`` must come before any other that matches the same request.
+    allowance, but for the loading page of ``handle_errors``, which runs a handler chain of its own. The
+    ``handle`` must come before any other that matches the same request.
     """
     matched_hosts = " ".join(hosts)
     return f"""\

@@ -80,8 +80,9 @@ own), and the skill only reads it, from Steps 1 and 2 of the workspace's
   tree as one commit rather than refusing it.
 
 The `--ceiling` instruction exists only for the Step 2 copies that predate the
-pin; the app drops it once the oldest release it updates from reads the pin
-itself.
+pin; the dispatcher's message drops it (`OLD_STEP_TWO_INSTRUCTION_TEMPLATE` in
+`workspace_update_control/protocol.py`) once the oldest release that is updated
+in place reads the pin itself.
 
 ## What the apply must tolerate
 

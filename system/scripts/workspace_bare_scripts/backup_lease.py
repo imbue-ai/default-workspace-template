@@ -148,10 +148,17 @@ def _write_lease(lease_path: Path, lease: BackupLease) -> None:
     handle, scratch = tempfile.mkstemp(
         dir=lease_path.parent, prefix=f".{lease_path.name}."
     )
-    with os.fdopen(handle, "w", encoding="utf-8") as out:
-        out.write(json.dumps(lease.document()) + "\n")
-    os.chmod(scratch, _LEASE_FILE_MODE)
-    os.replace(scratch, lease_path)
+    is_in_place = False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(json.dumps(lease.document()) + "\n")
+        os.chmod(scratch, _LEASE_FILE_MODE)
+        os.replace(scratch, lease_path)
+        is_in_place = True
+    finally:
+        # A holder renews every minute, so a scratch file left by each failed write would fill /run.
+        if not is_in_place:
+            Path(scratch).unlink(missing_ok=True)
 
 
 def read_lease(lease_path: Path, now: float) -> BackupLease | None:
