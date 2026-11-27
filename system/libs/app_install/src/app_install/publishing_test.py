@@ -485,6 +485,29 @@ def test_a_first_publish_creates_a_public_repository_only_when_asked_and_a_later
     assert push_app(workspace, "notes", None, False, runtime).is_private is None
 
 
+def test_a_first_publish_run_again_with_public_goes_on_only_when_its_repository_is_public(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    hook = _refuse_tags(published)
+    untagged = push_app(workspace, "notes", None, False, runtime)
+    assert (untagged.is_private, untagged.is_tag_pushed) == (True, False)
+    hook.unlink()
+
+    # The repository the first run made is private, and finishing the push does not change that.
+    with pytest.raises(PublishError, match="publish visibility notes --make-public"):
+        push_app(workspace, "notes", None, True, runtime)
+    assert "refs/tags/v0.1.0" not in _refs(published)
+
+    # Once it is public, as the repository of a first run with --public is, the same push is finished.
+    published_visibility(workspace, "notes", True, runtime)
+    tagged = push_app(workspace, "notes", None, True, runtime)
+
+    assert (tagged.is_tag_pushed, tagged.commit, tagged.is_private) == (True, untagged.commit, None)
+    assert run_git(published, ["rev-parse", "v0.1.0^{commit}"]) == untagged.commit
+    assert sum(call.startswith("create_published_repository") for call in runtime.calls) == 1
+
+
 def test_a_published_repository_says_whether_it_is_private_and_is_made_public_once(tmp_path: Path) -> None:
     workspace, _published, runtime = _publisher(tmp_path)
     with pytest.raises(PublishError, match="has no published repository yet"):

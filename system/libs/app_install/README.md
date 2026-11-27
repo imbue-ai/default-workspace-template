@@ -240,6 +240,7 @@ A file over 1 MB, a file that is not text, a link, and a repository nested in th
 **The push.**
 On the first publish the repository is created under the workspace's GitHub account through `latchkey curl`, private unless `--public` is given (`is_private` in the result says which), closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
 A later publish never changes who can see the repository: its `is_private` is null, and `--public` is refused with the command that does.
+A first publish that is run again may carry `--public` as its first run did, and is refused only when the repository it finds is private.
 Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.
 A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
 The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.

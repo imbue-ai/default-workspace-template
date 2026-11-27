@@ -718,7 +718,9 @@ def push_app(
     unless ``is_public``, and closed to outside contributions, and its URL is written to the app's record and
     committed, so that it is never created a second time. A later publish leaves the repository's visibility
     alone, and is refused when it asks for a public one: ``published_visibility`` is what makes a published
-    repository public. The tree becomes one commit, whose parent is the commit last published and
+    repository public. A first publish that is run again may ask for a public one as its first run did, and
+    is refused only when the repository it finds is private. The tree becomes one commit, whose parent is the
+    commit last published and
     whose message names the version and, for the first publish of an app that was installed and changed here,
     what it was derived from. The commit goes to the repository's ``main`` as a fast-forward and the tag
     ``v<version>`` after it, both through the latchkey gateway and neither forced.
@@ -738,10 +740,14 @@ def push_app(
     is_repository_created = False
     repo_url = record.published_repo_url
     if repo_url and is_public:
-        raise PublishError(
-            f"{name} already has its repository, {repo_url}, and a push does not change who can see it: run "
-            f"`app-install publish visibility {name} --make-public` to make it public"
-        )
+        # A first publish that is run again finds the repository its earlier run made, and has what it asks for
+        # when that repository is public.
+        is_first_publish_run_again = not record.published_commit
+        if not is_first_publish_run_again or runtime.is_published_repository_private(repo_url):
+            raise PublishError(
+                f"{name} already has its repository, {repo_url}, and a push does not change who can see it: run "
+                f"`app-install publish visibility {name} --make-public` to make it public"
+            )
     if not repo_url:
         chosen_name = repository_name or name
         if not _REPOSITORY_NAME_PATTERN.fullmatch(chosen_name):
