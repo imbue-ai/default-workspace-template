@@ -396,6 +396,144 @@ def test_a_record_that_cannot_be_read_reads_none_while_there_is_no_document(
     assert backup_destination.requests == []
 
 
+def test_a_document_that_cannot_be_read_stays_and_reads_failed_with_nothing_written(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = host_dir / INITIAL_DATA_FILE_NAME
+    document_path.mkdir()
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status.state is InitialDataState.FAILED
+    assert status.detail.startswith("The document could not be read: ")
+    assert read_initial_data_status(workspace_root) == status
+    assert document_path.is_dir()
+    assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
+    assert backup_destination.requests == []
+
+
+def test_a_document_that_cannot_be_deleted_reads_failed_and_the_next_start_deletes_it_and_writes_nothing(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document = initial_data_document()
+    document_path = write_initial_data_document(host_dir, document)
+
+    def _take_the_destination_and_put_a_directory_in_the_documents_place(
+        root: Path, request: Mapping[str, object]
+    ) -> None:
+        backup_destination(root, request)
+        document_path.unlink()
+        document_path.mkdir()
+
+    failed = apply_initial_data(
+        host_dir,
+        workspace_root,
+        _take_the_destination_and_put_a_directory_in_the_documents_place,
+        _NOW,
+    )
+
+    assert failed.state is InitialDataState.FAILED
+    assert failed.detail.startswith(
+        "Every part was written, and the document could not be deleted: "
+    )
+    assert read_initial_data_status(workspace_root) == failed
+    assert read_initial_data_record(workspace_root).progress_by_part == {
+        "profile": PartProgress.WRITTEN,
+        "timezone": PartProgress.WRITTEN,
+        "update_settings": PartProgress.WRITTEN,
+        "backups": PartProgress.WRITTEN,
+    }
+
+    # The document is there again at the next start, after the owner changed what it had set.
+    document_path.rmdir()
+    write_initial_data_document(host_dir, document)
+    take_update_settings({**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"})
+    applied = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 60
+    )
+
+    assert applied == applied_status(_NOW + 60)
+    assert read_initial_data_status(workspace_root) == applied
+    assert not document_path.exists()
+    assert len(backup_destination.requests) == 1
+    stored_settings = read_update_settings()
+    assert stored_settings is not None and stored_settings.channel == "beta"
+
+
+def _put_a_link_to_nowhere_in_the_records_place(
+    workspace_root: Path, tmp_path: Path
+) -> Path:
+    """Leave the record's directory as something that reads as no record and takes no file; answers the link."""
+    record_directory = (workspace_root / STATUS_RELATIVE_PATH).parent
+    record_directory.parent.mkdir(parents=True)
+    record_directory.symlink_to(tmp_path / "nowhere")
+    return record_directory
+
+
+def test_a_part_that_cannot_be_recorded_as_begun_is_not_written_and_is_tried_at_the_next_start(
+    workspace_root: Path,
+    host_dir: Path,
+    tmp_path: Path,
+    backup_destination: RecordingBackupDestination,
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+    record_directory = _put_a_link_to_nowhere_in_the_records_place(
+        workspace_root, tmp_path
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == failed_status(
+        "; ".join(
+            f"{name}: it could not be recorded that this part is about to be written"
+            for name in ("profile", "timezone", "update_settings", "backups")
+        )
+    )
+    assert document_path.exists()
+    assert not (workspace_root / SNAPSHOT_RELATIVE_PATH).exists()
+    assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
+    assert read_update_settings() is None
+    assert backup_destination.requests == []
+
+    record_directory.unlink()
+    applied = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 60
+    )
+
+    assert applied == applied_status(_NOW + 60)
+    assert not document_path.exists()
+    assert read_user_timezone(workspace_root) == "Europe/Berlin"
+    assert backup_destination.requests == [(workspace_root, BACKUPS_PART_DOCUMENT)]
+
+
+def test_a_document_whose_outcome_cannot_be_recorded_stays_and_reads_failed(
+    workspace_root: Path,
+    host_dir: Path,
+    tmp_path: Path,
+    backup_destination: RecordingBackupDestination,
+) -> None:
+    document_path = write_initial_data_document(host_dir, {"schema": 1})
+    record_directory = _put_a_link_to_nowhere_in_the_records_place(
+        workspace_root, tmp_path
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == failed_status(
+        "Every part was written, and that could not be recorded."
+    )
+    assert document_path.exists()
+
+    record_directory.unlink()
+    applied = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 60
+    )
+
+    assert applied == applied_status(_NOW + 60)
+    assert read_initial_data_status(workspace_root) == applied
+    assert not document_path.exists()
+
+
 class _StepKilled(BaseException):
     """Stands in for the step being killed in the middle of a part."""
 
