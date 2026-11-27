@@ -67,8 +67,8 @@ from workspace_initial_data.status import (
 )
 
 INITIAL_DATA_FILE_NAME: Final[str] = "initial_data.json"
-# The newest shape of the document this template applies. A document of a higher schema is left for a template
-# that knows it.
+# The newest shape of the document this template applies. A document of a higher schema is not applied: it stays
+# where it is and reads as failed.
 INITIAL_DATA_SCHEMA: Final[int] = 1
 # The document holds storage credentials, so one kept for another attempt is kept readable by its owner alone.
 _DOCUMENT_FILE_MODE: Final[int] = 0o600
