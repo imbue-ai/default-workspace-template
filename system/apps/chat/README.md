@@ -592,8 +592,11 @@ bootstrap leaves `data/.state/chat/owes_welcome_chat` on a workspace's first boo
 once it has read its agent list, opens the first-run chat below and removes the file. A workspace
 that already existed when it took this build is owed none. An Imbue Studio app from before this
 still posts its own first-run seed when a workspace is ready. Whichever of the two comes second
-finds the chat there: the seed route answers the chat that exists, and this app reads the taken
-name as the chat having been opened.
+finds the chat there: the seed route answers a seed with `is_first_run` the chat that exists, and
+this app reads the taken name as the chat having been opened. A seed that carries turns of its own
+is not answered that chat. Where the workspace's own first chat already wears the main chat's
+name, the route answers it 409 and leaves that chat as it is, so an app that still seeds its
+onboarding conversation opens no second first chat and its turns are not shown.
 
 A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
 app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`

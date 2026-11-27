@@ -2408,6 +2408,10 @@ def _seed_chat() -> Response:
     main chat (``main_chat.py``). Like every create, 503 until the agent list has been read from
     mngr once, so the Imbue Studio app's seeding retries rather than being refused; 409 when a chat
     already wears that name.
+
+    A seed with ``is_first_run`` is answered the first-run chat that exists instead, whoever opened it. A seed
+    that carries turns is not: where the workspace's own first chat (``first_boot_welcome.py``) wears the name,
+    it is answered 409 like any other taken name, and that chat is left as it is.
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
