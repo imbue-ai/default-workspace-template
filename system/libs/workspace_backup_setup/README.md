@@ -90,15 +90,17 @@ during a change of destination does not take that change up again.
 
 ## A `restic.env` the program did not write
 
-A released Imbue Studio desktop writes `restic.env` by its own command, and so do a
-current desktop's restore, its update of the backup service and its migration of
-the backup store. The record names the digest of the file as the program last left
-it, so a file with another digest is taken as the destination: the setup reads
-`READY` for the repository it names, and a setup the program had not finished is
-dropped. The destination's kind is read off the file: Imbue Cloud where the
-repository is a `rest:` address whose user name is the workspace's own id
-(`MNGR_AGENT_ID`), and storage of the user's own otherwise. A file the record
-expects that is gone is backups turned off.
+A released Imbue Studio desktop writes `restic.env` by its own command, and again
+from its own copy when it updates the backup service. A current desktop's restore
+and its migration of the backup store write it too; a current desktop's update of
+the backup service writes none into a workspace that has the backup lease, which
+every workspace with this program has. The record names the digest of the file as
+the program last left it, so a file with another digest is taken as the
+destination: the setup reads `READY` for the repository it names, and a setup the
+program had not finished is dropped. The destination's kind is read off the file:
+Imbue Cloud where the repository is a `rest:` address whose user name is the
+workspace's own id (`MNGR_AGENT_ID`), and storage of the user's own otherwise. A
+file the record expects that is gone is backups turned off.
 
 ## The backup lease
 

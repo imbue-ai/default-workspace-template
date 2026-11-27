@@ -5,9 +5,11 @@ The record of the setup is one file under ``data/.state/backup_setup/``, written
 request (``destination``) and by the program that does the setup (``program``). It holds no credential.
 
 A ``restic.env`` the program did not write is taken as the destination: a released Imbue Studio desktop writes the
-file by its own command, and so do a current desktop's restore, its update of the backup service and its migration
-of the backup store. The record names the digest of the file as the program last left it, so a file with another
-digest is someone else's, and a file gone that the record expects is backups turned off by such a writer.
+file by its own command, and again from its own copy when it updates the backup service, and a current desktop's
+restore and its migration of the backup store write it too. (A current desktop's update of the backup service
+writes none into a workspace that has the backup lease.) The record names the digest of the file as the program
+last left it, so a file with another digest is someone else's, and a file gone that the record expects is backups
+turned off by such a writer.
 """
 
 import fcntl
