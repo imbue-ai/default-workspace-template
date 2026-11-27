@@ -66,10 +66,11 @@ def write_atomically(path: Path, text: str, mode: int) -> None:
 
     A password is kept this way before a repository is initialised with it, so a file a crash could lose would
     leave a repository nothing can read. Raises ``OSError`` when it cannot be written, and leaves no scratch
-    file, which would hold the credentials.
+    file, which would hold the credentials, whatever the write raised.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, scratch = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    is_in_place = False
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
             out.write(text)
@@ -77,9 +78,10 @@ def write_atomically(path: Path, text: str, mode: int) -> None:
             os.fsync(out.fileno())
         os.chmod(scratch, mode)
         os.replace(scratch, path)
-    except OSError:
-        Path(scratch).unlink(missing_ok=True)
-        raise
+        is_in_place = True
+    finally:
+        if not is_in_place:
+            Path(scratch).unlink(missing_ok=True)
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)

@@ -261,6 +261,12 @@ def test_a_destination_named_with_no_storage_is_set_up_from_what_was_kept_for_it
             ),
             "AWS_ACCESS_KEY_ID must be one line",
         ),
+        (
+            own_storage_request(
+                "s3:https://s3.example/bucket", {"AWS_ACCESS_KEY_ID": "a\ud800b"}
+            ),
+            "AWS_ACCESS_KEY_ID must be text that a file can hold",
+        ),
         (own_storage_request("", {}), "repository must be one line that is not empty"),
         (
             {

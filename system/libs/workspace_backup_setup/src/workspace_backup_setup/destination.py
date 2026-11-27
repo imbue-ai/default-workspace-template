@@ -140,6 +140,13 @@ def _checked_value(name: str, value: str) -> str:
         raise InvalidBackupDestinationError(
             f"{name} must be one line that is not empty, does not start or end with a space, and is not quoted."
         )
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        # Half of a surrogate pair, which JSON can carry and a file cannot.
+        raise InvalidBackupDestinationError(
+            f"{name} must be text that a file can hold."
+        ) from None
     return value
 
 

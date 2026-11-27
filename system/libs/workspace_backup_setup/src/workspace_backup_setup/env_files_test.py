@@ -143,6 +143,17 @@ def test_a_write_that_fails_leaves_no_scratch_file_behind(tmp_path: Path) -> Non
     assert list(target.iterdir()) == []
 
 
+def test_a_write_of_text_no_file_can_hold_leaves_no_scratch_file_behind(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "restic.env.pending"
+
+    with pytest.raises(UnicodeEncodeError):
+        write_atomically(target, "RESTIC_REST_PASSWORD=token-\ud800\n", 0o600)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_installing_the_same_restic_env_again_leaves_the_file_untouched(
     workspace_root: Path,
 ) -> None:
