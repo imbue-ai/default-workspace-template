@@ -189,9 +189,14 @@ def _archive_path(workspace_root: Path, now: float) -> Path:
 
 
 def keep_restic_env_aside(workspace_root: Path, now: float) -> bool:
-    """Move the ``restic.env`` in use to ``restic.env.<timestamp>``; whether there was one to move."""
+    """Move the ``restic.env`` in use to ``restic.env.<timestamp>``; whether there was one to move.
+
+    The kept copy is the owner's alone to read, whatever mode another writer gave the file.
+    """
+    path = workspace_root / RESTIC_ENV_PATH
     try:
-        os.replace(workspace_root / RESTIC_ENV_PATH, _archive_path(workspace_root, now))
+        os.chmod(path, SECRET_FILE_MODE)
+        os.replace(path, _archive_path(workspace_root, now))
     except FileNotFoundError:
         return False
     return True
