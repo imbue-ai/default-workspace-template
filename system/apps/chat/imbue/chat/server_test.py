@@ -38,6 +38,7 @@ from pydantic import SecretStr
 from update_self_skill import update_agent_restarts
 from update_self_skill import update_runtime
 from update_self_skill.update_layout import APPS_REGISTRY_PATH
+from watchdog.events import FileSystemEventHandler
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -111,6 +112,7 @@ from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -177,6 +179,7 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_gated_mngr_binary
 from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_workspace_with_a_user_built_app
@@ -822,14 +825,17 @@ def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: st
 
 
 def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree(
-    tmp_path: Path,
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     """The chats of one account all watch that account's projects tree; the app watches it once, through one
     observer, however many of them are open."""
     state = build_test_state()
     account_dir = tmp_path / "account"
     (account_dir / "projects" / "hash123").mkdir(parents=True)
-    observers_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseObserver)}
+    # Another app's observer starting meanwhile: the suite runs in one process, where an earlier test's watcher can
+    # still be subscribing.
+    other_apps_observer = SharedWatchObserver.build()
+    other_apps_observer.subscribe(tmp_path_factory.mktemp("another-app"), False, FileSystemEventHandler())
     try:
         for index in range(4):
             agent_id = f"account-chat-{index}"
@@ -845,17 +851,20 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
             )
             state.get_or_create_watcher(info)
 
-        def app_observers() -> list[BaseObserver]:
+        def app_watches() -> list[tuple[BaseObserver, str]]:
+            # Each watch of this test's tree, with the observer holding it: that tree is what tells this app's
+            # observers from every other one in the process. An observer's emitters are copied in one step, since the
+            # chats' watcher threads add to them as this reads.
             return [
-                thread
+                (thread, emitter.watch.path)
                 for thread in threading.enumerate()
-                if isinstance(thread, BaseObserver) and thread not in observers_before
+                if isinstance(thread, BaseObserver)
+                for emitter in tuple(thread.emitters)
+                if Path(emitter.watch.path).is_relative_to(tmp_path)
             ]
 
         def watch_count(path: Path) -> int:
-            return sum(
-                1 for observer in app_observers() for emitter in observer.emitters if emitter.watch.path == str(path)
-            )
+            return sum(1 for _, watched in app_watches() if watched == str(path))
 
         # Each chat's own state dir is watched once its watcher has subscribed to everything.
         wait_until_true(
@@ -864,8 +873,9 @@ def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watc
             "every chat's watches in place",
         )
         assert watch_count(account_dir / "projects") == 1
-        assert len(app_observers()) == 1
+        assert len({observer for observer, _ in app_watches()}) == 1
     finally:
+        other_apps_observer.close()
         state.shutdown()
 
 
@@ -6639,6 +6649,93 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "first_message": "Begin here",
         "hint": None,
     }
+
+
+def test_a_launcher_text_sent_as_the_first_run_provider_page_is_left_reaches_the_main_chats_agent(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """Leaving the provider page starts the main chat's agent, so the launcher's Enter pressed right after finds
+    the chat being created: the text is kept for that agent and delivered as it lands, never handed to the root as
+    a draft. It is the first send the agent takes, so it carries the welcome the chat opened on."""
+    mngr_binary, _argv_log, gate = write_gated_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats"
+    )
+    # The launch's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+
+        response = _intake(client, message="Write hello.py", target="main_chat", client_id="c1", desktop_id="d1")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"path": f"/?chat={chat_id}"}
+        creating = manager.get_provisional_chat(chat_id)
+        assert creating is not None and creating.phase is ProvisionalChatPhase.CREATING
+        assert [held.text for held in creating.held_sends] == ["Write hello.py"]
+        gate.touch()
+        wait_until_true(lambda: len(messenger.sent) == 1, 10, "the delivery of the text kept for the agent")
+        ((_agent_id, delivered),) = messenger.sent
+        assert delivered.startswith(f"<{SEED_CONTEXT_TAG}>")
+        assert FIRST_RUN_WELCOME[0].text in delivered
+        assert delivered.endswith(f"</{SEED_CONTEXT_TAG}>\nWrite hello.py")
+    finally:
+        # Ends the create the gate still holds when an assertion fails ahead of it.
+        manager.stop()
+
+
+def test_intake_held_for_a_chat_awaiting_its_first_send_is_kept_for_the_agent_a_launch_began_before_the_apply(
+    app: Flask, client: FlaskClient
+) -> None:
+    """A text the root has yet to apply when something else launches the chat (the sign-in that gives it a
+    provider) is kept for that agent: the chat no longer awaits a first message to be launched with."""
+    agent_manager: AgentManager = state_of(app).agent_manager
+    chat_id = agent_manager.mint_awaiting_chat("").chat_id
+    token = _token_of(_intake(client, message="Begin here", target="chat", chat_id=str(chat_id)).get_json()["path"])
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = agent_manager._provisional_chats[chat_id].model_copy_update(
+            to_update(agent_manager._provisional_chats[chat_id].field_ref().phase, ProvisionalChatPhase.CREATING)
+        )
+
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": str(chat_id),
+        "composer_text": None,
+        "first_message": None,
+        "hint": None,
+    }
+    creating = agent_manager.get_provisional_chat(str(chat_id))
+    assert creating is not None
+    assert [held.text for held in creating.held_sends] == ["Begin here"]
+
+
+def test_only_a_text_sent_to_a_chat_being_created_is_kept_for_its_agent() -> None:
+    """A draft is never sent, and a chat whose create failed has no agent on its way: both are held for the root,
+    which puts the text in the composer."""
+    creating_id = ChatId(f"agent-{uuid4().hex}")
+    failed_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(creating_id)
+    seed_failed_chat(manager, failed_id, "Chat 2")
+
+    drafted = _intake(client, message="Draw me a seal", target="chat", chat_id=str(creating_id), is_draft=True)
+    sent_to_failed = _intake(client, message="Begin here", target="chat", chat_id=str(failed_id))
+
+    applied_draft = client.post(f"/api/chats/intakes/{_token_of(drafted.get_json()['path'])}/apply", json={})
+    applied_to_failed = client.post(
+        f"/api/chats/intakes/{_token_of(sent_to_failed.get_json()['path'])}/apply", json={}
+    )
+    assert applied_draft.get_json()["composer_text"] == "Draw me a seal"
+    assert applied_to_failed.get_json()["composer_text"] == "Begin here"
+    for chat_id in (creating_id, failed_id):
+        provisional = manager.get_provisional_chat(chat_id)
+        assert provisional is not None and provisional.held_sends == ()
 
 
 def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(

@@ -140,7 +140,6 @@ from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.claude import auth_endpoints
-from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import split_background_task_reports
@@ -955,17 +954,14 @@ def _send_to_chat(
         try:
             # A seeded chat whose agent was launched as the user signed in has its conversation to deliver
             # ahead of the first words sent to it; the seed counts as delivered only with a send that went
-            # through. A room's send carries none: a room has no agent to need the context, and its page shows
-            # the seeded conversation as the chat's earlier segments already.
+            # through.
             is_resent_when_unsure = not send_message_request.is_single_send
-            if agent_info.harness is HarnessType.ROOM:
-                outcome = _deliver_message(state, agent_info, delivered_text, message_id, is_resent_when_unsure)
-            else:
-                outcome = agent_manager.carry_pending_seed(
-                    chat_id,
-                    delivered_text,
-                    lambda text: _deliver_message(state, agent_info, text, message_id, is_resent_when_unsure),
-                )
+            outcome = agent_manager.carry_pending_seed(
+                chat_id,
+                agent_info.harness,
+                delivered_text,
+                lambda text: _deliver_message(state, agent_info, text, message_id, is_resent_when_unsure),
+            )
         except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
@@ -1050,27 +1046,32 @@ def _deliver_unreported_runner_ends_notice(
         )
 
 
+def _is_chat_being_created(agent_manager: AgentManager, chat_id: ChatId) -> bool:
+    provisional = agent_manager.get_provisional_chat(str(chat_id))
+    return provisional is not None and provisional.phase is ProvisionalChatPhase.CREATING
+
+
 def _hold_send_for_chat_being_created(
     state: ChatAppState,
-    chat_id: str,
+    chat_id: ChatId,
     send_message_request: SendMessageRequest,
     delivered_text: str,
     message_id: str,
-) -> Response | None:
-    """Hold a send to a chat whose create is still running, answering the route's 202; None when the chat is
-    not being created. The chat app keeps it until the agent lands, so a page closed meanwhile loses nothing. The
+    identity: RequestIdentity,
+) -> bool:
+    """Hold a send to a chat whose create is still running, as a send the chat took; False when the chat is not
+    being created. The chat app keeps it until the agent lands, so a page closed meanwhile loses nothing. The
     held text is the attributed one, so the agent the chat gets still learns a non-owner's author."""
-    parsed = parse_chat_ref(chat_id)
-    if parsed is None:
-        return None
     is_held = state.agent_manager.hold_send_for_chat_being_created(
-        parsed, message_id, delivered_text, _held_send_origin(send_message_request)
+        chat_id, message_id, delivered_text, _held_send_origin(send_message_request)
     )
     if not is_held:
-        return None
-    _consider_naming_chat(state, parsed, send_message_request.message)
-    record_client_message_activity(state.shell, parsed, send_message_request, state.is_secondary)
-    return model_response(HeldSendResponse(status="held", phase=None), 202)
+        return False
+    _consider_naming_chat(state, chat_id, send_message_request.message)
+    record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
+    _advance_first_run_tree(state, chat_id, send_message_request.message)
+    _act_on_accepted_send(state, chat_id, message_id, send_message_request.message, identity)
+    return True
 
 
 class _AttributedSend(FrozenModel):
@@ -1296,18 +1297,14 @@ def _send_message(
     # Attributed only once the chat is known to be an agent's or one being created: the annotation is a file under
     # the chat's folder, which a send must not leave behind for a chat that is not there (nor write beside the
     # chats' folders for an id that is no chat's, such as ``..``).
-    is_being_created = (
-        provisional := agent_manager.get_provisional_chat(chat_id)
-    ) is not None and provisional.phase is ProvisionalChatPhase.CREATING
-    if _find_active_agent(chat_id) is None and not is_being_created:
+    if _find_active_agent(chat_id) is None and not _is_chat_being_created(agent_manager, parsed):
         return _chat_not_found_response(chat_id)
     delivered_text = _attributed_delivery(state, parsed, send_message_request.message, message_id, request_identity())
     if _find_active_agent(chat_id) is None:
-        held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
-        if held is not None:
-            _advance_first_run_tree(state, ChatId(chat_id), send_message_request.message)
-            _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
-            return held
+        if _hold_send_for_chat_being_created(
+            state, parsed, send_message_request, delivered_text, message_id, request_identity()
+        ):
+            return model_response(HeldSendResponse(status="held", phase=None), 202)
         # The create may have landed between the lookup and the hold, which then refuses.
         if _find_active_agent(chat_id) is None:
             return _chat_not_found_response(chat_id)
@@ -2578,6 +2575,24 @@ def _deliver_intake_send(
     return None
 
 
+def _hold_intake_send_for_chat_being_created(
+    state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
+) -> bool:
+    """Hold the text an intake sends for the agent a chat's running create lands as, as the message route holds a
+    send to such a chat; False for a draft, for no text, and when the chat is not being created."""
+    # Attributed only for a chat being created: the annotation is a file under the chat's folder.
+    if intake.is_draft or not intake.message or not _is_chat_being_created(state.agent_manager, chat_id):
+        return False
+    message_id = uuid4().hex
+    send_message_request = SendMessageRequest(
+        message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
+    )
+    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity)
+    return _hold_send_for_chat_being_created(
+        state, chat_id, send_message_request, delivered_text, message_id, identity
+    )
+
+
 def _log_undelivered_intake_send(
     app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> None:
@@ -2684,9 +2699,12 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
 
 def _intake_into_listed_chat(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response:
     """An intake that resolved to a chat the app lists: an empty text is nothing to send or draft, so the answer is
-    the chat's path alone (spec section 10); a draft, or a chat that is not yet an agent, is held for the root;
-    else the text goes through the ordinary send path."""
+    the chat's path alone (spec section 10); a send to a chat whose agent is being created is kept for that agent;
+    a draft, or a chat with no agent on its way, is held for the root; else the text goes through the ordinary
+    send path."""
     if not intake.message:
+        return model_response(IntakeResponse(path=intake_path(chat_id, None)))
+    if _hold_intake_send_for_chat_being_created(state, chat_id, intake, request_identity()):
         return model_response(IntakeResponse(path=intake_path(chat_id, None)))
     if intake.is_draft or _agent_chat_snapshot(state.agent_manager, chat_id) is None:
         token = state.pending_intakes.mint(intake, chat_id, needs_pick=False)
@@ -2745,12 +2763,17 @@ def _apply_pending_intake(token: str) -> Response:
     intake = pending.request
     provisional: ProvisionalChat | None = agent_manager.get_provisional_chat(str(chat_id))
     is_awaiting = provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    # Tried before the chat is looked up as an agent, so a create that lands in between is found as one.
+    is_held = _hold_intake_send_for_chat_being_created(state, chat_id, intake, request_identity())
     is_agent = _agent_chat_snapshot(agent_manager, chat_id) is not None
     composer_text: str | None = None
     first_message: str | None = None
-    # Section 3.6.1's three outcomes: a draft, or a text for a chat that can neither take a message nor be launched
-    # by one, goes to the composer; a chat awaiting its first send is launched with the text; an agent is sent it.
-    if intake.is_draft or (not is_agent and not is_awaiting):
+    # Section 3.6.1's outcomes: a chat being created keeps the text for its agent; a draft, or a text for a chat
+    # that can neither take a message nor be launched by one, goes to the composer; a chat awaiting its first send
+    # is launched with the text; an agent is sent it.
+    if is_held:
+        pass
+    elif intake.is_draft or (not is_agent and not is_awaiting):
         composer_text = intake.message or None
     elif is_awaiting:
         first_message = intake.message or None

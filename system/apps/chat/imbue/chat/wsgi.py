@@ -1,3 +1,4 @@
+import socket
 from typing import Final
 
 from flask import Flask
@@ -69,4 +70,15 @@ def make_threaded_server(host: str, port: int, app: Flask) -> BaseWSGIServer:
     streaming. The caller owns the returned server's ``serve_forever`` /
     ``shutdown`` lifecycle.
     """
-    return make_server(host, port, app, threaded=True, request_handler=Http11RequestHandler)
+    return _threaded_http11_server(host, port, app, fd=None)
+
+
+def make_threaded_server_on(listener: socket.socket, app: Flask) -> BaseWSGIServer:
+    """The same server, serving on ``listener``, already bound and listening, instead of binding a socket of its
+    own."""
+    host, port = listener.getsockname()[:2]
+    return _threaded_http11_server(host, port, app, fd=listener.fileno())
+
+
+def _threaded_http11_server(host: str, port: int, app: Flask, fd: int | None) -> BaseWSGIServer:
+    return make_server(host, port, app, threaded=True, request_handler=Http11RequestHandler, fd=fd)

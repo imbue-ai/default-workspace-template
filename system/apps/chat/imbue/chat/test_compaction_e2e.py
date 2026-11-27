@@ -48,7 +48,6 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_last_compaction_record
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.testing import find_free_port
 
 pytestmark = [
     pytest.mark.browser,
@@ -127,9 +126,7 @@ def _compaction_workspace(
     session_events: Sequence[Mapping[str, Any]] | None = None,
     messenger: RecordingMngrMessenger | None = None,
 ) -> Generator[RunningWorkspace, None, None]:
-    with running_workspace(
-        tmp_path, find_free_port(), find_free_port(), session_events=session_events, messenger=messenger
-    ) as server:
+    with running_workspace(tmp_path, session_events=session_events, messenger=messenger) as server:
         poller = server.chat_state.agent_manager._compacting_marker_poller
         poller.start()
         try:

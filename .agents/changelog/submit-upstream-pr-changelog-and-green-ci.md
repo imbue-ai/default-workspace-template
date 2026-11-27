@@ -1,1 +1,0 @@
-- Sending a change back to the template now includes the changelog entry CI requires, and waits for the PR's CI to finish green before reporting the PR as ready.
