@@ -271,10 +271,12 @@ class BackupSetupProgram:
         self._awaited_holder = ""
         try:
             with setup_lock(self._workspace_root):
-                if (
-                    read_setup_record(self._workspace_root).request_id
-                    != record.request_id
-                ):
+                # A file another writer put in place since ``record`` was read is the destination, not the
+                # file this turn-off was asked to move: the record taken from it has a request id of its own.
+                current = take_another_writers_file(
+                    self._workspace_root, now, self._workspace_id
+                )
+                if current.request_id != record.request_id:
                     return
                 keep_restic_env_aside(self._workspace_root, now)
                 write_setup_record(
