@@ -19,6 +19,11 @@ from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
+from workspace_backup_setup.testing import FAKE_RESTIC_CONTROL_DIR_ENV
+from workspace_backup_setup.testing import install_fake_restic
+from workspace_backup_setup.testing import path_with_fake_restic_first
+from workspace_update_control.testing import StagedUpdateWorkspace
+from workspace_update_control.testing import stage_update_workspace
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
@@ -243,6 +248,41 @@ def announcement_writer(tmp_path: Path) -> AppAnnouncementWriter:
 @pytest.fixture
 def broadcaster() -> WebSocketBroadcaster:
     return WebSocketBroadcaster()
+
+
+@pytest.fixture
+def staged_update_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StagedUpdateWorkspace:
+    """A workspace an update can run in, which is the working directory, with its tools stubbed on PATH."""
+    return stage_update_workspace(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def update_workspace_app(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, staged_update_workspace: StagedUpdateWorkspace
+) -> Flask:
+    """The shell app serving the staged update workspace: its root, its observer's events file, and its stand-in
+    for the cron daemon's drop-in directory."""
+    state = build_test_state(
+        broadcaster=broadcaster,
+        shell_state_directory=tmp_path / "state",
+        inventory=build_inventory(write_two_app_registry(tmp_path), broadcaster),
+        repo_root=staged_update_workspace.root,
+        static_directory=tmp_path / "static",
+        agent_events_path=staged_update_workspace.events_path,
+    )
+    state.live_cron_directory = staged_update_workspace.live_cron_dir
+    return create_application(state)
+
+
+@pytest.fixture
+def fake_restic_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A stand-in ``restic`` first on PATH for the backup routes; the directory its mode, calls and release files
+    live in."""
+    control_directory = tmp_path / "restic-control"
+    install_fake_restic(tmp_path / "bin", control_directory)
+    monkeypatch.setenv("PATH", path_with_fake_restic_first(tmp_path / "bin"))
+    monkeypatch.setenv(FAKE_RESTIC_CONTROL_DIR_ENV, str(control_directory))
+    return control_directory
 
 
 @pytest.fixture

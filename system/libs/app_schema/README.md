@@ -66,6 +66,12 @@ the one shape every route answers a refusal or a failure with.
   loopback `Host`), skipping the Flask rules in `exempt_rules` (a module served
   to other origins with a CORS header), and answers a present identity header
   that does not parse with a 400 on every route. Every built-in app installs it.
+- `app_schema.request_guard.install_request_guard_with_web_client_routes(app, exempt_rules, web_client_rules)`:
+  the same guard for an app with routes the hosted web client's page may call.
+  A request to a rule in `web_client_rules` from another origin is admitted
+  when its identity carries the share gateway's word that the web client's
+  page sent it; that page is refused on every other route, like any other
+  origin's. The shell installs it, naming its workspace routes.
 - `app_schema.api_schema.build_openapi_document(app, title, description, version, route_table, excluded_endpoints)`:
   the document itself, for a caller that wants it without the route.
 - `app_schema.testing.assert_request_guard_refuses_unknown_provenance(client, method, path)`:

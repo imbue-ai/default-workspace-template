@@ -3,9 +3,8 @@
 One module behind both the gateway's ``/_agent/*`` routes and the
 ``agent-access`` CLI the desktop runs over ``mngr exec``, so the two can never
 disagree about what a grant is. Every operation takes the whole agent-access
-lock, re-reads the files under it, writes them atomically, reconciles the
-``authorized_keys`` lines from the grants file (section 5.3 of the spec), and
-records an audit event.
+lock, re-reads the files under it, writes them atomically, and records an
+audit event.
 """
 
 import json
@@ -33,11 +32,10 @@ from share_grants.agent_grants import mint_agent_id
 from share_grants.agent_grants import mint_invite_code
 from share_grants.agent_grants import prune_expired
 from share_grants.agent_grants import prune_expired_invites
-from share_grants.agent_grants import reconcile_authorized_keys
 from share_grants.agent_grants import render_agent_grants
 from share_grants.agent_grants import render_agent_invites
 from share_grants.agent_grants import sanitize_agent_name
-from share_grants.agent_grants import write_text_atomic
+from share_grants.grants import write_text_atomic
 from share_grants.json_values import is_json_object
 
 from share_gateway.agent_audit import write_agent_access_event
@@ -45,7 +43,6 @@ from share_gateway.agent_keys import AgentKeyError
 from share_gateway.agent_keys import canonical_public_key_line
 from share_gateway.log import log
 
-DEFAULT_AUTHORIZED_KEYS_PATH = Path.home() / ".ssh" / "authorized_keys"
 MAX_GRANT_LIFETIME = timedelta(days=3650)
 # Ten seconds: the shell reads the file for a visiting agent's presence under the same 70-second window a person's
 # heartbeats are read under, so a working agent never reads as gone between two requests.
@@ -59,12 +56,10 @@ class AgentAccessPaths:
         self,
         grants_path: Path,
         invites_path: Path,
-        authorized_keys_path: Path,
         events_dir: Path | None,
     ) -> None:
         self.grants_path = grants_path
         self.invites_path = invites_path
-        self.authorized_keys_path = authorized_keys_path
         self.events_dir = events_dir
 
 
@@ -72,7 +67,6 @@ def default_agent_access_paths(events_dir: Path | None) -> AgentAccessPaths:
     return AgentAccessPaths(
         grants_path=AGENT_GRANTS_FILE,
         invites_path=AGENT_INVITES_FILE,
-        authorized_keys_path=DEFAULT_AUTHORIZED_KEYS_PATH,
         events_dir=events_dir,
     )
 
@@ -124,9 +118,8 @@ class JoinedAgent:
         self.is_rejoin = is_rejoin
 
 
-def _write_grants(paths: AgentAccessPaths, grants: list[AgentGrant], now: datetime) -> None:
+def _write_grants(paths: AgentAccessPaths, grants: list[AgentGrant]) -> None:
     write_text_atomic(paths.grants_path, render_agent_grants(grants), 0o600)
-    reconcile_authorized_keys(paths.authorized_keys_path, grants, now)
 
 
 def _split_expired(grants: Sequence[AgentGrant], now: datetime) -> tuple[list[AgentGrant], list[AgentGrant]]:
@@ -149,15 +142,13 @@ def list_grants(paths: AgentAccessPaths, now: datetime) -> list[AgentGrant]:
 
 
 def reconcile(paths: AgentAccessPaths, now: datetime) -> bool:
-    """Prune expired grants and invites and bring ``authorized_keys`` in line; True when anything changed."""
+    """Prune expired grants and invites; True when anything changed."""
     with locked_agent_access(paths.grants_path):
         active_grants, expired_grants = _split_expired(load_agent_grants(paths.grants_path), now)
         is_changed = False
         if expired_grants:
-            write_text_atomic(paths.grants_path, render_agent_grants(active_grants), 0o600)
+            _write_grants(paths, active_grants)
             _record_expired(paths, expired_grants)
-            is_changed = True
-        if reconcile_authorized_keys(paths.authorized_keys_path, active_grants, now):
             is_changed = True
         invites = load_agent_invites(paths.invites_path)
         active_invites = prune_expired_invites(invites, now)
@@ -276,7 +267,7 @@ def join(
                 expires_at=invite.grant_expires_at,
             )
             grants = [grant if entry.agent_id == existing.agent_id else entry for entry in grants]
-        _write_grants(paths, grants, now)
+        _write_grants(paths, grants)
         _write_invites(paths, [entry for entry in invites if entry is not invite])
     _record_expired(paths, expired_grants)
     write_agent_access_event(
@@ -311,7 +302,7 @@ def revoke(
     now: datetime,
     via: str,
 ) -> AgentGrant:
-    """Remove one grant (and its ``authorized_keys`` line); the owner may revoke any, a granter their own.
+    """Remove one grant; the owner may revoke any, a granter their own.
 
     ``revoker`` and ``is_owner`` are what the caller asserts and ``via`` which
     surface asserted them (see ``mint_invite``). Raises RevokeRefusedError when
@@ -324,7 +315,7 @@ def revoke(
             raise RevokeRefusedError(f"no agent {agent_id}")
         if not is_owner and grant.granter != revoker:
             raise RevokeRefusedError(f"agent {agent_id} was not granted by you")
-        _write_grants(paths, [entry for entry in grants if entry.agent_id != agent_id], now)
+        _write_grants(paths, [entry for entry in grants if entry.agent_id != agent_id])
     _record_expired(paths, expired_grants)
     write_agent_access_event(
         paths.events_dir,

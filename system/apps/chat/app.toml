@@ -14,6 +14,11 @@ uses_microphone = true
 # rather than offering it up front.
 system = true
 
+# The workspace's two suggestion switches are this app's settings. The shell's workspace routes
+# (/api/workspace/suggestions) pass a client's read and write to this path, so the switches keep their one lock
+# and every open chat page hears of a change.
+suggestion_settings_path = "/api/settings/suggestions"
+
 # A desktop shortcut opens the chat list; a chat is created only from inside it, or through the
 # intake route below.
 [default_shortcut]

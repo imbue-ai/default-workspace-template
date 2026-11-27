@@ -39,11 +39,11 @@ PROGRAM_NAMES = {
     "publish_cgroup_meminfo": "Memory guard",
     "resource_sampler": "System Monitor",
     "host-backup": "Backups",
+    "backup_setup": "Backups",
     "share-gateway": "Sharing",
     "cron": "Scheduled tasks",
     "xvfb": "Virtual display",
     "terminal-pty": "Terminal",
-    "owner-exec": "Web access",
     "env-converge": "Environment setup",
 }
 

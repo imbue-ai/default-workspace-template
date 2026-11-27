@@ -25,6 +25,9 @@ offline or asleep. A connected device checks in every
 `announcement_interval_seconds`, so a device whose `last_seen_at` is much older
 than that is probably not reachable.
 
+An empty list means no desktop is connected to this workspace. See "When there
+is no desktop" below.
+
 
 ## Routing requests with X-Latchkey-Device
 
@@ -52,3 +55,15 @@ If the request is routed to more than one device, the response has the
 not be reached has an `error` field instead of `content_type` and `body`.
 If the request ends up going to a single device, that device's response is
 returned unchanged, without the header.
+
+
+## When there is no desktop
+
+A request that needs a desktop (a notification, the user's files, a command on
+their computer) is answered `503` with `No desktop has announced itself to this
+machine` when none is connected. The user may only be using Imbue Studio in a
+browser, with no desktop app at all, so this is not something to wait out or
+retry. Tell the user once, in plain words, that this needs the Imbue Studio
+desktop app running on their computer, and do not call a feature that needs a
+desktop again in the same conversation unless the user says the app is now
+running. Everything that does not need their computer still works.

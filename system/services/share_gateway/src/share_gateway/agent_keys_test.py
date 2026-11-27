@@ -7,8 +7,8 @@ from share_grants.agent_grants import fingerprint_of_public_key_line
 from share_gateway.agent_keys import AgentKeyError
 from share_gateway.agent_keys import canonical_public_key_line
 
-# The public key and fingerprint of the owner-exec profile's shared test vectors, so the fingerprint rule here is
-# checked against the one the daemon uses as keyid.
+# A public key and the fingerprint ``ssh-keygen -lf`` prints for it, so the fingerprint rule here is checked against
+# OpenSSH's.
 _VECTOR_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIqI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c"
 _VECTOR_FINGERPRINT = "SHA256:fe85JkIjo8VPe+XqXJGH5Mau1EMFdK1OdKvJUFicyA8"
 

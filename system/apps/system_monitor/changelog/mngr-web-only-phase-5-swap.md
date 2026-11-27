@@ -1,0 +1,1 @@
+- The System Monitor no longer carries a name ("Web access") for the `owner-exec` program, which a workspace no longer runs.

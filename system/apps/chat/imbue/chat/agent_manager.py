@@ -4836,13 +4836,13 @@ class AgentManager:
         (``chat_seed.first_run_start_suggestions``).
         """
         explicit_title = explicit_chat_name(title)
-        if is_first_run:
-            mark_provider_step_pending(self._chat_files_root)
         with self._lock:
             provisional = self._seed_chat_locked(
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
             )
             if is_first_run:
+                # Only once the chat is this seed's: a taken title owes nothing for the chat that wears it.
+                mark_provider_step_pending(self._chat_files_root)
                 chat_dir = self._chat_files_root / provisional.chat_id
                 write_first_run_context(chat_dir, first_run_context)
                 write_first_run_tree_step(chat_dir, FirstRunTreeStep.START)

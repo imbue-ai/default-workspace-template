@@ -12,6 +12,8 @@ record: it lives in the connector, and a service that needs it looks it up by
 
 import json
 
+from share_gateway.web_client import WEB_CLIENT_MARK_FIELD
+
 BEARER_PREFIX = "Bearer "
 
 IDENTITY_HEADER = "X-Imbue-Identity"
@@ -34,13 +36,19 @@ class RequesterIdentity:
         return f"RequesterIdentity({vars(self)!r})"
 
 
-def render_identity_header(identity: RequesterIdentity) -> str:
-    """The compact JSON value of ``X-Imbue-Identity`` for a verified requester."""
+def render_identity_header(identity: RequesterIdentity, is_from_web_client: bool) -> str:
+    """The compact JSON value of ``X-Imbue-Identity`` for a verified requester.
+
+    ``is_from_web_client`` adds the gateway's word that the hosted web client's page sent the request
+    (``share_gateway.web_client``); a request it does not hold for carries no such field.
+    """
     document: dict[str, object] = {
         "owner": identity.is_owner,
         "user_id": identity.user_id,
         "email": identity.email,
     }
+    if is_from_web_client:
+        document[WEB_CLIENT_MARK_FIELD] = True
     return json.dumps(document, separators=(",", ":"), ensure_ascii=True)
 
 

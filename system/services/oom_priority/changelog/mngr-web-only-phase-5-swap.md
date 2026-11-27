@@ -1,0 +1,1 @@
+- Removed the `owner-exec` service band. The terminal is now the least expendable service.

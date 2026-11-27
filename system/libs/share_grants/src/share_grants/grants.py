@@ -28,6 +28,7 @@ Imbue Studio desktop through ``mngr exec`` -- holds the same ``flock`` on the si
 import fcntl
 import json
 import os
+import re
 import tomllib
 from collections.abc import Generator
 from collections.abc import Set as AbstractSet
@@ -36,6 +37,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from share_grants.json_values import is_json_object
+
+_BARE_TOML_KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class GrantsError(ValueError):
@@ -178,9 +181,8 @@ def _toml_string_array(values: set[str]) -> str:
 
 
 def _toml_key(name: str) -> str:
-    if name.replace("-", "").replace("_", "").isalnum():
-        return name
-    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """``name`` as a TOML key: bare where TOML allows it (ASCII letters, digits, ``-`` and ``_``), else quoted."""
+    return name if _BARE_TOML_KEY_PATTERN.fullmatch(name) else toml_string(name)
 
 
 def _render_grant_list(grant_list: GrantList) -> list[str]:

@@ -408,7 +408,7 @@ The daily routines-only check is a second definition later, `caretaker-routines.
 - A command is its words when the shell would only split it; one with quoting, operators or expansions runs through the entry's `SHELL` (else `/bin/sh`) as the text cron ran.
   `\%` is a literal `%`; a line whose bare `%` feeds the command input is left in place.
 - Both copies of every converted entry are removed.
-- The Imbue Studio app's `update-self-dispatch` entry stays with cron, untouched: the app rewrites it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
+- The update dispatcher's `update-self-dispatch` entry stays with cron, untouched: the bootstrap writes it at every boot, and the shell's update routes (and an Imbue Studio app from before them) rewrite it whenever an update is armed, so a routine of it would run beside the cron line rather than replace it.
 
 The bootstrap runs it at every boot, after the first-boot commit and before writing the tick entry; it is a no-op once nothing is left, and the recovery guard is never touched.
 The definitions it writes are committed as every definition write is (section 4), one commit per definition; a commit the index refuses leaves the file written and the entry converted, as for any write.

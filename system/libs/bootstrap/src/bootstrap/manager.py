@@ -49,13 +49,14 @@ STATE_DIR = Path("data/.state")
 # existed: what `routines migrate-cron` could not convert stays here, and the
 # bootstrap installs it into /etc/cron.d (on the container rootfs, lost when
 # the container is recreated) at each boot. Scheduled work is otherwise a
-# routine; nothing new is written here.
+# routine; nothing new is written here but the update dispatcher's own line.
 RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # cron silently ignores drop-ins with dots or other odd characters in their
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# The user's timezone, written once by the client that created the workspace
+# The user's timezone, written once: by the boot itself from the initial data
+# the workspace was handed at create, or by a client's request to the shell
 # (the user-profile-state spec, section 8.4; the old boot-time fetch cached the
 # same file). /etc/localtime lives on the container rootfs and is lost when the
 # container is recreated, so each boot re-applies this instead of leaving the
@@ -79,6 +80,23 @@ UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
 # written straight into /etc/cron.d at every boot.
 ROUTINES_TICK_CRON_NAME = "routines"
 ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
+# The entry that writes the update dispatcher's cron line (``update-self-dispatch``): its durable
+# copy under RUNTIME_CRON_DIR and its live copy. The line is the update library's own
+# (system/libs/workspace_update_control), which the shell's update routes write it through too.
+# own-process: other-tier -- the boot re-syncs the venv after this process started, and the entry needs none
+UPDATE_DISPATCHER_CRON_SCRIPT = Path("system/scripts/install_update_dispatcher_cron.py")
+_UPDATE_DISPATCHER_CRON_TIMEOUT_SECONDS = 60.0
+# The entry every writer of the app registry goes through; ``--remove --name <app>`` drops a row.
+# own-process: other-tier -- the boot re-syncs the venv after this process started, and the entry needs none
+APP_REGISTRATION_SCRIPT = Path("system/scripts/forward_port.py")
+_APP_REGISTRATION_TIMEOUT_SECONDS = 60.0
+# What the owner-exec daemon and the VM exec service kept in a workspace: a registry row each,
+# registered with no program, so the update's pruning of rows whose program the tree dropped
+# passes them by, and the daemon's rendered configuration.
+# CLEANUP: remove these, ``_remove_retired_registrations`` and its call once every workspace has
+# booted a release without the owner-exec daemon.
+RETIRED_REGISTRY_ROWS = ("owner-exec", "vm-exec")
+RETIRED_STATE_FILES = (STATE_DIR / "owner_exec_inner.toml",)
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
 # /run/lock, so `flock` there fails and the guard never runs.
@@ -113,6 +131,9 @@ _LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
 # system_interface's ``DEFAULT_STATE_DIRECTORY``, spelled out rather than imported to keep this
 # first-boot program's dependencies minimal.
 OFFER_TOUR_SIGNAL = STATE_DIR / "system_interface" / "offer_tour"
+# Tells the chat app that this workspace owes its owner a welcome chat (its
+# ``first_boot_welcome.OWES_WELCOME_CHAT_RELATIVE_PATH``), which that app opens and then removes this.
+OWE_WELCOME_CHAT_SIGNAL = STATE_DIR / "chat" / "owes_welcome_chat"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -230,6 +251,17 @@ def _offer_tour_on_first_boot() -> None:
     if _is_main_branch_initialized():
         return
     _touch(OFFER_TOUR_SIGNAL)
+
+
+def _owe_welcome_chat_on_first_boot() -> None:
+    """Mark a workspace booting for the first time as owing its owner a welcome chat, which the chat app opens.
+
+    The workspace opens it for itself, so it does not depend on which client created the workspace, or on any
+    client being there. Must run before ``_initialize_workspace_main_branch``, as the tour's signal must.
+    """
+    if _is_main_branch_initialized():
+        return
+    _touch(OWE_WELCOME_CHAT_SIGNAL)
 
 
 def _initialize_workspace_main_branch() -> None:
@@ -389,9 +421,10 @@ def _set_container_timezone(
 ) -> None:
     """Apply the user timezone the file under ``data/.state`` names, when there is one.
 
-    The creating client writes the file exactly once, when the workspace is made
-    (the user-profile-state spec, section 8.4); a workspace created by an older
-    client holds whatever the old boot-time fetch last cached there. Best-effort
+    The file is written exactly once, when the workspace is made: by this boot's
+    ``_apply_initial_data`` from the document the creator left, or by a client's
+    request (the user-profile-state spec, section 8.4); a workspace created by an
+    older client holds whatever the old boot-time fetch last cached there. Best-effort
     throughout: an absent or unreadable file leaves the container on its
     current zone, never raises.
     """
@@ -540,6 +573,37 @@ def _migrate_cron_entries_to_routines() -> None:
             logger.warning("routines migrate-cron: {}", line)
 
 
+def _write_update_dispatcher_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Have the update library write its dispatcher's cron line, at every boot.
+
+    The dispatcher's minute is what arms a workspace's own updates and starts a scheduled one. The
+    shell's update routes write the line only when a client arms or starts an update, and the boot
+    writes it for a workspace no client has asked anything of. It is the same line under the same
+    name, written by the same code, so there is one of it either way.
+
+    Best-effort like every entry here: the boot must reach supervisord.
+    """
+    try:
+        completed = subprocess.run(
+            ["python3", str(UPDATE_DISPATCHER_CRON_SCRIPT), str(target_dir)],
+            capture_output=True,
+            text=True,
+            timeout=_UPDATE_DISPATCHER_CRON_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("Skipped the update dispatcher's cron entry: {}", e)
+        return
+    if completed.returncode != 0:
+        logger.warning(
+            "The update dispatcher's cron entry was not installed (exit {}): {}",
+            completed.returncode,
+            (completed.stderr or completed.stdout).strip(),
+        )
+        return
+    logger.info("Installed the update dispatcher's cron entry into {}", target_dir)
+
+
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
 
@@ -566,6 +630,42 @@ def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> Non
             logger.warning("Failed to install cron entry {}: {}", entry.name, e)
             continue
         logger.info("Installed cron entry {} into {}", entry.name, target_dir)
+
+
+def _remove_retired_registrations() -> None:
+    """Drop the registry rows and the state files of programs this release does not run.
+
+    Nothing starts those programs, so nothing else would ever take their rows out, and a row keeps
+    an origin on the share with nothing behind it. Runs before supervisord starts, so the share
+    gateway and the shell first read a registry without them. A name with no row is a no-op for
+    the registration entry, which makes this safe at every boot.
+
+    Best-effort like the cron entries: the boot must reach supervisord.
+    """
+    for name in RETIRED_REGISTRY_ROWS:
+        try:
+            completed = subprocess.run(
+                ["python3", str(APP_REGISTRATION_SCRIPT), "--remove", "--name", name],
+                capture_output=True,
+                text=True,
+                timeout=_APP_REGISTRATION_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning("Could not remove the registry row of {}: {}", name, e)
+            continue
+        if completed.returncode != 0:
+            logger.warning(
+                "Could not remove the registry row of {} (exit {}): {}",
+                name,
+                completed.returncode,
+                (completed.stderr or completed.stdout).strip(),
+            )
+    for state_file in RETIRED_STATE_FILES:
+        try:
+            state_file.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not remove {}: {}", state_file, e)
 
 
 def _ensure_supervisor_log_dir() -> None:
@@ -624,6 +724,50 @@ def _sync_workspace_venv() -> None:
         )
         return
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+
+
+# Bound on applying the initial data: a handful of small files written from one document.
+_INITIAL_DATA_TIMEOUT_SECONDS = 120.0
+
+
+def _apply_initial_data(timeout_seconds: float = _INITIAL_DATA_TIMEOUT_SECONDS) -> None:
+    """Apply the document whoever created the workspace left in the host dir, when there is one.
+
+    The entry (``apply-initial-data``, system/libs/workspace_initial_data) writes the profile snapshot,
+    the timezone, the update settings and the backup destination the document carries, records how
+    that went under ``data/.state/initial_data/``, and deletes the document once it is applied.
+
+    Every start, not the first boot: a pool host's first boot is over when it is baked, before it
+    has an owner, and its document is written when it is adopted, before its services are started
+    again. The document being there is the whole trigger, so a boot with none costs one process.
+
+    Runs after the venv converge, since the entry needs the workspace's packages, and before
+    ``_set_container_timezone``, so a timezone the document carries is in force from this very boot.
+    Best-effort: the entry records why a document could not be applied and leaves it for the next
+    boot, and the shell's status route says so to whoever is waiting on the create.
+    """
+    try:
+        # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
+        completed = subprocess.run(
+            ["uv", "run", "--no-sync", "apply-initial-data"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("The initial data could not be applied ({}); continuing boot", e)
+        return
+    if completed.returncode != 0:
+        logger.error(
+            "Applying the initial data failed (rc={}); continuing boot: {}",
+            completed.returncode,
+            (completed.stderr or completed.stdout).strip()[-500:],
+        )
+        return
+    for line in completed.stderr.splitlines():
+        if line.strip():
+            logger.info("apply-initial-data: {}", line)
 
 
 def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
@@ -955,7 +1099,8 @@ def main() -> None:
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
-    # Then, on a first boot only, mark the workspace new so the shell offers its tour.
+    # Then, on a first boot only, mark the workspace new so the shell offers its tour and the
+    # chat app opens its welcome chat.
     # Then commit the rsynced template and put the work_dir on `main`. Its OWN one-shot
     # signal: "does this workspace have a main branch" and "does it have a chat" are
     # different questions with different answers, so they cannot share one.
@@ -964,6 +1109,7 @@ def main() -> None:
     ):
         _ensure_git_identity()
         _offer_tour_on_first_boot()
+        _owe_welcome_chat_on_first_boot()
         _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
@@ -971,6 +1117,12 @@ def main() -> None:
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
         _sync_workspace_venv()
+
+    # Apply what the workspace was handed when it was created, on whichever boot
+    # finds it. After the venv converge, which the entry needs, and before the
+    # clock is set, so the timezone it carries is the one this boot applies.
+    with _bootstrap_step("apply_initial_data", "Applying the workspace's settings"):
+        _apply_initial_data()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the
@@ -998,7 +1150,11 @@ def main() -> None:
         _write_update_recovery_cron_entry()
         _migrate_cron_entries_to_routines()
         _write_routines_tick_cron_entry()
+        _write_update_dispatcher_cron_entry()
         _install_runtime_cron_entries()
+
+    # The share gateway and the shell read the registry as soon as supervisord starts them.
+    _remove_retired_registrations()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every

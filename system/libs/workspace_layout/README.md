@@ -82,7 +82,11 @@ answer shapes live in one place the shell and its callers share.
   read by its header, and a header-less one is admitted from loopback alone,
   under a loopback `Host` (`is_loopback_address`, `is_loopback_host`,
   `is_from_another_origin`), because the workspace's own browser is on loopback
-  too. `app_schema.request_guard` installs it on every app's Flask app.
+  too. One page of another origin is admitted: the hosted web client's, on a
+  route its app names as callable from there (`is_web_client_route`), when the
+  identity carries the share gateway's word that the page sent the request
+  (`is_from_web_client`, read by `is_vouched_web_client_request`).
+  `app_schema.request_guard` installs it on every app's Flask app.
 - `workspace_layout.roster`: the roster the shell answers at `GET /api/roster`
   and pushes as `roster_updated` (the multiplayer spec, section 4.2):
   `RosterParticipant` and `RosterDocument`, `handle_of_name` and

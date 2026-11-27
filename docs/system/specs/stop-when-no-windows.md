@@ -119,7 +119,7 @@ The `app` object of contracts section 5.5 gains `stop_when_no_windows` (a boolea
 
 An app is **stoppable** exactly when the shell's stop route would act on it: its row carries a `program`, it is not critical, and its program is not a critical app's program (the existing rule in `routes.py` and `isAppStoppable`).
 An app is **parkable** when it is stoppable and its registered URL names a loopback host (`127.0.0.1`, `localhost`, or `::1`) with an explicit port.
-Rows with no `program` (`owner-exec`, the VM exec service, previews) are never parked and never stopped.
+Rows with no `program` (previews, isolated test servers) are never parked and never stopped.
 
 ### 5.2 The parker
 

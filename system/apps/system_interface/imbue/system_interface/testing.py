@@ -226,6 +226,7 @@ def build_test_state(
     is started, and a POST launch wakes a stopped app (off by default, so no test parks a port or starts a
     program by accident), with the grace period and idle sweep interval given. ``workspace_environ`` is the
     environment the workspace's name is read from (none by default, so no test reads the machine's mngr records).
+    The backup lease is kept under the state directory, so no test reads the machine's ``/run``.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (
@@ -298,6 +299,7 @@ def build_test_state(
         roster_announcer=roster_announcer,
         roster_watch=RosterWatch(watched_paths=(), announce=roster_announcer.announce),
         workspace_name=workspace_name,
+        backup_lease_path=state_directory / "backup-operation.lease",
     )
 
 
