@@ -76,10 +76,14 @@ the user's own storage is refused.
   kept for it.
 
 Because the request is on disk, `backup-setup` takes its work up again whenever it
-starts. To make it forget a setup it has not finished (a restore does, so a
-workspace restored from a snapshot taken during a change of destination does not
-take that change up again), delete `state.json` and `restic.env.pending` while the
-program is stopped; the `restic.env` then in place is taken as the destination.
+starts. To make it forget a setup it has not finished, remove `state.json` and
+`restic.env.pending` while the program is stopped; the `restic.env` then in place
+is taken as the destination. A pending file that names a repository and a
+password is not deleted for that: it is kept aside as `restic.env.<timestamp>`,
+since the repository may already be initialised with that password, and the
+workspace finds it there when the repository is named again. The Imbue Studio
+desktop's restore does all of this, so a workspace restored from a snapshot taken
+during a change of destination does not take that change up again.
 
 ## A `restic.env` the program did not write
 
