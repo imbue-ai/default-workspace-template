@@ -76,7 +76,11 @@ needs a directory put on `sys.path`, and each stub says which. See
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
   skill), `seed_welcome_chat.py` (open the workspace's first chat on the
   conversation the Imbue Studio app had before the workspace existed; run through
-  `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
+  `mngr exec` by the Imbue Studio app), `backup_lease.py` (take, renew, give
+  back, read, or hold around a command the backup lease, the file under `/run`
+  that keeps two backup operations apart; the workspace's own backup setup
+  takes it, and the Imbue Studio app's restore, backup-service update and
+  backup-store migration run this through `mngr exec`), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`,
@@ -86,6 +90,12 @@ needs a directory put on `sys.path`, and each stub says which. See
   after a restart docker made on its own; it records the restart as a
   `container_restarted` event through
   `workspace_bare_scripts/record_container_restart.py`).
+- The update dispatcher's tick: `update_dispatcher_tick.py`, one minute of
+  `system/libs/workspace_update_control`'s dispatcher, which the
+  `update-self-dispatch` cron line runs from the workspace root with the system
+  `python3`. The shell's update routes write that line, and so does
+  `install_update_dispatcher_cron.py`, which the bootstrap runs at every boot
+  with the directory cron reads its drop-ins from.
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`. A changelog
   consolidation branch owes no entry.
 

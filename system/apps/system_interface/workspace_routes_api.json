@@ -1,0 +1,3485 @@
+{
+  "components": {
+    "schemas": {
+      "BackupCredentials": {
+        "additionalProperties": false,
+        "description": "The credentials the workspace backs up with.",
+        "properties": {
+          "digest": {
+            "description": "The SHA-256, in hex, of that text, which the backup state answers as credentials_digest; '' when there is none",
+            "title": "Digest",
+            "type": "string"
+          },
+          "env_text": {
+            "description": "The whole text of the restic.env in use; '' when there is none",
+            "title": "Env Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "env_text",
+          "digest"
+        ],
+        "title": "BackupCredentials",
+        "type": "object"
+      },
+      "BackupDestinationKind": {
+        "description": "Where a workspace's backups go.",
+        "enum": [
+          "NONE",
+          "IMBUE_CLOUD",
+          "OWN_STORAGE"
+        ],
+        "title": "BackupDestinationKind",
+        "type": "string"
+      },
+      "BackupDestinationRequest": {
+        "additionalProperties": false,
+        "description": "Where the workspace's backups are to go, with the storage that destination needs where the caller has some.",
+        "properties": {
+          "destination": {
+            "description": "NONE, IMBUE_CLOUD or OWN_STORAGE. NONE turns backups off",
+            "title": "Destination",
+            "type": "string"
+          },
+          "imbue_cloud_storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImbueCloudStorage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With IMBUE_CLOUD: the storage the connector issued. Left out, the workspace uses what it kept for the destination, and awaits storage when it kept none"
+          },
+          "own_storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OwnStorage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With OWN_STORAGE: the repository and the variables of its storage. Left out, the workspace uses what it kept for the destination, and awaits storage when it kept none"
+          }
+        },
+        "required": [
+          "destination"
+        ],
+        "title": "BackupDestinationRequest",
+        "type": "object"
+      },
+      "BackupLeaseHolder": {
+        "additionalProperties": false,
+        "description": "Who holds the backup lease, which keeps two backup operations apart.",
+        "properties": {
+          "expires_at": {
+            "description": "When it runs out unless renewed, seconds since the epoch",
+            "title": "Expires At",
+            "type": "number"
+          },
+          "holder": {
+            "description": "'setup' for the workspace's own setup, or the name of a program of the Imbue Studio desktop ('restore', 'backup-service-update', 'store-migration')",
+            "title": "Holder",
+            "type": "string"
+          },
+          "taken_at": {
+            "description": "When it was taken, seconds since the epoch",
+            "title": "Taken At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "holder",
+          "taken_at",
+          "expires_at"
+        ],
+        "title": "BackupLeaseHolder",
+        "type": "object"
+      },
+      "BackupOperationRunningRefusal": {
+        "additionalProperties": false,
+        "description": "A change of the backup destination refused because a backup operation is running.",
+        "properties": {
+          "code": {
+            "description": "An upper-case code naming the refusal or failure, for a caller that acts on it",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What went wrong, in words for the caller",
+            "title": "Detail",
+            "type": "string"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/BackupLeaseHolder",
+            "description": "Who holds the backup lease, and until when"
+          }
+        },
+        "required": [
+          "detail",
+          "code",
+          "lease"
+        ],
+        "title": "BackupOperationRunningRefusal",
+        "type": "object"
+      },
+      "BackupSetupState": {
+        "description": "How the setup of the workspace's backups stands.",
+        "enum": [
+          "NONE",
+          "AWAITING_STORAGE",
+          "INITIALIZING",
+          "READY",
+          "FAILED"
+        ],
+        "title": "BackupSetupState",
+        "type": "string"
+      },
+      "BackupSetupStatus": {
+        "additionalProperties": false,
+        "description": "How the setup stands, as a client reads it.",
+        "properties": {
+          "detail": {
+            "default": "",
+            "description": "What failed, or why storage is awaited, with no credential in it; '' otherwise",
+            "title": "Detail",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When it ended, seconds since the epoch; null while it runs or when there was none",
+            "title": "Finished At"
+          },
+          "retry_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When the workspace tries a failed setup again, seconds since the epoch; null otherwise",
+            "title": "Retry At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When the last attempt began, seconds since the epoch; null when there was none",
+            "title": "Started At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BackupSetupState",
+            "description": "NONE when no destination is chosen; AWAITING_STORAGE when one is and the workspace holds no storage credentials that work for it; INITIALIZING while an attempt runs; READY once restic.env is in place for the destination; FAILED when the last attempt failed"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "BackupSetupStatus",
+        "type": "object"
+      },
+      "BackupState": {
+        "additionalProperties": false,
+        "description": "Everything a client reads about a workspace's backups.",
+        "properties": {
+          "credentials_digest": {
+            "description": "The SHA-256, in hex, of the text of the restic.env in use; '' when there is none",
+            "title": "Credentials Digest",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/BackupDestinationKind",
+            "description": "Where the backups go: NONE, IMBUE_CLOUD or OWN_STORAGE"
+          },
+          "is_configured": {
+            "description": "Whether restic.env is in place, which is what the backup service runs on",
+            "title": "Is Configured",
+            "type": "boolean"
+          },
+          "is_verification_enabled": {
+            "description": "Whether a client checks this workspace's backups",
+            "title": "Is Verification Enabled",
+            "type": "boolean"
+          },
+          "lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupLeaseHolder"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who holds the backup lease; null when nobody does"
+          },
+          "repository": {
+            "description": "The address of the destination's repository, with any credential in it taken out; '' when there is none or the workspace does not know it yet",
+            "title": "Repository",
+            "type": "string"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/BackupSetupStatus",
+            "description": "How the setup of that destination stands"
+          }
+        },
+        "required": [
+          "destination",
+          "setup",
+          "is_configured",
+          "is_verification_enabled",
+          "repository",
+          "credentials_digest",
+          "lease"
+        ],
+        "title": "BackupState",
+        "type": "object"
+      },
+      "BackupVerificationModel": {
+        "additionalProperties": false,
+        "description": "Whether a client checks this workspace's backups.",
+        "properties": {
+          "is_enabled": {
+            "description": "Whether backup verification is on",
+            "title": "Is Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_enabled"
+        ],
+        "title": "BackupVerificationModel",
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": false,
+        "description": "What every route answers on a refusal or a failure: one line saying what went wrong.",
+        "properties": {
+          "detail": {
+            "description": "What went wrong, in words for the caller",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "GrantListModel": {
+        "additionalProperties": false,
+        "description": "One sharing scope's allow-list: user ids, exact emails (invitations), and whole email domains.",
+        "properties": {
+          "email_domains": {
+            "default": [],
+            "description": "Whole email domains granted access",
+            "items": {
+              "type": "string"
+            },
+            "title": "Email Domains",
+            "type": "array"
+          },
+          "emails": {
+            "default": [],
+            "description": "Exact email addresses granted access; the gateway turns each into a user id",
+            "items": {
+              "type": "string"
+            },
+            "title": "Emails",
+            "type": "array"
+          },
+          "users": {
+            "default": [],
+            "description": "User ids granted access (matched before emails)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "title": "GrantListModel",
+        "type": "object"
+      },
+      "GrantRefusalEntry": {
+        "additionalProperties": false,
+        "description": "One entry a grants document may not carry, and why.",
+        "properties": {
+          "kind": {
+            "description": "'user', 'email' or 'email_domain'",
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "description": "Why the entry was refused",
+            "title": "Message",
+            "type": "string"
+          },
+          "scope": {
+            "description": "'workspace', or the name of the app whose list carried the entry",
+            "title": "Scope",
+            "type": "string"
+          },
+          "value": {
+            "description": "The entry exactly as the caller sent it",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "kind",
+          "value",
+          "message"
+        ],
+        "title": "GrantRefusalEntry",
+        "type": "object"
+      },
+      "GrantedIdentityModel": {
+        "additionalProperties": false,
+        "description": "What the client knows of one granted account: what the shell names it from before it first arrives.",
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The account's display name; null when the client knows none",
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The account's email; null when the client knows none",
+            "title": "Email"
+          }
+        },
+        "title": "GrantedIdentityModel",
+        "type": "object"
+      },
+      "GrantsDocumentModel": {
+        "additionalProperties": false,
+        "description": "The whole grants document, in the shape of ``share_grants.toml``.",
+        "properties": {
+          "services": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GrantListModel"
+            },
+            "description": "Who is admitted to one app alone, by the app's name",
+            "title": "Services",
+            "type": "object"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/GrantListModel",
+            "description": "Who is admitted to the whole workspace"
+          }
+        },
+        "title": "GrantsDocumentModel",
+        "type": "object"
+      },
+      "GrantsStoredResponse": {
+        "additionalProperties": false,
+        "description": "The grants document as it was stored: trimmed, lowercased, and each list in order.",
+        "properties": {
+          "grants": {
+            "$ref": "#/components/schemas/GrantsDocumentModel",
+            "description": "The stored document"
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "title": "GrantsStoredResponse",
+        "type": "object"
+      },
+      "ImbueCloudStorage": {
+        "additionalProperties": false,
+        "description": "The storage Imbue Cloud issued for this workspace: what the connector's ``POST /backups/repositories``\nanswers.",
+        "properties": {
+          "repository_url": {
+            "description": "The repository's address at the backup store, a rest: address",
+            "title": "Repository Url",
+            "type": "string"
+          },
+          "rest_password": {
+            "description": "The store's token for the repository",
+            "format": "password",
+            "title": "Rest Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "rest_username": {
+            "description": "The user name restic signs in to the store with",
+            "title": "Rest Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_url",
+          "rest_username",
+          "rest_password"
+        ],
+        "title": "ImbueCloudStorage",
+        "type": "object"
+      },
+      "InitialDataState": {
+        "enum": [
+          "NONE",
+          "APPLIED",
+          "FAILED"
+        ],
+        "title": "InitialDataState",
+        "type": "string"
+      },
+      "InitialDataStatus": {
+        "additionalProperties": false,
+        "description": "How the workspace's initial data stands.",
+        "properties": {
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was applied, seconds since the epoch; null unless APPLIED",
+            "title": "Applied At"
+          },
+          "detail": {
+            "description": "Why, for FAILED, naming each part that is not written; '' otherwise",
+            "title": "Detail",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InitialDataState",
+            "description": "NONE when the workspace found no document and has applied none, APPLIED when every part of one was written, FAILED when some part of one is not written: the next start of the workspace's services tries the parts that were refused again, and writes no part a second time"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "applied_at"
+        ],
+        "title": "InitialDataStatus",
+        "type": "object"
+      },
+      "InvalidGrantsError": {
+        "additionalProperties": false,
+        "description": "A grants document whose shape is wrong: every entry refused, so a client can mark each row.",
+        "properties": {
+          "code": {
+            "description": "An upper-case code naming the refusal or failure, for a caller that acts on it",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What went wrong, in words for the caller",
+            "title": "Detail",
+            "type": "string"
+          },
+          "refusals": {
+            "description": "The entries refused, workspace scope first",
+            "items": {
+              "$ref": "#/components/schemas/GrantRefusalEntry"
+            },
+            "title": "Refusals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail",
+          "code",
+          "refusals"
+        ],
+        "title": "InvalidGrantsError",
+        "type": "object"
+      },
+      "OwnStorage": {
+        "additionalProperties": false,
+        "description": "Storage of the user's own.",
+        "properties": {
+          "backend_env": {
+            "additionalProperties": {
+              "format": "password",
+              "type": "string",
+              "writeOnly": true
+            },
+            "description": "The variables of the storage as the user typed them (its access keys and the like). The repository's password is not among them: the workspace makes it",
+            "title": "Backend Env",
+            "type": "object"
+          },
+          "repository": {
+            "description": "The repository's address, as restic takes one",
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "title": "OwnStorage",
+        "type": "object"
+      },
+      "ProfileSnapshotRequest": {
+        "additionalProperties": true,
+        "description": "The profile snapshot to write, as it is: its header fields, and whatever settings it carries beside them.",
+        "properties": {
+          "snapshot_format": {
+            "description": "The snapshot's shape version; one newer than this template is kept",
+            "title": "Snapshot Format",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshot_format"
+        ],
+        "title": "ProfileSnapshotRequest",
+        "type": "object"
+      },
+      "ProfileWrittenResponse": {
+        "additionalProperties": false,
+        "description": "What writing the profile snapshot answers.",
+        "properties": {
+          "is_written": {
+            "description": "Whether the snapshot was written; false when the one stored already equals the one sent apart from when it was written, which is then left as it is",
+            "title": "Is Written",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_written"
+        ],
+        "title": "ProfileWrittenResponse",
+        "type": "object"
+      },
+      "ReplaceGrantsRequest": {
+        "additionalProperties": false,
+        "description": "The grants to store, whole, with what the client knows of each granted account.",
+        "properties": {
+          "grants": {
+            "$ref": "#/components/schemas/GrantsDocumentModel",
+            "description": "The whole grants document"
+          },
+          "identities": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GrantedIdentityModel"
+            },
+            "description": "Each granted account's email and display name, by user id",
+            "title": "Identities",
+            "type": "object"
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "title": "ReplaceGrantsRequest",
+        "type": "object"
+      },
+      "ShareableApp": {
+        "additionalProperties": false,
+        "description": "One app of the workspace that can be shared by itself.",
+        "properties": {
+          "display_name": {
+            "description": "What a person reads for the app; '' when it registered without one",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "is_system": {
+            "description": "Whether the app is part of the workspace itself rather than built on it, which a sharing panel lists apart from the apps it offers up front",
+            "title": "Is System",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "The app's origin label, the first part of its share address; '' for an app that has none yet",
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "description": "The app's registered name, which its grants are keyed by",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "display_name",
+          "is_system"
+        ],
+        "title": "ShareableApp",
+        "type": "object"
+      },
+      "SharingStateResponse": {
+        "additionalProperties": false,
+        "description": "Whether the workspace holds share materials, its grants, and the apps that can be shared.",
+        "properties": {
+          "grants": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantsDocumentModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The grants document; null when there is no grants file, or it holds something else, so that a save replaces it"
+          },
+          "grants_error": {
+            "description": "'UNREADABLE' when the grants file is there and cannot be read; '' otherwise",
+            "title": "Grants Error",
+            "type": "string"
+          },
+          "is_shared": {
+            "description": "Whether share.env exists, the share stack's on-switch",
+            "title": "Is Shared",
+            "type": "boolean"
+          },
+          "shareable_apps": {
+            "description": "The registered apps that are not internal, in the registry's order: each can be shared by itself, and an internal app is reached only through a share of the whole workspace",
+            "items": {
+              "$ref": "#/components/schemas/ShareableApp"
+            },
+            "title": "Shareable Apps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "is_shared",
+          "grants",
+          "grants_error",
+          "shareable_apps"
+        ],
+        "title": "SharingStateResponse",
+        "type": "object"
+      },
+      "SuggestionSettingsRequest": {
+        "additionalProperties": false,
+        "description": "The suggestion switches to change. One left out, or null, stays as it is.",
+        "properties": {
+          "is_new_chat_suggestions_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether things to try are offered on a chat with no message yet",
+            "title": "Is New Chat Suggestions Enabled"
+          },
+          "is_next_step_suggestions_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether suggested replies are offered under an agent's reply",
+            "title": "Is Next Step Suggestions Enabled"
+          }
+        },
+        "title": "SuggestionSettingsRequest",
+        "type": "object"
+      },
+      "SuggestionSettingsResponse": {
+        "additionalProperties": false,
+        "description": "The workspace's two suggestion switches, as they stand.",
+        "properties": {
+          "is_new_chat_suggestions_enabled": {
+            "description": "Whether things to try are offered on a chat with no message yet",
+            "title": "Is New Chat Suggestions Enabled",
+            "type": "boolean"
+          },
+          "is_next_step_suggestions_enabled": {
+            "description": "Whether suggested replies are offered under an agent's reply",
+            "title": "Is Next Step Suggestions Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_next_step_suggestions_enabled",
+          "is_new_chat_suggestions_enabled"
+        ],
+        "title": "SuggestionSettingsResponse",
+        "type": "object"
+      },
+      "TimezoneRequest": {
+        "additionalProperties": false,
+        "description": "The user's timezone to record.",
+        "properties": {
+          "is_replacing": {
+            "default": false,
+            "description": "Whether to replace a zone already on record; false writes only when there is none",
+            "title": "Is Replacing",
+            "type": "boolean"
+          },
+          "zone": {
+            "description": "An IANA timezone name",
+            "title": "Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zone"
+        ],
+        "title": "TimezoneRequest",
+        "type": "object"
+      },
+      "TimezoneResponse": {
+        "additionalProperties": false,
+        "description": "The timezone now on record, applied when the container next boots.",
+        "properties": {
+          "is_written": {
+            "description": "Whether this request wrote it",
+            "title": "Is Written",
+            "type": "boolean"
+          },
+          "zone": {
+            "description": "The zone now recorded",
+            "title": "Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zone",
+          "is_written"
+        ],
+        "title": "TimezoneResponse",
+        "type": "object"
+      },
+      "UpdateBusyChat": {
+        "additionalProperties": false,
+        "description": "One chat waiting on background tasks.",
+        "properties": {
+          "agent_id": {
+            "description": "The chat's active agent's id; '' when unknown",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_name": {
+            "description": "The chat's active agent's name; '' when unknown",
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "chat_id": {
+            "description": "The chat",
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "is_busy": {
+            "description": "Whether a task still pending will start the agent's next turn",
+            "title": "Is Busy",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chat_id",
+          "agent_id",
+          "agent_name",
+          "is_busy"
+        ],
+        "title": "UpdateBusyChat",
+        "type": "object"
+      },
+      "UpdateChannelVersion": {
+        "additionalProperties": false,
+        "description": "The version the workspace's release channel is on, as the workspace last read it off the feed.",
+        "properties": {
+          "channel": {
+            "description": "The channel that was read",
+            "title": "Channel",
+            "type": "string"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When the channel's file was last asked for, whether or not it could be read",
+            "title": "Checked At"
+          },
+          "error": {
+            "default": "",
+            "description": "Why the last read failed; '' when it succeeded. A failed read keeps the last version",
+            "title": "Error",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When that version was read, seconds since the epoch; null when none was",
+            "title": "Read At"
+          },
+          "template_ref": {
+            "description": "The version the channel's file named; '' when no read has succeeded",
+            "title": "Template Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "template_ref"
+        ],
+        "title": "UpdateChannelVersion",
+        "type": "object"
+      },
+      "UpdateDismissalsRequest": {
+        "additionalProperties": false,
+        "description": "Which run's note or outcome the user dismissed, by the run's start.",
+        "properties": {
+          "note_run_started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The start of the run whose note was dismissed, seconds since the epoch",
+            "title": "Note Run Started At"
+          },
+          "outcome_run_started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The start of the run whose outcome was dismissed, seconds since the epoch",
+            "title": "Outcome Run Started At"
+          }
+        },
+        "title": "UpdateDismissalsRequest",
+        "type": "object"
+      },
+      "UpdateDismissalsResponse": {
+        "additionalProperties": false,
+        "description": "What recording a dismissal answers.",
+        "properties": {
+          "dismissals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The dismissals file as it now stands; null when none",
+            "title": "Dismissals"
+          }
+        },
+        "required": [
+          "dismissals"
+        ],
+        "title": "UpdateDismissalsResponse",
+        "type": "object"
+      },
+      "UpdateLivenessAgent": {
+        "additionalProperties": false,
+        "description": "One of the workspace's agents, as the observer's event file lists it.",
+        "properties": {
+          "agent_id": {
+            "description": "Its id",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "chat_id": {
+            "description": "The chat it takes messages for, when it is labelled with one; '' otherwise",
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The agent's name",
+            "title": "Name",
+            "type": "string"
+          },
+          "state": {
+            "description": "Its lifecycle state as mngr reports it; '' when the file does not say",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "agent_id",
+          "chat_id"
+        ],
+        "title": "UpdateLivenessAgent",
+        "type": "object"
+      },
+      "UpdateLivenessResponse": {
+        "additionalProperties": false,
+        "description": "What tells whether a running update is still alive, in one answer.",
+        "properties": {
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UpdateLivenessAgent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The workspace's agents; null when they could not be read, which a caller counts as alive",
+            "title": "Agents"
+          },
+          "busy_chats": {
+            "description": "The chats waiting on background tasks",
+            "items": {
+              "$ref": "#/components/schemas/UpdateBusyChat"
+            },
+            "title": "Busy Chats",
+            "type": "array"
+          },
+          "is_watchdog_installed": {
+            "description": "Whether the dispatcher's cron line is installed, so a stopped lead is brought back",
+            "title": "Is Watchdog Installed",
+            "type": "boolean"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest run's record; null when there is none",
+            "title": "Run"
+          }
+        },
+        "required": [
+          "run",
+          "agents",
+          "busy_chats",
+          "is_watchdog_installed"
+        ],
+        "title": "UpdateLivenessResponse",
+        "type": "object"
+      },
+      "UpdateOutcomeResponse": {
+        "additionalProperties": false,
+        "description": "What starting an update or arming a schedule came to.\n\n``outcome`` is one of ``STARTING``, ``CREATED``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``,\n``CHAT_APP_UNREACHABLE``, ``CREATE_FAILED``, ``NO_CRON`` and ``TOO_OLD_TO_UPDATE``; a later template may add one.\nA request that left its version or its window to the workspace may also be answered ``NO_CHANNEL_VERSION`` (the\nworkspace has read no version for its release channel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).",
+        "properties": {
+          "attempt_id": {
+            "default": "",
+            "description": "The start attempt a STARTING began (or one already under way); '' otherwise",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "chat_agent_name": {
+            "default": "",
+            "description": "The update's chat an ALREADY_RUNNING names; '' otherwise",
+            "title": "Chat Agent Name",
+            "type": "string"
+          },
+          "chat_id": {
+            "default": "",
+            "description": "That chat's id, for opening it; '' when unknown",
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "description": "One line about it",
+            "title": "Detail",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "What the request came to",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "run_started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When an ALREADY_RUNNING run began, seconds since the epoch; null when unsaid",
+            "title": "Run Started At"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The schedule file as arming left it; null for a start",
+            "title": "Schedule"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "UpdateOutcomeResponse",
+        "type": "object"
+      },
+      "UpdateScheduleCancelledResponse": {
+        "additionalProperties": false,
+        "description": "What cancelling the schedule answers.",
+        "properties": {
+          "is_cancelled": {
+            "description": "Whether there was a schedule to cancel",
+            "title": "Is Cancelled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_cancelled"
+        ],
+        "title": "UpdateScheduleCancelledResponse",
+        "type": "object"
+      },
+      "UpdateScheduleRefreshRequest": {
+        "additionalProperties": false,
+        "description": "The values a refresh rewrites in an armed schedule. Each one left out is rewritten with the workspace's own.",
+        "properties": {
+          "ceiling": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The newest template version the client knows; an update goes no further. Left out, it is the version the workspace's release channel is on, and only a client from before the workspace read that itself names one",
+            "title": "Ceiling"
+          },
+          "is_backup_configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether the client holds backup credentials for the workspace. Left out, it is whether the workspace holds them",
+            "title": "Is Backup Configured"
+          },
+          "window_length_minutes": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1440,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How long the window stays open; given with the start or not at all",
+            "title": "Window Length Minutes"
+          },
+          "window_start_minute_utc": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1440,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Minutes past UTC midnight the update window opens at. Left out with the length, the window is the update settings', in the workspace's timezone",
+            "title": "Window Start Minute Utc"
+          }
+        },
+        "title": "UpdateScheduleRefreshRequest",
+        "type": "object"
+      },
+      "UpdateScheduleRefreshedResponse": {
+        "additionalProperties": false,
+        "description": "What refreshing the schedule answers.",
+        "properties": {
+          "is_armed": {
+            "description": "Whether a schedule is armed; a refresh does nothing when none is",
+            "title": "Is Armed",
+            "type": "boolean"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The schedule file as the refresh left it",
+            "title": "Schedule"
+          }
+        },
+        "required": [
+          "is_armed",
+          "schedule"
+        ],
+        "title": "UpdateScheduleRefreshedResponse",
+        "type": "object"
+      },
+      "UpdateScheduleRequest": {
+        "additionalProperties": false,
+        "description": "Everything a schedule is armed with. A value left out is the workspace's own, which it then keeps current.",
+        "properties": {
+          "ceiling": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The newest template version the client knows; an update goes no further. Left out, it is the version the workspace's release channel is on, and only a client from before the workspace read that itself names one",
+            "title": "Ceiling"
+          },
+          "is_auto_armed": {
+            "default": false,
+            "description": "Whether the client armed the schedule by itself, rather than the user",
+            "title": "Is Auto Armed",
+            "type": "boolean"
+          },
+          "is_backup_configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether the client holds backup credentials for the workspace. Left out, it is whether the workspace holds them",
+            "title": "Is Backup Configured"
+          },
+          "override_ref": {
+            "default": "",
+            "description": "A version the user typed; the target is this, or the ceiling",
+            "title": "Override Ref",
+            "type": "string"
+          },
+          "window_length_minutes": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1440,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How long the window stays open; given with the start or not at all",
+            "title": "Window Length Minutes"
+          },
+          "window_start_minute_utc": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1440,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Minutes past UTC midnight the update window opens at. Left out with the length, the window is the update settings', in the workspace's timezone",
+            "title": "Window Start Minute Utc"
+          }
+        },
+        "title": "UpdateScheduleRequest",
+        "type": "object"
+      },
+      "UpdateSettingsModel": {
+        "additionalProperties": false,
+        "description": "The update settings a workspace holds: the release channel it follows, and when it arms its own updates.\n\nThree are the workspace's own, which its owner sets in the workspace's settings: its own answer on arming, and\nits own hours. A request that leaves one of them out keeps the stored value, and one that sends null clears it,\nso a client that writes the account's settings, or one from before a setting existed, cannot wipe an answer the\nowner gave in another client. An answer carries every one of them.",
+        "properties": {
+          "channel": {
+            "description": "The release channel the workspace follows",
+            "minLength": 1,
+            "title": "Channel",
+            "type": "string"
+          },
+          "feed_base_url": {
+            "description": "Where that channel's file is read from (<feed_base_url>/<channel>-web.json); '' on a tier that publishes none, where the workspace reads no version",
+            "title": "Feed Base Url",
+            "type": "string"
+          },
+          "is_auto_update_enabled": {
+            "description": "Whether the account's workspaces arm their own updates",
+            "title": "Is Auto Update Enabled",
+            "type": "boolean"
+          },
+          "is_auto_update_enabled_here": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This workspace's own answer, which wins over the account's; null when it has none. Left out of a request, the stored answer is kept",
+            "title": "Is Auto Update Enabled Here"
+          },
+          "window_end_hour": {
+            "description": "The hour it may no longer start at; an earlier hour than the start is the next day's",
+            "maximum": 23,
+            "minimum": 0,
+            "title": "Window End Hour",
+            "type": "integer"
+          },
+          "window_end_hour_here": {
+            "anyOf": [
+              {
+                "maximum": 23,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This workspace's own end hour; set or null with its start hour. Left out of a request, the stored hour is kept",
+            "title": "Window End Hour Here"
+          },
+          "window_start_hour": {
+            "description": "The hour of the owner's day an armed update may start from, as the account sets it",
+            "maximum": 23,
+            "minimum": 0,
+            "title": "Window Start Hour",
+            "type": "integer"
+          },
+          "window_start_hour_here": {
+            "anyOf": [
+              {
+                "maximum": 23,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This workspace's own start hour, which with its end hour wins over the account's; both are set, or both null when it has none. Left out of a request, the stored hour is kept",
+            "title": "Window Start Hour Here"
+          }
+        },
+        "required": [
+          "channel",
+          "feed_base_url",
+          "is_auto_update_enabled",
+          "window_start_hour",
+          "window_end_hour"
+        ],
+        "title": "UpdateSettingsModel",
+        "type": "object"
+      },
+      "UpdateSkipRequest": {
+        "additionalProperties": false,
+        "description": "The version the user chose to skip for this workspace.",
+        "properties": {
+          "skipped_at": {
+            "description": "When the user chose it, seconds since the epoch; of two skips the later is kept",
+            "title": "Skipped At",
+            "type": "number"
+          },
+          "target_ref": {
+            "description": "The version skipped",
+            "minLength": 1,
+            "title": "Target Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_ref",
+          "skipped_at"
+        ],
+        "title": "UpdateSkipRequest",
+        "type": "object"
+      },
+      "UpdateSkippedResponse": {
+        "additionalProperties": false,
+        "description": "What skipping a version answers.",
+        "properties": {
+          "is_cancelled": {
+            "description": "Whether there was a schedule to cancel",
+            "title": "Is Cancelled",
+            "type": "boolean"
+          },
+          "skipped_target": {
+            "additionalProperties": true,
+            "description": "The skipped-version file as it now stands",
+            "title": "Skipped Target",
+            "type": "object"
+          }
+        },
+        "required": [
+          "is_cancelled",
+          "skipped_target"
+        ],
+        "title": "UpdateSkippedResponse",
+        "type": "object"
+      },
+      "UpdateStartAttempt": {
+        "additionalProperties": false,
+        "description": "The last attempt at starting an update now, and how creating its chat went.",
+        "properties": {
+          "attempt_id": {
+            "description": "The attempt's id, which the start answered",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "chat_agent_name": {
+            "default": "",
+            "description": "The update's chat, once created",
+            "title": "Chat Agent Name",
+            "type": "string"
+          },
+          "chat_id": {
+            "default": "",
+            "description": "That chat's id; '' when unknown",
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "description": "One line about the outcome",
+            "title": "Detail",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When it ended; null while it runs",
+            "title": "Finished At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CREATED, CHAT_APP_UNREACHABLE, CREATE_FAILED or NEEDS_SIGN_IN once the attempt has ended; null while the chat is being created",
+            "title": "Outcome"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "When the attempt began, seconds since the epoch",
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "outcome"
+        ],
+        "title": "UpdateStartAttempt",
+        "type": "object"
+      },
+      "UpdateStartRequest": {
+        "additionalProperties": false,
+        "description": "The values an update started now runs with. Each one left out is the workspace's own.",
+        "properties": {
+          "ceiling": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The newest template version the client knows; an update goes no further. Left out, it is the version the workspace's release channel is on, and only a client from before the workspace read that itself names one",
+            "title": "Ceiling"
+          },
+          "is_backup_configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether the client holds backup credentials for the workspace. Left out, it is whether the workspace holds them",
+            "title": "Is Backup Configured"
+          },
+          "override_ref": {
+            "default": "",
+            "description": "A version the user typed; the target is this, or the ceiling",
+            "title": "Override Ref",
+            "type": "string"
+          }
+        },
+        "title": "UpdateStartRequest",
+        "type": "object"
+      },
+      "UpdateStateResponse": {
+        "additionalProperties": false,
+        "description": "Everything a client reads about the workspace's updates. The files are answered as they are on disk.",
+        "properties": {
+          "channel_version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateChannelVersion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version the settings' channel is on, as the workspace last read it; null when it has read nothing for that channel. The workspace reads it at most once an hour, and this read does not"
+          },
+          "dismissals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The dismissals file; null when none",
+            "title": "Dismissals"
+          },
+          "is_signed_in": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether an AI account is signed in; null unless asked (check_sign_in=1) or the schedule's skip says none was",
+            "title": "Is Signed In"
+          },
+          "last_dispatch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record of the update chat last created",
+            "title": "Last Dispatch"
+          },
+          "last_start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateStartAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The last start attempt; null when there was none"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest run's record; null when there is none",
+            "title": "Run"
+          },
+          "run_chat_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id of the chat the run record names, looked up when the last dispatch does not name it: '' when the workspace lists no such chat, null when there was nothing to look up or the agents could not be read",
+            "title": "Run Chat Id"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The armed schedule's file; null when none is armed",
+            "title": "Schedule"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateSettingsModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The update settings the workspace holds; null when no client has written any"
+          },
+          "skipped_target": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The skipped-version file; null when none",
+            "title": "Skipped Target"
+          }
+        },
+        "required": [
+          "settings",
+          "channel_version",
+          "schedule",
+          "run",
+          "last_dispatch",
+          "run_chat_id",
+          "is_signed_in",
+          "skipped_target",
+          "dismissals",
+          "last_start"
+        ],
+        "title": "UpdateStateResponse",
+        "type": "object"
+      },
+      "WorkspaceApp": {
+        "additionalProperties": false,
+        "description": "One app of the workspace, as a client lists it and draws it.",
+        "properties": {
+          "display_name": {
+            "description": "What a person reads for the app; '' when it registered without one",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "icon": {
+            "description": "The SVG markup the app registered as its icon, as it registered it; '' when it has none. It is the app's own markup, so a client draws it as an image and never as part of its page",
+            "title": "Icon",
+            "type": "string"
+          },
+          "is_system": {
+            "description": "Whether the app is part of the workspace itself rather than built on it, which a sharing panel lists apart from the apps it offers up front",
+            "title": "Is System",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "The app's origin label, the first part of its share address; '' for an app that has none yet",
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "description": "The app's registered name, which its grants are keyed by",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "display_name",
+          "is_system",
+          "icon"
+        ],
+        "title": "WorkspaceApp",
+        "type": "object"
+      },
+      "WorkspaceAppsResponse": {
+        "additionalProperties": false,
+        "description": "The workspace's apps.",
+        "properties": {
+          "apps": {
+            "description": "The registered apps that are not internal, in the registry's order: the apps the sharing read lists as shareable. Those with is_system false are the apps built on the workspace, which a client lists as the workspace's own",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceApp"
+            },
+            "title": "Apps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "apps"
+        ],
+        "title": "WorkspaceAppsResponse",
+        "type": "object"
+      },
+      "WorkspaceRouteError": {
+        "additionalProperties": false,
+        "description": "What a workspace route answers when it refuses a request (4xx) or could not do what it was asked (5xx).",
+        "properties": {
+          "code": {
+            "description": "An upper-case code naming the refusal or failure, for a caller that acts on it",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What went wrong, in words for the caller",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "code"
+        ],
+        "title": "WorkspaceRouteError",
+        "type": "object"
+      },
+      "WorkspaceStatusResponse": {
+        "additionalProperties": false,
+        "description": "What the workspace serves: the version of its checkout, the operations it has a route for, the\ncompatibility number a client checks before it acts inside the workspace, and how the initial data it was\nhanded at create stands.",
+        "properties": {
+          "compatibility": {
+            "description": "The template's compatibility number, raised only by a change an older client could not work with; an answer without it means 1. A client that knows a lower number opens the workspace and runs its lifecycle, and does nothing else inside it",
+            "title": "Compatibility",
+            "type": "integer"
+          },
+          "initial_data": {
+            "$ref": "#/components/schemas/InitialDataStatus",
+            "description": "How the document the workspace was handed when it was created stands: whether its boot found and applied one. An answer without it is a template from before the initial data, which ignores the document"
+          },
+          "operations": {
+            "description": "The name of every operation this workspace serves a route for",
+            "items": {
+              "type": "string"
+            },
+            "title": "Operations",
+            "type": "array"
+          },
+          "schema": {
+            "description": "The shape of this answer; 1",
+            "title": "Schema",
+            "type": "integer"
+          },
+          "template_ref": {
+            "description": "The version of the workspace's checkout: the ref its newest update-self merge names, or its nearest minds-v* tag when there is no such merge or the tag is a newer release; '' when it names none",
+            "title": "Template Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "template_ref",
+          "operations",
+          "compatibility",
+          "initial_data"
+        ],
+        "title": "WorkspaceStatusResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "The state a workspace owns, read and changed over HTTP by a client outside it: its sharing grants, its profile snapshot and timezone, its backup configuration, its updates, its suggestion switches, its apps and its wallpaper.",
+    "title": "Workspace routes",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/workspace/apps": {
+      "get": {
+        "description": "The workspace's apps: every registered app that is not internal, in the registry's order, each with its\nname, its origin label, the name a person reads for it, whether it is part of the workspace itself, and the\nSVG markup of its icon.\n\nThey are the apps the sharing read lists as shareable. Those that are not part of the workspace itself are\nthe apps built on it, which a client lists as the workspace's own. An icon is the app's own markup: a client\ndraws it as an image, so nothing in it runs.",
+        "operationId": "get_api_workspace_apps",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceAppsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The workspace's apps: every registered app that is not internal, in the registry's order, each with its name, its origin label, the name a person reads for it, whether it is part of the workspace itself, and the SVG markup of its icon.",
+        "x-workspace-operation": "apps.read"
+      }
+    },
+    "/api/workspace/backups": {
+      "get": {
+        "description": "Everything a client reads about the workspace's backups: where they go, how the setup of that destination\nstands (with what failed and when the workspace tries again), whether restic.env is in place, the\nverification flag, the repository, the digest of the credentials in use, and who holds the backup lease.",
+        "operationId": "get_api_workspace_backups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupState"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Everything a client reads about the workspace's backups: where they go, how the setup of that destination stands (with what failed and when the workspace tries again), whether restic.env is in place, the verification flag, the repository, the digest of the credentials in use, and who holds the backup lease.",
+        "x-workspace-operation": "backups.read"
+      }
+    },
+    "/api/workspace/backups/credentials": {
+      "get": {
+        "description": "The whole text of the restic.env in use and its digest, both '' when there is none, to the owner alone.\n\nThe workspace makes the repository's password, so this is how an owner's client comes to hold a copy of it:\nit reads the credentials when the digest the backup state answers differs from its own copy's. Anyone but the\nowner is refused with 403 OWNER_ONLY.",
+        "operationId": "get_api_workspace_backups_credentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCredentials"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The whole text of the restic.env in use and its digest, both '' when there is none, to the owner alone.",
+        "x-workspace-operation": "backups.credentials.read"
+      }
+    },
+    "/api/workspace/backups/destination": {
+      "put": {
+        "description": "Name where the workspace's backups go, with the storage that destination needs where the client has some.\n\nThe workspace sets the destination up itself: it makes the repository's password, initialises the repository,\ninstalls restic.env, and tries again when that fails. Answers the backup state, under 202 when the request\nleft the workspace something to do and under 200 when it did not: a request for what the workspace already\nholds changes nothing. A destination named with no storage is set up from what the workspace kept for it,\nand awaits storage when it kept none. Storage offered for the repository already in use is taken only once\nthe workspace finds that the storage refuses what it holds. NONE moves restic.env aside and keeps it.\n\nA request that would change something while another backup operation runs (a restore, an update of the\nbackup service, a migration of the backup store) is refused with 409 BACKUP_OPERATION_RUNNING, naming who\nholds the backup lease. The workspace's own setup holding it refuses nothing: the request replaces what the\nsetup was asked. A destination the workspace does not know, and a password among the variables of the user's\nown storage, are refused with 400 INVALID_DESTINATION.",
+        "operationId": "put_api_workspace_backups_destination",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupDestinationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupState"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupState"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupOperationRunningRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkspaceRouteError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Name where the workspace's backups go, with the storage that destination needs where the client has some.",
+        "x-workspace-operation": "backups.destination.write"
+      }
+    },
+    "/api/workspace/backups/verification": {
+      "put": {
+        "description": "Turn backup verification on or off for this workspace, and answer the value now set.",
+        "operationId": "put_api_workspace_backups_verification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupVerificationModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupVerificationModel"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Turn backup verification on or off for this workspace, and answer the value now set.",
+        "x-workspace-operation": "backups.verification.write"
+      }
+    },
+    "/api/workspace/profile": {
+      "put": {
+        "description": "Write the profile snapshot a client materialized from the workspace's account, as it is.\n\nA snapshot of a format newer than this template knows is written all the same. One that equals the stored\nsnapshot apart from when it was written leaves the file alone and answers ``is_written`` false, so a client\nthat sends the snapshot whenever it opens the workspace announces no change that did not happen. The shell\ntells its pages when the keybindings in it change.",
+        "operationId": "put_api_workspace_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWrittenResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Write the profile snapshot a client materialized from the workspace's account, as it is.",
+        "x-workspace-operation": "profile.write"
+      }
+    },
+    "/api/workspace/sharing": {
+      "get": {
+        "description": "Whether the workspace holds share materials, its grants, and the apps that can be shared by themselves:\nwhat a client reads before every edit of who the workspace is shared with.\n\nThe apps are the registered ones that are not internal, each with its name, its origin label and the name a\nperson reads for it.",
+        "operationId": "get_api_workspace_sharing",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingStateResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Whether the workspace holds share materials, its grants, and the apps that can be shared by themselves: what a client reads before every edit of who the workspace is shared with.",
+        "x-workspace-operation": "sharing.read"
+      }
+    },
+    "/api/workspace/sharing/grants": {
+      "put": {
+        "description": "Replace the grants, and the identities beside them, and answer the document as stored.\n\nThe document's shape is checked (an entry is empty, repeated, or not an email address or a domain), never who\nan account may share with, which is the caller's to decide. The value of an entry the stored document already\nholds is not checked. A document refused changes no file.",
+        "operationId": "put_api_workspace_sharing_grants",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceGrantsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsStoredResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidGrantsError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkspaceRouteError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Replace the grants, and the identities beside them, and answer the document as stored.",
+        "x-workspace-operation": "sharing.grants.write"
+      }
+    },
+    "/api/workspace/status": {
+      "get": {
+        "description": "What this workspace serves: the version of its checkout, the name of every operation it has a route for,\nthe template's compatibility number, and how its initial data stands.\n\nA client asks before the first operation it sends a workspace, and calls a route only for an operation named\nhere. A preview shell names none: it serves a copy, and cannot change the live workspace. A client that reads\na compatibility number higher than it knows opens the workspace and does nothing else inside it.\n\n``initial_data`` says whether the workspace's boot applied the document it was handed when it was created:\n``NONE`` (it found none and has applied none), ``APPLIED`` with when, or ``FAILED`` with why, in which case\nthe next start of the workspace's services tries the parts that were refused again, and writes no part a\nsecond time. Whoever creates a workspace waits for ``APPLIED``.",
+        "operationId": "get_api_workspace_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStatusResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What this workspace serves: the version of its checkout, the name of every operation it has a route for, the template's compatibility number, and how its initial data stands."
+      }
+    },
+    "/api/workspace/suggestions": {
+      "get": {
+        "description": "The workspace's two suggestion switches: whether suggested replies are offered under an agent's reply, and\nwhether things to try are offered on a chat with no message yet.\n\nThe switches are the settings of one of the workspace's apps, and the read is passed to it. When that app is\nnot running or does not answer, the answer is 503 SUGGESTIONS_UNAVAILABLE, and asking again later is right.\nWhen no app of the workspace holds switches that can be read here, which is an app from before it could, the\nanswer is 501 SUGGESTIONS_UNSUPPORTED.",
+        "operationId": "get_api_workspace_suggestions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionSettingsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The workspace's two suggestion switches: whether suggested replies are offered under an agent's reply, and whether things to try are offered on a chat with no message yet.",
+        "x-workspace-operation": "suggestions.read"
+      },
+      "put": {
+        "description": "Change the suggestion switches the request names, leave one it does not name, and answer both.\n\nThe write is passed to the app that holds the switches, which tells its own open pages of the change. It is\nrefused as the read is: 503 SUGGESTIONS_UNAVAILABLE, or 501 SUGGESTIONS_UNSUPPORTED.",
+        "operationId": "put_api_workspace_suggestions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionSettingsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the suggestion switches the request names, leave one it does not name, and answer both.",
+        "x-workspace-operation": "suggestions.write"
+      }
+    },
+    "/api/workspace/timezone": {
+      "put": {
+        "description": "Record the user's timezone, by default only when none is recorded, and answer the zone now on record.\n\nThe zone is applied when the container next boots.",
+        "operationId": "put_api_workspace_timezone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimezoneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimezoneResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Record the user's timezone, by default only when none is recorded, and answer the zone now on record.",
+        "x-workspace-operation": "timezone.write"
+      }
+    },
+    "/api/workspace/update": {
+      "get": {
+        "description": "The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the\nupdate settings, and the version the settings' release channel is on as the workspace last read it.\n\nNothing in the workspace changes, and the feed is not read. ``?check_sign_in=1`` also asks whether an AI\naccount is signed in.",
+        "operationId": "get_api_workspace_update",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStateResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the update settings, and the version the settings' release channel is on as the workspace last read it.",
+        "x-workspace-operation": "update.read"
+      }
+    },
+    "/api/workspace/update/dismissals": {
+      "post": {
+        "description": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's.",
+        "operationId": "post_api_workspace_update_dismissals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDismissalsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateDismissalsResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's.",
+        "x-workspace-operation": "update.dismiss"
+      }
+    },
+    "/api/workspace/update/liveness": {
+      "get": {
+        "description": "What tells whether a running update is still alive: the run record, the workspace's agents with their states\nand chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed.",
+        "operationId": "get_api_workspace_update_liveness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateLivenessResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What tells whether a running update is still alive: the run record, the workspace's agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed.",
+        "x-workspace-operation": "update.liveness.read"
+      }
+    },
+    "/api/workspace/update/schedule": {
+      "delete": {
+        "description": "Cancel the schedule, and answer whether there was one.",
+        "operationId": "delete_api_workspace_update_schedule",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateScheduleCancelledResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Cancel the schedule, and answer whether there was one.",
+        "x-workspace-operation": "update.schedule.cancel"
+      },
+      "patch": {
+        "description": "Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are\nconfigured), and nothing when none is armed. The version the user typed and the dispatcher's record stay.\n\nA value the request leaves out is rewritten with the workspace's own, and left as it is where the workspace\nhas none.",
+        "operationId": "patch_api_workspace_update_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScheduleRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateScheduleRefreshedResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rewrite the client's own values in an armed schedule (the ceiling, the window, whether backups are configured), and nothing when none is armed. The version the user typed and the dispatcher's record stay.",
+        "x-workspace-operation": "update.schedule.refresh"
+      },
+      "put": {
+        "description": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.\n\nAnswers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the schedule. Arming\nagain starts the dispatcher's record of earlier attempts over.\n\nA value the request leaves out is the workspace's own, which the dispatcher then keeps current in the\nschedule: the version its release channel is on (NO_CHANNEL_VERSION when it has read none and the user named\nnone), the window of its update settings (NO_UPDATE_SETTINGS when it holds none), and whether it holds backup\ncredentials.",
+        "operationId": "put_api_workspace_update_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateOutcomeResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.",
+        "x-workspace-operation": "update.schedule.write"
+      }
+    },
+    "/api/workspace/update/settings": {
+      "put": {
+        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.\n\nThe cron line that runs the dispatcher is written again too, so that it runs this workspace's own.",
+        "operationId": "put_api_workspace_update_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateSettingsModel"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Store the update settings: the release channel the workspace follows, where that channel's file is read from, whether the workspace arms its own updates, and the hours of the owner's day one may start in.",
+        "x-workspace-operation": "update.settings.write"
+      }
+    },
+    "/api/workspace/update/skip": {
+      "post": {
+        "description": "Cancel the schedule and record a version as skipped for this workspace; of two skips the later is kept.",
+        "operationId": "post_api_workspace_update_skip",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateSkippedResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Cancel the schedule and record a version as skipped for this workspace; of two skips the later is kept.",
+        "x-workspace-operation": "update.skip"
+      }
+    },
+    "/api/workspace/update/start": {
+      "post": {
+        "description": "Start an update now.\n\nThe quick checks come first (the update-self skill is there, an account is signed in, no update is running or\nabout to), and one that fails is answered 200 with its outcome. Otherwise the update's chat begins to be\ncreated and the answer is 202 with the outcome STARTING and an attempt id; the read route's ``last_start``\nholds the attempt's outcome once it has one.\n\nA request that names no ``ceiling`` updates to the version the workspace's release channel is on, and is\nanswered NO_CHANNEL_VERSION when the workspace has read none and the user named none.",
+        "operationId": "post_api_workspace_update_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateOutcomeResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateOutcomeResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRouteError"
+                }
+              }
+            },
+            "description": "Failure"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Start an update now.",
+        "x-workspace-operation": "update.start"
+      }
+    },
+    "/api/workspace/wallpaper": {
+      "get": {
+        "description": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own\ncontent type; 204 with no body when that desktop wears its theme's default, the workspace has no desktop\nyet, or the image is gone.\n\nThe image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again\nand is answered 304 while it has not changed. A page of another origin reads it with a credentialed request\nof its own code, as it reads every workspace route; an image element of another site is refused.",
+        "operationId": "get_api_workspace_wallpaper",
+        "responses": {
+          "200": {
+            "description": "The image of the first desktop's wallpaper, under its own content type; 204 with no body when that desktop wears its theme's default"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own content type; 204 with no body when that desktop wears its theme's default, the workspace has no desktop yet, or the image is gone.",
+        "x-no-schema": "The image of the first desktop's wallpaper, under its own content type; 204 with no body when that desktop wears its theme's default",
+        "x-workspace-operation": "wallpaper.read"
+      }
+    }
+  }
+}

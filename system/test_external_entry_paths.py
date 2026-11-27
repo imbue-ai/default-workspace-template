@@ -1,10 +1,9 @@
 """The script paths other programs call keep working, under the interpreter those callers use.
 
-Imbue Studio (minds), its evals and admin tools, the web client (through owner-exec), the
-mngr create hook, CI and older releases' update-self flows all run these files by path, from
-outside this release. A bare one runs with the system ``python3`` and no venv, so it is run here
-as ``python -S -s`` (no site-packages at all); the one venv-tier path is run from the root venv,
-as its callers' ``uv run --no-sync`` would.
+Imbue Studio (minds), its evals and admin tools, the mngr create hook, CI and older releases'
+update-self flows all run these files by path, from outside this release. A bare one runs with
+the system ``python3`` and no venv, so it is run here as ``python -S -s`` (no site-packages at
+all); the one venv-tier path is run from the root venv, as its callers' ``uv run --no-sync`` would.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (SYSTEM_SCRIPTS / "seed_welcome_chat.py", ("--help",)),
     (SYSTEM_SCRIPTS / "message_chat.py", ("--help",)),
     (SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
-    (SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "backup_lease.py", ("--help",)),
     (SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
     (SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
     (SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
@@ -38,9 +37,14 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (UPDATE_SELF_SCRIPTS / "run_in_background.py", ("--help",)),
 )
 
-# Imported without letting the __main__ block act (a run would collect a real bug report), which
-# still resolves every import a real run makes at startup.
-_BARE_IMPORTS = (SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",)
+# Imported without letting the __main__ block act (a run would collect a real bug report, be a
+# minute of the update dispatcher in the workspace running the suite, or write that dispatcher's
+# cron line), which still resolves every import a real run makes at startup.
+_BARE_IMPORTS = (
+    SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",
+    SYSTEM_SCRIPTS / "update_dispatcher_tick.py",
+    SYSTEM_SCRIPTS / "install_update_dispatcher_cron.py",
+)
 
 _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (

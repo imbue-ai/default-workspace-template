@@ -188,9 +188,9 @@ def test_a_renamed_app_is_re_announced(announcement_writer: AppAnnouncementWrite
 
 
 def test_a_row_with_no_manifest_announces_an_empty_display_name() -> None:
-    """``--name --url`` rows (owner-exec, the vm exec service, previews) carry no display name at all, so it
+    """``--name --url`` rows (previews, isolated test servers) carry no display name at all, so it
     announces as empty rather than absent: a consumer never has to tell "no name" from "older workspace"."""
-    row = RegistryRow(name=AppName("owner-exec"), url=AppUrl("http://localhost:8700"))
+    row = RegistryRow(name=AppName("files-preview"), url=AppUrl("http://localhost:8700"))
 
     assert announced_row_of(row).display_name == ""
 

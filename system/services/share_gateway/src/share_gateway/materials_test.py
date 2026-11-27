@@ -38,7 +38,47 @@ def test_parse_share_materials_defaults_chrome_origin_to_empty_when_absent() -> 
     without_chrome = "\n".join(line for line in _VALID.splitlines() if "SHARE_CHROME_ORIGIN" not in line)
     materials = parse_share_materials(without_chrome)
     assert materials is not None
-    assert materials.chrome_origin == ""
+    assert (materials.chrome_origin, materials.is_chrome_origin_refused) == ("", False)
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        "https://minds.imbue.com evil.example",
+        "{http.request.header.Origin}",
+        "*.imbue.com",
+        "https://minds.imbue.com*",
+        "https://minds.imbue.com/app",
+        "https://minds.imbue.com:port",
+        "https://owner@minds.imbue.com",
+        "ftp://minds.imbue.com",
+        "minds.imbue.com",
+    ],
+)
+def test_a_web_client_origin_that_is_no_plain_http_origin_reads_as_none_and_the_share_stays_up(named: str) -> None:
+    materials = parse_share_materials(_VALID.replace("https://minds.imbue.com/", named))
+
+    assert materials is not None
+    assert (materials.chrome_origin, materials.is_chrome_origin_refused) == ("", True)
+    assert materials.workspace_domain == "host-aaaa.bbbb.us1.imbueminds.com"
+    assert materials.relay_token == "tok-123"
+
+
+@pytest.mark.parametrize(
+    ("named", "origin"),
+    [
+        ("https://minds.imbue.com/", "https://minds.imbue.com"),
+        ("https://minds.imbue.com:8443", "https://minds.imbue.com:8443"),
+        ("http://localhost:5173", "http://localhost:5173"),
+        ("https://Minds.Imbue.com/", "https://minds.imbue.com"),
+        ("HTTPS://MINDS.IMBUE.COM:8443", "https://minds.imbue.com:8443"),
+    ],
+)
+def test_a_web_client_origin_is_kept_as_its_scheme_host_and_port_in_lower_case(named: str, origin: str) -> None:
+    materials = parse_share_materials(_VALID.replace("https://minds.imbue.com/", named))
+
+    assert materials is not None
+    assert (materials.chrome_origin, materials.is_chrome_origin_refused) == (origin, False)
 
 
 def test_parse_share_materials_rejects_missing_or_malformed_keys() -> None:

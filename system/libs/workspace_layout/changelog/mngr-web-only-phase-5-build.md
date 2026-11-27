@@ -1,0 +1,1 @@
+- The request identity gains `is_from_web_client`, the share gateway's word that the hosted web client's page sent a request. The provenance check admits a request of another origin that carries it, on a route its app names as callable from that page (`RequestProvenance.is_web_client_route`), and refuses every other request of another origin as before.

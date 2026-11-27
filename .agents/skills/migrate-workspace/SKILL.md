@@ -389,7 +389,13 @@ registering apps and restarting services, and release it when done.
 **including `data/.secrets/anthropic.env`**, so migrated integrations keep working
 by default. What is excluded is per-workspace identity rather than user content:
 `restic.env` (a backup repository keyed by *that* workspace's own random
-password), `cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
+password), with the copies of it the old workspace kept aside
+(`restic.env.<timestamp>`), the credentials of a backup setup it had not finished
+(`restic.env.pending`) and the record of that setup (`data/.state/backup_setup/`),
+the record of the initial data the old workspace was created with
+(`data/.state/initial_data/`, by which this workspace's boot knows which parts of
+its own it has applied),
+`cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
 workspace's published share -- `share.env`, `share_auth_label`,
 `share_gateway_signing_key`, `share_grants.toml` and its lock,
 `share_identities.json`, `share_tls/`, and the visiting-agent registry
@@ -397,7 +403,15 @@ workspace's published share -- `share.env`, `share_auth_label`,
 the old one's resources; copying the share files would have this workspace
 present the old one's hostname and certificate, with two machines claiming one
 share. This workspace's own share, and who may enter it, is set up from the
-desktop's Share panel. The script owns the list, so take the excludes from it:
+desktop's Share panel. Also left behind is what the old workspace recorded of its
+own update runs under `data/.state/update-apply/` (`run.json`, `schedule.json`,
+`schedule-origin.json`, `last-dispatch.json`, `last-start.json`,
+`installed-version.json`, `client-ceiling.json`, `watchdog.json`,
+`dispatch-attempt.json`): this workspace arms its own updates from those files,
+so a copied one would hold an update back, or start one here that the old
+workspace had scheduled. The update settings (`settings.json`) and the version
+the owner skipped (`skipped-target.json`) do come over. The script owns the list,
+so take the excludes from it:
 
 ```bash
 rsync -a -e "ssh -i /tmp/mind_key -p <port> -o StrictHostKeyChecking=no" \

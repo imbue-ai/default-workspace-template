@@ -324,7 +324,7 @@ def test_register_without_internal_omits_the_key(tmp_path: Path) -> None:
 def test_register_internal_marks_the_entry(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "owner-exec", "--url", "http://localhost:8793", "--internal"],
+        ["--name", "files-preview", "--url", "http://localhost:8793", "--internal"],
         apps_file,
     )
     assert result.returncode == 0, result.stderr
@@ -749,6 +749,7 @@ system = true
 priority = "files"
 launcher_rank = 20
 window_closed_path = "/api/window-closed"
+suggestion_settings_path = "/api/settings/suggestions"
 
 [default_shortcut]
 launch = "new"
@@ -851,6 +852,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert list(row["default_shortcuts"][0]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
+    assert row["suggestion_settings_path"] == "/api/settings/suggestions"
     assert row["description"] == "Browse and open the files in this workspace."
     assert row["api_schema_path"] == "/api/schema"
     assert "actions" not in row
@@ -1151,6 +1153,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "launcher_rank",
         "pin",
         "window_closed_path",
+        "suggestion_settings_path",
         "message_handlers",
         "keybindings",
     ):

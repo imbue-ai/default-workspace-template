@@ -16,7 +16,7 @@ def test_rows_with_a_program_map_to_their_priority_and_default_to_user(
     registry.write_text(
         '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nprogram = "files"\npriority = "files"\n'
         '[[apps]]\nname = "news"\nurl = "http://localhost:8090"\nprogram = "news"\n'
-        '[[apps]]\nname = "owner-exec"\nurl = "http://localhost:8793"\ninternal = true\n'
+        '[[apps]]\nname = "files-preview"\nurl = "http://localhost:8793"\ninternal = true\n'
         '[[apps]]\nname = "odd"\nurl = "http://localhost:8091"\nprogram = "odd"\npriority = 7\n'
     )
 

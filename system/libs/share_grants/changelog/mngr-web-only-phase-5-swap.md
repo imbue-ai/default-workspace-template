@@ -1,0 +1,1 @@
+- Removed `reconcile_authorized_keys`, `reconcile_authorized_keys_text`, `authorized_keys_lock_path`, `is_agent_access_line` and `AUTHORIZED_KEYS_MARKER` from `agent_grants`. A visiting agent's grant no longer puts its key in `~/.ssh/authorized_keys`: the grants file is the whole of an agent's authority.

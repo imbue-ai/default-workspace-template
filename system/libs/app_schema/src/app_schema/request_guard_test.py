@@ -8,7 +8,10 @@ from workspace_layout.identity import (
     parse_identity_header,
 )
 
-from app_schema.request_guard import install_request_guard
+from app_schema.request_guard import (
+    install_request_guard,
+    install_request_guard_with_web_client_routes,
+)
 from app_schema.testing import (
     CROSS_SITE_FETCH_HEADERS,
     OWNER_IDENTITY_HEADERS,
@@ -132,3 +135,88 @@ def test_a_present_header_that_does_not_parse_is_answered_with_a_400_on_every_ro
     refused = guarded.get("/who", headers={IDENTITY_HEADER: "{not json"})
     assert refused.status_code == 400
     assert IDENTITY_HEADER in refused.get_json()["detail"]
+
+
+_WEB_CLIENT_RULE = "/api/workspace/thing"
+_WEB_CLIENT_IDENTITY_HEADERS = {
+    IDENTITY_HEADER: '{"owner":true,"user_id":"u-1","email":"o@example.com","is_from_web_client":true}'
+}
+_SHARE_BASE_URL = "https://shell-x.ws.example"
+
+
+@pytest.fixture
+def guarded_with_web_client_route() -> FlaskClient:
+    app = Flask("guarded-web", static_folder=None)
+    app.config["PROPAGATE_EXCEPTIONS"] = True
+    install_request_guard_with_web_client_routes(
+        app, exempt_rules=frozenset(), web_client_rules=frozenset({_WEB_CLIENT_RULE})
+    )
+
+    @app.put(_WEB_CLIENT_RULE)
+    def change_the_thing() -> Response:
+        return Response("changed", mimetype="text/plain")
+
+    @app.post("/act")
+    def act() -> Response:
+        return Response("acted", mimetype="text/plain")
+
+    return app.test_client()
+
+
+def test_the_web_clients_page_reaches_a_route_named_for_it_on_the_gateways_word(
+    guarded_with_web_client_route: FlaskClient,
+) -> None:
+    admitted = guarded_with_web_client_route.put(
+        _WEB_CLIENT_RULE,
+        headers={**CROSS_SITE_FETCH_HEADERS, **_WEB_CLIENT_IDENTITY_HEADERS},
+        base_url=_SHARE_BASE_URL,
+    )
+    assert admitted.status_code == 200
+    assert admitted.get_data(as_text=True) == "changed"
+
+
+def test_the_web_clients_page_is_refused_on_every_other_route(
+    guarded_with_web_client_route: FlaskClient,
+) -> None:
+    refused = guarded_with_web_client_route.post(
+        "/act",
+        headers={**CROSS_SITE_FETCH_HEADERS, **_WEB_CLIENT_IDENTITY_HEADERS},
+        base_url=_SHARE_BASE_URL,
+    )
+    assert refused.status_code == 403
+    assert refused.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
+
+
+def test_a_page_of_another_origin_without_the_gateways_word_is_refused_on_a_route_named_for_the_web_client(
+    guarded_with_web_client_route: FlaskClient,
+) -> None:
+    # Another site's page, through a proxy that vouched for the owner and not for the web client.
+    unvouched = guarded_with_web_client_route.put(
+        _WEB_CLIENT_RULE,
+        headers={**CROSS_SITE_FETCH_HEADERS, **OWNER_IDENTITY_HEADERS},
+        base_url=_SHARE_BASE_URL,
+    )
+    assert unvouched.status_code == 403
+    assert unvouched.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
+    # And one that reached the app with no proxy at all.
+    assert (
+        guarded_with_web_client_route.put(
+            _WEB_CLIENT_RULE, headers=CROSS_SITE_FETCH_HEADERS
+        ).status_code
+        == 403
+    )
+    # The route still serves its own callers: a proxied request, and one from inside the container.
+    assert_request_guard_refuses_unknown_provenance(
+        guarded_with_web_client_route, "PUT", _WEB_CLIENT_RULE
+    )
+
+
+def test_an_app_that_names_no_route_for_the_web_client_refuses_its_page_everywhere(
+    guarded: FlaskClient,
+) -> None:
+    refused = guarded.post(
+        "/act",
+        headers={**CROSS_SITE_FETCH_HEADERS, **_WEB_CLIENT_IDENTITY_HEADERS},
+        base_url=_SHARE_BASE_URL,
+    )
+    assert refused.status_code == 403

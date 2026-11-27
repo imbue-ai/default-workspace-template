@@ -72,7 +72,7 @@ def load_unsent_change_values(workspace_root: Path) -> dict[str, object]:
     return _load_flat_value_map(path, "unsent profile changes file")
 
 
-def _write_flat_value_map(path: Path, value_by_key: Mapping[str, object]) -> None:
+def write_flat_value_map(path: Path, value_by_key: Mapping[str, object]) -> None:
     """Atomically replace one flat map file. Raises ``ProfileWriteError``."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,9 +98,9 @@ def write_user_override_values(workspace_root: Path, user_id: str, value_by_key:
     if not _is_plain_filename_user_id(user_id):
         raise ProfileWriteError(f"Refusing a profile override write for a path-shaped user id: {user_id!r}")
     path = workspace_root / USER_OVERRIDES_RELATIVE_DIR / f"{user_id}.json"
-    _write_flat_value_map(path, value_by_key)
+    write_flat_value_map(path, value_by_key)
 
 
 def write_unsent_change_values(workspace_root: Path, value_by_key: Mapping[str, object]) -> None:
     """Replace the shell's unsent account changes file whole. Raises ``ProfileWriteError``."""
-    _write_flat_value_map(workspace_root / UNSENT_CHANGES_RELATIVE_PATH, value_by_key)
+    write_flat_value_map(workspace_root / UNSENT_CHANGES_RELATIVE_PATH, value_by_key)

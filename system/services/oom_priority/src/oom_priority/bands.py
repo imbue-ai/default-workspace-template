@@ -145,12 +145,13 @@ CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
 # services.
 #
 # The services are ordered from least- to most-expendable by how much losing one
-# hurts: the two authority paths into the workspace (owner-exec, then the
-# terminal) come first, then the UI and the chat app, then the sharing stack,
-# then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the Screen service (the stack it starts sits far above,
-# at SCREEN_STACK), then the Files app, then the two single-page apps (Getting
-# Started, then System Monitor), and last the System Monitor's resource sampler.
+# hurts: the terminal, the authority path into the workspace, comes first,
+# then the UI and the chat app, then the sharing stack,
+# then the runtime-state sync (github-sync, opt-in), the host backup and the
+# backups' own setup, then the job scheduler, then the Screen service (the stack
+# it starts sits far above, at SCREEN_STACK), then the Files app, then the two
+# single-page apps (Getting Started, then System Monitor), and last the System
+# Monitor's resource sampler.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -174,13 +175,6 @@ CHAT_ENGAGEMENT: Final[ChatEngagement] = ChatEngagement(
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
 SERVICE_BANDS: Final[dict[str, int]] = {
-    # The owner-authenticated exec service: SSH-equivalent authority over the
-    # workspace (run a command, read/write a file, edit the sharing grants). A
-    # web-only workspace has no desktop and no SSH client, so this is the *only*
-    # way its owner can act on it -- including to repair anything else that
-    # broke -- and it is the single writer of the sharing grants for the desktop
-    # too. It is also a small HTTP server, so shedding it frees almost nothing.
-    "owner-exec": 5,
     "terminal": 10,
     # ttyd, on its own origin, framed by the terminal app's wrapper page: a shed pty drops
     # every terminal pane's connection (the tmux sessions survive), so it sits right beside
@@ -204,6 +198,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # Opt-in runtime/ sync (added by the github-sync skill).
     "github-sync": 40,
     "host-backup": 50,
+    # The workspace's own setup of its backups: a small process that is idle but
+    # for a setup and an hourly check. A shed loses nothing: what it was asked is
+    # on disk, and it takes it up when it comes back.
+    "backup_setup": 52,
     # The cron daemon behind the workspace's scheduled jobs. A shed defers those
     # jobs rather than losing them -- the every-minute checkers fire at the due
     # hour when the container is up, or the first minute it is back up after a

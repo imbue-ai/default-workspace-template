@@ -52,8 +52,9 @@ _RUN_AUTOMATION_SUFFIX: Final[str] = "run_automation.sh"
 _ENV_WRAPPER_SUFFIX: Final[str] = "with_agent_env.sh"
 _CARETAKER_CHECK_SUFFIX: Final[str] = "caretaker_check.sh"
 _CRON_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]+$")
-# Entries that stay with cron untouched: the Imbue Studio app writes its update dispatcher's entry, and rewrites
-# it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
+# Entries that stay with cron untouched: the shell's update routes (and an Imbue Studio app from before them)
+# write the update dispatcher's entry, and rewrite it whenever an update is armed, so a routine of it would run
+# beside the cron line rather than replace it.
 _ENTRIES_OWNED_BY_THE_APP: Final[frozenset[str]] = frozenset({"update-self-dispatch"})
 # Where every pre-routines cron line found the env wrapper, and where it lives now: an entry left in place
 # keeps running only if it names the wrapper where it is.

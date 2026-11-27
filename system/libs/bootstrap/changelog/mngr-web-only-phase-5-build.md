@@ -1,0 +1,5 @@
+- A workspace's first boot writes `data/.state/chat/owes_welcome_chat`, which tells the chat app to open the workspace's welcome chat. A workspace that already existed never gets it.
+
+The boot writes the update dispatcher's cron line (`update-self-dispatch`) through `system/scripts/install_update_dispatcher_cron.py`, so a workspace no client has armed or started an update in still runs the dispatcher every minute. It is the line the shell's update routes write, under the same name, so there is still one.
+
+Every boot applies the initial data the workspace was handed when it was created: a new step, `apply_initial_data`, runs `apply-initial-data` (`system/libs/workspace_initial_data`) after the workspace's Python packages are in place and before the clock is set, so a timezone the document carries is in force from that boot. The document being in the host dir is the trigger, not a first boot, since a pool host's first boot is over before it has an owner. A document a part of which cannot be applied is left for the next boot, which tries that part again and writes no part a second time, and the boot goes on.

@@ -39,6 +39,13 @@ class RequestIdentity(FrozenModel):
     agent_id: str | None = Field(default=None, description="A visiting agent's grant id; absent for a person")
     agent_name: str | None = Field(default=None, description="The name the visiting agent joined under")
     granter: str | None = Field(default=None, description="Who invited the visiting agent, as the grant records it")
+    # Strict for the reason ``owner`` is: this field admits a request the provenance check would otherwise refuse.
+    is_from_web_client: bool = Field(
+        default=False,
+        strict=True,
+        description="Whether the share gateway vouches that the request was sent by the hosted web client's own "
+        "page, with a session the gateway accepted. No other proxy stamps it",
+    )
     is_header_present: bool = Field(
         default=False,
         description="Whether a proxy actually stamped the request: set by the parse, never read from the wire. "
@@ -105,6 +112,11 @@ def visiting_user_id(identity: RequestIdentity) -> UserId | None:
 # reaches loopback through a name of its own (a rebound or wildcard DNS name) names that host instead. And a browser
 # marks a request made by a page of another origin with fetch metadata, which no in-container client sends, so such a
 # request is refused whatever it carries, other than a GET or HEAD navigation (the shell framing an app's page).
+#
+# One page of another origin is the owner's own: the hosted web client, which calls the workspace routes itself. The
+# share gateway knows that page's origin and marks the identity of a request it sent (``is_from_web_client``), and a
+# client can never set the mark, since the gateway strips the header from every request that arrives. Such a request
+# is admitted to the routes an app names as callable from that page, and to no other.
 LOOPBACK_ADDRESSES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1"})
 LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 FETCH_SITE_HEADER: Final[str] = "Sec-Fetch-Site"
@@ -128,6 +140,9 @@ class RequestProvenance(FrozenModel):
     fetch_mode: str | None = Field(description="The Sec-Fetch-Mode header a browser sends, or None")
     host: str = Field(description="The Host header, with or without its port")
     remote_address: str | None = Field(description="The peer address the connection came from")
+    is_web_client_route: bool = Field(
+        description="Whether the route the request is for is one its app names as callable from the web client's page"
+    )
 
 
 @pure
@@ -155,11 +170,25 @@ def is_from_another_origin(method: str, fetch_site: str | None, fetch_mode: str 
 
 
 @pure
+def is_vouched_web_client_request(identity_header: str | None) -> bool:
+    """Whether the identity a proxy stamped carries the share gateway's word that the web client's page sent the
+    request. A header that is missing or does not parse carries nobody's word."""
+    try:
+        identity = parse_identity_header(identity_header)
+    except InvalidIdentityHeaderError:
+        return False
+    return identity.is_header_present and identity.is_from_web_client
+
+
+@pure
 def describe_provenance_refusal(provenance: RequestProvenance) -> str | None:
     """Why the request may not be read at all, or None when it may: a page of another origin is refused whatever it
-    carries; a request a proxy stamped is then read by its header; one with no header is admitted from loopback
-    alone, under a loopback ``Host``."""
-    if is_from_another_origin(provenance.method, provenance.fetch_site, provenance.fetch_mode):
+    carries, unless the share gateway vouches that it is the web client's and the route is one callable from there; a
+    request a proxy stamped is then read by its header; one with no header is admitted from loopback alone, under a
+    loopback ``Host``."""
+    if is_from_another_origin(provenance.method, provenance.fetch_site, provenance.fetch_mode) and not (
+        provenance.is_web_client_route and is_vouched_web_client_request(provenance.identity_header)
+    ):
         return OTHER_ORIGIN_REFUSAL
     if provenance.identity_header is not None and provenance.identity_header.strip():
         return None

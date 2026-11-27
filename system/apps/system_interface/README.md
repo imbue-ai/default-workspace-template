@@ -102,8 +102,44 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   owner's "everywhere" save also `unsent.json`, delivered to the account
   through the latchkey gateway's `minds-workspaces-account-settings` verb,
   whose first use files one permission request). Every save, and a watch on
-  the account's profile snapshot (`data/.state/profile/account.json`, written
-  from outside the workspace), says `keybindings_changed`.
+  the account's profile snapshot (`data/.state/profile/account.json`, which a
+  client writes through the profile route below), says `keybindings_changed`.
+- The workspace routes (`/api/workspace/...`, contracts section 5.7; the code
+  is `workspace_routes.py`): the state a workspace owns, read and changed by a
+  client outside it where a client used to run a command in the workspace.
+  `GET /api/workspace/status` names the version of the checkout, every
+  operation the shell has a route for, the template's compatibility number
+  (`WORKSPACE_COMPATIBILITY`, raised only by a change an older client could not
+  work with), and whether the workspace's boot applied the initial data it was
+  handed at create (`initial_data`, read from `workspace_initial_data`); a
+  client calls a route only for an operation named there. The
+  rest are who the workspace is shared with and which of its apps can be
+  shared (`sharing`, `sharing/grants`), the profile snapshot and the user's
+  timezone (`profile`, `timezone`), the backups (`backups`, which answers where
+  they go and how the workspace's own setup of them stands;
+  `backups/destination`, which names where they go; `backups/credentials`,
+  which answers the credentials in use to the owner alone; and
+  `backups/verification`), the updates
+  (`update`, `update/start|schedule|skip|dismissals|liveness|settings`), and
+  what a client with no backend of its own reads from the shell: the two
+  suggestion switches (`suggestions`), the workspace's apps with each one's
+  icon markup (`apps`), and the image its first desktop wears (`wallpaper`,
+  204 when that is the theme's default). The
+  update settings name the release channel the workspace follows and when it
+  arms its own updates, the workspace's own hours among them, and a start or
+  a schedule that names no version takes
+  the one that channel is on. What each one does lives in a library
+  (`share_grants`, `workspace_profile`, `workspace_backup_setup`,
+  `workspace_update_control`). The suggestion switches are the settings of
+  whichever registered app names a `suggestion_settings_path`, and the shell
+  passes a read and a write there over loopback
+  (`shell/suggestion_settings.py`), naming no app. A preview shell names
+  no operation and refuses every route that changes the workspace.
+  `workspace_routes_api.json` beside this file is the description of these
+  routes a client is checked against: a test regenerates it from the route
+  table and fails when the two differ, and holds it to every copy under
+  `workspace_routes_api_frozen/`, so a route a released client calls keeps
+  taking that client's requests and answering what it reads.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
@@ -411,9 +447,11 @@ parse is refused with 400 on every route; only a missing or blank one reads as
 the owner of a workspace that has not shared, and only from loopback under a
 loopback `Host`, since the workspace's own browser is on loopback too; a
 request a browser marks as a page of another origin's is refused with 403
-before any route runs, other than a GET or HEAD navigation and the two browser-side
-modules served to other origins on purpose (the request guard every app
-installs, `app_schema.request_guard`). Nothing more: what to call an
+before any route runs, other than a GET or HEAD navigation, the two browser-side
+modules served to other origins on purpose, and the workspace routes
+(`/api/workspace/...`) for the hosted web client's page, which is admitted to
+them when the share gateway marks the identity `is_from_web_client` (the
+request guard every app installs, `app_schema.request_guard`). Nothing more: what to call an
 account and what it looks like is its profile, which the shell fetches from
 imbue_cloud (below). The shell page posts `/api/presence/heartbeat` every 30
 seconds while the tab is visible, once immediately when it becomes visible,

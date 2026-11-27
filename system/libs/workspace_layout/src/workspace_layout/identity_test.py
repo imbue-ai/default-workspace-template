@@ -10,6 +10,7 @@ from workspace_layout.identity import describe_provenance_refusal
 from workspace_layout.identity import is_from_another_origin
 from workspace_layout.identity import is_loopback_host
 from workspace_layout.identity import is_owner_participant
+from workspace_layout.identity import is_vouched_web_client_request
 from workspace_layout.identity import parse_identity_header
 from workspace_layout.identity import participant_key_of
 from workspace_layout.identity import visiting_user_id
@@ -126,6 +127,7 @@ def _provenance(**overrides: object) -> RequestProvenance:
         "fetch_mode": None,
         "host": "127.0.0.1:8090",
         "remote_address": "127.0.0.1",
+        "is_web_client_route": False,
     }
     fields.update(overrides)
     return RequestProvenance.model_validate(fields)
@@ -159,3 +161,62 @@ def test_a_page_of_another_origin_is_refused_whatever_it_carries() -> None:
     assert describe_provenance_refusal(framed) is None
     own_page = _provenance(fetch_site="same-origin", fetch_mode="cors")
     assert describe_provenance_refusal(own_page) is None
+
+
+_WEB_CLIENT_OWNER_HEADER = '{"owner":true,"user_id":"u-1","email":"o@example.com","is_from_web_client":true}'
+
+
+def test_the_web_clients_page_is_admitted_on_the_gateways_word_to_a_route_that_asked_for_it() -> None:
+    for fetch_site in ("cross-site", "same-site"):
+        vouched = _provenance(
+            fetch_site=fetch_site,
+            fetch_mode="cors",
+            identity_header=_WEB_CLIENT_OWNER_HEADER,
+            host="shell-x.ws.example",
+            remote_address="127.0.0.1",
+            is_web_client_route=True,
+        )
+        assert describe_provenance_refusal(vouched) is None
+
+
+def test_the_web_clients_page_is_refused_on_a_route_that_did_not_ask_for_it() -> None:
+    other_route = _provenance(
+        fetch_site="cross-site", fetch_mode="cors", identity_header=_WEB_CLIENT_OWNER_HEADER, is_web_client_route=False
+    )
+    assert describe_provenance_refusal(other_route) == OTHER_ORIGIN_REFUSAL
+
+
+@pytest.mark.parametrize(
+    "identity_header",
+    [
+        None,
+        '{"owner":true}',
+        '{"owner":true,"is_from_web_client":false}',
+        # The mark is a real boolean a proxy stamped, never text.
+        '{"owner":true,"is_from_web_client":"true"}',
+        "{not json",
+    ],
+)
+def test_a_page_of_another_origin_without_the_gateways_word_is_refused_on_every_route(
+    identity_header: str | None,
+) -> None:
+    unvouched = _provenance(
+        fetch_site="cross-site", fetch_mode="cors", identity_header=identity_header, is_web_client_route=True
+    )
+    assert describe_provenance_refusal(unvouched) == OTHER_ORIGIN_REFUSAL
+    assert is_vouched_web_client_request(identity_header) is False
+
+
+def test_the_gateways_word_changes_nothing_for_a_request_that_is_not_from_another_origin() -> None:
+    """The mark only lifts the refusal of another origin: a request with no header still needs loopback."""
+    from_nowhere = _provenance(remote_address="10.0.0.7", is_web_client_route=True)
+    assert describe_provenance_refusal(from_nowhere) == UNTRUSTED_LOOPBACK_REFUSAL
+    own_page = _provenance(fetch_site="same-origin", fetch_mode="cors", is_web_client_route=True)
+    assert describe_provenance_refusal(own_page) is None
+
+
+def test_a_header_carries_the_mark_only_when_a_proxy_stamped_it_true() -> None:
+    assert parse_identity_header(_WEB_CLIENT_OWNER_HEADER).is_from_web_client is True
+    assert parse_identity_header('{"owner":true}').is_from_web_client is False
+    assert parse_identity_header(None).is_from_web_client is False
+    assert is_vouched_web_client_request(_WEB_CLIENT_OWNER_HEADER) is True
