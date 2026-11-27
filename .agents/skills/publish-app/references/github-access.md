@@ -21,8 +21,8 @@ It is where the GitHub access check lives, which this flow shares with
 
 On a first publish, ask before anything else:
 
-> To publish, we'll put your app's code on your own account on GitHub, where
-> anyone can see it. Do you have a GitHub account?
+> To publish, we'll put your app's code on your own account on GitHub. Do you
+> have a GitHub account?
 
 - **Yes:** file the permission requests now ("Asking for the access"), so the
   approval waits in Imbue Studio while you settle the scope.
@@ -51,7 +51,7 @@ chat builds the user's approval card from it):
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
-    -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this app as a new public GitHub repository on your account."}'
+    -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this app to a GitHub repository of its own on your account."}'
 ```
 
 ```bash
