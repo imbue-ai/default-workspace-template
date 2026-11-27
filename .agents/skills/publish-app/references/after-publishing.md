@@ -24,8 +24,11 @@ lock.
 
 ## 2. Stop the app, and move a skill's data
 
-Skip steps 2 and 3 for an app with no `pyproject.toml` that took in no skill:
-nothing it runs on changed.
+Skip steps 2 and 3 for an app with no `pyproject.toml` that took in no skill,
+when `supervisorctl reread` names none of its programs: nothing it runs on
+changed, and neither did how it is run. `reread` prints a line for each
+program whose file differs from what supervisord runs, and starts or stops
+nothing.
 
 Stop the app's programs: `supervisorctl stop <name>`, and each
 `<name>-<role>`.
