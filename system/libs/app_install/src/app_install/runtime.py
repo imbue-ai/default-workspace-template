@@ -28,6 +28,8 @@ from github_sync.repositories import GithubRequestError
 from github_sync.repositories import RepositoryNameTakenError
 from github_sync.repositories import create_repository
 from github_sync.repositories import lock_down_repository
+from github_sync.repositories import make_repository_public
+from github_sync.repositories import read_repository_is_private
 from github_sync.repositories import set_repository_topics
 from host_backup.cli import has_recent_backup
 
@@ -198,9 +200,9 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             url=f"{GITHUB_URL_PREFIX}{repository}", lockdown_problem=lock_down_repository(repository) or ""
         )
 
-    def create_published_repository(self, name: str, description: str) -> CreatedRepository:
+    def create_published_repository(self, name: str, description: str, is_private: bool) -> CreatedRepository:
         try:
-            repository = create_repository(name, description, is_private=False)
+            repository = create_repository(name, description, is_private=is_private)
         except RepositoryNameTakenError as e:
             raise PublishedNameTakenError(str(e)) from e
         except GithubRequestError as e:
@@ -215,6 +217,18 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             lockdown_problem=lock_down_repository(repository) or "",
             topic_problem=topic_problem,
         )
+
+    def is_published_repository_private(self, repo_url: str) -> bool:
+        try:
+            return read_repository_is_private(repo_url.removeprefix(GITHUB_URL_PREFIX))
+        except GithubRequestError as e:
+            raise PublishError(str(e)) from e
+
+    def make_published_repository_public(self, repo_url: str) -> None:
+        try:
+            make_repository_public(repo_url.removeprefix(GITHUB_URL_PREFIX))
+        except GithubRequestError as e:
+            raise PublishError(str(e)) from e
 
     def scan_secrets(self, directory: Path) -> SecretScan:
         script = self.repo_root / SECRET_SCAN_SCRIPT

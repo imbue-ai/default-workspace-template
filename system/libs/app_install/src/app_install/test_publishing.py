@@ -43,7 +43,7 @@ def _publish(workspace: Path, runtime: RecordingRuntime, version: str) -> str:
     set_version(workspace, "notes", version, runtime)
     commit_all(workspace, f"notes {version}")
     assemble_app(workspace, "notes", "HEAD", runtime)
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     recorded = record_publish(workspace, "notes", runtime)
     assert (pushed.problems, recorded.problems) == ((), ())
     return pushed.commit

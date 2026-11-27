@@ -61,27 +61,18 @@ class RepositoryNameTakenError(GithubRequestError):
     """The account already has a repository of the name asked for."""
 
 
-def request_github(method: str, url: str, body: dict[str, object]) -> dict[str, Any]:
-    """Send one JSON request to the GitHub API through latchkey; its JSON answer.
+def request_github(method: str, url: str, body: dict[str, object] | None) -> dict[str, Any]:
+    """Send one request to the GitHub API through latchkey, with `body` as
+    JSON when there is one; its JSON answer.
 
     Raises GithubRequestError when latchkey cannot be run, exits non-zero, or
     answers with anything but a JSON object. An answer that reports a refusal
     is returned as it is, for the caller to read.
     """
+    sent_body = [] if body is None else ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     try:
         completed = subprocess.run(
-            [
-                "latchkey",
-                "curl",
-                "-s",
-                "-X",
-                method,
-                url,
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json.dumps(body),
-            ],
+            ["latchkey", "curl", "-s", "-X", method, url, *sent_body],
             capture_output=True,
             text=True,
             check=False,
@@ -152,6 +143,34 @@ def lock_down_repository(repository: str) -> str | None:
     if "name" not in response:
         return explain_refusal(response)
     return None
+
+
+def read_repository_is_private(repository: str) -> bool:
+    """Whether `<owner>/<repo>` is private, as GitHub says now.
+
+    Raises GithubRequestError when GitHub does not say.
+    """
+    response = request_github("GET", f"{GITHUB_API_URL}/repos/{repository}", None)
+    is_private = response.get("private")
+    if not isinstance(is_private, bool):
+        raise GithubRequestError(
+            f"GitHub did not say whether {repository} is private: {explain_refusal(response)}"
+        )
+    return is_private
+
+
+def make_repository_public(repository: str) -> None:
+    """Make `<owner>/<repo>` public.
+
+    Raises GithubRequestError when it is not public afterwards.
+    """
+    response = request_github(
+        "PATCH", f"{GITHUB_API_URL}/repos/{repository}", {"private": False}
+    )
+    if response.get("private") is not False:
+        raise GithubRequestError(
+            f"{repository} was not made public: {explain_refusal(response)}"
+        )
 
 
 def set_repository_topics(repository: str, names: list[str]) -> None:

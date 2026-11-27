@@ -14,7 +14,8 @@ Usage, from the workspace repo's root::
     uv run --no-sync app-install publish compare <name> [--commit <rev>]
     uv run --no-sync app-install publish set-version <name> <version>
     uv run --no-sync app-install publish assemble <name> [--commit <rev>]
-    uv run --no-sync app-install publish push <name> [--repo-name <repository>]
+    uv run --no-sync app-install publish push <name> [--repo-name <repository>] [--public]
+    uv run --no-sync app-install publish visibility <name> [--make-public]
     uv run --no-sync app-install publish record <name>
     uv run --no-sync app-install verify <name> [--template <version>]
     uv run --no-sync app-install check
@@ -60,6 +61,7 @@ from app_install.ports import is_port_bound
 from app_install.publishing import PublishedTree
 from app_install.publishing import assemble_app
 from app_install.publishing import compare_with_published
+from app_install.publishing import published_visibility
 from app_install.publishing import push_app
 from app_install.publishing import record_publish
 from app_install.publishing import set_version
@@ -524,13 +526,19 @@ def publish_assemble_command(repo_root: Path, name: str, revision: str) -> None:
     default=None,
     help="The repository a first publish creates; the app's name otherwise",
 )
+@click.option(
+    "--public",
+    "is_public",
+    is_flag=True,
+    help="Create the repository of a first publish public; it is private otherwise",
+)
 @click.pass_obj
-def publish_push_command(repo_root: Path, name: str, repository_name: str | None) -> None:
-    """Push the assembled tree of the app NAME to its public repository as one commit and tag it, creating the
-    repository on the first publish. Never forced."""
+def publish_push_command(repo_root: Path, name: str, repository_name: str | None, is_public: bool) -> None:
+    """Push the assembled tree of the app NAME to its repository as one commit and tag it, creating the
+    repository on the first publish, private unless --public is given. Never forced."""
     with install_lock(repo_root):
         try:
-            outcome = push_app(repo_root, name, repository_name, WorkspaceRuntime(repo_root=repo_root))
+            outcome = push_app(repo_root, name, repository_name, is_public, WorkspaceRuntime(repo_root=repo_root))
         except PublishedNameTakenError as e:
             _refuse("name_taken", name=name, repo_name=repository_name or name, detail=str(e))
         except NotAssembledError as e:
@@ -548,9 +556,35 @@ def publish_push_command(repo_root: Path, name: str, repository_name: str | None
         version=outcome.version,
         tag=outcome.tag,
         is_repository_created=outcome.is_repository_created,
+        is_private=outcome.is_private,
         is_tag_pushed=outcome.is_tag_pushed,
         derived_from=outcome.derived_from,
         problems=list(outcome.problems),
+    )
+
+
+@publish_group.command("visibility")
+@click.argument("name")
+@click.option(
+    "--make-public",
+    "is_made_public",
+    is_flag=True,
+    help="Make a private published repository public",
+)
+@click.pass_obj
+def publish_visibility_command(repo_root: Path, name: str, is_made_public: bool) -> None:
+    """Say whether the published repository of the app NAME is private, making it public first with
+    --make-public."""
+    try:
+        outcome = published_visibility(repo_root, name, is_made_public, WorkspaceRuntime(repo_root=repo_root))
+    except (AppInstallError, AppManifestError) as e:
+        _refuse("refused", name=name, detail=str(e))
+    _emit(
+        "visibility",
+        name=str(outcome.record.name),
+        published_repo_url=outcome.repo_url,
+        is_private=outcome.is_private,
+        is_changed=outcome.is_changed,
     )
 
 

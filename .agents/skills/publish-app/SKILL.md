@@ -1,14 +1,14 @@
 ---
 name: publish-app
-description: Publish one app this workspace built (or installed and then changed) to a public GitHub repository of its own on the user's account, as a version another workspace can install with install-app. Handles the first publish of an app and every later version. Use only when the user asks to publish, share publicly, or release an app or a new version of one. To share a whole workspace, use publish-template instead; to give particular people private access to an app, see the github-sync skill's dev repositories.
+description: Publish one app this workspace built (or installed and then changed) to a GitHub repository of its own on the user's account, private unless the user wants it public, as a version another workspace can install with install-app. Handles the first publish of an app, every later version, and making a published app public. Use only when the user asks to publish, share, release or put on GitHub an app or a new version of one. To share a whole workspace, use publish-template instead.
 metadata:
   author: imbue
 ---
 
 # Publish an app
 
-A published app is a small public repository named after the app, with the
-app's directory at its root: its code, the skills and routines it carries, its
+A published app is a small repository named after the app, private unless the
+user wants it public, with the app's directory at its root: its code, the skills and routines it carries, its
 `app.toml` and `README.md`. It holds one commit per published version, and it
 is what `install-app` installs from. This skill makes the first version and
 every later one.
@@ -21,15 +21,21 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 ## Standing instructions
 
 - **Only when the user asks.** Never publish, and never start this flow, on
-  your own initiative: publishing makes the app public, for good.
+  your own initiative: publishing copies the app out of the workspace.
+- **Private unless the user asked for public.** "Publish it", "put it on
+  GitHub", "share it with my team" make a private repository: only the user
+  and the people they invite on GitHub can see or install it. Words that mean
+  everyone ("publicly", "open source", "so anyone can install it") make a
+  public one, for good. When you cannot tell which they mean, ask at the scope
+  gate. Never make anything public on a guess.
 - **Two gates only the user can pass.** The scope gate (step 3) comes before
   anything is prepared, and the publish gate (step 6) before anything is
   pushed. Each needs an explicit reply to THAT message: the original "publish
   this", an earlier gate, and approving a GitHub permission do not count, and
   your own checks are verification, not confirmation. End your turn after
   sending each one.
-- **Nothing is public until step 7, and what goes is exactly what was
-  scanned.** If any step before the push fails, nothing has left the
+- **Nothing leaves the workspace until step 7, and what goes is exactly what
+  was scanned.** If any step before the push fails, nothing has left the
   workspace: fix the cause and run the step again, or stop and tell the user
   plainly that nothing was published. Never get a version out another way (a
   plain `git push`, files uploaded through the API, the app's dev repository
@@ -53,11 +59,13 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 - **Changes do not flow back.** The published repository is an export: an
   edit made on GitHub is not brought into the workspace, and the next publish
   is refused rather than overwriting it.
-- **Sharing with particular people without publishing** is the app's private
-  dev repository (the `github-sync` skill), which has had no secret scan and
-  is never what this skill makes public.
-- **Unpublishing** is the user's to do on GitHub. `app-install uninstall`
-  leaves an app's repositories alone.
+- **Sharing with particular people** is a private publish: the user then
+  invites them to the repository on GitHub. Never the app's dev repository
+  (the `github-sync` skill), which has had no secret scan.
+- **Making a published app public later**: read "Making a published app
+  public" in `references/results.md`. It needs the user's explicit yes.
+- **Making it private again, or unpublishing**, is the user's to do on
+  GitHub. `app-install uninstall` leaves an app's repositories alone.
 
 ## Steps
 
@@ -104,7 +112,7 @@ Then look for a publish an earlier attempt left between its steps:
 `cat data/.state/app_install/publish/<name>.json`. No such file means nothing
 is waiting. When there is one, read "A publish that was pushed and never
 finished" in `references/results.md` before anything else: a pushed version
-is ALREADY PUBLIC.
+is ALREADY ON GITHUB.
 
 ## Step 2: Get somewhere to publish to
 
@@ -144,7 +152,11 @@ there):
 - the proposed version, and for a major one what people who installed the app
   will have to do;
 - the repository's name, marked as adjustable on a first publish;
-- that the repository will be **public** and will ship under the MIT license;
+- who will be able to see it. **Private**: only they and the people they
+  invite on GitHub. **Public**, only when they asked for that: anyone, for
+  good, under the MIT license. When their request did not say which, ask here
+  and offer private as the default. On a later publish, say which it is now
+  (`uv run --no-sync app-install publish visibility <name>`);
 - for a `modified` app: that this is their version of an app that came from
   `<upstream_url>`, published under their own account with a note of where it
   came from.
@@ -207,7 +219,8 @@ Present the publish ONCE, in plain language:
   whether it reads like a good description of what they built. Say up front
   that the button at its top shows as a plain link in chat;
 - the **address** it will have, `https://github.com/<owner>/<repo_name>`, and
-  once more that this makes it **public**, under the MIT license.
+  once more who will be able to see it: private, or **public**, for anyone
+  and for good, under the MIT license.
 
 Then end your turn and wait for their explicit go-ahead to THIS message.
 
@@ -218,15 +231,17 @@ user calls it off" in `references/results.md`, and say nothing was published.
 ## Step 7: Push
 
 ```bash
-uv run --no-sync app-install publish push <name> --repo-name <repo_name>
+uv run --no-sync app-install publish push <name> --repo-name <repo_name> [--public]
 ```
 
 (`--repo-name` only on a first publish under another name.) A first publish
-creates the public repository. The assembled tree is then pushed as ONE
-commit on top of the last published one, with the tag `v<version>`, never
-forced.
+creates the repository, private unless `--public` is given: pass it only when
+the user chose public at the gates. A later publish leaves who can see the
+repository as it is, and is refused with `--public`. The assembled tree is
+then pushed as ONE commit on top of the last published one, with the tag
+`v<version>`, never forced.
 
-On `pushed` the version is public: keep `published_repo_url`, and check
+On `pushed` the version is on GitHub: keep `published_repo_url`, and check
 `is_tag_pushed` and `problems` before step 8, as "After a push" in
 `references/results.md` says. On any other `result`
 (`name_taken`, `push_refused`, `not_assembled`, `refused`), read "When the
@@ -259,5 +274,6 @@ for a retry.
 
 In your final message give the user the app's address (`published_repo_url`)
 and the two ways to take it: the "Open in Imbue Studio" button on that page,
-or pasting the address into a workspace's chat. Mention any follow-up from
-step 7.
+or pasting the address into a workspace's chat. For a private one, say that
+only people they invite to it on GitHub can do either. Mention any follow-up
+from step 7.

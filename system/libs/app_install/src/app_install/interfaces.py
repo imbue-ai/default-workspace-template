@@ -92,11 +92,20 @@ class WorkspaceRuntimeInterface(MutableModel, ABC):
         such case, and the message says so."""
 
     @abstractmethod
-    def create_published_repository(self, name: str, description: str) -> CreatedRepository:
-        """Create the public repository ``name`` under the workspace's GitHub account, close it to outside
-        contributions, and give it the topic published apps are found by. Raises PublishedNameTakenError when
-        the account already has a repository of that name, and PublishError when it is not created for any other
-        reason."""
+    def create_published_repository(self, name: str, description: str, is_private: bool) -> CreatedRepository:
+        """Create the repository ``name`` under the workspace's GitHub account, private or public as asked,
+        close it to outside contributions, and give it the topic published apps are found by. Raises
+        PublishedNameTakenError when the account already has a repository of that name, and PublishError when it
+        is not created for any other reason."""
+
+    @abstractmethod
+    def is_published_repository_private(self, repo_url: str) -> bool:
+        """Whether the repository at ``repo_url`` is private, as GitHub says now. Raises PublishError when
+        GitHub does not say."""
+
+    @abstractmethod
+    def make_published_repository_public(self, repo_url: str) -> None:
+        """Make the repository at ``repo_url`` public. Raises PublishError when it is not public afterwards."""
 
     @abstractmethod
     def scan_secrets(self, directory: Path) -> SecretScan:

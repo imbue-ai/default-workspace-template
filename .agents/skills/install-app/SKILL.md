@@ -32,8 +32,9 @@ skill.
 
 ## What the URL can be
 
-- **A published app**: a public repository that holds one clean copy of the
-  app per version. The latest version is installed unless you name one.
+- **A published app**: a repository that holds one clean copy of the app
+  per version, public or private to the people its owner invited. The latest
+  version is installed unless you name one.
 - **Someone's dev repository** (usually named `<name>-dev`): the private
   repository a person's own workspace keeps its working copy of an app in,
   which they have given the user access to. It installs the same way, from

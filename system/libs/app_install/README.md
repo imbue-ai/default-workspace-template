@@ -198,17 +198,18 @@ The result is `linked` (the first marker was made), `refreshed` (a new one was m
 
 ## Publishing an app
 
-An app's published repository is public, is named after the app, and holds one commit per published version: the app's directory at one workspace commit, less the paths the manifest's `[publish] exclude` names.
+An app's published repository is named after the app, is private unless the publish asks for a public one, and holds one commit per published version: the app's directory at one workspace commit, less the paths the manifest's `[publish] exclude` names.
 It is what another workspace installs from.
-A publish is driven by the `publish-app` skill, which asks the user twice before anything becomes public; the steps that need no judgement are five subcommands, run in this order.
+A publish is driven by the `publish-app` skill, which asks the user twice before anything leaves the workspace; the steps that need no judgement are five subcommands, run in this order, and a sixth for who can see the repository.
 
 | Step | What it does | Result |
 | --- | --- | --- |
 | `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`), which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from, and each line that names a skill the app does not carry (`outside_skill_uses`). Writes nothing. | `compared` |
 | `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
 | `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
-| `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
+| `publish push <name> [--repo-name <repository>] [--public]` | Creates the repository on the first publish, private unless `--public` is given, and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
 | `publish record <name>` | Writes `published_commit`, `published_version` and `verified_template` to the app's record, beside the `published_repo_url` the push wrote, and commits that one file. | `recorded` |
+| `publish visibility <name> [--make-public]` | Asks GitHub whether the published repository is private (`is_private`), and with `--make-public` makes a private one public first (`is_changed`). Everything in the repository went through the secret scan before it was pushed, so this publishes nothing that was not checked. Refused for an app that has no published repository. | `visibility` |
 
 **The version.**
 A version is three numbers, with an optional pre-release after a hyphen, and each published version is newer than the last.
@@ -237,7 +238,8 @@ The check reads paths only: a Python import of a skill's package is caught by th
 A file over 1 MB, a file that is not text, a link, and a repository nested in the app are not read.
 
 **The push.**
-On the first publish the public repository is created under the workspace's GitHub account through `latchkey curl`, closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+On the first publish the repository is created under the workspace's GitHub account through `latchkey curl`, private unless `--public` is given (`is_private` in the result says which), closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+A later publish never changes who can see the repository: its `is_private` is null, and `--public` is refused with the command that does.
 Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.
 A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
 The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.

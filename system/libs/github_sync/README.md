@@ -249,7 +249,9 @@ than keep copies:
   account has one of that name, `GithubRequestError` for any other refusal),
   and `lock_down_repository(repository)` closes issues, wiki, projects,
   discussions and outside pull requests, returning the problem when that did
-  not take. `set_repository_topics(repository, names)` sets the topics a
+  not take. `read_repository_is_private(repository)` asks GitHub whether a
+  repository is private, and `make_repository_public(repository)` makes it
+  public. `set_repository_topics(repository, names)` sets the topics a
   published template or app is found by, and `hint_for_push_failure(output)`
   says what a push git refused most likely means, when it is a refusal it
   knows.

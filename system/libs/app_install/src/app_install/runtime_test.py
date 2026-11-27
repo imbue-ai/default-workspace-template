@@ -42,7 +42,7 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
         tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"names": ["imbue-studio-app"]}'
     )
 
-    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes")
+    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=False)
 
     assert created.model_dump() == {
         "url": "https://github.com/octo/notes",
@@ -53,6 +53,65 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
     assert '"private": false' in creation and '"description": "Keep short notes"' in creation
     assert '{"names": ["imbue-studio-app"]}' in topic
     assert '"has_issues": false' in lockdown and '"pull_request_creation_policy": "collaborators_only"' in lockdown
+
+
+def test_a_published_repository_is_created_private_when_asked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = _latchkey_answering_a_publish(
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"names": ["imbue-studio-app"]}'
+    )
+
+    WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=True)
+
+    assert '"private": true' in requests.read_text().splitlines()[0]
+
+
+# A stand-in for latchkey that logs each request and answers what GitHub says of one repository: the content of
+# the file beside it, whether the repository is read or changed.
+_LATCHKEY_ANSWERING_FOR_ONE_REPOSITORY = """\
+directory="$(dirname "$0")"
+printf '%s\\n' "$*" >> "$directory/requests"
+cat "$directory/repository.json"
+"""
+
+
+def _latchkey_answering_for_one_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str) -> Path:
+    """Put the stand-in latchkey first on PATH; the file it logs its requests to."""
+    bin_directory = tmp_path / "bin"
+    install_fake_latchkey(bin_directory, _LATCHKEY_ANSWERING_FOR_ONE_REPOSITORY)
+    (bin_directory / "repository.json").write_text(answer)
+    monkeypatch.setenv("PATH", f"{bin_directory}{os.pathsep}{os.environ['PATH']}")
+    return bin_directory / "requests"
+
+
+def test_whether_a_published_repository_is_private_is_what_github_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = _latchkey_answering_for_one_repository(tmp_path, monkeypatch, '{"name": "notes", "private": true}')
+    runtime = WorkspaceRuntime(repo_root=tmp_path)
+
+    assert runtime.is_published_repository_private("https://github.com/octo/notes") is True
+    # A read sends no body.
+    assert requests.read_text().splitlines() == ["curl -s -X GET https://api.github.com/repos/octo/notes"]
+
+    (tmp_path / "bin" / "repository.json").write_text('{"message": "Not Found"}')
+    with pytest.raises(PublishError, match="did not say whether octo/notes is private"):
+        runtime.is_published_repository_private("https://github.com/octo/notes")
+
+
+def test_a_published_repository_is_made_public_or_the_refusal_is_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = _latchkey_answering_for_one_repository(tmp_path, monkeypatch, '{"name": "notes", "private": false}')
+    runtime = WorkspaceRuntime(repo_root=tmp_path)
+
+    runtime.make_published_repository_public("https://github.com/octo/notes")
+
+    (request,) = requests.read_text().splitlines()
+    assert "-X PATCH https://api.github.com/repos/octo/notes" in request and '{"private": false}' in request
+
+    (tmp_path / "bin" / "repository.json").write_text('{"error": "request not permitted by the user"}')
+    with pytest.raises(PublishError, match="octo/notes was not made public"):
+        runtime.make_published_repository_public("https://github.com/octo/notes")
 
 
 def test_a_dev_repository_is_created_private_and_closed_to_outsiders(
@@ -86,7 +145,7 @@ def test_a_topic_that_is_not_set_is_a_problem_of_a_repository_that_was_created(
         tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"message": "Not Found"}'
     )
 
-    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes")
+    created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=False)
 
     assert created.url == "https://github.com/octo/notes"
     assert "the topic was not set" in created.topic_problem
@@ -101,13 +160,13 @@ def test_a_name_the_account_already_uses_is_told_apart_from_every_other_refusal(
     runtime = WorkspaceRuntime(repo_root=tmp_path)
 
     with pytest.raises(PublishedNameTakenError, match="name already exists"):
-        runtime.create_published_repository("notes", "Keep short notes")
+        runtime.create_published_repository("notes", "Keep short notes", is_private=False)
     # Nothing is asked of a repository that was not created.
     assert len(requests.read_text().splitlines()) == 1
 
     (tmp_path / "bin" / "creation.json").write_text('{"error": "request not permitted by the user"}')
     with pytest.raises(PublishError, match="github-rest-api") as refused:
-        runtime.create_published_repository("notes", "Keep short notes")
+        runtime.create_published_repository("notes", "Keep short notes", is_private=False)
     assert not isinstance(refused.value, PublishedNameTakenError)
 
 

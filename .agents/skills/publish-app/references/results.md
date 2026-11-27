@@ -17,6 +17,7 @@ calls off. Step numbers are SKILL.md's.
 - After a push
 - When the push stops
 - When recording stops
+- Making a published app public
 
 ## An app that cannot be published
 
@@ -32,13 +33,13 @@ calls off. Step numbers are SKILL.md's.
 `data/.state/app_install/publish/<name>.json` is what an earlier attempt left
 between its steps.
 
-- `is_commit_pushed` is `true`: that version is ALREADY PUBLIC and only its
+- `is_commit_pushed` is `true`: that version is ALREADY ON GITHUB and only its
   record (and perhaps its tag) is missing. Do not start over, and do not
   remove the worker or its branch `mngr/<slug>`: that branch holds the
   published version's own changes to the app, and step 8 merges it. Go
   straight to step 7, which sends only what is still missing, then step 8.
 - `is_commit_pushed` is `false`: a tree that was assembled and never pushed.
-  Nothing is public, and starting over replaces it.
+  Nothing has left the workspace, and starting over replaces it.
 
 ## A worker an earlier attempt left
 
@@ -124,7 +125,7 @@ assemble is what gets pushed.
 
 ## When the user calls it off
 
-Before the push, calling the publish off leaves nothing public. Destroy the
+Before the push, calling the publish off leaves nothing on GitHub. Destroy the
 worker and its branch, without merging it, so the workspace's copy of the app
 stays as it was:
 
@@ -138,8 +139,8 @@ git branch -D "mngr/<slug>"
 
 ## After a push
 
-`pushed` means the version is public. On a first publish the push created
-the public repository, closed its issues, wiki, projects, discussions and
+`pushed` means the version is on GitHub. On a first publish the push created
+the repository (`is_private` says whether it is private), closed its issues, wiki, projects, discussions and
 outside pull requests, and gave it the topic `imbue-studio-app`. Before
 step 8:
 
@@ -179,3 +180,27 @@ The app is published whatever `publish record` answers, so never push again.
   `uv run --no-sync app-install publish record <name>` again.
 - `not_assembled` after a run that answered `recorded`: there is nothing left
   to record (`app-install list` shows the app's `published_version`).
+
+## Making a published app public
+
+A published app's repository is private unless the user chose public when it
+was first published. Making it public later needs no new version: everything
+in the repository went through the secret scan before it was pushed.
+
+```bash
+uv run --no-sync app-install publish visibility <name>
+```
+
+says who can see it now (`is_private`). To make it public:
+
+1. Tell the user, in one message, that anyone will be able to see and install
+   the app from then on, that this cannot be taken back by you (they can make
+   it private again themselves on GitHub, but copies people took stay out
+   there), and that it is shared under the MIT license. End your turn and
+   wait for an explicit yes to THAT message.
+2. Run `uv run --no-sync app-install publish visibility <name> --make-public`.
+   `is_changed` is true when it was private and is public now. On `refused`,
+   `detail` says why: an app that was never published has no repository to
+   make public, and a missing GitHub permission is requested as "Somewhere to
+   publish to" in `github-access.md` says.
+3. Give the user the address again.

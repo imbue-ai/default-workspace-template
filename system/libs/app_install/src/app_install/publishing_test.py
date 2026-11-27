@@ -30,6 +30,7 @@ from app_install.publishing import PushOutcome
 from app_install.publishing import assemble_app
 from app_install.publishing import compare_with_published
 from app_install.publishing import pending_publish_path
+from app_install.publishing import published_visibility
 from app_install.publishing import push_app
 from app_install.publishing import record_publish
 from app_install.publishing import set_version
@@ -77,7 +78,7 @@ def _versioned(workspace: Path, runtime: RecordingRuntime, version: str) -> str:
 def _publish(workspace: Path, runtime: RecordingRuntime, version: str) -> PushOutcome:
     _versioned(workspace, runtime, version)
     assemble_app(workspace, "notes", "HEAD", runtime)
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     record_publish(workspace, "notes", runtime)
     return pushed
 
@@ -219,7 +220,7 @@ def test_the_published_tree_leaves_out_what_the_manifest_excludes(tmp_path: Path
     # Nothing is pushed by assembling.
     assert _refs(published) == []
 
-    push_app(workspace, "notes", None, runtime)
+    push_app(workspace, "notes", None, False, runtime)
 
     # The app's directory is the repository's root, and the excluded files never left the machine.
     assert _published_files(published) == kept
@@ -240,7 +241,7 @@ def test_a_planted_secret_stops_the_publish_and_nothing_is_pushed(tmp_path: Path
     assert stopped.value.findings == ("[stand-in] planted-secret: src/notes/settings.py (value redacted)",)
     assert not pending_publish_path(workspace, "notes").exists()
     with pytest.raises(NotAssembledError, match="publish assemble notes"):
-        push_app(workspace, "notes", None, runtime)
+        push_app(workspace, "notes", None, False, runtime)
     assert _refs(published) == []
     assert not any(call.startswith("create_published_repository") for call in runtime.calls)
 
@@ -252,7 +253,7 @@ def test_a_planted_secret_stops_the_publish_and_nothing_is_pushed(tmp_path: Path
     commit_all(workspace, "Leave the settings out of what is published")
     assembled = assemble_app(workspace, "notes", "HEAD", runtime)
     assert "src/notes/settings.py" in assembled.published.excluded_paths
-    push_app(workspace, "notes", None, runtime)
+    push_app(workspace, "notes", None, False, runtime)
     assert "src/notes/settings.py" not in _published_files(published)
 
 
@@ -440,16 +441,17 @@ def test_a_first_publish_creates_the_repository_and_pushes_one_parentless_commit
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
 
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
 
     assert pushed.repo_url == _PUBLISHED_URL
     assert pushed.is_repository_created
+    assert pushed.is_private is True
     assert pushed.is_tag_pushed
     assert pushed.parent == ""
     assert pushed.tag == "v0.1.0"
     assert pushed.derived_from == ""
     assert pushed.problems == ()
-    assert "create_published_repository notes 'Notes'" in runtime.calls
+    assert "create_published_repository notes 'Notes' private" in runtime.calls
     # The record names the repository from the moment it exists; the version waits for the record step.
     assert pushed.record.published_repo_url == _PUBLISHED_URL
     assert (pushed.record.published_commit, pushed.record.published_version) == ("", "")
@@ -460,6 +462,43 @@ def test_a_first_publish_creates_the_repository_and_pushes_one_parentless_commit
     # The workspace keeps the published commit for the next publish to follow, and no tag of the app's.
     assert run_git(workspace, ["rev-parse", "refs/app-published/notes"]) == pushed.commit
     assert run_git(workspace, ["tag", "--list"]) == _TEMPLATE_VERSION
+
+
+def test_a_first_publish_creates_a_public_repository_only_when_asked_and_a_later_one_never_changes_it(
+    tmp_path: Path,
+) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+
+    pushed = push_app(workspace, "notes", None, True, runtime)
+    record_publish(workspace, "notes", runtime)
+
+    assert pushed.is_private is False
+    assert "create_published_repository notes 'Notes' public" in runtime.calls
+
+    _versioned(workspace, runtime, "0.2.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    with pytest.raises(PublishError, match="publish visibility notes --make-public"):
+        push_app(workspace, "notes", None, True, runtime)
+    # The repository was there already, so the push that follows has nothing to say of who can see it.
+    assert push_app(workspace, "notes", None, False, runtime).is_private is None
+
+
+def test_a_published_repository_says_whether_it_is_private_and_is_made_public_once(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    with pytest.raises(PublishError, match="has no published repository yet"):
+        published_visibility(workspace, "notes", False, runtime)
+    _publish(workspace, runtime, "0.1.0")
+
+    asked = published_visibility(workspace, "notes", False, runtime)
+    made_public = published_visibility(workspace, "notes", True, runtime)
+    again = published_visibility(workspace, "notes", True, runtime)
+
+    assert (asked.repo_url, asked.is_private, asked.is_changed) == (_PUBLISHED_URL, True, False)
+    assert (made_public.is_private, made_public.is_changed) == (False, True)
+    assert (again.is_private, again.is_changed) == (False, False)
+    assert runtime.calls.count(f"make_published_repository_public {_PUBLISHED_URL}") == 1
 
 
 def test_a_second_publish_follows_the_first_and_is_pushed_as_a_fast_forward(tmp_path: Path) -> None:
@@ -477,7 +516,7 @@ def test_a_second_publish_follows_the_first_and_is_pushed_as_a_fast_forward(tmp_
         second.commit,
     ]
     assert run_git(published, ["show", "main:src/notes/runner.py"]) == "GREETING = 'good morning'"
-    assert runtime.calls.count("create_published_repository notes 'Notes'") == 1
+    assert runtime.calls.count("create_published_repository notes 'Notes' private") == 1
     record = load_record(workspace, "notes")
     assert (record.published_commit, record.published_version) == (second.commit, "0.2.0")
 
@@ -495,7 +534,7 @@ def test_a_repository_someone_else_pushed_to_is_never_forced(tmp_path: Path) -> 
     assemble_app(workspace, "notes", "HEAD", runtime)
 
     with pytest.raises(PushRefusedError, match="nothing is ever forced"):
-        push_app(workspace, "notes", None, runtime)
+        push_app(workspace, "notes", None, False, runtime)
 
     assert run_git(published, ["rev-parse", "main"]) == theirs
     assert "refs/tags/v0.2.0" not in _refs(published)
@@ -509,7 +548,7 @@ def test_a_name_the_account_already_uses_stops_the_first_publish(tmp_path: Path)
     assemble_app(workspace, "notes", "HEAD", runtime)
 
     with pytest.raises(PublishedNameTakenError, match="already exists"):
-        push_app(workspace, "notes", None, runtime)
+        push_app(workspace, "notes", None, False, runtime)
 
     assert _refs(published) == []
     assert load_record(workspace, "notes").published_repo_url == ""
@@ -517,12 +556,12 @@ def test_a_name_the_account_already_uses_stops_the_first_publish(tmp_path: Path)
         record_publish(workspace, "notes", runtime)
 
     with pytest.raises(PublishError, match="not a repository name"):
-        push_app(workspace, "notes", "-notes", runtime)
+        push_app(workspace, "notes", "-notes", False, runtime)
 
     # Another name, agreed at the scope gate, is taken up without assembling again.
     renamed = make_bare_repository(tmp_path / "github" / "octo-notes.git")
     point_url_at(workspace, "https://github.com/octo/octo-notes", renamed)
-    pushed = push_app(workspace, "notes", "octo-notes", runtime)
+    pushed = push_app(workspace, "notes", "octo-notes", False, runtime)
     assert pushed.repo_url == "https://github.com/octo/octo-notes"
     assert run_git(renamed, ["rev-parse", "main"]) == pushed.commit
     assert load_record(workspace, "notes").published_repo_url == "https://github.com/octo/octo-notes"
@@ -536,7 +575,7 @@ def test_a_repository_that_was_created_is_not_created_again_when_the_push_is_run
     point_url_at(workspace, _PUBLISHED_URL, tmp_path / "github" / "missing.git")
     run_git(workspace, ["config", "--unset", f"url.{published}.insteadOf"])
     with pytest.raises(PublishError, match="the push to https://github.com/octo/notes failed"):
-        push_app(workspace, "notes", None, runtime)
+        push_app(workspace, "notes", None, False, runtime)
     # The repository exists from then on, so the record names it, committed, before anything is in it.
     assert load_record(workspace, "notes").published_repo_url == _PUBLISHED_URL
     assert run_git(workspace, ["log", "-1", "--format=%an|%s"]) == (
@@ -548,11 +587,11 @@ def test_a_repository_that_was_created_is_not_created_again_when_the_push_is_run
     run_git(workspace, ["config", "--unset", f"url.{tmp_path / 'github' / 'missing.git'}.insteadOf"])
     point_url_at(workspace, _PUBLISHED_URL, published)
 
-    pushed = push_app(workspace, "notes", None, runtime)
-    again = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
+    again = push_app(workspace, "notes", None, False, runtime)
 
     assert not pushed.is_repository_created
-    assert runtime.calls.count("create_published_repository notes 'Notes'") == 1
+    assert runtime.calls.count("create_published_repository notes 'Notes' private") == 1
     # A push that already reached the repository makes no second commit.
     assert again.commit == pushed.commit
     assert run_git(published, ["rev-list", "--count", "main"]) == "1"
@@ -564,14 +603,14 @@ def test_a_push_that_reached_the_repository_before_that_was_noted_is_finished_by
     workspace, published, runtime = _publisher(tmp_path, is_python=False)
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     # As if the run had been cut off right after git pushed: the commit is noted, that it arrived is not.
     pending_file = pending_publish_path(workspace, "notes")
     noted = json.loads(pending_file.read_text())
     assert noted["commit"] == pushed.commit
     pending_file.write_text(json.dumps({**noted, "is_commit_pushed": False, "is_tag_pushed": False}))
 
-    again = push_app(workspace, "notes", None, runtime)
+    again = push_app(workspace, "notes", None, False, runtime)
 
     # The same commit is pushed again, which the repository already has, so nothing is refused or doubled.
     assert again.commit == pushed.commit
@@ -596,7 +635,7 @@ def test_a_tag_that_did_not_reach_the_repository_is_sent_alone_by_pushing_again(
     assemble_app(workspace, "notes", "HEAD", runtime)
     hook = _refuse_tags(published)
 
-    untagged = push_app(workspace, "notes", None, runtime)
+    untagged = push_app(workspace, "notes", None, False, runtime)
 
     # The version is published all the same, and the outcome says its tag is still owed.
     assert untagged.is_tag_pushed is False
@@ -606,12 +645,12 @@ def test_a_tag_that_did_not_reach_the_repository_is_sent_alone_by_pushing_again(
     assert run_git(published, ["rev-parse", "main"]) == untagged.commit
 
     hook.unlink()
-    tagged = push_app(workspace, "notes", None, runtime)
+    tagged = push_app(workspace, "notes", None, False, runtime)
 
     assert (tagged.is_tag_pushed, tagged.commit, tagged.problems) == (True, untagged.commit, ())
     assert run_git(published, ["rev-list", "--count", "main"]) == "1"
     assert run_git(published, ["rev-parse", "v0.1.0^{commit}"]) == untagged.commit
-    assert runtime.calls.count("create_published_repository notes 'Notes'") == 1
+    assert runtime.calls.count("create_published_repository notes 'Notes' private") == 1
 
 
 def test_a_tag_the_repository_already_has_is_reported_and_never_moved(tmp_path: Path) -> None:
@@ -623,7 +662,7 @@ def test_a_tag_the_repository_already_has_is_reported_and_never_moved(tmp_path: 
     _versioned(workspace, runtime, "0.2.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
 
-    second = push_app(workspace, "notes", None, runtime)
+    second = push_app(workspace, "notes", None, False, runtime)
 
     assert second.is_tag_pushed is False
     (problem,) = second.problems
@@ -641,7 +680,7 @@ def test_a_repository_that_was_not_closed_or_not_given_its_topic_is_a_problem_of
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
 
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
 
     assert pushed.is_repository_created and pushed.is_tag_pushed
     assert pushed.problems == (
@@ -665,7 +704,7 @@ def test_a_first_publish_whose_push_fails_still_says_what_creating_the_repositor
     point_url_at(workspace, _PUBLISHED_URL, tmp_path / "github" / "missing.git")
 
     with pytest.raises(PublishError) as failure:
-        push_app(workspace, "notes", None, runtime)
+        push_app(workspace, "notes", None, False, runtime)
 
     # The run after this one finds the repository made, so this is the only time either is said.
     assert f"the push to {_PUBLISHED_URL} failed" in str(failure.value)
@@ -673,7 +712,7 @@ def test_a_first_publish_whose_push_fails_still_says_what_creating_the_repositor
     assert "the topic published apps are found by: the topic was not set" in str(failure.value)
     run_git(workspace, ["config", "--unset", f"url.{tmp_path / 'github' / 'missing.git'}.insteadOf"])
     point_url_at(workspace, _PUBLISHED_URL, published)
-    assert push_app(workspace, "notes", None, runtime).problems == ()
+    assert push_app(workspace, "notes", None, False, runtime).problems == ()
 
 
 def test_only_the_first_publish_of_an_app_installed_and_changed_here_says_what_it_was_derived_from(
@@ -724,7 +763,7 @@ def test_the_record_step_alone_finishes_a_publish_whose_record_was_not_written(t
     workspace, published, runtime = _publisher(tmp_path)
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     # The push reached the repository and then the publish was interrupted: the record says nothing yet.
     assert load_record(workspace, "notes").published_commit == ""
     assert run_git(published, ["rev-parse", "main"]) == pushed.commit
@@ -762,7 +801,7 @@ def test_the_next_version_is_not_assembled_while_a_pushed_one_waits_to_be_record
     workspace, published, runtime = _publisher(tmp_path, is_python=False)
     _versioned(workspace, runtime, "0.1.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     _versioned(workspace, runtime, "0.2.0")
 
     # Assembling now would forget which commit was pushed, and the next push could not follow it.
@@ -771,7 +810,7 @@ def test_the_next_version_is_not_assembled_while_a_pushed_one_waits_to_be_record
 
     record_publish(workspace, "notes", runtime)
     assemble_app(workspace, "notes", "HEAD", runtime)
-    second = push_app(workspace, "notes", None, runtime)
+    second = push_app(workspace, "notes", None, False, runtime)
     assert second.parent == pushed.commit
     assert run_git(published, ["rev-list", "main"]).splitlines() == [second.commit, pushed.commit]
 
@@ -782,7 +821,7 @@ def test_recording_a_version_made_on_a_branch_that_was_not_merged_says_so(tmp_pa
     worker_commit = _versioned(workspace, runtime, "0.1.0")
     run_git(workspace, ["checkout", "--quiet", "main"])
     assemble_app(workspace, "notes", "mngr/publish-notes", runtime)
-    push_app(workspace, "notes", None, runtime)
+    push_app(workspace, "notes", None, False, runtime)
 
     recorded = record_publish(workspace, "notes", runtime)
 
@@ -987,6 +1026,7 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     assert pushed["published_repo_url"] == _PUBLISHED_URL
     assert pushed["tag"] == "v0.2.0"
     assert pushed["is_repository_created"] is False
+    assert pushed["is_private"] is None
     assert pushed["is_tag_pushed"] is True
     assert pushed["problems"] == []
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
@@ -1020,6 +1060,16 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     }
     assert run("push", "notes")[1]["result"] == "not_assembled"
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
+
+
+def test_the_command_refuses_to_say_who_can_see_an_app_that_was_never_published(tmp_path: Path) -> None:
+    workspace, _published, _runtime = _publisher(tmp_path, is_python=False)
+
+    result = CliRunner().invoke(main, ["--repo-root", str(workspace), "publish", "visibility", "notes"])
+
+    refusal = json.loads(result.output)
+    assert (result.exit_code, refusal["result"], refusal["name"]) == (1, "refused", "notes")
+    assert "has no published repository yet" in refusal["detail"]
 
 
 def test_the_command_names_each_line_that_names_a_skill_the_app_does_not_carry(
@@ -1080,7 +1130,7 @@ def test_the_command_names_a_lock_that_does_not_hold_a_name_that_is_taken_and_a_
     assert _refs(published) == []
 
     # Published once, then someone else's commit lands on the published main.
-    pushed = push_app(workspace, "notes", None, runtime)
+    pushed = push_app(workspace, "notes", None, False, runtime)
     record_publish(workspace, "notes", runtime)
     other = tmp_path / "other"
     run_git(tmp_path, ["clone", "--quiet", str(published), str(other)])

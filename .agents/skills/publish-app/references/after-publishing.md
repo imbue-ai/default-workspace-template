@@ -5,7 +5,7 @@ publish is recorded, before you tell the user anything. The merge brought the
 published version's changes into the workspace's own copy of the app, and
 some of them take effect only when something is moved or started again.
 
-The version is public by now. A problem you find here is fixed as any change
+The version is on GitHub by now. A problem you find here is fixed as any change
 to the app is (the `update-app` skill) and goes out as the next version.
 
 ## Contents
