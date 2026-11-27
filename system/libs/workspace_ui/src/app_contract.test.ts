@@ -100,6 +100,7 @@ describe("connectToShell", () => {
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
+      declinesProviderRelay: false,
       isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -130,6 +131,7 @@ describe("connectToShell", () => {
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
       showsCoachMarks: false,
+      declinesProviderRelay: false,
       isViewing: false,
     });
   });
@@ -160,6 +162,16 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, showsCoachMarks: "true" }, parent);
     deliver(HANDSHAKE, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].showsCoachMarks)).toEqual([true, false, false]);
+  });
+
+  it("reads whether the embedder said it relays no provider sign-in, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, declinesProviderRelay: true }, parent);
+    deliver({ ...HANDSHAKE, declinesProviderRelay: "true" }, parent);
+    deliver(HANDSHAKE, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].declinesProviderRelay)).toEqual([true, false, false]);
   });
 
   it("reads whether the window is being viewed on somebody else's desktop, and anything but true as no", () => {

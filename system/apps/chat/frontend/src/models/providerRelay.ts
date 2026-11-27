@@ -8,6 +8,9 @@
  * browser, or a chrome that cannot bind the port, answers no or not at all -- and then the
  * chooser offers a way to sign in that needs no relay. A port that is only taken by something
  * else on the user's machine is said apart, since Claude's CLI draws a fresh one each run.
+ *
+ * A chrome with no computer behind it, as Imbue Studio in a browser, says before any sign-in that
+ * it relays none. The chooser then asks for no relay and opens the sign-in's page itself.
  */
 
 import {
@@ -26,6 +29,20 @@ export const RELAY_ACK_TIMEOUT_MS = 5000;
 /** The desktop app is relaying; or the callback port the CLI drew is taken on the user's machine,
  *  which a fresh sign-in may clear; or it cannot relay. */
 export type RelayAnswer = "relaying" | "port_taken" | "unavailable";
+
+let isRelayDeclinedByChrome = false;
+
+/** The chrome said whether it relays no provider sign-in: in the shell's handshake, and again
+ *  whenever it says what it can do. */
+export function noteProviderRelayDeclined(isDeclined: boolean): void {
+  isRelayDeclinedByChrome = isDeclined;
+}
+
+/** Whether the chrome above this page said it relays no provider sign-in. False under a chrome
+ *  that relays, under one from before it said, and with no chrome at all. */
+export function isProviderRelayDeclined(): boolean {
+  return isRelayDeclinedByChrome;
+}
 
 /** Settles the request still waiting on an ack. The ack has one handler slot, so only one request may own it. */
 let settlePending: ((answer: RelayAnswer) => void) | null = null;

@@ -55,6 +55,7 @@ import {
 } from "../models/Chats";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { isNothingSignedIn, makeRootFirstSendChooser } from "../models/firstSendChooser";
+import { noteProviderRelayDeclined } from "../models/providerRelay";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
@@ -617,6 +618,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
+      noteProviderRelayDeclined(received.declinesProviderRelay);
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
       pool?.setHandshake(received);
       // Whatever went up before the shell was listening is told again.
@@ -674,7 +676,9 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       ...handshake,
       opensWorkspaceSettings: message.opensWorkspaceSettings === true,
       showsCoachMarks: message.showsCoachMarks === true,
+      declinesProviderRelay: message.declinesProviderRelay === true,
     };
+    noteProviderRelayDeclined(handshake.declinesProviderRelay);
     pool?.setHandshake(handshake);
   });
   // Hidden until the shell says shown: the root can load into a background tab.

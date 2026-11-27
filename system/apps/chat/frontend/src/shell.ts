@@ -14,6 +14,7 @@ import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
+import { noteProviderRelayDeclined } from "./models/providerRelay";
 import { rereadNextStepSuggestions } from "./models/Suggestions";
 import {
   EMBEDDER_CAPABILITIES,
@@ -164,6 +165,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     lastHandshake = received;
     isWorkspaceSettingsOpenedByChrome = received.opensWorkspaceSettings;
     isCoachMarkDrawnByChrome = received.showsCoachMarks;
+    noteProviderRelayDeclined(received.declinesProviderRelay);
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any page's unexpired visible or hidden report) is what a hidden report keeps.
@@ -203,6 +205,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     isWorkspaceSettingsOpenedByChrome = message.opensWorkspaceSettings === true;
     isCoachMarkDrawnByChrome = message.showsCoachMarks === true;
+    noteProviderRelayDeclined(message.declinesProviderRelay === true);
     m.redraw();
   });
   if (connection.isFramed) {

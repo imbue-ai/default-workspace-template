@@ -221,6 +221,9 @@ export interface ShellHandshake {
   opensLocalFiles: boolean;
   opensWorkspaceSettings: boolean;
   showsCoachMarks: boolean;
+  /** Whether the chrome said it relays no provider sign-in, so a page that signs in opens the provider's page
+   *  itself and asks for no relay. False under a chrome that relays, and under one that never said. */
+  declinesProviderRelay: boolean;
   /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
    *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
   isViewing: boolean;
@@ -308,6 +311,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     opensLocalFiles,
     opensWorkspaceSettings,
     showsCoachMarks,
+    declinesProviderRelay,
     isViewing,
   } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
@@ -320,6 +324,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     opensLocalFiles: opensLocalFiles === true,
     opensWorkspaceSettings: opensWorkspaceSettings === true,
     showsCoachMarks: showsCoachMarks === true,
+    declinesProviderRelay: declinesProviderRelay === true,
     isViewing: isViewing === true,
   };
 }

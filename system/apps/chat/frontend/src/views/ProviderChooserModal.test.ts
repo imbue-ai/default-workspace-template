@@ -32,10 +32,11 @@ const state: {
 
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<RelayAnswer> => "relaying"));
+const isProviderRelayDeclined = vi.hoisted(() => vi.fn(() => false));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 const abortFlow = vi.hoisted(() => vi.fn());
 
-vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
+vi.mock("../models/providerRelay", () => ({ requestProviderRelay, isProviderRelayDeclined }));
 
 // The real module under the view's data sources, so the chooser's open/pick/close state is the
 // production code rather than a stand-in for it.
@@ -136,6 +137,9 @@ beforeEach(() => {
   abortFlow.mockClear();
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue("relaying");
+  isProviderRelayDeclined.mockReset();
+  isProviderRelayDeclined.mockReturnValue(false);
+  vi.restoreAllMocks();
   loadLanesAndAccountsWithRetry.mockReset();
   loadLanesAndAccountsWithRetry.mockResolvedValue(undefined);
   state.lanes = [lane()];
@@ -686,6 +690,90 @@ describe("a sign-in finished in the browser", () => {
     await clickLane("openai");
 
     expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "chatgpt", "device"]);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+  });
+
+  describe("under a chrome that said it relays no sign-in", () => {
+    /** A tab the browser hands back for `window.open`, and what was done with it. */
+    function browserOpensTabs() {
+      const tab = { opener: window as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+      const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+      return { tab, open };
+    }
+
+    beforeEach(() => {
+      isProviderRelayDeclined.mockReturnValue(true);
+    });
+
+    it("asks for no relay, opens the sign-in's page in a tab of its own at the click, and is on the code step", async () => {
+      const { tab, open } = browserOpensTabs();
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+      const root = await clickLane("anthropic");
+
+      expect(requestProviderRelay).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledExactlyOnceWith("", "_blank");
+      expect(tab.location.replace).toHaveBeenCalledExactlyOnceWith("https://claude.ai/manual");
+      // The provider's page is another site's, and is handed no way back to this one.
+      expect(tab.opener).toBeNull();
+      expect(tab.close).not.toHaveBeenCalled();
+      expect(root.textContent).toContain(PASTE_STEP_LABEL);
+      expect(root.textContent).not.toContain("Finish signing in to Anthropic in your browser.");
+    });
+
+    it("goes straight to ChatGPT's one-time code, and shows that sign-in's page in the tab", async () => {
+      const { tab } = browserOpensTabs();
+      state.lanes = [CHATGPT];
+      state.flow = { ...(startedFlow("code_then_wait", null) as object), url: "https://auth.openai.com/device" };
+
+      await clickLane("openai");
+
+      expect(startFlow).toHaveBeenCalledExactlyOnceWith("openai", "device", undefined);
+      expect(requestProviderRelay).not.toHaveBeenCalled();
+      expect(tab.location.replace).toHaveBeenCalledExactlyOnceWith("https://auth.openai.com/device");
+    });
+
+    it("closes the tab it opened when the sign-in does not start", async () => {
+      const { tab } = browserOpensTabs();
+      startFlow.mockRejectedValueOnce(new Error("the sign-in could not be started"));
+
+      const root = await clickLane("anthropic");
+
+      expect(tab.close).toHaveBeenCalledOnce();
+      expect(tab.location.replace).not.toHaveBeenCalled();
+      expect(root.textContent).toContain("the sign-in could not be started");
+    });
+
+    it("leaves the link to the sign-in's page as the first step when the browser opens no tab", async () => {
+      const open = vi.spyOn(window, "open").mockReturnValue(null);
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+      const root = await clickLane("anthropic");
+
+      expect(open).toHaveBeenCalledOnce();
+      expect(root.querySelector('a[href="https://claude.ai/manual"]')?.textContent).toContain(
+        "Open Anthropic sign-in page",
+      );
+      expect(root.textContent).toContain(PASTE_STEP_LABEL);
+    });
+
+    it("opens no tab for a sign-in that is a pasted key", async () => {
+      const { open } = browserOpensTabs();
+      state.lanes = [PI_KEY_LANE];
+
+      await clickLane(PI_KEY_LANE.id);
+
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
+  it("opens no tab of its own under a chrome that relays, which opens the page itself", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    await clickLane("anthropic");
+
+    expect(open).not.toHaveBeenCalled();
     expect(requestProviderRelay).toHaveBeenCalledOnce();
   });
 

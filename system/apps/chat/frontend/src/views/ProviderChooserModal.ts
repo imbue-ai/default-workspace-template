@@ -69,7 +69,7 @@ import {
   submitKey,
 } from "../models/Providers";
 import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay";
+import { type RelayAnswer, isProviderRelayDeclined, requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
@@ -89,6 +89,25 @@ export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
 /** How many sign-ins in a row may draw a callback port that is taken before the chooser stops
  *  asking the desktop app and signs in without it. */
 export const MAX_SIGN_IN_PORT_DRAWS = 3;
+
+/** A tab of the browser's, opened before its page is known and pointed there afterwards. */
+export interface PendingTab {
+  show(url: string): void;
+  close(): void;
+}
+
+/** Open a blank tab now, for a page whose address comes later; null when the browser refuses one. A browser
+ *  opens a tab only while the click that asked for it still counts, and a sign-in's page is known seconds later. */
+export function openPendingTab(view: Pick<Window, "open">): PendingTab | null {
+  const tab = view.open("", "_blank");
+  if (tab === null) return null;
+  // The sign-in's page is another site's, which gets no handle on this one.
+  tab.opener = null;
+  return {
+    show: (url) => tab.location.replace(url),
+    close: () => tab.close(),
+  };
+}
 
 /** The loopback port a sign-in page's `redirect_uri` calls back to, or null when it names none. */
 function callbackPort(relayUrl: string): string | null {
@@ -171,9 +190,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return candidate.shape === "paste";
   }
 
+  /** Whether nothing will relay a sign-in: the chrome said beforehand that it relays none, or answered so, or no
+   *  callback port came free. */
+  function isNothingRelaying(): boolean {
+    return isRelayUnavailable || isProviderRelayDeclined();
+  }
+
   /** A lane's methods this page can offer: a browser-only sign-in needs a relay. */
   function offeredMethods(candidate: Lane): LaneMethod[] {
-    return candidate.methods.filter((each) => !(isRelayUnavailable && each.shape === "browser"));
+    return candidate.methods.filter((each) => !(isNothingRelaying() && each.shape === "browser"));
   }
 
   /** The way into a lane that needs no relay and no pasted key, for a browser-only sign-in that
@@ -233,7 +258,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         return "stood_down";
       }
       const started = getFlow();
-      if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped)
+      if (started === null || started.relay_url === null || isNothingRelaying() || options.isRelaySkipped)
         return "not_relaying";
       const port = callbackPort(started.relay_url);
       // A CLI that listens on a fixed port (codex) lands on the taken one again; asking again is futile.
@@ -260,12 +285,25 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   async function begin(
     chosen: Lane,
     requested: LaneMethod,
-    options: { fromChooser: boolean; accountId?: string; notice?: string; isRelaySkipped?: boolean },
+    options: {
+      fromChooser: boolean;
+      accountId?: string;
+      notice?: string;
+      isRelaySkipped?: boolean;
+      /** Set by a click that asks for the sign-in, which is when the browser lets a tab be opened. */
+      isFromClick?: boolean;
+    },
   ): Promise<void> {
     // A browser-only sign-in nothing will relay would only be started to be thrown away for the
     // fallback below, so it goes straight to that.
     const chosenMethod =
-      requested.shape === "browser" && isRelayUnavailable ? (relaylessFallback(chosen) ?? requested) : requested;
+      requested.shape === "browser" && isNothingRelaying() ? (relaylessFallback(chosen) ?? requested) : requested;
+    // Under a chrome that relays nothing, nobody opens the sign-in's page for the user. The tab for it is opened
+    // here, on the click, and shown the page once the sign-in has started and says where it is.
+    const ownTab =
+      options.isFromClick === true && isProviderRelayDeclined() && !isPaste(chosenMethod)
+        ? openPendingTab(window)
+        : null;
     lane = chosen;
     method = chosenMethod;
     cameFromChooser = options.fromChooser;
@@ -295,6 +333,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const attempt = generation;
     m.redraw();
     let fallback: LaneMethod | null = null;
+    let pageUrl: string | null = null;
     try {
       const handOff = await startAndHandToDesktop(chosen, chosenMethod, options, attempt);
       if (handOff === "stood_down") return;
@@ -303,11 +342,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       } else if (chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
         fallback = relaylessFallback(chosen);
+      } else {
+        pageUrl = getFlow()?.url ?? null;
       }
     } catch (e) {
       if (attempt !== generation) return;
       error = errorText(e);
     } finally {
+      if (ownTab !== null) {
+        if (pageUrl !== null && attempt === generation) {
+          ownTab.show(pageUrl);
+          // Opening the page is the first step, and it is taken.
+          activeStep = 2;
+        } else {
+          ownTab.close();
+        }
+      }
       if (attempt === generation) {
         busy = false;
         m.redraw();
@@ -424,7 +474,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         // Attributes rather than copy or tailwind classes: it drives this dialog from another
         // repo, so anything it keys on must survive a wording change or a re-port.
         "data-e2e": `lane-${candidate.id}`,
-        onclick: () => begin(candidate, candidate.methods[0], { fromChooser: true }),
+        onclick: () => begin(candidate, candidate.methods[0], { fromChooser: true, isFromClick: true }),
       },
       [
         m("span", { class: css.CHOOSER_ROW_MARK }, m.trust(providerMark(candidate.id, 30))),
@@ -858,6 +908,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                       begin(current, candidate, {
                         fromChooser: false,
                         accountId: reauthAccountId ?? undefined,
+                        isFromClick: true,
                       }),
                   },
                   [
@@ -1018,6 +1069,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   void begin(current, method ?? current.methods[0], {
                     fromChooser: cameFromChooser,
                     accountId: reauthAccountId ?? undefined,
+                    isFromClick: true,
                   }),
               },
               "Try again",
