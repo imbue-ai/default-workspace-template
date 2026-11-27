@@ -18,9 +18,9 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
-Identity comes from `X-Imbue-Identity`, read as every app reads it (`workspace_layout.identity`;
+Identity comes from `X-Imbue-Identity`, read as every app reads it (`imbue.app_sdk.identity`;
 a present header that does not parse is refused with 400). A header-less request is the owner's,
-but only once the request guard every app installs ahead of its routes (`app_schema.request_guard`)
+but only once the request guard every app installs ahead of its routes (`imbue.app_sdk.request_guard`)
 has admitted it: the browser on the Screen is on loopback too, so a header-less request counts
 only from loopback under a loopback `Host` (a page reaching the service through a rebound name
 names that host instead), and a request a browser marks as a page of another origin's
@@ -110,7 +110,7 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 - `GET /health`: `{"status", "lifecycle"}`.
 - `GET /api/schema`: the OpenAPI document of this API, built from the routes and the route table
   (`api_models.py` names what every route takes and answers; the manifest's `api_schema_path`;
-  `system/libs/app_schema`), for an agent that reaches the Screen from inside the workspace or
+  the app SDK (`imbue.app_sdk`)), for an agent that reaches the Screen from inside the workspace or
   over a share. A refusal on any route is `{"detail": ...}`.
 
 ## The browser

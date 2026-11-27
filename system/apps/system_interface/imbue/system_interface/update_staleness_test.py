@@ -218,6 +218,7 @@ def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> 
         repo,
         "scaffold a new app",
         "system/supervisord.conf.d/finances.conf",
+        "system/config/apps/finances.toml",
         "system/apps/finances/pyproject.toml",
         "system/apps/finances/uv.lock",
         "system/apps/finances/app.toml",

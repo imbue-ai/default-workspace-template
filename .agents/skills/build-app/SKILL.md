@@ -51,8 +51,6 @@ existing app, use the `update-app` skill.
 - **Renaming an app, or pinning a window of it**:
   `.agents/shared/references/apps/manifest.md`.
 - **The shared (public) URL** of an app: `references/public-url.md`.
-- **`forward_port.py`'s flags**, for a registration written by hand:
-  `references/forward-port-cli.md`.
 - **The program schema and its logs**:
   `.agents/shared/references/service-processes.md`.
 
@@ -100,8 +98,9 @@ the mock converges.
   label of a standalone service (`share`, `app`, `owner`, `vm`, `host`, `env`,
   `agent`, `github`), which would claim that service as the app's sidecar. Nor
   may it be a name the template uses (`system-interface`, `terminal`,
-  `bootstrap` and the like) or one a `system/supervisord.conf.d/*.conf`
-  already declares. The scaffolder refuses all of these.
+  `bootstrap` and the like), one another app or program holds, or one that
+  differs from another app's only by a hyphenated suffix. The scaffolder
+  refuses all of these.
 - **Icon.** Draw one specific to what this app does, to the rules in
   `docs/system/app-icons.md`: a 216 by 216 two-layer SVG tile with one
   fill-only glyph, coloured from that doc's palette. A brand-new registration
@@ -121,14 +120,14 @@ uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_
 `--description` is one line of at most 200 characters saying what the app is
 for, in the user's terms: it is what an agent reads to decide whether the app
 does what it needs. Pass `--display-name` (at most 64 characters) when the
-description is too long to be the app's name. `--start` registers the app and
-waits until it answers healthy. The port is picked for you, so do not check
-ports by hand.
+description is too long to be the app's name. The scaffolder registers the
+app through `app-install`, which picks its port and generates its program
+file: never do either by hand. `--start` waits until the app answers healthy.
 
 `references/scaffold-output.md` has the other flags, what each generated file
-is for, the program block, how the app starts, adding a dependency, and an app
+is for, the program file, how the app starts, adding a dependency, and an app
 that needs a credential. Read it when you change something the scaffold wrote
-other than routes, or when a start fails.
+other than routes, or when the scaffolder or a start fails.
 
 ## Step 4: Confirm a mock
 
@@ -192,10 +191,10 @@ one.
   document.
 - `.agents/shared/references/apps/code.md` has the other rules: state under
   `DATA_DIR`, the content-security policy, a "view raw" control on derived
-  data, calling Claude.
+  data, finding another app by name, data migrations, calling Claude.
 - `.agents/shared/references/apps/manifest.md` says when an app that works
-  between requests needs `stop_when_no_windows = false`, and how to register
-  what you build for the app outside its directory.
+  between requests needs `stop_when_no_windows = false`, where the app's
+  skills, routines and environment units go, and how to change how it runs.
 
 **The mock frame stays until the app is really hooked up.** Confirming the mock
 does not take it down. The app stays framed while any of it is not real, above

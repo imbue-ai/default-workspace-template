@@ -49,9 +49,27 @@ confirming the new behaviour actually fires.
 
 ## A change to the program's definition
 
-For a change to the program itself (its port, its `command`, its log config, or
-adding or removing a program), edit the program's own
-`system/supervisord.conf.d/<name>.conf`, then:
+**An app the workspace built or installed** (one with a record under
+`system/config/apps/`) has its program files generated from its `app.toml`,
+and each begins with a comment saying so. Never edit one. Say how the app runs
+in its `app.toml` (`[run]` for its main program, `[[services]]` for a
+background program, `[[secrets]]` for a secret file it runs under), as
+`.agents/shared/references/apps/manifest.md` ("How the app runs") sets out,
+then:
+
+```bash
+uv run --no-sync app-install regenerate <name>
+supervisorctl reread && supervisorctl update
+```
+
+Its port is kept in its record and passed to it in its program's environment,
+so no file is edited to change one. `uv run --no-sync app-install check` says
+whether the generated files match.
+
+**Any other program** (a built-in app, a service): for a change to the program
+itself (its port, its `command`, its log config, or adding or removing a
+program), edit the program's own `system/supervisord.conf.d/<name>.conf`,
+then:
 
 ```bash
 supervisorctl reread && supervisorctl update

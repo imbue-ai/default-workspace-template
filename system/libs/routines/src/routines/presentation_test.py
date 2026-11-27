@@ -14,9 +14,11 @@ from routines.data_types import RoutineDefinition
 from routines.data_types import RoutineState
 from routines.data_types import RunBlockedEvent
 from routines.data_types import RunStartedEvent
+from routines.data_types import ScheduleOverride
 from routines.presentation import build_listing
 from routines.presentation import build_row
 from routines.presentation import fold_run_events
+from routines.primitives import Duration
 from routines.primitives import RUN_EVENTS_SOURCE
 from routines.primitives import RoutineHealth
 from routines.primitives import RunId
@@ -24,9 +26,11 @@ from routines.primitives import RunKind
 from routines.primitives import RunOutcome
 from routines.primitives import RunTrigger
 from routines.primitives import RunWarning
+from routines.primitives import TimeOfDay
 from routines.testing import TEST_NOW
 from routines.testing import TEST_ROUTINE_ID
 from routines.testing import TEST_ZONE
+from routines.testing import loaded_routine
 
 
 def _loaded(**fields: object) -> LoadedRoutine:
@@ -37,7 +41,7 @@ def _loaded(**fields: object) -> LoadedRoutine:
         "command": ["true"],
     }
     values.update(fields)
-    return LoadedRoutine(routine_id=TEST_ROUTINE_ID, definition=RoutineDefinition.model_validate(values), error=None)
+    return loaded_routine(TEST_ROUTINE_ID, RoutineDefinition.model_validate(values))
 
 
 def _last_run(outcome: RunOutcome, started_at: datetime) -> LastRun:
@@ -53,7 +57,7 @@ def _last_run(outcome: RunOutcome, started_at: datetime) -> LastRun:
 
 
 def test_a_broken_definition_is_broken_whatever_its_state() -> None:
-    loaded = LoadedRoutine(routine_id=TEST_ROUTINE_ID, definition=None, error="what: Field required")
+    loaded = loaded_routine(TEST_ROUTINE_ID, None, error="what: Field required")
     row = build_row(loaded, RoutineState(is_enabled=False), TEST_NOW, TEST_ZONE)
     assert row.health is RoutineHealth.BROKEN
     assert row.health_detail == "what: Field required"
@@ -193,3 +197,27 @@ def test_run_events_fold_into_records_with_a_blocked_run_still_going() -> None:
     assert records[0].is_blocked
     assert records[0].outcome_text == "Waiting for you"
     assert records[0].when_text == "2 minutes ago"
+
+
+def test_a_row_reads_the_schedule_the_user_gave_a_routine_an_app_owns() -> None:
+    """The words, the next run and the overdue margin all follow the user's schedule, not the app's file."""
+    definition = RoutineDefinition.model_validate(
+        {"title": "Inbox status", "what": "Checks mail.", "every": "1h", "command": ["true"]}
+    )
+    loaded = loaded_routine(TEST_ROUTINE_ID, definition, app_package="inbox_status")
+    last = _last_run(RunOutcome.SUCCEEDED, TEST_NOW - timedelta(hours=3))
+    ran_three_hours_ago = RoutineState(last_succeeded_at=TEST_NOW - timedelta(hours=3), last_run=last)
+    rescheduled = ran_three_hours_ago.model_copy_update(
+        to_update(
+            ran_three_hours_ago.field_ref().schedule_override,
+            ScheduleOverride(every=Duration("1d"), at=TimeOfDay("09:00")),
+        )
+    )
+
+    by_the_file = build_row(loaded, ran_three_hours_ago, TEST_NOW, TEST_ZONE)
+    by_the_user = build_row(loaded, rescheduled, TEST_NOW, TEST_ZONE)
+
+    assert (by_the_file.schedule_text, by_the_file.health) == ("Every hour", RoutineHealth.OVERDUE)
+    assert (by_the_user.schedule_text, by_the_user.health) == ("Every day at 9:00 am", RoutineHealth.WORKING)
+    assert by_the_user.next_due_at == datetime(2026, 10, 21, 9, 0, tzinfo=TEST_ZONE)
+    assert by_the_user.next_run_text == "tomorrow 9:00 am"

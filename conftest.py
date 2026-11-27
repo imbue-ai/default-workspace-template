@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Final, NoReturn
 
 import pytest
+from app_manifest.selection import read_projectless_user_apps
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
 from workspace_bare_scripts import user_packages
 
@@ -16,17 +17,22 @@ from workspace_bare_scripts import user_packages
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 # A user package is a standalone project whose tests run from its own directory and
-# venv; collected here they would import packages the root venv does not have.
-_USER_PACKAGE_DIRECTORIES: Final[tuple[Path, ...]] = tuple(
+# venv; collected here they would import packages the root venv does not have. A user
+# app that is no Python project has no venv at all, and a test file it holds was
+# written for its publisher's environment.
+_UNCOLLECTED_DIRECTORIES: Final[tuple[Path, ...]] = tuple(
     (Path(__file__).parent / relative).resolve()
-    for relative in user_packages.user_packages(Path(__file__).parent)
+    for relative in (
+        *user_packages.user_packages(Path(__file__).parent),
+        *read_projectless_user_apps(Path(__file__).parent),
+    )
 )
 
 
 def pytest_ignore_collect(collection_path: Path) -> bool | None:
     resolved = collection_path.resolve()
     if any(
-        resolved.is_relative_to(directory) for directory in _USER_PACKAGE_DIRECTORIES
+        resolved.is_relative_to(directory) for directory in _UNCOLLECTED_DIRECTORIES
     ):
         return True
     return None

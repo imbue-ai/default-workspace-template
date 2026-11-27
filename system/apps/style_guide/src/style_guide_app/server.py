@@ -28,13 +28,13 @@ from werkzeug.serving import run_simple
 
 from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
-from app_schema.api_schema import register_api_schema_route
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import model_response
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import model_response
 from imbue.imbue_common.logging import setup_logging
 from style_guide_app.data_types import HealthResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE

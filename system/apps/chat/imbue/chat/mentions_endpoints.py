@@ -3,13 +3,13 @@ and the mentions the requester has not looked at."""
 
 from typing import Final
 
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.routes import model_response
 from imbue.chat.identity import request_identity
 from imbue.chat.mention_parser import MentionTable
 from imbue.chat.mentions import MentionHandler

@@ -42,7 +42,7 @@ port 8070:
   route is not limited to the workspace's owner.
 - `GET /api/health`: `{"status", "is_frontend_built"}`.
 - `GET /api/schema`: the OpenAPI document of these routes
-  (`system/libs/app_schema`); the manifest's `api_schema_path`.
+  (the app SDK, `imbue.app_sdk`); the manifest's `api_schema_path`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module,
   served from this origin as every app serves it.
 - `GET /_static/themes/<path>`: the workspace's theme bundles, served from this

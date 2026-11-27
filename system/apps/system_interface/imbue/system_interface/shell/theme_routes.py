@@ -2,8 +2,6 @@
 themes with the default it wears, the default's route, each theme's icons, and the theme files every app serves
 from its own origin, which the shell serves for its own pages too."""
 
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import abort
 from flask import send_file
@@ -17,6 +15,8 @@ from workspace_themes.primitives import ThemeId
 from workspace_themes.serving import resolve_theme_icon
 from workspace_themes.serving import theme_file_security_headers
 
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.app_theming import is_themeable

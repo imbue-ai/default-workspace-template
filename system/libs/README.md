@@ -8,11 +8,16 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_install/` - The `app-install` command: registers the apps the workspace's
+  agent builds, keeps each one's record under `system/config/apps/`, and
+  generates its supervisord program files and skill links from its manifest.
 - `app_registration/` - Writes an app's row in the app registry: what
   `system/scripts/forward_port.py` runs, stdlib-only.
-- `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
-  API, built from its Flask routes and served at the path its manifest names
-  in `api_schema_path`, and the assertion an app's tests make about it.
+- `app_schema/` - The names of the app SDK (`imbue.app_sdk`, installed from
+  the mngr commit `pyproject.toml` pins) under the package they had before
+  it: an app's request guard, its route helpers, and the OpenAPI document
+  built from its routes. Kept for apps built before the SDK, and as what
+  a scaffolded app depends on to get the SDK until `imbue-app-sdk` is on PyPI.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.

@@ -23,9 +23,6 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
 from watchdog.observers.api import BaseObserver
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import participant_key_of
-from workspace_layout.identity import visiting_user_id
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import requester_spelling
 from workspace_layout.primitives import ClientId
@@ -50,6 +47,9 @@ from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import participant_key_of
+from imbue.app_sdk.identity import visiting_user_id
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore

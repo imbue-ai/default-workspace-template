@@ -43,8 +43,10 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   the recorded *versions*. Versions change only at the explicit
   `env-converge upgrade` (run by the update-self flow), never on restore,
   restart, or re-converge.
-- **Declared units are code.** `system/scripts/env.d/<NNNN>-<name>.sh` are plain,
-  dumb bash scripts run in lexical order by the slow phase: each must be
+- **Declared units are code.** `system/scripts/env.d/<NNNN>-<name>.sh`, and the
+  units a user app carries in `system/apps/<package>/env.d/<NNNN>-<name>.sh`, are plain,
+  dumb bash scripts run by the slow phase as one list in lexical order of file
+  name, whichever directory each is in: each must be
   idempotent with a fast satisfied-check (exit 0 in milliseconds when nothing
   to do). There are NO marker files -- skip-speed comes from the check, and
   version stability comes from the pins inside each unit. Units receive

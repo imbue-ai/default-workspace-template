@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
 from onboarding_activity.markers import Marker
 from onboarding_activity.markers import mark
 from onboarding_checklist.items import read_checklist_items

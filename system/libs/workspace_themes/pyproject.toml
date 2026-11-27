@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     # The route-table entry for the theme route, which every app serving it publishes in its API document.
-    "app-schema",
+    "imbue-app-sdk",
     "click>=8.1",
     "flask>=3.0",
     "imbue-common",

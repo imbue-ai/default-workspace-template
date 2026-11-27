@@ -2,7 +2,6 @@ from datetime import datetime
 from enum import auto
 from pathlib import Path
 
-from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
@@ -10,6 +9,7 @@ from pydantic import model_validator
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterParticipant
 
+from imbue.app_sdk.api_schema import ErrorResponse
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo

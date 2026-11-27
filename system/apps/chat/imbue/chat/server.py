@@ -29,19 +29,6 @@ from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
-from app_schema.api_schema import AlternateResponse
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import ErrorResponse
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
-from app_schema.api_schema import merge_route_tables
-from app_schema.api_schema import register_api_schema_route
-from app_schema.errors import InvalidRequestBodyError
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from flask import current_app
@@ -54,10 +41,6 @@ from pydantic import Field
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import is_owner_participant
-from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
@@ -65,6 +48,23 @@ from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
+from imbue.app_sdk.api_schema import AlternateResponse
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import ErrorResponse
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
+from imbue.app_sdk.api_schema import merge_route_tables
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.errors import InvalidIdentityValueError
+from imbue.app_sdk.errors import InvalidRequestBodyError
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import is_owner_participant
+from imbue.app_sdk.identity import participant_key_of
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import keybindings_endpoints
@@ -1213,7 +1213,7 @@ def _participant_picture_endpoint(key: str) -> Response:
     state = get_state()
     try:
         participant_key = ParticipantKey(key)
-    except InvalidLayoutValueError:
+    except InvalidIdentityValueError:
         return error_response(f"No participant {key!r}", 404)
     entry = state.roster.participant(participant_key)
     if entry is None or entry.profile_picture_url is None or not entry.profile_picture_url.startswith("/"):

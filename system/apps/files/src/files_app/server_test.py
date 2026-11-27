@@ -10,9 +10,6 @@ import pytest
 from werkzeug.test import TestResponse
 from workspace_themes.testing import write_standard_theme
 
-from app_schema.testing import CROSS_SITE_FETCH_HEADERS
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from files_app.connections import shared_paths
 from files_app.device_files import safe_content_disposition
 from files_app.server import create_app
@@ -21,6 +18,9 @@ from files_app.testing import FakeComputer
 from files_app.testing import json_of
 from files_app.testing import propfind_body
 from files_app.webdav import parse_propfind
+from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
 
 NARROW_NAME = "Screenshot at 4.16.34\u202fPM.png"
 _MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"

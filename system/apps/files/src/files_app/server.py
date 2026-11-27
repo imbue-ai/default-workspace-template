@@ -7,7 +7,7 @@
   DELETE change it.
 - ``/__files/assets/`` is the frontend's build, ``/__files/api/connections`` what the user has shared with the
   workspace from their computers (``connections_cache``).
-- ``/__files/api/schema`` is the OpenAPI document of these routes, built from the url map (``app_schema``); the
+- ``/__files/api/schema`` is the OpenAPI document of these routes, built from the url map (``imbue.app_sdk``); the
   manifest's ``api_schema_path``, which the visiting-agent primer links.
 """
 
@@ -25,8 +25,6 @@ from flask import Response
 from flask import request
 from flask import send_from_directory
 from loguru import logger
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import parse_identity_header
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_profile.manifest import resolve_keybindings_me_response
@@ -35,13 +33,6 @@ from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
 from app_manifest.built_assets import send_built_asset
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
-from app_schema.api_schema import register_api_schema_route
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response
-from app_schema.routes import model_response
 from files_app.connections import Connections
 from files_app.connections import SYNCED_FOLDERS
 from files_app.connections_cache import ConnectionsCache
@@ -55,6 +46,15 @@ from files_app.sources import FileSource
 from files_app.sources import FilesError
 from files_app.sources import FolderStamps
 from files_app.sources import PageData
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import parse_identity_header
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
 
 API_PREFIX: Final[str] = "/__files/api"
 APP_DISPLAY_NAME: Final[str] = "Files"

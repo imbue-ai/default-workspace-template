@@ -54,15 +54,35 @@ new WebSocket(scheme + "//" + location.host + "/socket");
 
 ## Multiple ports per app
 
-If the app listens on more than one port (rare, but it happens with admin UIs
-and metrics endpoints), register each as its own app (`<name>-admin`,
-`<name>-metrics`). `forward_port.py` registers one URL per name.
+An app has one port, the one the workspace allocates for it (`{port:main}`
+in its `app.toml`), and one registered URL, which is where its window
+opens. Do not register an extra port as a second app named `<name>-admin`
+or `<name>-metrics`: an app's name may not be another app's name followed by
+a hyphen and more, because those names belong to the app's own background
+programs, so the registration is refused.
+
+- **An extra surface** (an admin page, a metrics endpoint) is a path on the
+  app's one port (`/admin`, `/metrics`), served by the same process.
+- **A background program** the app needs beside its main one (a worker, a
+  poller, a queue consumer) is a `[[services]]` entry in its `app.toml`
+  (`role`, `command`, `args`, `env`). It runs as the supervisord program
+  `<name>-<role>`, generated like the app's own, and gets no window and no
+  port of its own; `{port:main}` in its `args` or `env` is the app's port,
+  for a program that calls the app.
+- **A wrapped tool that insists on a second listening port** keeps that port
+  on loopback and unregistered. Nothing allocates it, so give the tool a
+  port well away from the range the workspace hands out (8080 upwards), and
+  reach it only from inside the workspace.
 
 ## Port already in use
 
-If the port is bound by something else, the start command fails loudly: the
-framework prints an error and exits. Supervisord retries a few times and then
-leaves the program in `FATAL`, so the failure shows in
-`supervisorctl status <name>` and `/var/log/supervisor/<name>-stderr.log`. Pick
-a different port. The scaffolder's own pick avoids this; the `build-app` skill
-says how to pick one by hand.
+If the app's port is bound by something else, the start command fails loudly:
+the framework prints an error and exits. Supervisord retries a few times and
+then leaves the program in `FATAL`, so the failure shows in
+`supervisorctl status <name>` and `/var/log/supervisor/<name>-stderr.log`.
+
+`app-install` allocates the port of every app the workspace builds or installs,
+and skips one that a program, a registry row or another app's record holds, or
+that something is listening on. So this happens only when something took the
+port afterwards. Find what holds it (`ss -tlnp`) and stop that. Do not edit
+the port into the program file, which is generated.

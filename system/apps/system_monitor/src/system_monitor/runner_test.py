@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_schema.testing import (
+from flask.testing import FlaskClient
+from imbue.app_sdk.app_testing import (
     CROSS_SITE_FETCH_HEADERS,
     assert_api_schema_describes_app,
     assert_request_guard_refuses_unknown_provenance,
 )
-from flask.testing import FlaskClient
 
 from system_monitor import actions, disk, runner, stats
 
@@ -220,7 +220,7 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
 ) -> None:
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
-    app_schema.request_guard): such a page cannot stop a chat's agent."""
+    imbue.app_sdk.request_guard): such a page cannot stop a chat's agent."""
     assert_request_guard_refuses_unknown_provenance(client, "GET", "/health")
     cross_site = client.post(
         "/api/stop",

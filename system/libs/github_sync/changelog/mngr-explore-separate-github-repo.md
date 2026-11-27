@@ -1,0 +1,1 @@
+`github_sync.wiring.gateway_git_config()` returns the git configuration that sends github.com URLs through the latchkey gateway, for a caller that wires one command instead of the container; `apply_git_wiring` writes the same entries. `app-install` uses it to read a private app repository in a workspace where GitHub sync is not enabled.

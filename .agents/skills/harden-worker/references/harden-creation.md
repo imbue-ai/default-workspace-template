@@ -95,11 +95,16 @@ edit is invisible to it).
 
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
-the owning app's `app.toml` -- when the file genuinely belongs to it -- or name
-it in your final report under `Outside footprint:`, one line each on why it
-changed on this branch. A skill run's one sanctioned edit inside an app
-directory, the `[[references]]` entry it adds to that app's manifest, sits
-under the skill's `context` and is counted as inside the footprint.
+the owning app's `app.toml` -- when the file genuinely belongs to it and the
+app is built in -- or name it in your final report under `Outside footprint:`,
+one line each on why it changed on this branch. An app the workspace built or
+installed keeps its references in its record
+(`system/config/apps/<name>.toml`), and its manifest is refused with
+`[[references]]` in it: write neither, and name the file in the report, saying
+which app it belongs to (`type-app.md`). A skill run's one sanctioned edit
+inside a built-in app's directory, the `[[references]]` entry it adds to that
+app's manifest, sits under the skill's `context` and is counted as inside the
+footprint.
 
 ## Carried work from a superseded pass
 

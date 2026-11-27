@@ -20,7 +20,9 @@ from typing import Final
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
-from app_schema.api_schema import (
+from flask import Blueprint, Flask, Response, request, send_file
+from flask.typing import ResponseReturnValue
+from imbue.app_sdk.api_schema import (
     DEFAULT_API_SCHEMA_PATH,
     RouteModels,
     RouteTable,
@@ -28,10 +30,8 @@ from app_schema.api_schema import (
     flask_rule_to_openapi_path,
     register_api_schema_route,
 )
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response, model_response, parse_request_body
-from flask import Blueprint, Flask, Response, request, send_file
-from flask.typing import ResponseReturnValue
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response, model_response, parse_request_body
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
@@ -589,7 +589,7 @@ def build_pages_app(
     on_window_closed: Callable[[TmuxSessionName | None], None],
 ) -> Flask:
     """The pages as the one Flask app the terminal serves: the request guard every app installs ahead of its routes
-    (``app_schema.request_guard``), then the blueprint ``build_pages_blueprint`` builds from the same arguments."""
+    (``imbue.app_sdk.request_guard``), then the blueprint ``build_pages_blueprint`` builds from the same arguments."""
     app = Flask(__name__, static_folder=None)
     install_request_guard(app, exempt_rules=frozenset())
     app.register_blueprint(

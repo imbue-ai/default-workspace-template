@@ -1,24 +1,32 @@
-"""Stand up a new Flask app (and its supervisord program entry).
+"""Stand up a new Flask app and register it with the workspace.
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
 is available for WebSockets) and its `app.toml` manifest, as a standalone uv
 project: its own `pyproject.toml`, a `uv.lock` seeded from the root lock (so the
 app starts on the built-ins' versions and resolves from the warm cache), and a
-`.venv` linked beside the uv cache. It writes a `[program:<name>]` block to its
-own `system/supervisord.conf.d/<name>.conf` whose command links and syncs that
+`.venv` linked beside the uv cache.
+
+It then registers the directory the way `app-install add` does
+(`app_install.operations.add_app`): the app gets the lowest free port, its
+record `system/config/apps/<name>.toml`, and its generated supervisord program
+`system/supervisord.conf.d/<name>.conf`, whose command links and syncs that
 project (`--locked`), registers the manifest, and execs the app's entry point
-from the app's own `.venv/bin`.
+from the app's own `.venv/bin` with the port in its environment. The port is in
+no file of the app's directory. A registration the workspace refuses (a name, a
+program, or a port something else holds) removes the directory again, so a
+refusal leaves nothing behind.
 
 The app is not a root workspace member, so a dependency it adds changes only its
 own lock and venv, never the chat's or another app's
-(docs/system/blueprint/app-environments/). It reaches the shared code through an
-editable path dependency on `app-schema`, whose own workspace sources keep
-`imbue-common` on the root's mngr pin.
+(docs/system/blueprint/app-environments/). It reaches the app SDK
+(`imbue.app_sdk`) through an editable path dependency on `app-schema`, which
+depends on it and whose own workspace sources keep the SDK and `imbue-common`
+on the root's mngr pin.
 
-No shared file is written: the supervisord program lives in its own file rather
-than being appended to a config shared with every other creation, and the root
-`pyproject.toml` and `uv.lock` are not touched. That is what lets two agents
-scaffold two apps concurrently without editing the same file.
+No shared file is written: the record and the program each live in a file of
+the app's own, and the root `pyproject.toml` and `uv.lock` are not touched. That
+is what lets two agents scaffold two apps concurrently without editing the same
+file.
 
 Every run also sets the workspace's `app_build_started` onboarding marker (an
 empty file under `data/.state/onboarding_activity/`, whose time is that of the
@@ -29,10 +37,11 @@ Usage:
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
         --icon-file icon.svg [--display-name "Inbox status"] \\
-        [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
+        [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"] \\
+        [--secrets-file inbox --secrets-variable INBOX_API_KEY]
 
 Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
-any failure (lib already exists, reserved name, sync failure, etc.).
+any failure (lib already exists, reserved name, refused registration, sync failure, etc.).
 """
 
 import argparse
@@ -40,7 +49,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -48,7 +56,6 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Iterable
 
-import tomlkit
 from app_registration import forward_port
 from onboarding_activity.markers import (
     Marker,
@@ -79,21 +86,12 @@ RESERVED_NAMES = frozenset(
         "imbue-common",
     }
 )
-LOWEST_AUTO_PORT = 8080
-# The browser-side modules every app serves from its own origin (a module import is a fetch
-# without cookies, which the forwarder refuses across origins): the app contract and the
-# element context menu, built by the shell's frontend into its static output. Mirrors
-# app_manifest.registry's SHELL_APP_CONTRACT_PATH and SHELL_CONTEXT_MENU_PATH; the scaffold
-# keeps the library (and the pydantic it loads) out of its imports, so it carries the path.
-SHELL_STATIC_MODULES_DIR = (
-    "system/apps/system_interface/imbue/system_interface/static/_static"
-)
-SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # The <name> of data/.secrets/<name>.env, as the chat app's secret card and
 # app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
 SECRET_FILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
+# A variable a secret file sets, as app_manifest.primitives.ENV_VAR_NAME_PATTERN spells it.
+SECRET_VARIABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _kebab_to_snake(name: str) -> str:
@@ -134,109 +132,37 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
-def _validate_secrets_file(name: str) -> None:
-    # The name is spliced into the program's `bash -c` string as
-    # data/.secrets/<name>.env, so anything outside the slug would break the
-    # command or name a file the secret card can never write.
-    if not SECRET_FILE_NAME_RE.fullmatch(name):
+def _validate_secrets(secrets_file: str | None, variables: list[str]) -> None:
+    """Refuse, before anything is written, a secret declaration the manifest would refuse.
+
+    The generated program loads data/.secrets/<file>.env through with_secrets.py from the
+    manifest's ``[[secrets]]`` table, which names the file and at least one variable it sets.
+    """
+    if secrets_file is None:
+        if variables:
+            sys.exit(
+                "error: --secrets-variable names a variable of a secret file; pass --secrets-file too"
+            )
+        return
+    if not SECRET_FILE_NAME_RE.fullmatch(secrets_file):
         sys.exit(
-            f"error: --secrets-file {name!r} must be lowercase letters, digits and "
+            f"error: --secrets-file {secrets_file!r} must be lowercase letters, digits and "
             "hyphens, starting with a letter or digit "
             "(the <name> of data/.secrets/<name>.env)"
         )
-
-
-def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
-    """``<supervisord.conf>.d/``: the one directory the config's ``[include]`` glob names.
-
-    Fixed by convention rather than read out of the config, and pinned by
-    ``system/test_supervisord_layout.py``: every reader of the config, here and in
-    the evals capture that reads it from outside the workspace, assumes it.
-    """
-    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
-
-
-def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
-    """The main config plus every drop-in, in supervisord's read order.
-
-    Only regular files: a directory named like a drop-in (``supervisord.conf.d/archive.conf/``)
-    would otherwise be handed to a caller that reads it. supervisord cannot read it either.
-    """
-    files = [supervisord_conf] if supervisord_conf.is_file() else []
-    dropin_dir = _supervisord_dropin_dir(supervisord_conf)
-    files.extend(path for path in sorted(dropin_dir.glob("*.conf")) if path.is_file())
-    return files
-
-
-def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
-    """The drop-in ``name``'s program belongs in: ``<supervisord.conf>.d/<name>.conf``.
-
-    One program per file, named after it, is what removing an app deletes and what
-    ``system/test_supervisord_layout.py`` pins.
-    """
-    return _supervisord_dropin_dir(supervisord_conf) / f"{name}.conf"
-
-
-def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
-    # Every app registers its localhost backend via a forward_port.py call in
-    # its [program:*] command, so scanning the config text for
-    # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    # Scans the main config AND every drop-in, which is where every program
-    # lives -- missing the drop-ins would hand a new app a port another program
-    # already holds.
-    ports: set[int] = set()
-    for path in _supervisord_conf_files(supervisord_conf):
-        ports.update(
-            int(match.group(1))
-            for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+    if not variables:
+        sys.exit(
+            f"error: --secrets-file {secrets_file!r} needs at least one --secrets-variable "
+            "(a variable the file sets, such as EXAMPLE_API_KEY)"
         )
-    return ports
-
-
-def _apps_toml_ports(apps_toml: Path) -> set[int]:
-    if not apps_toml.exists():
-        return set()
-    doc = tomlkit.parse(apps_toml.read_text())
-    apps = doc.get("apps", [])
-    ports: set[int] = set()
-    for app in apps:
-        url = app.get("url", "")
-        match = LOCALHOST_PORT_RE.search(str(url))
-        if match:
-            ports.add(int(match.group(1)))
-    return ports
-
-
-def _is_port_bound(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("127.0.0.1", port))
-            return False
-        except OSError:
-            return True
-
-
-def _pick_port(
-    repo_root: Path, requested: int | None, is_port_bound: Callable[[int], bool]
-) -> int:
-    in_use = _supervisord_conf_ports(
-        repo_root / "system/supervisord.conf"
-    ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
-    # Reserve known internal ports that may not have supervisor entries
-    in_use.add(8083)  # the Screen's CDP proxy
-    # neko, the Screen's video server: its port is only in a comment in its supervisord
-    # config, and its stack is usually stopped, so neither check above sees it.
-    in_use.add(8091)
-    if requested is not None:
-        if requested in in_use or is_port_bound(requested):
+    for variable in variables:
+        if not SECRET_VARIABLE_NAME_RE.fullmatch(variable):
             sys.exit(
-                f"error: --port {requested} is already in use by another app or service"
+                f"error: --secrets-variable {variable!r} must be letters, digits and "
+                "underscores, not starting with a digit"
             )
-        return requested
-    port = LOWEST_AUTO_PORT
-    while port in in_use or is_port_bound(port):
-        port += 1
-    return port
+    if len(set(variables)) != len(variables):
+        sys.exit("error: --secrets-variable names a variable twice")
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
@@ -308,8 +234,13 @@ markers = [
 [tool.uv]
 exclude-newer = "14 days"
 
-# The workspace's shared code, live and editable. app-schema's own workspace sources
-# apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
+# CLEANUP: once imbue-app-sdk 0.1.0 is published to PyPI, depend on it directly: replace
+# "app-schema" with "imbue-app-sdk>=0.1,<1" and "app-schema[testing]" with
+# "imbue-app-sdk[testing]", drop this source entry, and add
+# `exclude-newer-package = {{ imbue-app-sdk = false }}` under [tool.uv].
+# Until then the app SDK (imbue.app_sdk) reaches this app through app-schema, which
+# depends on it. app-schema's own workspace sources apply in this lock, so the SDK and
+# imbue-common come from the commit the workspace pins mngr to; a source for either
 # here as well would be a second URL for one package, which uv refuses to lock.
 [tool.uv.sources]
 app-schema = {{ path = "../../libs/app_schema", editable = true }}
@@ -323,11 +254,11 @@ def _lib_runner(
     name: str,
     package: str,
     description: str,
-    port: int,
     display_name: str,
 ) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
     port_env_var = f"{package.upper()}_PORT"
+    host_env_var = f"{package.upper()}_HOST"
     # Python literals for the generated source: the document's title is the manifest's display name.
     title_literal = repr(display_name)
     description_literal = repr(description)
@@ -348,11 +279,13 @@ Services run from /home/user/workspace (the repo root). Conventions:
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
-- Listen port: bind ``PORT`` (defined below), which defaults to this
-  app's assigned port but honors the ``{port_env_var}`` env var, so
-  an editing agent can boot a throwaway instance on a *spare* port
-  alongside the live one (see the update-app skill). Never hardcode
-  the port at the ``run_simple`` call.
+- Listen address: bind ``HOST`` and ``PORT`` (defined below), which are
+  read from the ``{host_env_var}`` and ``{port_env_var}`` env vars. The
+  workspace allocates this app's port and sets ``{port_env_var}`` in its
+  program's environment, and an editing agent sets it to a *spare* port
+  to boot a throwaway instance alongside the live one (see the
+  update-app skill). No file of the app holds the port, so never
+  hardcode one at the ``run_simple`` call or anywhere else.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
 The app owns its own browser origin (the forwarder routes
@@ -367,15 +300,16 @@ import hashlib
 import os
 from pathlib import Path
 
-from app_schema.api_schema import (
+from flask import Flask, Response, request
+from imbue.app_sdk.api_schema import (
     DEFAULT_API_SCHEMA_PATH,
     RouteModels,
     RouteTable,
     SchemalessRoute,
     register_api_schema_route,
 )
-from app_schema.routes import model_response
-from flask import Flask, Response, abort, request, send_file
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.shell_modules import SHELL_MODULE_ROUTE_KEY, register_shell_module_routes
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import setup_logging
 from loguru import logger
@@ -391,20 +325,16 @@ from werkzeug.serving import run_simple
 # exist_ok=True)`` before writing.
 DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 
-# Listen port. Defaults to this app's assigned port but is overridable via
-# the ``{port_env_var}`` env var so an editing agent can boot a throwaway
-# instance on a spare port next to the live one (see the update-app skill).
-# Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
-PORT = int(os.environ.get("{port_env_var}", "{port}"))
-
-# The browser-side modules the workspace shell builds and every app serves from
-# its own origin: the app contract (how a page talks to the shell framing it) and
-# the element context menu (the right-click menu whose last rows hand the
-# clicked element to a chat). A module import is a fetch without cookies, which
-# the forwarder refuses across origins, so they are served here rather than from
-# the shell. Relative to the repo root the service runs from, like DATA_DIR.
-SHELL_STATIC_MODULES_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
-SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
+# Listen address, read from the environment. The workspace sets ``{port_env_var}``
+# to the port it allocated for this app, and an editing agent sets it to a spare
+# port to boot a throwaway instance next to the live one (see the update-app
+# skill). With it unset (the app run on its own, outside a workspace) the
+# operating system picks a free port. Never hardcode the port at the
+# ``run_simple`` call, or the workspace's port is bypassed. The host is
+# loopback unless ``{host_env_var}`` says otherwise: the forwarder reaches the
+# app from inside the same container.
+HOST = os.environ.get("{host_env_var}", "127.0.0.1")
+PORT = int(os.environ.get("{port_env_var}", "0"))
 
 # The script every page serves (keep it on every page): it connects the page to
 # the shell, reports where the page is on the handshake so the shell can reopen
@@ -465,8 +395,8 @@ class HealthResponse(FrozenModel):
 # ``model_response``; a page, a file or a stream is declared schemaless with the reason.
 ROUTE_TABLE: RouteTable = {{
     ("GET", "/"): SchemalessRoute(reason="the app's page"),
-    ("GET", "/_static/{{basename}}"): SchemalessRoute(reason="a browser-side module the shell builds"),
     ("GET", "/health"): RouteModels(response_model=HealthResponse),
+    SHELL_MODULE_ROUTE_KEY: SchemalessRoute(reason="a browser-side module the shell builds"),
     ("POST", "/_csp-report"): SchemalessRoute(reason="the browser's report of what the page's policy blocked"),
 }}
 
@@ -476,6 +406,14 @@ app = Flask("{package}", static_folder=None)
 register_api_schema_route(
     app, DEFAULT_API_SCHEMA_PATH, title={title_literal}, description={description_literal}, route_table=ROUTE_TABLE
 )
+# The browser-side modules the workspace shell builds, served from this app's
+# own origin at ``/_static/``: the app contract (how a page talks to the shell
+# framing it) and the element context menu. A module import is a fetch without
+# cookies, which the forwarder refuses across origins, so the page cannot load
+# them from the shell. The SDK fetches each from the running shell once; with no
+# shell (the app run on its own) they are a 404 and the page runs without the
+# shell's features.
+register_shell_module_routes(app)
 
 
 @app.after_request
@@ -526,20 +464,6 @@ def content_security_policy_report() -> Response:
     return Response(status=204)
 
 
-@app.route("/_static/<basename>")
-def shell_module(basename: str) -> Response:
-    """One of the two browser-side modules the workspace shell builds and every app serves from its own origin."""
-    # The two shell-built modules and nothing else: a name that is not one of
-    # them is a 404, so this route can never read outside that directory.
-    if basename not in SHELL_STATIC_MODULE_NAMES:
-        abort(404)
-    module_path = SHELL_STATIC_MODULES_DIR / basename
-    if not module_path.is_file():
-        abort(404)
-    # Flask resolves a relative path against the app's own directory, not the cwd.
-    return send_file(module_path.absolute(), mimetype="text/javascript")
-
-
 @app.route("/health")
 def health() -> Response:
     """Whether the app is up."""
@@ -548,9 +472,7 @@ def health() -> Response:
 
 def main() -> None:
     setup_logging()
-    run_simple(
-        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
-    )
+    run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)
 
 
 if __name__ == "__main__":
@@ -694,14 +616,39 @@ def _display_name(description: str, explicit: str | None) -> str:
     return candidate
 
 
+def _lib_manifest(
+    name: str,
+    package: str,
+    description: str,
+    display_name: str,
+    secrets_file: str | None,
+    secrets_variables: list[str],
+) -> str:
+    manifest = _MANIFEST_TEMPLATE.format(
+        name=name,
+        display_name=display_name,
+        description_toml=_toml_basic_string(description),
+        package_upper=package.upper(),
+    )
+    if secrets_file is None:
+        return manifest
+    return manifest + _MANIFEST_SECRETS_TEMPLATE.format(
+        file_toml=_toml_basic_string(secrets_file),
+        variables_toml=", ".join(
+            _toml_basic_string(variable) for variable in secrets_variables
+        ),
+    )
+
+
 def _write_lib(
     repo_root: Path,
     name: str,
     description: str,
     display_name: str,
-    port: int,
     extras: list[str],
     icon_markup: str,
+    secrets_file: str | None,
+    secrets_variables: list[str],
 ) -> Path:
     package = _kebab_to_snake(name)
     lib_dir = repo_root / "system" / "apps" / package
@@ -713,11 +660,8 @@ def _write_lib(
         _lib_pyproject(name, package, description, extras)
     )
     (lib_dir / "app.toml").write_text(
-        _MANIFEST_TEMPLATE.format(
-            name=name,
-            display_name=display_name,
-            description_toml=_toml_basic_string(description),
-            package_upper=package.upper(),
+        _lib_manifest(
+            name, package, description, display_name, secrets_file, secrets_variables
         )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
@@ -725,7 +669,7 @@ def _write_lib(
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
     (src_dir / "runner.py").write_text(
-        _lib_runner(name, package, description, port, display_name)
+        _lib_runner(name, package, description, display_name)
     )
     (src_dir / "runner_test.py").write_text(_lib_runner_test(package))
     return lib_dir
@@ -735,7 +679,7 @@ def _lib_runner_test(package: str) -> str:
     """The one test every scaffolded app starts with: its API document says what its manifest says."""
     return f"""from pathlib import Path
 
-from app_schema.testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
 
 from {package}.runner import app
 
@@ -746,8 +690,8 @@ def test_the_app_describes_its_api_the_way_its_manifest_says() -> None:
 
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
-# ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names. ``stop_when_no_windows``
+# ``priority = "user"`` is what puts a user-built app in the user band: the
+# generated program's ``oom_tag_service.py`` prefix names it. ``stop_when_no_windows``
 # is stated outright so the rule an app runs under is in its own manifest. No
 # launch paths: the shell offers ``open`` at the app's root. No
 # ``default_shortcut``: the shell gives every desktop a shortcut of ``open``.
@@ -779,99 +723,17 @@ env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}
 copies = {{data = "data/.apps/{name}"}}
 """
 
-# ``startsecs``/``startretries`` bound a crash loop, and are why a user app's
-# block differs from a built-in service's (which retries forever, by design: the
-# workspace is unusable without them). An app that dies before it has been up
-# ``startsecs`` counts as a failed start, so supervisord backs off and gives up
-# in FATAL after ``startretries`` instead of restarting it at full speed for as
-# long as the workspace lives. Without this a broken app restarts a few times a
-# second forever, and every restart re-registers it (measured on a real
-# workspace: 46,939 restarts in one day).
-_SUPERVISORD_PROGRAM_TEMPLATE = """\
-[program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/{package} && uv sync --locked --project system/apps/{package} && python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && exec {entry_point}"
-directory=/home/user/workspace
-autostart=true
-autorestart=true
-startsecs=30
-startretries=5
-stopasgroup=true
-killasgroup=true
-stdout_logfile=/var/log/supervisor/{name}-stdout.log
-stderr_logfile=/var/log/supervisor/{name}-stderr.log
-stdout_logfile_maxbytes=10MB
-stderr_logfile_maxbytes=10MB
-stdout_logfile_backups=3
-stderr_logfile_backups=3
+# The ``[[secrets]]`` table of an app scaffolded with ``--secrets-file``. The generated
+# program wraps the entry point in with_secrets.py once per table, so the file's
+# variables reach the app and appear in no config file and no command line.
+_MANIFEST_SECRETS_TEMPLATE = """
+# The secret file the app runs under (data/.secrets/<file>.env) and the variables it
+# sets. Add a `note`: one line for someone installing the app, saying what the value
+# is and where to get it.
+[[secrets]]
+file = {file_toml}
+variables = [{variables_toml}]
 """
-
-
-def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
-    """The drop-in this scaffold will write, once nothing else claims the name.
-
-    Exits non-zero if the name is already claimed, whether in the main config or
-    in a drop-in, and whether by a program or by an event listener: supervisord
-    holds both in one process-group namespace, so a duplicate name either
-    resolves silently to whichever the include order read last, or breaks the
-    config for every program at the next reread.
-
-    Runs before anything is written, so a refusal leaves no half-scaffolded lib
-    for the agent to clean up.
-    """
-    conf = repo_root / "system/supervisord.conf"
-    if not conf.exists():
-        sys.exit(f"error: {conf} not found (cannot register the new app)")
-    for existing in _supervisord_conf_files(conf):
-        text = existing.read_text()
-        for section in (f"[program:{name}]", f"[eventlistener:{name}]"):
-            if section in text:
-                sys.exit(
-                    f"error: {existing.relative_to(repo_root)} already has a "
-                    f"{section} section"
-                )
-    return _supervisord_program_path(conf, name)
-
-
-def _entry_point_command(name: str, package: str, secrets_file: str | None) -> str:
-    """The program's entry point, wrapped so a declared secret file's variables reach it.
-
-    `with_secrets.py` is the one sanctioned reader of data/.secrets/ (see the
-    connect-external-service skill): it loads the file into the child's environment
-    and execs the app, so the value appears in no config file and no command line.
-    """
-    entry_point = f"system/apps/{package}/.venv/bin/{name}"
-    if secrets_file is None:
-        return entry_point
-    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {entry_point}"
-
-
-def _write_supervisord_program(
-    path: Path, name: str, package: str, port: int, secrets_file: str | None
-) -> None:
-    """Write the app's supervisord program to its own drop-in file.
-
-    The command is wrapped in `bash -c "..."` because supervisord exec's commands
-    directly (no shell) and this one chains forward_port.py with `&&`; the
-    `oom_tag_service.py user` prefix tags the new (user-created) app so it is
-    shed before any built-in app or service under memory pressure (see
-    system/services/oom_priority/README.md).
-
-    Each start links the app's venv (a rebuilt root filesystem loses its target,
-    and uv refuses a dangling link), syncs it from the app's own lock with
-    `--locked` (a no-op in about 30 ms when current; a stale lock or failed sync
-    fails the start with uv's error, and supervisord retries), then execs the entry
-    point from the app's own `.venv/bin` -- not through `uv run`, so no uv process
-    stays resident as its parent.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        _SUPERVISORD_PROGRAM_TEMPLATE.format(
-            name=name,
-            package=package,
-            port=port,
-            entry_point=_entry_point_command(name, package, secrets_file),
-        )
-    )
 
 
 def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
@@ -882,18 +744,41 @@ def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
         sys.exit(f"error: `{description}` failed (exit {result.returncode})")
 
 
-def _validate_manifest(repo_root: Path, package: str) -> None:
-    # The written manifest is checked against the app_manifest library's rules so a
-    # scaffolded app never registers a manifest its readers would skip. Imported
-    # here, so only a scaffold that validates pays for the library and its pydantic.
-    from app_manifest.errors import AppManifestError
-    from app_manifest.manifest import load_manifest
+def _register_app(
+    repo_root: Path,
+    package: str,
+    requested_port: int | None,
+    is_port_bound: Callable[[int], bool],
+) -> tuple[int, tuple[str, ...]]:
+    """Register the app directory just written, as ``app-install add`` does.
 
-    manifest_path = repo_root / "system" / "apps" / package / "app.toml"
-    try:
-        load_manifest(manifest_path)
-    except AppManifestError as error:
-        sys.exit(f"error: {manifest_path.relative_to(repo_root)} is invalid: {error}")
+    Returns the port the app was given and the repo-relative files written for it: its
+    record first, then its generated program.
+
+    The workspace refuses an app that would take a name, a program, a console script or
+    a port something else holds. A refused app's directory is removed before exiting
+    non-zero, so the refusal leaves nothing for the agent to clean up.
+    """
+    # Imported here, so only a scaffold that gets as far as registering pays for the
+    # installer, the app_manifest library and their pydantic.
+    from app_install.errors import AppInstallError, CollisionError
+    from app_install.operations import add_app, install_lock
+    from app_manifest.errors import AppManifestError
+
+    with install_lock(repo_root):
+        try:
+            outcome = add_app(repo_root, package, requested_port, is_port_bound)
+        except (AppInstallError, AppManifestError) as error:
+            shutil.rmtree(repo_root / "system" / "apps" / package)
+            problems = (
+                error.problems if isinstance(error, CollisionError) else (str(error),)
+            )
+            sys.exit(
+                f"error: the workspace refused to register the app, so system/apps/{package} "
+                "was removed again:\n"
+                + "\n".join(f"  - {problem}" for problem in problems)
+            )
+    return outcome.record.port, outcome.changed_paths
 
 
 def _create_project_env(repo_root: Path, package: str) -> None:
@@ -983,7 +868,10 @@ def main() -> None:
         help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
     )
     parser.add_argument(
-        "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
+        "--port",
+        type=int,
+        default=None,
+        help="the loopback port to register the app on (the lowest free one if omitted)",
     )
     parser.add_argument(
         "--extra-dep",
@@ -999,23 +887,28 @@ def main() -> None:
     parser.add_argument(
         "--secrets-file",
         default=None,
-        help="the <name> of a data/.secrets/<name>.env the app needs (requested through the connect-external-service skill); the program runs under with_secrets.py so its variables reach the app",
+        help="the <name> of a data/.secrets/<name>.env the app needs (requested through the connect-external-service skill); declared in the manifest's [[secrets]], so the generated program runs under with_secrets.py and its variables reach the app",
+    )
+    parser.add_argument(
+        "--secrets-variable",
+        action="append",
+        default=[],
+        help="a variable the --secrets-file sets, such as EXAMPLE_API_KEY (repeatable; at least one with --secrets-file)",
     )
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip the manifest check and the app's lock and venv after generation (for tests/dry runs)",
+        help="skip the app's lock and venv after generation (for tests/dry runs)",
     )
     parser.add_argument(
         "--start",
         action="store_true",
-        help="register with supervisord (reread + update) and wait for health endpoint",
+        help="have supervisord pick up the generated program (reread + update) and wait for health endpoint",
     )
     args = parser.parse_args()
 
     _validate_name(args.name)
-    if args.secrets_file is not None:
-        _validate_secrets_file(args.secrets_file)
+    _validate_secrets(args.secrets_file, list(args.secrets_variable))
     icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
@@ -1024,8 +917,6 @@ def main() -> None:
     )
     _note_app_build_started(repo_root)
     package = _kebab_to_snake(args.name)
-    port = _pick_port(repo_root, args.port, _is_port_bound)
-    program_path = _reserve_supervisord_program_path(repo_root, args.name)
     _check_description(args.description)
     display_name = _display_name(args.description, args.display_name)
 
@@ -1034,16 +925,17 @@ def main() -> None:
         args.name,
         args.description,
         display_name,
-        port,
         list(args.extra_dep),
         icon_markup,
+        args.secrets_file,
+        list(args.secrets_variable),
     )
-    _write_supervisord_program(
-        program_path, args.name, package, port, args.secrets_file
-    )
+    # Imported here for the same reason as inside _register_app.
+    from app_install.ports import is_port_bound
+
+    port, registered_paths = _register_app(repo_root, package, args.port, is_port_bound)
 
     if not args.skip_uv_sync:
-        _validate_manifest(repo_root, package)
         _create_project_env(repo_root, package)
 
     if args.start:
@@ -1054,11 +946,14 @@ def main() -> None:
         if args.start
         else ""
     )
+    record_path, *generated_paths = registered_paths
     print(
         f"{start_msg}Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(app `{args.name}` on port {port}, registered in "
-        f"{program_path.relative_to(repo_root)}; the window renders at the service's "
-        f"own origin, http://{args.name}.<workspace-host>/). "
+        f"(app `{args.name}` on port {port}, recorded in {record_path}; the window "
+        f"renders at the service's own origin, http://{args.name}.<workspace-host>/). "
+        f"Generated, never edited by hand: {', '.join(generated_paths)}. To change how the "
+        f"app runs, change {lib_dir.relative_to(repo_root)}/app.toml and run "
+        f"`uv run --no-sync app-install regenerate {args.name}`. "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f".agents/shared/references/apps/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )

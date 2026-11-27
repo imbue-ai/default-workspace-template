@@ -78,6 +78,9 @@ window keeps showing the old page until it is refreshed. The live change loop
   in `references/verify-against-a-copy.md`.
 - **Never restart an app with `supervisorctl restart`.** It waits out the
   program's start window (30 s for a scaffolded app); step 4's call does not.
+- **Never edit a generated program file.** An app with a record under
+  `system/config/apps/` has its program files generated from its `app.toml`:
+  `references/applying-a-change.md` says how to change one.
 - **The harden pass comes after the user's feedback, in the background.** Never
   dispatch it in the turn you made the change, and never run the thorough
   tests or the review gates yourself.
@@ -175,8 +178,9 @@ policy, a "view raw" control on derived data.
 Then edit the code under `system/apps/<package>/`, or wherever the program's
 command points. Three more things the change may owe:
 
-- **The manifest.** Anything the change creates for the app outside its own
-  directory is registered under `[[references]]`. If the change gives the app
+- **The manifest.** What the change creates for the app (a skill, a routine,
+  an environment unit) goes inside the app's directory, or, for a built-in
+  app, is registered under `[[references]]`. If the change gives the app
   work between requests, or takes it away, `stop_when_no_windows` changes
   with it. Both rules are in
   `.agents/shared/references/apps/manifest.md`; the restart in step 4

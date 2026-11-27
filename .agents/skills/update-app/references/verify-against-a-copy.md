@@ -173,7 +173,11 @@ gives an app, as part of your change, so the throwaway instance above works:
   with every read and write routed through it;
 - the port override,
   `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`,
-  with `PORT` bound in `run_simple`, never a hardcoded literal.
+  with `PORT` bound in `run_simple`, never a hardcoded literal. The assigned
+  port stays the default only for a service whose hand-written program file
+  passes no port. An app with a record under `system/config/apps/` gets its
+  port from its generated program's environment, so its default is `"0"` (as
+  the scaffold writes it) and no port sits in the app's code.
 
 If you genuinely cannot, fall back to read-only verification plus the snapshot
 net.

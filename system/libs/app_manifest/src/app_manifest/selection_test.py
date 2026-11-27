@@ -10,6 +10,7 @@ from app_manifest.selection import ChangedPathClass
 from app_manifest.selection import CreationReach
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
+from app_manifest.selection import read_projectless_user_apps
 from app_manifest.selection import render_command_line
 from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
@@ -19,6 +20,8 @@ from app_manifest.testing import declare_root_dependency
 from app_manifest.testing import remove_shell_modules
 from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
+from app_manifest.testing import write_app_record
+from app_manifest.testing import write_app_skill
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
@@ -712,3 +715,138 @@ def test_a_changed_package_with_no_tests_gets_an_import_check_in_its_own_environ
         (".", ("uv", "run", "--no-sync", "python", "-c", "import quiet")),
         ("system/services/poller", ("uv", "run", "--no-sync", "python", "-c", "import poller")),
     ]
+
+
+_NOTES_SUITE = "uv run --no-sync pytest system/apps/notes"
+
+
+def _notes_as_a_user_app(workspace: Path) -> None:
+    """Give the notes app a record that lists the refresh skill, a skill of its own, a service,
+    and the program files generated for it. Its manifest still references ``run_notes.sh``."""
+    write_app_manifest(
+        workspace,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n\n'
+        '[[references]]\npath = "system/scripts/run_notes.sh"\n\n'
+        '[[services]]\nrole = "indexer"\ncommand = "notes-indexer"\n',
+        is_icon_written=True,
+    )
+    write_app_record(workspace, "notes", "notes", {".agents/skills/refresh": "Calls POST /api/notes"})
+    write_app_skill(workspace, "notes", "notes-digest")
+    write_repo_file(workspace, "system/apps/notes/routines/daily.toml", 'schedule = "0 7 * * *"\n')
+    write_repo_file(workspace, "system/apps/notes/env.d/2000-notes.sh", "#!/bin/sh\n")
+    write_supervisord_dropin(workspace, "notes", ("program:notes",))
+    write_supervisord_dropin(workspace, "notes-indexer", ("program:notes-indexer",))
+    commit_everything(workspace, "notes becomes a user app")
+
+
+def test_a_path_a_user_apps_record_lists_runs_that_app_and_one_only_its_manifest_lists_does_not(
+    workspace: Path,
+) -> None:
+    _notes_as_a_user_app(workspace)
+
+    from_record = _select(workspace, [".agents/skills/refresh/scripts/refresh.py"])
+    from_manifest = _select(workspace, ["system/scripts/run_notes.sh"])
+    from_app = _select(workspace, ["system/apps/notes/src/notes/core.py"])
+
+    expected = [_ALWAYS_RUN, "uv run --no-sync pytest .agents/skills/refresh", _NOTES_SUITE]
+    assert _command_lines(from_record) == expected
+    assert from_record.paths[0].classes == (ChangedPathClass.SKILL, ChangedPathClass.MANIFEST_REFERENCE)
+    assert _command_lines(from_app) == expected
+    assert from_manifest.paths[0].classes == (ChangedPathClass.UNOWNED,)
+
+
+@pytest.mark.parametrize("path", ["system/config/apps/notes.toml", ".agents/skills/notes-digest"])
+def test_a_user_apps_record_and_the_link_to_a_skill_it_carries_run_that_app(workspace: Path, path: str) -> None:
+    _notes_as_a_user_app(workspace)
+
+    selection = _select(workspace, [path])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, _NOTES_SUITE]
+    assert selection.paths[0].classes == (ChangedPathClass.USER_APP_FILE,)
+    assert not selection.is_full_root
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "system/apps/notes/skills/notes-digest/SKILL.md",
+        "system/apps/notes/routines/daily.toml",
+        "system/apps/notes/env.d/2000-notes.sh",
+    ],
+)
+def test_what_a_user_app_carries_in_its_directory_is_a_change_to_that_app(workspace: Path, path: str) -> None:
+    _notes_as_a_user_app(workspace)
+
+    selection = _select(workspace, [path])
+
+    # The app's own suite, and the tests of what its record lists: the skill that drives it.
+    assert _command_lines(selection) == [
+        _ALWAYS_RUN,
+        "uv run --no-sync pytest .agents/skills/refresh",
+        _NOTES_SUITE,
+    ]
+    assert selection.paths[0].classes == (ChangedPathClass.PACKAGE,)
+
+
+def test_a_user_apps_service_program_file_runs_that_app(workspace: Path) -> None:
+    _notes_as_a_user_app(workspace)
+
+    selection = _select(workspace, ["system/supervisord.conf.d/notes-indexer.conf"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, _NOTES_SUITE, _BAND_CHECK]
+    assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
+
+
+def _wrapped_server(workspace: Path, *, has_record: bool) -> list[str]:
+    """An app that is no Python project: a manifest, a file that looks like a test, and its
+    program; returns every path of it a change can touch."""
+    write_app_manifest(
+        workspace, "wrapped", 'name = "wrapped"\ndisplay_name = "Wrapped"\nicon = "icon.svg"\n', is_icon_written=True
+    )
+    write_repo_file(workspace, "system/apps/wrapped/test_server.py", "def test_upstream() -> None:\n    pass\n")
+    write_supervisord_dropin(workspace, "wrapped", ("program:wrapped",))
+    paths = [
+        "system/apps/wrapped/app.toml",
+        "system/apps/wrapped/test_server.py",
+        "system/supervisord.conf.d/wrapped.conf",
+    ]
+    if has_record:
+        write_app_record(workspace, "wrapped", "wrapped", {})
+        paths.append("system/config/apps/wrapped.toml")
+    commit_everything(workspace, "add a wrapped server")
+    return paths
+
+
+def test_a_user_app_that_is_no_python_project_has_no_suite_to_run(workspace: Path) -> None:
+    paths = _wrapped_server(workspace, has_record=True)
+
+    selection = _select(workspace, paths)
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, _BAND_CHECK]
+    assert not selection.is_full_root
+    assert {str(entry.path): entry.classes for entry in selection.paths} == {
+        "system/apps/wrapped/app.toml": (ChangedPathClass.PACKAGE,),
+        "system/apps/wrapped/test_server.py": (ChangedPathClass.PACKAGE,),
+        "system/config/apps/wrapped.toml": (ChangedPathClass.USER_APP_FILE,),
+        "system/supervisord.conf.d/wrapped.conf": (ChangedPathClass.WIRING,),
+    }
+
+
+def test_an_app_with_no_record_and_no_python_project_keeps_its_root_collected_tests(workspace: Path) -> None:
+    paths = _wrapped_server(workspace, has_record=False)
+
+    selection = _select(workspace, paths)
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/wrapped", _BAND_CHECK]
+
+
+@pytest.mark.parametrize(("has_record", "expected"), [(True, ("system/apps/wrapped",)), (False, ())])
+def test_the_root_run_leaves_out_only_a_user_app_that_is_no_python_project(
+    workspace: Path, has_record: bool, expected: tuple[str, ...]
+) -> None:
+    # The notes app is a user app with a project of its own, which runs as its own pytest root.
+    _notes_as_a_user_app(workspace)
+    _wrapped_server(workspace, has_record=has_record)
+
+    assert read_projectless_user_apps(workspace) == expected

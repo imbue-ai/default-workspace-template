@@ -349,7 +349,7 @@ def test_name_too_long(tmp_path: Path) -> None:
     assert "length" in error
 
 
-# --- Runnability check (check_runnable) -------------------------------------
+# The runnability check (check_runnable).
 
 
 class _RecordingRunner:
@@ -526,3 +526,71 @@ def test_every_built_in_skill_with_python_names_its_project_and_package(
 @pytest.mark.parametrize("skill", _SKILLS_WITH_PYTHON, ids=lambda path: path.name)
 def test_every_built_in_skill_with_python_is_runnable(skill: Path) -> None:
     assert validate_skill.check_runnable(skill) is None
+
+
+# Skills the workspace keeps as they came: the listed ones, and an installed app's
+
+
+def _write_app_with_a_skill(repo_root: Path, name: str, origin: str, upstream_url: str, skill: str) -> None:
+    records = repo_root / "system" / "config" / "apps"
+    records.mkdir(parents=True, exist_ok=True)
+    (records / f"{name}.toml").write_text(
+        f'name = "{name}"\npackage = "{name}"\nport = 8084\norigin = "{origin}"\nupstream_url = "{upstream_url}"\n'
+    )
+    skill_dir = repo_root / "system" / "apps" / name / "skills" / skill
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {skill}\ndescription: test\n---\n")
+    link = repo_root / ".agents" / "skills" / skill
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(f"../../system/apps/{name}/skills/{skill}")
+
+
+def test_an_installed_apps_skills_are_kept_as_they_came_and_an_owned_apps_are_not(tmp_path: Path) -> None:
+    _write_app_with_a_skill(tmp_path, "notes", "installed", "https://github.com/alice/notes", "weekly-review")
+    _write_app_with_a_skill(tmp_path, "digest", "local", "", "morning-digest")
+    agents_dir = tmp_path / ".agents"
+    (agents_dir / "third-party-skills.toml").write_text(
+        '[skills]\npdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"\n'
+    )
+
+    assert validate_skill.third_party_skills(agents_dir) == {
+        "weekly-review": "https://github.com/alice/notes",
+        "pdf": "https://github.com/anthropics/skills/tree/main/skills/pdf",
+    }
+    # By its entry under skills/, and by the directory inside the app that the entry links to.
+    assert validate_skill.is_third_party_skill(agents_dir / "skills" / "weekly-review") is True
+    assert validate_skill.is_third_party_skill((agents_dir / "skills" / "weekly-review").resolve()) is True
+    assert validate_skill.is_third_party_skill(agents_dir / "skills" / "morning-digest") is False
+    assert validate_skill.is_third_party_skill((agents_dir / "skills" / "morning-digest").resolve()) is False
+
+
+def test_a_skill_an_owned_app_carries_is_checked_against_the_repository_it_is_in(tmp_path: Path) -> None:
+    _write_app_with_a_skill(tmp_path, "digest", "local", "", "morning-digest")
+    link = tmp_path / ".agents" / "skills" / "morning-digest"
+    skill_md = link / "SKILL.md"
+    skill_md.write_text(skill_md.read_text() + "\nThe record is `system/config/apps/digest.toml`.\n")
+
+    # By its entry under skills/, and by the directory inside the app that the entry links to.
+    assert validate_skill.validate(link) is None
+    assert validate_skill.validate(link.resolve()) is None
+
+    skill_md.write_text(skill_md.read_text() + "\nRead `system/config/apps/absent.toml` too.\n")
+
+    error = validate_skill.validate(link)
+    assert error is not None
+    assert "system/config/apps/absent.toml, which does not exist" in error
+    assert "digest.toml" not in error
+
+
+def test_a_listed_skill_is_kept_as_it_came_in_a_checkout_whose_directory_is_named_apps(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "apps" / ".agents"
+    (agents_dir / "skills" / "pdf").mkdir(parents=True)
+    (agents_dir / "third-party-skills.toml").write_text(
+        '[skills]\npdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"\n'
+    )
+
+    assert validate_skill.is_third_party_skill(agents_dir / "skills" / "pdf") is True
+
+
+def test_a_tree_with_no_app_records_and_no_listing_keeps_no_skill_as_it_came(tmp_path: Path) -> None:
+    assert validate_skill.third_party_skills(tmp_path / ".agents") == {}

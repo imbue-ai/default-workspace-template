@@ -1,5 +1,9 @@
 """When a routine is due, and how its schedule reads: pure functions of the definition, the state and now.
 
+The schedule a routine runs on is its definition's, except for a routine an app owns whose user has rescheduled
+it: that schedule is kept in the routine's state, and ``effective_routine`` is what every reader of a schedule
+goes through.
+
 Every datetime that crosses these functions is timezone-aware. A definition's ``at``, ``days``, ``day_of_month``
 and ``once`` are in the workspace's local zone, which the caller passes in, so the arithmetic that touches a
 calendar day happens in that zone and the answer comes back aware.
@@ -12,10 +16,13 @@ from datetime import tzinfo
 from typing import Final
 from typing import assert_never
 
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from routines.data_types import LoadedRoutine
 from routines.data_types import RoutineDefinition
 from routines.data_types import RoutineState
+from routines.data_types import ScheduleChange
+from routines.data_types import ScheduleOverride
 from routines.primitives import Duration
 from routines.primitives import DurationUnit
 from routines.primitives import SECONDS_PER_DAY
@@ -47,6 +54,57 @@ def is_switched_on(loaded: LoadedRoutine, state: RoutineState) -> bool:
     if state.is_enabled is not None:
         return state.is_enabled
     return loaded.definition.enabled if loaded.definition is not None else True
+
+
+@pure
+def apply_schedule(definition: RoutineDefinition, schedule: ScheduleChange) -> RoutineDefinition:
+    """The definition with the schedule in place of its own; raises pydantic's ValidationError when the two do not
+    make a routine."""
+    rescheduled = definition.model_copy_update(
+        to_update(definition.field_ref().every, schedule.every),
+        to_update(definition.field_ref().at, schedule.at),
+        to_update(definition.field_ref().days, schedule.days),
+        to_update(definition.field_ref().day_of_month, schedule.day_of_month),
+        to_update(definition.field_ref().once, schedule.once),
+    )
+    return RoutineDefinition.model_validate(rescheduled.model_dump())
+
+
+@pure
+def schedule_of(definition: RoutineDefinition) -> ScheduleOverride:
+    """The definition's schedule fields on their own."""
+    return ScheduleOverride(
+        every=definition.every,
+        at=definition.at,
+        days=definition.days,
+        day_of_month=definition.day_of_month,
+        once=definition.once,
+    )
+
+
+@pure
+def is_same_schedule(first: RoutineDefinition, second: RoutineDefinition) -> bool:
+    """Whether the two run on one schedule. The weekdays are a set, so the order they are written in is no part
+    of it."""
+    return (first.every, first.at, frozenset(first.days), first.day_of_month, first.once) == (
+        second.every,
+        second.at,
+        frozenset(second.days),
+        second.day_of_month,
+        second.once,
+    )
+
+
+@pure
+def effective_routine(loaded: LoadedRoutine, state: RoutineState) -> LoadedRoutine:
+    """The routine as it runs: one an app owns carries the schedule its state keeps for the user, when there is
+    one, in place of its file's; any other is as loaded."""
+    override = state.schedule_override
+    if loaded.definition is None or loaded.app_package is None or override is None:
+        return loaded
+    return loaded.model_copy_update(
+        to_update(loaded.field_ref().definition, apply_schedule(loaded.definition, override))
+    )
 
 
 @pure

@@ -1,6 +1,6 @@
 # app_manifest
 
-The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is `system/libs/app_schema`):
+The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is the app SDK's `imbue.app_sdk.api_schema`):
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, a one-line description, the path of its
@@ -20,6 +20,10 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   apps, written only by `system/scripts/forward_port.py` (which copies the
   manifest's fields onto the row at registration and adds the URL and the
   origin label). The row shape is `contracts.md` section 3.
+
+It also holds the model of the **app record**, `system/config/apps/<name>.toml`:
+what this workspace records about an app its agent built or installed, which
+`app-install` writes and the footprint reads.
 
 ## API
 
@@ -63,13 +67,55 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   table: how far the app takes part in workspace themes, a `ThemingMode` of
   `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
   a theme may style, each an `AppPartName` unique within the app and a
-  description), `load_manifest(path, repo_root=None)`
+  description), the fields that say how a user app runs and what it asks of
+  a workspace that installs it (`version`, a semantic version, and
+  `verified_template`, a `minds-v<version>` template version, both written
+  when the app is published; `RunSpec`, the `[run]` table: the `command` of
+  the app's main program, its `args` and its `env`; `ServiceSpec`, one
+  `[[services]]` entry: a background program run as `<name>-<role>`, whose
+  `role` is lowercase words joined by hyphens and unique within the app; in
+  both, a `command` is one word (its arguments go in `args`), a text may
+  carry only the `{port:main}` and `{host}` placeholders,
+  and an `env` value may hold one kind of quote, and not at either end,
+  and no `;` or `#` after a space, which supervisord reads as the start of
+  a comment: that is all its environment line can carry; and the guidance
+  for an adopter: `PermissionNote` (`[[permissions]]`), `LlmNote` (`[llm]`),
+  `EnvironmentNote` (`[environment]`: `apt`, `npm_global`, `uv_tools`,
+  `cargo_crates`, `cargo_default_toolchain`), `AppDependency`
+  (`[[dependencies]]`, each name once), `AdaptationNote` (`[[adaptation]]`),
+  and `PublishRules` (`[publish] exclude`, globs relative to the app's
+  directory)), `load_manifest(path, repo_root=None, mode=ManifestReadMode.TOLERANT)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
   directory nor in another app's, and goes through no symlinked directory,
-  which git never reports a changed file through), `repo_root_for_manifest`,
+  which git never reports a changed file through; the references of an app
+  with a record are the record's, so its manifest's are not checked),
+  `ManifestReadMode` (what
+  `load_manifest` does with a key the models do not declare, in the manifest
+  or in any table or array entry of it: `TOLERANT`, the default, logs a
+  warning naming the manifest and the key and ignores it, so a reader still
+  reads the manifest of an app installed from a repository whose template is
+  newer than this workspace's; `STRICT` fails the load, for a check of a
+  manifest this workspace is authoring, and also refuses a `[[references]]`
+  or `[wiring]` table beside a record, which `TOLERANT` loads unread
+  ("Built-in apps and user apps" below); every other rule holds in both),
+  `check_declares_no_record_tables(path, manifest)` (that refusal on its own,
+  for `app-install add`, which reads a manifest before its app has a record),
+  `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
+- `app_manifest.records`: the app record, the file that makes an app a user
+  app. `AppRecord` (`name`, which is the file's stem; `package`, the app's
+  directory under `system/apps/`; `port`, the loopback port of its main
+  program; `origin`, an `AppOrigin` of `local` or `installed`; the
+  `upstream_*` fields of an installed app; `dev_repo_url`; the `published_*`
+  fields; `verified_template`; and `references`, each a `RecordReference` of
+  a path elsewhere in the workspace that uses the app, with a note),
+  `record_path(repo_root, name)`, `load_record` (raises
+  `AppRecordNotFoundError` for an app with none), `load_all_records`,
+  `parse_record` (a record that does not parse, or whose file is not named
+  after its app, raises `RecordLoadError`), `render_record` (the file's
+  text, the same text for the same record), and `write_record`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
   an app from an older reader), `read_registry(path)` (a row that fails
@@ -112,11 +158,17 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `system/supervisord.conf.d/*.conf` drop-in its `[include]` glob names;
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
-  `app.toml` is skipped, and so is a manifest that fails to load, with a warning
-  naming it -- `system/test_app_manifests.py` is the loud check for that, so one
-  app's stale reference does not block every other creation's footprint).
+  `app.toml` is skipped, and so is an app whose manifest or record fails to
+  load, with a warning naming it -- `system/test_app_manifests.py` is the loud
+  check for that, so one app's stale reference does not block every other
+  creation's footprint). `find_app_record` answers whether an app is a user app
+  (it has a record whose `package` is its directory), `resolve_loaded_manifest`
+  pairs a manifest with that record, the references read from it, and the
+  links to the skills the app carries, and `list_user_app_files` lists what a
+  user app owns beside its directory ("Built-in apps and user apps" below).
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
-  pathspec that matches nothing and a mistyped path would read as "unchanged".
+  pathspec that matches nothing and a mistyped path would read as "unchanged",
+  and refuses the link to a skill an app carries for the same reason.
   `parse_creation_spec`, `compute_creation_scope`, `compute_pass_scope`, and
   `render_pass_scope_file` build the pass scope file behind `app-manifest
   pass-scope`, with `find_fork_point` and `find_departure_point` telling the
@@ -161,7 +213,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   the template's following `/` as one slash; it raises `PageTemplateFieldError`
   when a field is missing or not a string or the page is not a rooted path.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
-  build-app scaffold and tests. Without `--repo-root` the reference location
+  build-app scaffold and tests. It is the authoring check, so it loads the
+  manifest in the strict mode: a key the schema does not declare fails it.
+  Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout
   implies, and a manifest anywhere else skips them.
 
@@ -197,9 +251,11 @@ goes to stdout; with it, the parent directories are created.
   skill's `package` and `manifest` are null and its `name` is the directory's
   name.
 - `primary` is what the creation is: the app's package directory, or the
-  `--for-path` path. A directory ends in `/`.
+  `--for-path` path. A directory ends in `/`. A user app's also lists its
+  record and the link to each skill it carries, after its directory.
 - `wiring` is the supervisord sections the app owns: its own
-  `program:<program>` block, every `program:<name>-<role>` sidecar, and every
+  `program:<program>` block, every `program:<name>-<role>` sidecar, and, for a
+  built-in app, every
   program the manifest's `[wiring] programs` declares (the Screen declares the
   four programs of its stack and its `screen-watch` listener, which exist only
   for it; a declared program with no block is an error). The first label of
@@ -212,17 +268,20 @@ goes to stdout; with it, the parent directories are created.
   `screen-watch.conf`), so its footprint carries all six. Empty when nothing
   runs any of them, which is the normal state before an app is first
   registered.
-- `references` copies the manifest's entries through, with `kind` derived from
+- `references` copies the app's entries through (a built-in app's manifest's,
+  a user app's record's), with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a
-  `--for-path` scope, the primary directory of every app whose manifest
-  references that path. Of each context directory only its `app.toml` counts as
-  inside the footprint, because a skill's one sanctioned edit outside its own
-  directory is the `[[references]]` entry it adds there; a change to the app's
-  code is reported outside.
+  `--for-path` scope, the primary directory of every app that references that
+  path, each user app's followed by its record. Of each context directory only
+  its `app.toml` counts as inside the footprint, and a context record counts
+  itself, because a skill's one sanctioned edit outside its own directory is
+  the reference to it the owning app gains, in its manifest or, for a user app,
+  in its record; a change to the app's code is reported outside.
 - `conventions` is a fixed list keyed by creation type, not checked for
   existence.
-- `exclude` is the built-in globs followed by the manifest's own, deduplicated.
+- `exclude` is the built-in globs followed by the manifest's own, deduplicated,
+  all repo-root-relative: a user app's are written with its directory in front.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
   sha, the full sha of the `ref` the diff runs to (HEAD, or what `--diff-ref`
   names, so one tree can answer for a range that ends elsewhere -- what a merge
@@ -237,6 +296,48 @@ goes to stdout; with it, the parent directories are created.
   `incoming_base` are null and `others` and `incoming` empty: they are
   `pass-scope --lead-ref`'s (below).
 
+### Built-in apps and user apps
+
+A user app is an app with a record, `system/config/apps/<name>.toml`, whose
+`package` is the app's directory (`app_manifest.records`); `app-install` writes
+it for every app the workspace's agent builds or installs. Every other app is a
+built-in one, and its footprint is read as it always was. A user app is one
+self-contained directory that is installed into other workspaces, so nothing in
+its manifest may depend on the workspace around it:
+
+- **References.** The manifest's `[[references]]` is not read. The paths
+  elsewhere in the workspace that use the app are the record's `references`,
+  held to the rules of a manifest reference when the footprint is computed:
+  each is a literal path that exists, outside every app's directory, reached
+  through no symlink. A record that breaks one fails the footprint of its app
+  with the record named (`RecordLoadError`), and in a lookup across every app
+  that app is skipped with a warning, as an app whose manifest does not load
+  is.
+- **Wiring.** `[wiring]` is not read. The app owns its own program and one
+  `<name>-<role>` program per `[[services]]` entry, which the sidecar rule
+  finds; `app-install` generates each one's file, and `app-install check` is
+  what fails when one is missing.
+- **Excludes.** Each `[scope] exclude` glob is relative to the app's own
+  directory, as a pattern in a `.gitignore` there would be: one with a slash
+  before its end is anchored to the directory (`seed/**` is
+  `system/apps/<package>/seed/**`), and any other matches at every depth
+  beneath it (`*.snap` is `system/apps/<package>/**/*.snap`). Such a glob
+  cannot reach a reference, so the rule that the excludes may not swallow a
+  footprint entry whole refuses the globs that leave nothing of the app (`**`).
+- **What the app owns beside its directory.** Its record, the program files
+  generated for it (its `wiring`), and the link `.agents/skills/<skill>` to
+  each skill it carries under `system/apps/<package>/skills/`. Git reports
+  that link as one path and a change to the skill under the app's directory,
+  so both are in the footprint. `skill:<name>` for such a skill is the app.
+
+A manifest that still carries `[[references]]` or `[wiring]` beside a record
+loads in the tolerant mode with both tables unread: the footprint ignores them,
+and `load_manifest` does not check the paths such a `[[references]]` names, so
+an installed app's manifest is not held to this workspace's tree. The strict
+mode (`app-manifest validate-manifest`) refuses such a manifest, and says that
+what else uses the app is listed in its record and that its background
+programs are `[[services]]`.
+
 `app-manifest pass-scope` writes the scope file for a harden pass, which covers
 every creation one change touched:
 
@@ -245,7 +346,9 @@ every creation one change touched:
 Each `--creation` is `app:<registered name or package directory>`,
 `skill:<directory under .agents/skills>`, `service:<package under
 system/services>`, or `shared:<path under .agents/shared>` (a shared script or
-reference, scoped as `--for-path` scopes it). The file is
+reference, scoped as `--for-path` scopes it). A skill whose entry under
+`.agents/skills` is a link into an app's own `skills/` directory is part of
+that app, so `skill:<name>` for it is the app's footprint. The file is
 `{"creations": [...], "diff": ...}`: one entry per creation, each the scope
 `footprint` writes with its `diff` null, and one `diff` for the pass, whose
 `inside_footprint` is every changed file some creation's footprint accounts
@@ -277,12 +380,16 @@ A service has `type` `service`, its directory as
 runs as `host-backup`) and every `<name>-<role>` one; an app directory with no
 `app.toml` yet is scoped the same way. A pass that names one creation twice is
 refused, including an app named by both its registered name and its package
-directory.
+directory, or beside a skill it carries.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
-(`app`, `manifest`, `path`, `note`) for every app whose manifest claims that
+(`app`, `manifest`, `path`, `note`) for every app that claims that
 path -- directly or as something beneath a referenced directory -- and exits 0
-with no output when none does.
+with no output when none does. A built-in app claims what its manifest
+references and a user app what its record does. A user app also claims each
+skill it carries: the lookup names it for the link `.agents/skills/<skill>`
+and for any path under `system/apps/<package>/skills/<skill>/`, with that link
+or that directory as `path`.
 
 `priority` is validated for shape only; whether it names a band is checked
 against `oom_priority.bands.SERVICE_BANDS` by `system/test_app_manifests.py`
@@ -341,12 +448,14 @@ Selection reads only what the workspace declares. A path selects:
   for a test file, which nothing that depends on the package runs, and not for
   a path in an app's frontend, which is built into the app's own bundle;
 - for a path in an app other than a test file or a frontend path, the tests
-  beneath each directory the app's manifest references (a referenced skill
+  beneath each directory the app references (a referenced skill
   drives the app's surface);
-- the app whose manifest references it (`[[references]]`), or whose program a
+- the app that references it (`[[references]]`, in a built-in app's manifest
+  or a user app's record), or whose program a
   supervisord block holds; a supervisord block also selects
   `oom_priority`'s `oom_tag_service_test.py`, which checks that every program
   block names its OOM band;
+- for a user app's record, or the link to a skill it carries, that app;
 - for a `uv.lock` change, every member that depends on a package the lock
   upgraded (a package only added selects nothing beyond the member whose
   `pyproject.toml` added it);
@@ -361,8 +470,18 @@ Selection reads only what the workspace declares. A path selects:
   (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
   sources) select every npm package.
 
+Everything a user app carries in its directory (its skills, routines, and
+environment units among the rest) is a path in that app's package. A user app
+with no `pyproject.toml` (a wrapped server) is no Python project: it has no
+venv to run a suite in, and no selected command names a test file it happens
+to hold, so a change to it selects the tests of what it references and the
+always-run set, and nothing of its own. The root run leaves those test files
+out as well: the root `conftest.py` ignores the directories
+`read_projectless_user_apps` names.
+
 A path in no package, skill or npm package, that is not npm root
-configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
+configuration, a supervisord block, a user app's record or skill link,
+`uv.lock`, a guard, a collected test file,
 markdown under `.agents/` (agent prose, which only the always-run prose checks
 and the apps referencing it read), or other markdown those checks read, runs
 the full root suite (`uv run --no-sync pytest` from the repo root), which replaces the
@@ -421,6 +540,7 @@ neither.
 
 A coupling nothing declares (a script run as a subprocess, a service called
 over HTTP, a file one component writes and another reads) is invisible to the
-selection. When the consumer is an app, declaring the path in its manifest's
-`[[references]]` is what makes a change to the path select it.
+selection. When the consumer is an app, listing the path among its references
+(its manifest's `[[references]]` for a built-in app, its record's for a user
+app) is what makes a change to the path select it.
 

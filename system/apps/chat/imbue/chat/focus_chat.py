@@ -16,11 +16,6 @@ window shows (the welcome chat may have been put there first); with none, the pi
 from collections.abc import Iterable
 from typing import Final
 
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from loguru import logger
@@ -33,6 +28,11 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowPath
 
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.primitives import AGENT_ID_PATTERN

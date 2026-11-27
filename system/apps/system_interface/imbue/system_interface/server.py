@@ -15,12 +15,6 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import register_api_schema_route
-from app_schema.errors import InvalidRequestBodyError
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response
-from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
 from flask import request
@@ -30,11 +24,17 @@ from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import UserId
 
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.errors import InvalidIdentityValueError
+from imbue.app_sdk.errors import InvalidRequestBodyError
+from imbue.app_sdk.identity import participant_key_of
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
 from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
@@ -566,7 +566,7 @@ def _presence_heartbeat_endpoint() -> Response:
         get_state().presence_announcer.record_heartbeat(
             identity, now, reported_input_moment(now, heartbeat.input_age_seconds, heartbeat.last_input_at)
         )
-    except (InvalidShellValueError, InvalidLayoutValueError) as e:
+    except (InvalidShellValueError, InvalidIdentityValueError) as e:
         return error_response(str(e), 400)
     if heartbeat.client_id is not None:
         _shell().record_window_input(heartbeat.client_id, heartbeat.input_windows)

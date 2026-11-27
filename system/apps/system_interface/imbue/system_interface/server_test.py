@@ -18,16 +18,16 @@ from unittest.mock import patch
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import CROSS_SITE_FETCH_HEADERS
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
 from pydantic import Field
-from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.identity import ANONYMOUS_OWNER
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
@@ -833,6 +833,15 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
         "last_seen",
         "last_input_at",
     }
+
+
+def test_presence_heartbeat_refuses_a_user_id_that_could_not_name_a_file(client: FlaskClient) -> None:
+    headers = identity_headers(RequestIdentity(owner=False, user_id="bob smith/.."))
+
+    response = client.post("/api/presence/heartbeat", json={}, headers=headers)
+
+    assert response.status_code == 400
+    assert response.get_json() == {"detail": "invalid user id 'bob smith/..'"}
 
 
 def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:

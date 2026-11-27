@@ -24,7 +24,6 @@ from uuid import uuid4
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -44,9 +43,6 @@ from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
 from workspace_bare_scripts import room_agent
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import parse_identity_header
 from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
@@ -55,6 +51,10 @@ from workspace_layout.shell_url import shell_base_url
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import roster_participant
 
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import parse_identity_header
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account

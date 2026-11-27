@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from flask.testing import FlaskClient
-from workspace_layout.identity import IDENTITY_HEADER
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
 from imbue.chat.keybindings_endpoints import chat_keybinding_actions
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state

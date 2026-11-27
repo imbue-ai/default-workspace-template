@@ -160,7 +160,10 @@ docs class; both 4a and 4b read it.
 **When `has_local_footprint` is true, also resolve the user's creations by
 footprint** before 4a. Every app with an `app.toml` has a footprint the
 manifest library computes -- its directory, the supervisord drop-ins that run
-it, and the paths its manifest claims in `[[references]]` -- and reading it
+it, and the paths it claims as references: in its record
+(`system/config/apps/<name>.toml`) for an app that has one, whose footprint
+also holds the record and the links to the skills it carries, and in its
+manifest's `[[references]]` for any other app -- and reading it
 over two ranges answers by rule what 4a and 4b otherwise judge by hand:
 whether the creation carries the workspace's own content, and whether the
 update reached it.
@@ -281,7 +284,8 @@ command).
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared scripts
    and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
-   app's `app.toml` claims in `[[references]]`. For a manifest app with a
+   app claims as references (in its record when it has one, else in its
+   `app.toml`'s `[[references]]`). For a manifest app with a
    Step 4 scope file that last search is already done: its `.update.json`
    lists the update's changes inside its footprint, references included, and
    a hit there is an impacted consumer. If the update adds reference- or
@@ -354,6 +358,33 @@ in your report.
   import, a user service whose program line runs under `uv run`, or a type
   error in a user skill or app) is fixed by following
   `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`.
+  The workspace's own apps are brought to the layout this template expects in
+  the same gate, once the venv is synced (below). These steps run on every
+  update, whether or not a manifest or lockfile is in the merged set: a change
+  to what is generated for an app touches neither. Each command here prints
+  one JSON line whose `result` says what happened:
+  - An app the workspace's agent built before apps had records (a directory
+    under `system/apps/` that holds an `app.toml`, has no
+    `system/config/apps/<name>.toml`, and is absent from the target template's
+    tree: `git cat-file -e "$TARGET_REF:system/apps/<package>/app.toml"` fails)
+    is converted with `uv run --no-sync app-install migrate <package>`, after
+    its `--dry-run`, whose output goes in your report. `migrated` moved the
+    skills and routines the app owns into its directory and wrote its record;
+    commit what it changed (`update-self: convert the <name> app`).
+    `unconverted` changed nothing and lists why under `problems`; the app keeps
+    running as it was, so report it under the update's follow-ups with those
+    problems for the lead to hand to a repair worker, and do not hold the
+    update for it.
+  - Then `uv run --no-sync app-install regenerate`, so a change this template
+    made to what is generated reaches every app; commit any file it lists under
+    `changed_paths` (`update-self: regenerate the apps' program files`).
+  - Then `uv run --no-sync app-install check`. `inconsistent` names each
+    problem; one in an app's own files is that app's follow-up, reported the
+    same way.
+  These commits are part of the environment gate, like a relock: they are
+  mechanical, they are not edits of your own for the review gates of 4c, and
+  an app they changed gets this step's suites and its isolated boot as any
+  converted package does.
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a
   `pyproject.toml` or `uv.lock` at all, merged or pulled in

@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
@@ -50,8 +51,32 @@ def _once_as_a_local_moment(value: Any) -> Any:
     return value
 
 
+def _check_one_schedule(
+    every: Duration | None,
+    at: TimeOfDay | None,
+    days: tuple[Weekday, ...],
+    day_of_month: int | None,
+    once: datetime | None,
+) -> None:
+    """Raises DefinitionValidationError unless the fields together say one schedule a routine can run on."""
+    if (every is None) == (once is None):
+        raise DefinitionValidationError("a routine needs exactly one of 'every' and 'once'")
+    if once is not None and (at is not None or days or day_of_month is not None):
+        raise DefinitionValidationError("'at', 'days' and 'day_of_month' go with 'every', not 'once'")
+    if every is not None and every.unit is DurationUnit.SECONDS:
+        raise DefinitionValidationError(
+            "'every' is a number of minutes, hours, days, weeks or months (15m, 3h, 1d, 2w, 1mo): "
+            "the schedule is checked once a minute"
+        )
+    if at is not None and every is not None and every.approximate_seconds < SECONDS_PER_DAY:
+        raise DefinitionValidationError("'at' only goes with a cadence of a day or longer")
+    if day_of_month is not None and (every is None or every.unit is not DurationUnit.MONTHS):
+        raise DefinitionValidationError("'day_of_month' only goes with a cadence in months")
+
+
 class RoutineDefinition(FrozenModel):
-    """What a routine is and when it runs: the contents of ``system/routines/<id>.toml``."""
+    """What a routine is and when it runs: the contents of ``system/routines/<id>.toml``, or of
+    ``system/apps/<package>/routines/<id>.toml`` for a routine an app owns."""
 
     title: NonEmptyStr = Field(description="What the user sees it called")
     what: NonEmptyStr = Field(description="One sentence saying what it does for the user")
@@ -79,23 +104,11 @@ class RoutineDefinition(FrozenModel):
 
     @model_validator(mode="after")
     def _check_one_schedule_and_one_action(self) -> Self:
-        if (self.every is None) == (self.once is None):
-            raise DefinitionValidationError("a routine needs exactly one of 'every' and 'once'")
+        _check_one_schedule(self.every, self.at, self.days, self.day_of_month, self.once)
         if (self.command is None) == (self.skill is None):
             raise DefinitionValidationError("a routine needs exactly one of 'command' and 'skill'")
         if self.command is not None and len(self.command) == 0:
             raise DefinitionValidationError("'command' needs at least one word")
-        if self.once is not None and (self.at is not None or self.days or self.day_of_month is not None):
-            raise DefinitionValidationError("'at', 'days' and 'day_of_month' go with 'every', not 'once'")
-        if self.every is not None and self.every.unit is DurationUnit.SECONDS:
-            raise DefinitionValidationError(
-                "'every' is a number of minutes, hours, days, weeks or months (15m, 3h, 1d, 2w, 1mo): "
-                "the schedule is checked once a minute"
-            )
-        if self.at is not None and self.every is not None and self.every.approximate_seconds < SECONDS_PER_DAY:
-            raise DefinitionValidationError("'at' only goes with a cadence of a day or longer")
-        if self.day_of_month is not None and (self.every is None or self.every.unit is not DurationUnit.MONTHS):
-            raise DefinitionValidationError("'day_of_month' only goes with a cadence in months")
         if self.timeout.is_calendar_months or self.retry_after.is_calendar_months:
             raise DefinitionValidationError("'timeout' and 'retry_after' are fixed lengths, not months")
         return self
@@ -118,12 +131,33 @@ class ScheduleChange(FrozenModel):
     _refuse_a_zoned_once = field_validator("once", mode="after")(_once_as_a_local_moment)
 
 
+class ScheduleOverride(ScheduleChange):
+    """The schedule a user gave a routine an app owns, as the routine's state keeps it in place of the file's: the
+    file belongs to the app, so a reschedule never rewrites it. Always one whole schedule a routine can run on."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def _check_it_is_one_schedule(self) -> Self:
+        _check_one_schedule(self.every, self.at, self.days, self.day_of_month, self.once)
+        return self
+
+
 class LoadedRoutine(FrozenModel):
-    """One definition file as read: the definition, or why it could not be read."""
+    """One routine's definition as read: the definition, or why it could not be read."""
 
     routine_id: RoutineId = Field(description="The file's stem")
-    definition: RoutineDefinition | None = Field(description="The definition; None when the file is broken")
-    error: str | None = Field(description="Why the file does not validate; None when it does")
+    definition: RoutineDefinition | None = Field(description="The definition; None when the routine is broken")
+    error: str | None = Field(description="Why the routine is broken; None when it is not")
+    path: Path = Field(description="The definition file; the first of them when more than one has the id")
+    app_package: str | None = Field(
+        description="The directory under system/apps of the app that owns the file; None for a file under "
+        "system/routines, which the workspace owns"
+    )
+    is_duplicated: bool = Field(
+        description="Whether more than one file has the id: the routine is broken until one is left, and the "
+        "library changes none of them"
+    )
 
 
 class CurrentRun(FrozenModel):
@@ -171,6 +205,11 @@ class RoutineState(FrozenModel):
     is_enabled: bool | None = Field(
         default=None,
         description="The user's switch; None means the definition's default",
+    )
+    schedule_override: ScheduleOverride | None = Field(
+        default=None,
+        description="The user's schedule for a routine an app owns; None means the definition's. Never read for "
+        "a routine under system/routines, whose reschedule rewrites its file",
     )
     chat_id: str | None = Field(default=None, description="The chat a skill routine runs in")
     last_started_at: datetime | None = Field(default=None, description="When a run last started")
@@ -309,7 +348,10 @@ class RoutineDetail(FrozenModel):
     """One routine with its definition and recent runs."""
 
     row: RoutineRow = Field(description="The routine as the list shows it")
-    definition: RoutineDefinition | None = Field(description="The definition; None when broken")
+    definition: RoutineDefinition | None = Field(
+        description="The definition as the routine runs, with the user's schedule in place of the file's for a "
+        "routine an app owns; None when broken"
+    )
     definition_path: str = Field(description="Where the definition lives")
     runs: tuple[RunRecord, ...] = Field(description="Recent runs, newest first")
 

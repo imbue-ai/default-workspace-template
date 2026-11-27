@@ -1,14 +1,14 @@
 """The request identity a proxy vouches for: the ``X-Imbue-Identity`` header every request into the workspace
-carries (the share identity spec, section 4.2), read as the shell reads it (``workspace_layout.identity``; the
+carries (the share identity spec, section 4.2), read as the shell reads it (``imbue.app_sdk.identity``; the
 provenance check that admits a header-less request from loopback alone is installed on the app by
-``app_schema.request_guard``), the agent headers the agent verbs name their caller with, and the display name neko
+``imbue.app_sdk.request_guard``), the agent headers the agent verbs name their caller with, and the display name neko
 shows a session under."""
 
 from typing import Final
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.pure import pure
 from screen.primitives import DisplayName
-from workspace_layout.identity import RequestIdentity
 
 AGENT_ID_HEADER: Final[str] = "X-Mngr-Agent-Id"
 AGENT_NAME_HEADER: Final[str] = "X-Mngr-Agent-Name"

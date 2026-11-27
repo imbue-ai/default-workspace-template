@@ -1,0 +1,3 @@
+Imports the request guard, the route helpers, and the API document from the app SDK (`imbue.app_sdk`, the `imbue-app-sdk` package) in place of the workspace's `app_schema`, which the SDK was built from. Behaviour is unchanged; a refused request is now logged through Flask's logger.
+
+A routine an app owns (its definition is inside the app's directory) can be rescheduled from its page without the app's file changing: the schedule is kept in the routine's state, and the page and the schedule editor show the schedule it runs on. Removing such a routine is refused with a 409 that says it is removed by changing the app.

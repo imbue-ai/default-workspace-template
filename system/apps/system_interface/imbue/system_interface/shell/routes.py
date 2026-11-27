@@ -7,8 +7,6 @@ from typing import assert_never
 
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import request
 from flask.typing import ResponseReturnValue
@@ -18,7 +16,6 @@ from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatsActivityReport
-from workspace_layout.identity import is_owner_participant
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import parse_op_body
@@ -34,6 +31,10 @@ from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
+from imbue.app_sdk.errors import InvalidIdentityValueError
+from imbue.app_sdk.identity import is_owner_participant
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.shell.api_models import AppRunningState
@@ -145,7 +146,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             return detail_response(str(error), HTTP_INTERNAL_ERROR)
 
 
-def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
+def _answer_layout_value_error(error: InvalidLayoutValueError | InvalidIdentityValueError) -> ResponseReturnValue:
     """A value off the layout wire's rule (an id, a requester) in a request: the caller's to fix."""
     return detail_response(str(error), HTTP_BAD_REQUEST)
 
@@ -490,6 +491,7 @@ def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
     application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
+    application.register_error_handler(InvalidIdentityValueError, _answer_layout_value_error)
     register_desktop_routes(application)
     register_theme_routes(application)
     application.add_url_rule(

@@ -1,6 +1,6 @@
 """The request and response helpers the chat app's routes share.
 
-A modelled route reads its body through ``app_schema.routes.parse_request_body`` and answers through
+A modelled route reads its body through ``imbue.app_sdk.routes.parse_request_body`` and answers through
 ``model_response``; ``json_response`` here is for the routes the route table declares schemaless (the events, the
 harness catalogs), whose answers are loosely shaped JSON no model describes.
 """
@@ -10,12 +10,12 @@ import traceback
 from typing import Any
 from typing import Final
 
-from app_schema.routes import error_response
 from flask import Response
 from flask import request
 from loguru import logger
 from werkzeug.exceptions import HTTPException
 
+from imbue.app_sdk.routes import error_response
 from imbue.chat.errors import ChatAppError
 
 # The peer addresses a loopback-only route answers, as the shell's routes of that kind do.

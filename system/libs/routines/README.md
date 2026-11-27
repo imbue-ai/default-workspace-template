@@ -7,10 +7,11 @@ files and the command.
 
 A **routine** is one TOML file under `system/routines/<id>.toml` (tracked in
 git like an app or a skill; the root `routines` symlink points at the
-directory) plus its state under `data/.state/routines/<id>/`. The id is
-lowercase letters, digits and hyphens, and never `events`, which is the run
-ledger's directory beside the routines' own. It runs a **command** from the
-repo root, or a **skill** in a chat of its own.
+directory), or under `system/apps/<package>/routines/<id>.toml` for a routine
+an app owns, plus its state under `data/.state/routines/<id>/`. The id is
+lowercase letters, digits and hyphens, never `events` (the run ledger's
+directory beside the routines' own), and unique across the workspace. It runs
+a **command** from the repo root, or a **skill** in a chat of its own.
 
 ```toml
 title = "Morning inbox digest"
@@ -35,6 +36,38 @@ skill = "inbox-digest"
 | `retry_after` | How long after a failed run the next attempt may start (`2m`). |
 | `notify_after_failures` | Failures in a row before the Imbue Studio feed is told (`3`; `0` never). |
 | `app` | The app the routine belongs to, for grouping. |
+
+## Routines an app owns
+
+A user app is one directory, `system/apps/<package>/`, which may be installed
+from someone else's repository; its routines are the files under its
+`routines/`. The library lists `system/apps/*/routines/*.toml` together with
+`system/routines/*.toml`, by file name. An id that more than one file has is
+listed once, as broken, with a reason naming each file, and is neither run nor
+changed until one file is left (`DuplicateRoutineError` from a change).
+
+The library never rewrites or deletes a file inside an app's directory, which
+would leave an installed app modified against where it came from:
+
+- A reschedule (`routines edit` with schedule flags, or the Routines app's
+  schedule editor) is kept as `schedule_override` in the routine's
+  `state.json`, with no write to the definition and no commit. The routine runs
+  on the override while there is one and on its definition's schedule
+  otherwise; `effective_routine` in `schedule.py` is what the due computation,
+  the listing, the tick and the detail's definition all read. Rescheduling
+  back to exactly the definition's schedule clears the override. A routine
+  under `system/routines` never reads the field: its reschedule rewrites and
+  commits its file.
+- `routines edit` of any other field and `routines remove` raise
+  `AppOwnedRoutineError`, which names the app's directory and the file to
+  change there, as part of a change to the app.
+- The on/off switch is state for every routine, an app's included.
+- `routines add --app <name>` writes the definition into
+  `system/apps/<package>/routines/` and commits it there when `<name>` is a
+  user app: it has a record, `system/config/apps/<name>.toml`, and the
+  directory that record names as its `package` exists. Any other `--app` (a built-in app, or a
+  name that is no app) is written under `system/routines` with the name kept
+  for grouping.
 
 ## How it runs
 
@@ -74,10 +107,11 @@ The due moment is the last success plus the cadence, moved to `at` on that day
 (the day the successful run started, so a run that crosses midnight claims no
 second day) and to the next listed weekday; a never-run routine is due now; a
 failed attempt is retried no sooner than `retry_after` after it started; missed
-windows catch up once and are never replayed. The state file keeps
-`last_started_at`, `last_succeeded_at`, `last_success_started_at`,
-`consecutive_failures`, the run in flight and the last run; delete
-`last_succeeded_at` to make a routine due.
+windows catch up once and are never replayed. The state file keeps the user's
+switch (`is_enabled`), the user's schedule for a routine an app owns
+(`schedule_override`), `last_started_at`, `last_succeeded_at`,
+`last_success_started_at`, `consecutive_failures`, the run in flight and the
+last run; delete `last_succeeded_at` to make a routine due.
 
 After a run the runner tells the feed once per streak when
 `notify_after_failures` is reached, once when the routine works again, and once
@@ -104,7 +138,9 @@ routines migrate-cron
 Every definition write is committed by the library, staging that one file; a
 commit refused because another writer holds the index is retried once and then
 reported as "Couldn't save that change because something else is saving right
-now. Try again in a moment.", with the file left written.
+now. Try again in a moment.", with the file left written. A reschedule of a
+routine an app owns writes no definition and makes no commit; `edit` then
+prints the state file the schedule went to.
 
 `routines migrate-cron` converts the `data/.state/cron.d` entries a workspace
 wrote before routines existed, carries the old runner's state over, and

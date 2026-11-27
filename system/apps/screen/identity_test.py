@@ -1,6 +1,6 @@
+from imbue.app_sdk.identity import ANONYMOUS_OWNER
+from imbue.app_sdk.identity import RequestIdentity
 from screen.identity import display_name_for_identity
-from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import RequestIdentity
 
 
 def test_display_name_is_the_email_local_part_else_the_role() -> None:

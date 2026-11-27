@@ -21,16 +21,17 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
-from app_schema.api_schema import merge_route_tables
-from app_schema.api_schema import register_api_schema_route
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
+from imbue.app_sdk.api_schema import merge_route_tables
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.identity import is_loopback_address
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from screen.api_models import AcquireAnswer
 from screen.api_models import AcquireRequest
 from screen.api_models import ActivatedAnswer
@@ -87,7 +88,6 @@ from screen.service import DEFAULT_SCREENSHOT_QUALITY
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
 from screen.xclipboard import MAX_CLIPBOARD_BYTES
-from workspace_layout.identity import is_loopback_address
 
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 

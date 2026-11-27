@@ -2,13 +2,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import Field
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import roster_participant
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.authors import AuthorStore
 from imbue.chat.harnesses.harness_type import HarnessType

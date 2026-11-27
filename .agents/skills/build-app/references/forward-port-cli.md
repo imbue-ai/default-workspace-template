@@ -2,8 +2,9 @@
 
 `forward_port.py` registers an app's port in `data/.state/apps.toml`, which is
 what gives the app its origin and its place in the launcher. Both paths use it:
-the scaffolder generates the call, and a wrapped server's program has you write
-it. Read this when you write or change a registration by hand.
+the program `app-install` generates for an app calls it, so you do not write
+the call yourself. Read this when a registration fails, or for a registration
+with no app directory.
 
 ```
 python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url URL
@@ -56,5 +57,6 @@ The script is standard-library only and runs under a plain `python3`.
   registration call is authoritative. Never pass it for unsupervised instances
   (previews, `serve_isolated_instance.py` test servers): those own their own
   teardown and must not offer a Stop that supervisord cannot honor.
-- `--remove`: remove the named entry from `data/.state/apps.toml`. Use it when
-  tearing an app down (the `update-app` skill).
+- `--remove`: remove the named entry from `data/.state/apps.toml`.
+  `app-install uninstall` does this for an app with a record; by hand it is
+  for tearing down a registration with none (the `update-app` skill).

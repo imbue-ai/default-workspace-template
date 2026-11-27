@@ -85,7 +85,8 @@ This layout is for the workspace's own skills. A skill installed or copied in
 from elsewhere (a skills marketplace, another repository, a download) keeps the
 layout it came with: list it in `.agents/third-party-skills.toml` with where it
 came from, and the root suite's checks on skills leave it out. Every skill not
-listed there is held to them.
+listed there is held to them, apart from the skills an installed app carries,
+which the app's record under `system/config/apps/` leaves out with no entry.
 
 The `name` in `.agents/skills/<name>/` must match the `name` field in SKILL.md
 frontmatter (1-64 chars, lowercase letters and digits with single hyphens, no

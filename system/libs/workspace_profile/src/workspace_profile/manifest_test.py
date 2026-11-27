@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from workspace_layout.identity import RequestIdentity
+from imbue.app_sdk.identity import RequestIdentity
 
 from workspace_profile.errors import InvalidKeybindingDeclarationError
 from workspace_profile.manifest import (

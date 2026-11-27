@@ -42,7 +42,7 @@ it.
 ```python
 from pathlib import Path
 
-from workspace_layout.identity import parse_identity_header
+from imbue.app_sdk.identity import parse_identity_header
 from workspace_profile.resolve import resolve_profile_setting
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 

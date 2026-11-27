@@ -1,4 +1,5 @@
 import pytest
+from imbue.app_sdk.errors import InvalidIdentityValueError
 
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientId
@@ -81,5 +82,5 @@ def test_participant_keys_take_each_form(value: str) -> None:
     ],
 )
 def test_participant_keys_refuse_what_a_file_name_or_a_path_segment_cannot_carry(value: str) -> None:
-    with pytest.raises(InvalidLayoutValueError):
+    with pytest.raises(InvalidIdentityValueError):
         ParticipantKey(value)

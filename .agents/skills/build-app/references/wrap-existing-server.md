@@ -9,31 +9,49 @@ name and the icon are step 2's; steps 6 and 7 apply unchanged.
 
 ## Steps
 
-1. Pick a port and bind loopback
-2. Write the manifest
-3. Write the program
-4. Confirm it is what the user wanted
-5. Give the tool the shell contract, if it can take it
+1. Look at what the tool exposes
+2. Bind loopback
+3. Write the manifest
+4. Register the app
+5. Confirm it is what the user wanted
+6. Give the tool the shell contract, if it can take it
 
-## Pick a port and bind loopback
+## Look at what the tool exposes
 
-- **Port.** Pick one by the scaffolder's own check, done by hand:
-  `scaffold-output.md` states it under `--port`, and `ss -tln` shows what is
-  bound. Two things show up nowhere: the `agent-observer` program binds no
-  port at all, and a preview of any app (`update-app`'s `preview_app.py`)
-  takes free ports at boot, so there is nothing to avoid for either.
-- **Bind host.** Bind `127.0.0.1`, not `0.0.0.0`. The forwarder reaches the
-  app from inside the same container, so binding all interfaces is noise. The
-  scaffolder's starter does this already. A wrapped tool may not: many Node
-  frameworks default to `0.0.0.0` (`http.createServer().listen(port)` binds
-  `::`/`0.0.0.0` when no host is passed), so pass an explicit loopback host
-  (`HOST=127.0.0.1`, `app.listen(port, "127.0.0.1")`). Python defaults are
-  usually loopback already.
+**A wrapped server has no request guard.** Nothing checks who is calling it,
+so it trusts anything that can reach its port. That includes a page of another
+site open in the workspace's own browser, which can send it requests, and,
+once the workspace is shared, anyone the app is shared with. A scaffolded app
+can install the SDK's request guard
+(`imbue.app_sdk.request_guard.install_request_guard`), which refuses such
+callers ahead of every route; a wrapped tool cannot.
+
+So before you wrap a tool, look at what it exposes. When it exposes anything
+sensitive or destructive (the user's files, credentials, a shell or code
+execution, an admin action, anything that deletes), tell the user so in plain
+terms before you stand it up, and prefer a scaffolded app, whose routes can
+sit behind the guard, over wrapping the tool as it is. If the tool has
+authentication of its own (a token, a password), leave it on.
+
+## Bind loopback
+
+Bind `127.0.0.1`, not `0.0.0.0`. The forwarder reaches the app from inside the
+same container, so binding all interfaces is noise. The scaffolder's starter
+does this already. A wrapped tool may not: many Node frameworks default to
+`0.0.0.0` (`http.createServer().listen(port)` binds `::`/`0.0.0.0` when no
+host is passed), so pass an explicit loopback host (`HOST=127.0.0.1`,
+`app.listen(port, "127.0.0.1")`). Python defaults are usually loopback
+already.
+
+Do not pick a port: the workspace allocates one when the app is registered,
+and the manifest says where the tool takes it.
 
 ## Write the manifest
 
-Save the icon as `system/apps/<name>/icon.svg` and write the app's manifest
-beside it as `system/apps/<name>/app.toml` (as the `files` app does):
+The app is still a directory, `system/apps/<package>/` (`<package>` is the
+app's name with each hyphen replaced by an underscore), holding the icon as
+`icon.svg` and the app's manifest as `app.toml`. The manifest's `[run]` table
+gives the tool's existing start command:
 
 ```toml
 name = "<name>"
@@ -41,53 +59,53 @@ display_name = "<What users see>"
 icon = "icon.svg"
 priority = "user"
 program = "<name>"
+
+[run]
+command = "<the program the existing start command runs>"
+args = ["<each argument>", "--port", "{port:main}"]
 ```
 
-## Write the program
+- `command` is one word, the program alone, run as given (on `PATH`, or a path
+  relative to the repo root, where the program runs). Each argument is its own
+  entry in `args`.
+- Put `{port:main}` wherever the server takes its port: the workspace
+  allocates the port and fills it in. `{host}` is the loopback address
+  (`127.0.0.1`), for a server that takes its bind host as an argument.
+- A server that takes its port or host from the environment gets an `env`
+  table instead: `env = { PORT = "{port:main}", HOST = "{host}" }`.
 
-Add a `[program:<name>]` block as its own
-`system/supervisord.conf.d/<name>.conf`. It runs `forward_port.py --manifest`
-and then the tool's own start command:
+For Jupyter, the `[run]` table is:
 
-```ini
-[program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && exec <existing_start_command>"
-directory=/home/user/workspace
-autostart=true
-autorestart=true
-startsecs=30
-startretries=5
+```toml
+[run]
+command = "jupyter"
+args = ["notebook", "--port", "{port:main}", "--ip", "{host}", "--no-browser"]
 ```
 
-For Jupyter, `<existing_start_command>` is
-`jupyter notebook --port <port> --ip 127.0.0.1 --no-browser`.
+A start that takes several steps (exports, a bootstrap) goes in a script
+inside the app's directory, which `[run]` then runs: `command = "bash"`,
+`args = ["system/apps/<package>/run.sh", "{port:main}"]`, with the script
+ending in `exec <existing_start_command>`.
 
-- **The `forward_port.py` call MUST come first in the command.** The port must
-  be registered before the app starts listening; otherwise the shell's
-  announcement of the registration races with the backend coming up.
-- Keep the `oom_tag_service.py user` prefix and the `bash -c "..."` wrapper.
-  `scaffold-output.md`, "The supervisord program", says what each is for.
-
-When the start takes several steps or env exports, put them in a wrapper script
-and run that instead. Only the `command` line of the block changes:
+## Register the app
 
 ```bash
-# system/scripts/run_<name>.sh
-#!/usr/bin/env bash
-set -euo pipefail
-python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port>
-exec <existing_start_command>
-```
-
-```ini
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash system/scripts/run_<name>.sh
-```
-
-After writing the file, start the program:
-
-```bash
+uv run --no-sync app-install add <package>
 supervisorctl reread && supervisorctl update
 ```
+
+`app-install add` allocates the app's port, writes its record
+(`system/config/apps/<name>.toml`), and generates its program file
+(`system/supervisord.conf.d/<name>.conf`); it prints the port in its result.
+The generated program registers the manifest and the port through
+`forward_port.py` before it starts the tool, and carries the
+`oom_tag_service.py user` prefix. `scaffold-output.md`, "The record and the
+supervisord program", says what each part is for.
+
+Do not write a program block by hand, and never edit the generated file. To
+change the command, change `[run]` and run
+`uv run --no-sync app-install regenerate <name>`, then
+`supervisorctl reread && supervisorctl update`.
 
 The full program schema and the logging knobs are in
 `.agents/shared/references/service-processes.md`.

@@ -58,6 +58,7 @@ from routines.primitives import RunKind
 from routines.primitives import RunOutcome
 from routines.primitives import RunTrigger
 from routines.primitives import RunWarning
+from routines.schedule import effective_routine
 from routines.schedule import is_switched_on
 from routines.schedule import next_due
 from routines.tails import read_tail
@@ -555,7 +556,9 @@ class Runner(MutableModel):
             state = self._state_or_none(loaded.routine_id)
             if state is None or not is_switched_on(loaded, state) or state.current_run is not None:
                 continue
-            due = next_due(loaded.definition, state, now, zone)
+            definition = effective_routine(loaded, state).definition
+            assert definition is not None
+            due = next_due(definition, state, now, zone)
             if due is None or due > now:
                 continue
             self._spawn_run(loaded.routine_id)

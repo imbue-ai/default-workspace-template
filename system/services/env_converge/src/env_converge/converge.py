@@ -7,7 +7,8 @@ Two phases with different contracts:
   services never write to a rootfs path that should persist. Instant, no
   network.
 - **Slow phase** (the `env-converge` supervisord one-shot; never blocks boot):
-  re-runs every `system/scripts/env.d/<NNNN>-<name>.sh` unit in lexical order (units
+  re-runs every `system/scripts/env.d/<NNNN>-<name>.sh` unit, and every unit an app carries at
+  `system/apps/<package>/env.d/<NNNN>-<name>.sh`, as one list in lexical order of file name (units
   are idempotent with fast satisfied-checks -- there are NO marker files;
   version stability comes from the units' pins and the snapshot-pinned apt
   sources, so re-running is deterministic), then installs anything present in
@@ -149,10 +150,18 @@ def run_fast_phase(workspace_dir: Path, overlay_dir: Path) -> list[OverlayApplyR
 
 
 def _list_unit_scripts(workspace_dir: Path) -> list[Path]:
-    unit_dir = workspace_dir / "system" / "scripts" / "env.d"
-    if not unit_dir.is_dir():
-        return []
-    return sorted(path for path in unit_dir.iterdir() if path.name.endswith(".sh"))
+    """The workspace's own units and the ones each app carries in its directory, as one list in lexical order of
+    file name, whichever directory a unit sits in."""
+    unit_dirs = [workspace_dir / "system" / "scripts" / "env.d"]
+    unit_dirs.extend(sorted((workspace_dir / "system" / "apps").glob("*/env.d")))
+    units = [
+        path
+        for unit_dir in unit_dirs
+        if unit_dir.is_dir()
+        for path in unit_dir.iterdir()
+        if path.name.endswith(".sh")
+    ]
+    return sorted(units, key=lambda path: (path.name, str(path)))
 
 
 def run_unit_scripts(workspace_dir: Path, overlay_dir: Path) -> list[UnitRunResult]:

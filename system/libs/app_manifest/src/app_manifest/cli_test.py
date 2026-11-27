@@ -16,6 +16,8 @@ from app_manifest.testing import init_git_repository
 from app_manifest.testing import run_git
 from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
+from app_manifest.testing import write_app_record
+from app_manifest.testing import write_app_skill
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
@@ -984,3 +986,82 @@ def test_pass_scope_refuses_a_creation_that_is_not_type_and_name(tmp_path: Path)
 
     assert result.exit_code != 0
     assert "widget:news" in result.output
+
+
+def _news_as_a_user_app(repo_root: Path) -> None:
+    """The news workspace with a record for the app, which lists the refresh skill, and a skill
+    the app carries. The manifest keeps its own ``[[references]]``, which nothing reads."""
+    build_news_workspace(repo_root)
+    write_app_record(repo_root, "news", "news", {".agents/skills/news-refresh": "Calls POST /api/ingest"})
+    write_app_skill(repo_root, "news", "news-digest")
+
+
+def _reference_rows(repo_root: Path, for_path: str) -> list[dict[str, str]]:
+    result = _run_cli(["references", "--for-path", for_path, "--repo-root", str(repo_root)])
+    assert result.exit_code == 0, result.output
+    return [json.loads(line) for line in result.output.splitlines() if line.strip()]
+
+
+def test_references_reads_a_user_apps_record_and_names_the_app_that_carries_a_skill(tmp_path: Path) -> None:
+    _news_as_a_user_app(tmp_path)
+
+    assert _reference_rows(tmp_path, ".agents/skills/news-refresh/SKILL.md") == [
+        {
+            "app": "news",
+            "manifest": "system/apps/news/app.toml",
+            "path": ".agents/skills/news-refresh",
+            "note": "Calls POST /api/ingest",
+        }
+    ]
+    # Only the manifest lists the script, and a user app's manifest is not where its references are.
+    assert _reference_rows(tmp_path, "system/scripts/run_news.sh") == []
+    assert [row["path"] for row in _reference_rows(tmp_path, ".agents/skills/news-digest")] == [
+        ".agents/skills/news-digest"
+    ]
+    assert [row["path"] for row in _reference_rows(tmp_path, "system/apps/news/skills/news-digest/SKILL.md")] == [
+        "system/apps/news/skills/news-digest"
+    ]
+
+
+def test_footprint_of_a_user_app_carries_its_record_and_the_links_to_its_skills(tmp_path: Path) -> None:
+    _news_as_a_user_app(tmp_path)
+
+    result = _run_cli(["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    scope = json.loads(result.output)
+    assert scope["primary"] == ["system/apps/news/", "system/config/apps/news.toml", ".agents/skills/news-digest"]
+    assert [reference["path"] for reference in scope["references"]] == [".agents/skills/news-refresh"]
+    # The manifest's globs, read from the app's own directory.
+    assert scope["exclude"][-2:] == ["system/apps/news/docs/generated/**", "system/apps/news/data/**"]
+
+
+def test_footprint_reports_a_record_reference_that_names_nothing(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    write_app_record(tmp_path, "news", "news", {".agents/skills/missing": ""})
+
+    result = _run_cli(["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "system/config/apps/news.toml is invalid" in result.output
+    assert "'.agents/skills/missing' does not exist" in result.output
+
+
+def test_pass_scope_resolves_a_carried_skill_to_the_app_that_carries_it(tmp_path: Path) -> None:
+    _news_as_a_user_app(tmp_path)
+    init_git_repository(tmp_path)
+    base_sha = commit_everything(tmp_path, "base")
+    write_repo_file(tmp_path, "system/apps/news/skills/news-digest/SKILL.md", "# news digest, edited\n")
+    commit_everything(tmp_path, "the skill changes")
+
+    result = _run_cli(
+        ["pass-scope", "--creation", "skill:news-digest", "--repo-root", str(tmp_path), "--diff-base", base_sha]
+    )
+
+    assert result.exit_code == 0, result.output
+    scope = json.loads(result.output)
+    assert [creation["creation"] for creation in scope["creations"]] == [
+        {"type": "app", "name": "news", "package": "news", "manifest": "system/apps/news/app.toml"}
+    ]
+    assert scope["diff"]["inside_footprint"] == ["system/apps/news/skills/news-digest/SKILL.md"]
+    assert scope["diff"]["outside_footprint"] == []

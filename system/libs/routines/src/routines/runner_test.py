@@ -22,6 +22,7 @@ from routines.data_types import RoutineState
 from routines.data_types import RunFinishedEvent
 from routines.data_types import RunResult
 from routines.data_types import RunStartedEvent
+from routines.data_types import ScheduleOverride
 from routines.definitions import FileDefinitionStore
 from routines.errors import DefinitionValidationError
 from routines.errors import RunInFlightError
@@ -36,6 +37,7 @@ from routines.mock_state_store_test import OneRefusingStateStore
 from routines.mock_state_store_test import StaleReadStateStore
 from routines.paths import RoutinesPaths
 from routines.primitives import ChatStatusWord
+from routines.primitives import Duration
 from routines.primitives import RUN_EVENTS_SOURCE
 from routines.primitives import RoutineId
 from routines.primitives import RunId
@@ -49,6 +51,8 @@ from routines.runner import Runner
 from routines.runner import read_result
 from routines.runner import reap_in_background
 from routines.state import FileStateStore
+from routines.testing import wait_for_last_run
+from routines.testing import write_app_definition
 
 SYNC = RoutineId("nightly-sync")
 
@@ -392,6 +396,33 @@ def test_the_tick_skips_a_routine_that_is_off_or_not_due(
         SYNC, lambda state: state.model_copy_update(to_update(state.field_ref().last_succeeded_at, clock.now()))
     )
     assert runner.tick().started == ()
+
+
+def test_the_tick_starts_a_routine_an_app_owns_by_the_schedule_its_user_gave_it(
+    runner: Runner, paths: RoutinesPaths, states: FileStateStore, clock: FakeClock
+) -> None:
+    write_app_definition(
+        paths, "news_sync", SYNC, 'title = "Nightly sync"\nwhat = "Syncs."\nevery = "1h"\ncommand = ["true"]\n'
+    )
+    states.update(
+        SYNC,
+        lambda state: state.model_copy_update(
+            to_update(state.field_ref().last_succeeded_at, clock.now() - timedelta(hours=2)),
+            to_update(state.field_ref().schedule_override, ScheduleOverride(every=Duration("1d"))),
+        ),
+    )
+    # Due an hour ago by the app's file; not for another 22 hours by the user's schedule.
+    assert runner.tick().started == ()
+
+    states.update(
+        SYNC,
+        lambda state: state.model_copy_update(
+            to_update(state.field_ref().schedule_override, ScheduleOverride(every=Duration("30m")))
+        ),
+    )
+    assert runner.tick().started == (SYNC,)
+    # The run it spawned is waited for so nothing leaks.
+    wait_for_last_run(states, SYNC, 30)
 
 
 def test_the_tick_keeps_house_once_a_day(runner: Runner, definitions: FileDefinitionStore, clock: FakeClock) -> None:

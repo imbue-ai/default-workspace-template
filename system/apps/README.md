@@ -83,12 +83,12 @@ in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
 and the app's port via `system/scripts/forward_port.py --manifest`, from its
 program line or from inside its entry point once its socket is bound, and then
 runs the app. Every built-in app's Flask app installs the request guard ahead of
-its routes (`app_schema.request_guard`, over `workspace_layout.identity`): the
+its routes (`imbue.app_sdk.request_guard`, over `imbue.app_sdk.identity`, both in the app SDK): the
 workspace's own browser is on loopback too, so a request it marks as a page of
 another origin's is refused, and a request with no `X-Imbue-Identity` header is
 the owner's only from loopback under a loopback `Host`.
 
-A manifest may also declare what belongs to the app *outside* its own folder.
+A built-in app's manifest may also declare what belongs to the app *outside* its own folder.
 `[[references]]` lists literal repo-root-relative files and directories the app
 owns -- a skill that drives it, a script that launches it, a doc that describes
 it -- each with an optional one-line `note` saying which of the app's surfaces
@@ -104,7 +104,11 @@ with the app's directory and the supervisord blocks that run it, these make up
 the app's footprint, which `app-manifest footprint <manifest>` writes out as a
 scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration
-ignores both tables, so a stale reference can never stop the app.
+ignores both tables, so a stale reference can never stop the app. An app with a
+record (below) declares neither `[[references]]` nor `[wiring]`: what else in
+the workspace uses it is listed in its record, its background programs are
+`[[services]]` in its manifest, and its `[scope] exclude` globs are relative to
+its own directory.
 
 The built-in apps run from the workspace venv: each is named in the root
 `pyproject.toml`'s `[tool.uv.workspace] members` and is also a root dependency
@@ -122,6 +126,16 @@ that syncs its own project with `--locked` before it execs from its own
 `.venv/bin`. A dependency it adds changes only its own lock, so it can never move
 the chat's or another app's versions. The build-app scaffold sets this up, and
 `.agents/shared/references/running-python.md` has the rules.
+
+Such an app, and one installed from someone else's repository, has a record,
+`system/config/apps/<name>.toml`, which is what tells it from a built-in app.
+Everything it owns is inside its directory: its code, the skills it carries
+(`skills/`), its routines (`routines/`), and its environment units (`env.d/`).
+The files the workspace needs for it elsewhere are generated from its manifest
+and its record by the `app-install` command, and never edited: one program
+file per program under `system/supervisord.conf.d/`, which passes the app its
+port in its environment, and a link under `.agents/skills/` to each skill it
+carries. `system/libs/app_install/README.md` describes the command.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

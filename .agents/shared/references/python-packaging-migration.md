@@ -22,7 +22,9 @@ update's checks fail on them. The rules themselves are in
 ## A skill that came from elsewhere
 
 The checks cover every skill in `.agents/skills/` except the ones
-`.agents/third-party-skills.toml` lists. So when a check fails on a skill,
+`.agents/third-party-skills.toml` lists and the ones an installed app carries
+(an app whose record under `system/config/apps/` says `origin = "installed"`).
+So when a check fails on a skill,
 first decide whether this workspace made it:
 
 - **Its history**: `git log --format='%h %ad %s' --date=short -- .agents/skills/<name>`.

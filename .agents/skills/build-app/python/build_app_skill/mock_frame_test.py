@@ -85,7 +85,7 @@ def _scaffolded_app(
     registry = tmp_path / "data" / ".state" / "apps.toml"
     monkeypatch.setenv(forward_port.ENV_APPS_FILE, str(registry))
     lib_dir = scaffold_flask_lib._write_lib(
-        tmp_path, _APP, "inbox status dashboard", "Inbox status", 8081, [], _ICON
+        tmp_path, _APP, "inbox status dashboard", "Inbox status", [], _ICON, None, []
     )
     return registry, lib_dir
 

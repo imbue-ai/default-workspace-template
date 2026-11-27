@@ -9,12 +9,12 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 
-from app_schema.api_schema import AlternateResponse
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
+from imbue.app_sdk.api_schema import AlternateResponse
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from screen.api_models import AcquireRequest
 from screen.api_models import AttachAnswer
 from screen.api_models import BrowserAcquireAnswer

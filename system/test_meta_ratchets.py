@@ -8,13 +8,11 @@ from pathlib import Path
 import pytest
 import tomlkit
 from agents_shared.validate_skill import third_party_skills
+from app_manifest.records import AppOrigin, load_all_records
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 
 _REPO_ROOT = Path(__file__).parents[1]
-
-# Directories excluded from scanning (vendored code)
-_VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
 
 # Directory names pruned during filesystem walks: non-source trees (venvs,
 # node_modules, git internals) that can hold tens of thousands of files.
@@ -32,18 +30,33 @@ pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 _META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 
 
-def _get_all_project_dirs() -> list[Path]:
-    """Return all project directories (system/{libs,services,apps}/*) excluding vendored code."""
+def _installed_app_directories(repo_root: Path) -> set[Path]:
+    """The directory of every app installed from someone else's repository. Such an app is kept
+    as it came: its publisher's template may hold a different set of ratchets than this one."""
+    return {
+        repo_root / "system" / "apps" / record.package
+        for record in load_all_records(repo_root)
+        if record.origin is AppOrigin.INSTALLED
+    }
+
+
+def _get_all_project_dirs(repo_root: Path = _REPO_ROOT) -> list[Path]:
+    """Return all project directories (system/{libs,services,apps}/*) excluding vendored code
+    and installed apps."""
     project_dirs: list[Path] = []
+    installed_app_directories = _installed_app_directories(repo_root)
     for parent in (
-        _REPO_ROOT / "system" / "libs",
-        _REPO_ROOT / "system" / "services",
-        _REPO_ROOT / "system" / "apps",
+        repo_root / "system" / "libs",
+        repo_root / "system" / "services",
+        repo_root / "system" / "apps",
     ):
         if not parent.is_dir():
             continue
         for child in sorted(parent.iterdir()):
-            if child.name in _META_EXEMPT_PROJECTS:
+            if (
+                child.name in _META_EXEMPT_PROJECTS
+                or child in installed_app_directories
+            ):
                 continue
             if child.is_dir() and (child / "pyproject.toml").exists():
                 project_dirs.append(child)
@@ -74,7 +87,23 @@ def _extract_test_function_names(file_path: Path) -> frozenset[str]:
     )
 
 
-# --- Meta: ensure every project has ratchets ---
+# Every project has ratchets.
+
+
+def test_an_installed_app_is_left_out_of_the_projects_and_an_owned_app_is_not(
+    tmp_path: Path,
+) -> None:
+    records = tmp_path / "system" / "config" / "apps"
+    records.mkdir(parents=True)
+    for name, origin in (("notes", "installed"), ("digest", "local")):
+        (records / f"{name}.toml").write_text(
+            f'name = "{name}"\npackage = "{name}"\nport = 8084\norigin = "{origin}"\n'
+        )
+        project = tmp_path / "system" / "apps" / name
+        project.mkdir(parents=True)
+        (project / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+
+    assert _get_all_project_dirs(tmp_path) == [tmp_path / "system" / "apps" / "digest"]
 
 
 def test_every_project_has_test_ratchets_file() -> None:
@@ -126,11 +155,11 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
     )
 
 
-# --- Repo-wide ratchets ---
+# Repo-wide ratchets.
 
 
-def _find_bash_scripts_without_strict_mode() -> list[str]:
-    """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
+def _find_bash_scripts_without_strict_mode(repo_root: Path = _REPO_ROOT) -> list[str]:
+    """Find bash scripts missing 'set -euo pipefail', excluding vendored code and installed apps.
 
     Only scripts git would consider count (tracked, or untracked but not
     ignored), for the same reason :func:`_live_prose_files` asks git: in a live
@@ -151,15 +180,16 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
             "--",
             "*.sh",
         ],
-        cwd=_REPO_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         check=True,
     )
+    kept_as_they_came = {repo_root / "system" / "vendor", *_installed_app_directories(repo_root)}
     violations: list[str] = []
     for rel in filter(None, candidates.stdout.split("\0")):
-        script = _REPO_ROOT / rel
-        if _VENDORED_DIR in script.parents or not script.is_file():
+        script = repo_root / rel
+        if kept_as_they_came.intersection(script.parents) or not script.is_file():
             continue
         content = script.read_text(errors="replace")
         if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
@@ -219,6 +249,25 @@ def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_n
 
     assert _skill_python_dirs_without_a_pyproject(tmp_path) == [
         "half-built-skill/python"
+    ]
+
+
+def test_an_installed_apps_bash_scripts_are_left_out_and_an_owned_apps_are_not(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    records = tmp_path / "system" / "config" / "apps"
+    records.mkdir(parents=True)
+    for name, origin in (("notes", "installed"), ("digest", "local")):
+        (records / f"{name}.toml").write_text(
+            f'name = "{name}"\npackage = "{name}"\nport = 8084\norigin = "{origin}"\n'
+        )
+        unit = tmp_path / "system" / "apps" / name / "env.d" / f"2100-{name}.sh"
+        unit.parent.mkdir(parents=True)
+        unit.write_text("#!/usr/bin/env bash\napt-get install -y poppler-utils\n")
+
+    assert _find_bash_scripts_without_strict_mode(tmp_path) == [
+        "system/apps/digest/env.d/2100-digest.sh"
     ]
 
 
@@ -342,7 +391,7 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     )
 
 
-# --- Retired-terminology ratchets (the creation rename) ---
+# Retired-terminology ratchets (the creation rename).
 #
 # The workspace vocabulary is: users make "creations" -- apps (opened as
 # tabs), skills (an automation is a skill run on a schedule), data, and
@@ -472,7 +521,7 @@ def test_prevent_application_terminology() -> None:
     )
 
 
-# --- Apps are apps, not services ---
+# Apps are apps, not services.
 #
 # The shell is a window manager over apps; "service" is a background program
 # with no tab. The shell's own code, its frontend, and the frontend library the

@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.manifest import KeybindingAction, load_manifest
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from pydantic import Field
-from workspace_layout.identity import RequestIdentity
 
 from workspace_profile.errors import InvalidKeybindingDeclarationError
 from workspace_profile.keybindings import is_canonical_chord, resolve_app_keybindings

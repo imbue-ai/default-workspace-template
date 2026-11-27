@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from workspace_layout.identity import RequestIdentity
+from imbue.app_sdk.identity import RequestIdentity
 
 from workspace_profile.overrides import (
     UNSENT_CHANGES_RELATIVE_PATH,

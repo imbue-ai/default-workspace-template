@@ -1,0 +1,1 @@
+`host_backup.cli.has_recent_backup()` answers, for a caller in the same process, what `host-backup-now --check` exits 0 for: whether a recent backup succeeded. `app-install update` asks it before it runs a new version of an app over data too large to copy aside.

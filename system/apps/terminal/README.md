@@ -32,7 +32,7 @@ running one of this package's entry points from the workspace venv
   page the shell then opens a window at (`docs/system/blueprint/post-launch-paths/`);
   `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe,
   `GET /api/schema` the OpenAPI document of these routes (the manifest's
-  `api_schema_path`, built by `system/libs/app_schema`), and
+  `api_schema_path`, built by the app SDK, `imbue.app_sdk`), and
   `POST /api/window-closed` (the manifest's `window_closed_path`) where the shell
   posts a closed window of the terminal so the window sweep below runs at once.
   It appends the `server_registered` discovery event to
