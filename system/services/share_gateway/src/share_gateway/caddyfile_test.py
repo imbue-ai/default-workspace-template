@@ -22,6 +22,7 @@ from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.caddyfile import render_compression
 from share_gateway.caddyfile import render_web_client_access
+from share_gateway.testing import origins_that_look_like
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _AUTH_LABEL = "auth-x7k9q2w1"
@@ -714,12 +715,16 @@ def test_caddy_answers_the_web_clients_permission_check_and_lets_it_read_answers
             assert agent_call.getheader("Access-Control-Allow-Origin") == _CHROME_ORIGIN
             assert _RecordingBackend.reached == [("PUT", "/api/workspace/profile"), ("GET", "/_agent/grants")]
 
-            # Another origin, another path, and an app a per-app grant admits to: each reaches the app as it always
-            # did, permission check included, and its answer names no origin.
+            # Another origin, one that only looks like the web client's, another path, and an app a per-app grant
+            # admits to: each reaches the app as it always did, permission check included, and its answer names no
+            # origin.
             _RecordingBackend.reached = []
             unanswered = (
-                ("OPTIONS", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
-                ("PUT", _INTERNAL_HOST, "/api/workspace/profile", "https://evil.example.com"),
+                *(
+                    (method, _INTERNAL_HOST, "/api/workspace/profile", origin)
+                    for origin in ("https://evil.example.com", *origins_that_look_like(_CHROME_ORIGIN))
+                    for method in ("OPTIONS", "PUT")
+                ),
                 ("OPTIONS", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
                 ("PUT", _INTERNAL_HOST, "/api/chats", _CHROME_ORIGIN),
                 ("OPTIONS", _GRANTABLE_HOST, "/api/workspace/profile", _CHROME_ORIGIN),

@@ -28,6 +28,22 @@ from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
 
 
+def origins_that_look_like(origin: str) -> tuple[str, ...]:
+    """Origins that are not the https ``origin`` and that a looser comparison than equality would take for it: a
+    longer host, a host that ends like it, the other scheme, another port, a trailing dot, another case, and the
+    origin a sandboxed page names."""
+    scheme, host = origin.split("://", 1)
+    return (
+        f"{origin}.evil.example",
+        f"{scheme}://evil-{host}",
+        f"http://{host}",
+        f"{origin}:8443",
+        f"{origin}.",
+        origin.upper(),
+        "null",
+    )
+
+
 def set_cookies_by_name(response: Response) -> dict[str, str]:
     """The response's rendered ``Set-Cookie`` headers, keyed by cookie name."""
     return {header.split("=", 1)[0]: header for header in response.headers.getlist("Set-Cookie")}

@@ -48,6 +48,7 @@ from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
+from share_gateway.testing import origins_that_look_like
 from share_gateway.testing import set_cookies_by_name
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
@@ -1108,6 +1109,31 @@ def test_verify_vouches_for_no_other_request(tmp_path: Path, host: str, uri: str
 
     assert resp.status_code == 200
     assert _WEB_CLIENT_MARK not in _identity_header(resp)
+
+
+@pytest.mark.parametrize("origin", origins_that_look_like(_CHROME_ORIGIN))
+def test_verify_vouches_for_no_origin_that_only_looks_like_the_web_clients(tmp_path: Path, origin: str) -> None:
+    harness = _make_harness(tmp_path)
+    _owner_session(harness)
+
+    read = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="GET", uri="/api/workspace/status", origin=origin, accept="*/*"
+        ),
+    )
+    written = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(
+            host=_SHELL_HOST, method="PUT", uri="/api/workspace/profile", origin=origin, accept="*/*"
+        ),
+    )
+
+    # A read is safe from any origin, and reaches the app without the word its guard admits another origin on.
+    assert read.status_code == 200
+    assert _WEB_CLIENT_MARK not in _identity_header(read)
+    assert written.status_code == 403
+    assert IDENTITY_HEADER not in written.headers
 
 
 def test_verify_never_vouches_without_a_session_it_accepted(tmp_path: Path) -> None:
