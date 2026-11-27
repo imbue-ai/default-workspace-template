@@ -276,14 +276,21 @@ async function openRunStream(config, payload, idleTimeoutMs) {
   if (response.statusCode === 200) return response;
   const answer = jsonAnswer(response.statusCode, await streamText(response));
   if (answer.status === 403) throw new HelperError(REFUSED_MESSAGE, EXIT_REVOKED);
+  // The gateway refuses a run before it starts the command, with a 4xx. A 5xx
+  // may be a proxy on the way giving up on a command that had started and not
+  // yet printed its first line, so it is not answered by running it again.
+  if (answer.status >= 500) {
+    throw refusalError("run", { ...answer, detail: `${answer.detail} (the command may have started)` }, false);
+  }
   throw refusalError("run", answer);
 }
 
 // A 400 or a 413 says the request itself was wrong, which is the caller's to
-// fix, so it ends as a usage error and is never retried.
-function refusalError(what, answer) {
+// fix, so it ends as a usage error and is never retried. Any other refusal is
+// retried unless `isRetryable` says that asking again could repeat its work.
+function refusalError(what, answer, isRetryable = true) {
   const isCallersToFix = answer.status === 400 || answer.status === 413;
-  return new HelperError(`${what} answered ${answer.status}: ${answer.detail}`, isCallersToFix ? EXIT_USAGE : 1);
+  return new HelperError(`${what} answered ${answer.status}: ${answer.detail}`, isCallersToFix ? EXIT_USAGE : 1, isRetryable);
 }
 
 // A failed request heals by re-reading `me` and retrying once. The answer

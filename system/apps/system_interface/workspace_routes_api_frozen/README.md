@@ -10,6 +10,7 @@ the commit that is tagged: `just dwt-freeze-workspace-routes` in the mngr reposi
 is deleted when no supported client was written against that release any more.
 
 `test_workspace_routes_description.py` holds the current description to every copy here: a route
-keeps its path, its method and the name of its operation, no field of an answer is removed, and no
-field of a request becomes required. A change that test refuses is not made to the route; it becomes a new route or a new
-optional field instead.
+keeps its path, its method and the name of its operation, no field of an answer is removed, no
+field of a request becomes required, and no field of a request stops being taken (a request
+refuses a field it does not know, so a client that still sends one would be answered 400). A change
+that test refuses is not made to the route; it becomes a new route or a new optional field instead.

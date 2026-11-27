@@ -11,8 +11,8 @@ could reach any file that way, so a path rule here would protect nothing.
 """
 
 import base64
-import binascii
 import codecs
+import errno
 import math
 import os
 import re
@@ -44,6 +44,8 @@ _FILE_MODE_PATTERN = re.compile(r"0*[0-7]{1,3}")
 _READ_CHUNK_BYTES = 64 * 1024
 # A line with no newline is cut here, so a command that never ends its line cannot grow one event without bound.
 _MAX_LINE_CHARACTERS = 1024 * 1024
+# How often the caller of a command that has closed its output and runs on is looked at.
+_CALLER_CHECK_SECONDS = 0.2
 
 STDOUT_EVENT = "stdout"
 STDERR_EVENT = "stderr"
@@ -163,7 +165,8 @@ def parse_write_file_request(body: Mapping[str, object], repo_root: Path) -> Wri
         raise InvalidAgentRequestError("content_b64 must be a string")
     try:
         content = base64.b64decode(content_b64, validate=True)
-    except binascii.Error as exc:
+    # A character outside ASCII is a plain ValueError, which binascii's own error is one of.
+    except ValueError as exc:
         raise InvalidAgentRequestError("content_b64 is not valid base64") from exc
     return WriteFileRequest(
         raw_path=raw_path,
@@ -191,6 +194,9 @@ def read_workspace_file(path: Path) -> bytes | None:
 
 def write_workspace_file(path: Path, content: bytes, mode: int) -> None:
     """Replace ``path`` through a same-directory temp file and a rename, creating its directory. Raises WorkspaceFileError."""
+    # The root has no name to put a temp file beside, and is a directory like any other.
+    if not path.name:
+        raise WorkspaceFileError(os.strerror(errno.EISDIR))
     temp_path = path.with_name(f".{path.name}.{uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -298,11 +304,12 @@ class _CommandOutput:
     def __init__(self, process: subprocess.Popen[bytes], caller: socket.socket | None) -> None:
         assert process.stdout is not None and process.stderr is not None
         self._pipes = (process.stdout, process.stderr)
+        self._splitters = (_LineSplitter(STDOUT_EVENT), _LineSplitter(STDERR_EVENT))
         self._open_pipe_count = len(self._pipes)
         self.has_caller_left = False
         self._selector = selectors.DefaultSelector()
-        self._selector.register(process.stdout, selectors.EVENT_READ, _LineSplitter(STDOUT_EVENT))
-        self._selector.register(process.stderr, selectors.EVENT_READ, _LineSplitter(STDERR_EVENT))
+        for pipe, splitter in zip(self._pipes, self._splitters, strict=True):
+            self._selector.register(pipe, selectors.EVENT_READ, splitter)
         if caller is not None:
             self._selector.register(caller, selectors.EVENT_READ, caller)
 
@@ -337,12 +344,37 @@ class _CommandOutput:
                 self._open_pipe_count -= 1
         return events
 
+    def read_written_events(self) -> list[dict[str, object]]:
+        """The events of all that is written and no event has carried yet, a line with no end included, without waiting.
 
-def _exit_code_before(process: subprocess.Popen[bytes], deadline: float) -> int | None:
-    """The command's exit code as the stream reports it, or None when it has not exited by ``deadline``."""
-    try:
-        return_code = process.wait(timeout=max(deadline - time.monotonic(), 0.0))
-    except subprocess.TimeoutExpired:
+        What a command that is about to be stopped has to show. Each pipe is read once, so a command that never
+        stops writing cannot hold this past the moment it was called.
+        """
+        events = self.read_events(0.0)
+        for splitter in self._splitters:
+            events.extend(splitter.feed(b""))
+        return events
+
+
+def _exit_code_while_awaited(process: subprocess.Popen[bytes], output: _CommandOutput, deadline: float) -> int | None:
+    """The command's exit code as the stream reports it, or None when it has not exited by ``deadline`` or its
+    caller has left first.
+
+    For a command whose output has ended and which runs on: its caller is looked at between waits, the only
+    place left where a caller that has gone would show.
+    """
+    return_code: int | None = None
+    is_awaited = True
+    while is_awaited:
+        remaining = deadline - time.monotonic()
+        try:
+            return_code = process.wait(timeout=min(max(remaining, 0.0), _CALLER_CHECK_SECONDS))
+        except subprocess.TimeoutExpired:
+            output.read_events(0.0)
+            is_awaited = remaining > 0 and not output.has_caller_left
+        else:
+            is_awaited = False
+    if return_code is None:
         return None
     return return_code if return_code >= 0 else _SIGNALLED_EXIT_CODE
 
@@ -356,7 +388,8 @@ def stream_command(
     its own. It is finished when it has exited and nothing it started still
     holds its output open, which is what a shell waits for at the end of a
     pipe. When its time runs out first, the whole group is killed and the exit
-    event says ``timed_out``.
+    event says ``timed_out``; what it had written by then comes before that
+    event, a line it had not ended included.
 
     A command nobody is waiting for is ended the same way, with no exit event:
     when this generator is closed, which is how a server reports an answer it
@@ -379,21 +412,25 @@ def stream_command(
         return
     deadline = time.monotonic() + request.timeout_seconds
     exit_code: int | None = None
+    events_at_timeout: list[dict[str, object]] = []
     running.add(process)
     try:
         with _CommandOutput(process, caller) as output:
             while output.is_open and not output.has_caller_left and (remaining := deadline - time.monotonic()) > 0:
                 yield from output.read_events(remaining)
+            if not output.has_caller_left and not output.is_open:
+                exit_code = _exit_code_while_awaited(process, output, deadline)
             if output.has_caller_left:
                 return
-            if not output.is_open:
-                exit_code = _exit_code_before(process, deadline)
+            if exit_code is None:
+                events_at_timeout = output.read_written_events()
     finally:
         if exit_code is None:
             _kill_command(process)
             process.wait()
         running.discard(process)
     if exit_code is None:
+        yield from events_at_timeout
         yield {"type": EXIT_EVENT, "code": None, "timed_out": True}
     else:
         yield {"type": EXIT_EVENT, "code": exit_code}

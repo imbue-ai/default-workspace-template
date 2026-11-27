@@ -7,6 +7,7 @@ from flask import Flask
 
 from imbue.imbue_common.pytest_utils import inline_snapshot_is_updating
 from imbue.system_interface.workspace_api_models import WORKSPACE_OPERATIONS
+from imbue.system_interface.workspace_routes import SHARING_GRANTS_ROUTE
 from imbue.system_interface.workspace_routes import STATUS_ROUTE
 from imbue.system_interface.workspace_routes import TIMEZONE_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_OPERATION_BY_ROUTE
@@ -75,6 +76,29 @@ def test_a_description_is_compatible_with_itself_and_with_one_that_only_adds(app
 
     assert description_compatibility_breaks(frozen, frozen) == []
     assert description_compatibility_breaks(current, frozen) == []
+
+
+def test_a_field_no_longer_described_by_a_request_that_takes_any_field_is_not_a_break(app: Flask) -> None:
+    current = build_workspace_routes_description(app)
+    frozen = copy.deepcopy(current)
+    frozen["components"]["schemas"]["ProfileSnapshotRequest"]["properties"]["account_id"] = {"type": "string"}
+
+    assert description_compatibility_breaks(current, frozen) == []
+
+
+def test_a_request_field_no_longer_taken_or_newly_required_inside_an_object_is_a_break(app: Flask) -> None:
+    frozen = build_workspace_routes_description(app)
+    current = copy.deepcopy(frozen)
+    del current["components"]["schemas"]["TimezoneRequest"]["properties"]["is_replacing"]
+    del current["components"]["schemas"]["GrantListModel"]["properties"]["email_domains"]
+    current["components"]["schemas"]["GrantedIdentityModel"]["required"] = ["email"]
+
+    breaks = description_compatibility_breaks(current, frozen)
+
+    assert f"PUT {TIMEZONE_ROUTE} no longer takes the request field 'is_replacing'" in breaks
+    assert f"PUT {SHARING_GRANTS_ROUTE} no longer takes the request field 'grants.workspace.email_domains'" in breaks
+    assert f"PUT {SHARING_GRANTS_ROUTE} no longer takes the request field 'grants.services.email_domains'" in breaks
+    assert f"PUT {SHARING_GRANTS_ROUTE} now requires the request field 'identities.email'" in breaks
 
 
 def test_a_removed_route_a_removed_answer_field_and_a_newly_required_request_field_are_breaks(app: Flask) -> None:

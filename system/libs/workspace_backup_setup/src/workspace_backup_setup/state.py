@@ -25,6 +25,7 @@ from host_backup.config import parse_restic_env_file
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from loguru import logger
 from pydantic import Field, ValidationError
 from workspace_bare_scripts.backup_lease import default_lease_path, read_lease
 
@@ -209,15 +210,25 @@ def setup_lock(workspace_root: Path) -> Generator[None, None, None]:
 
 def read_setup_record(workspace_root: Path) -> SetupRecord:
     """The record on disk; the record of a workspace nothing was asked of when there is none to read."""
+    path = workspace_root / SETUP_STATE_RELATIVE_PATH
     try:
-        raw: object = json.loads(
-            (workspace_root / SETUP_STATE_RELATIVE_PATH).read_text(encoding="utf-8")
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return SetupRecord()
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "Could not read the backup setup's record at {}: {}; reading it as none",
+            path,
+            e,
         )
-    except (OSError, ValueError):
         return SetupRecord()
     try:
         return SetupRecord.model_validate(raw)
     except ValidationError:
+        logger.warning(
+            "The backup setup's record at {} is not one this template reads; reading it as none",
+            path,
+        )
         return SetupRecord()
 
 

@@ -1,0 +1,3 @@
+New module `document`, for the shell's sharing routes: `read_sharing_state` reads whether the workspace holds share materials and its grants, `grant_shape_refusals` checks a replacement's shape (an entry that is empty, repeated, or not an email address or a domain; never an entry the stored document already holds), and `replace_grants` writes the grants and the identities under the lock every other writer holds.
+
+`render_grants` writes a document that parses whatever a per-app scope is named: a name outside ASCII letters, digits, `-` and `_` is written as a quoted key with its control characters escaped, where a name like `café` used to be written bare and left a grants file that was not TOML.

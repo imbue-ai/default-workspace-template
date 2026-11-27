@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
+from workspace_update_control.dispatcher import write_log_line
 from workspace_update_control.support import as_json_object
 
 # mngr's conventions, duplicated rather than imported: the host directory's environment variable and
@@ -76,7 +77,13 @@ def _tail_lines_back_to_snapshot(path: str) -> list[str] | None:
                     return (
                         tail[line_start:].decode("utf-8", errors="replace").splitlines()
                     )
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        write_log_line(
+            "could not read the agents' events at %s (%s); treating the agents as unknown"
+            % (path, exc)
+        )
         return None
     return None
 

@@ -83,7 +83,7 @@ def test_the_workspaces_suggestion_routes_read_and_change_the_chat_apps_own_swit
     """A client with no way to the chat app reads and changes the two suggestion switches through the shell, which
     passes each request to the chat app at the path its manifest names: the chat app's settings change, a setting
     the write did not name stays, and the chat app tells its open pages."""
-    with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
+    with running_workspace(tmp_path) as workspace:
         _wait_for_the_chat_app(workspace.shell_url)
         suggestions_url = f"{workspace.shell_url}/api/workspace/suggestions"
         _send_json("PUT", f"{workspace.chat_url}/api/settings", {"fast_mode_turn_limit": 7})

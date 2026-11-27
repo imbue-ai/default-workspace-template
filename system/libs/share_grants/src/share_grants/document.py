@@ -18,6 +18,7 @@ its message and echoes the raw entry in its ``value``, so a client can mark the 
 """
 
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -34,6 +35,8 @@ from share_grants.grants import (
     write_grants_atomic,
     write_text_atomic,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Relative to the workspace root every supervised process runs from.
 SHARE_ENV_RELATIVE_PATH: Final[Path] = Path("data/.secrets/share.env")
@@ -253,17 +256,24 @@ def read_sharing_state(workspace_root: Path) -> SharingState:
     silently drop it.
     """
     is_shared = (workspace_root / SHARE_ENV_RELATIVE_PATH).is_file()
+    grants_path = workspace_root / SHARE_GRANTS_RELATIVE_PATH
     try:
-        text = (workspace_root / SHARE_GRANTS_RELATIVE_PATH).read_text(encoding="utf-8")
+        text = grants_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return SharingState(
             is_shared=is_shared, grants=None, is_grants_unreadable=False
         )
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        _logger.warning("Could not read the grants file at %s: %s", grants_path, exc)
         return SharingState(is_shared=is_shared, grants=None, is_grants_unreadable=True)
     try:
         grants: Grants | None = parse_grants(text)
-    except GrantsError:
+    except GrantsError as exc:
+        _logger.warning(
+            "The grants file at %s is not a grants document (%s); reading it as none",
+            grants_path,
+            exc,
+        )
         grants = None
     return SharingState(is_shared=is_shared, grants=grants, is_grants_unreadable=False)
 

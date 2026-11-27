@@ -3,6 +3,7 @@ import signal
 import socket
 import stat
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,8 @@ def test_a_write_request_whose_content_is_absent_or_not_base64_is_refused() -> N
         parse_write_file_request({"path": "a", "content_b64": "not base64!"}, _ROOT)
     with pytest.raises(InvalidAgentRequestError, match="content_b64 is not valid base64"):
         parse_write_file_request({"path": "a", "content_b64": "AAE"}, _ROOT)
+    with pytest.raises(InvalidAgentRequestError, match="content_b64 is not valid base64"):
+        parse_write_file_request({"path": "a", "content_b64": "café"}, _ROOT)
 
 
 def test_reading_answers_the_bytes_and_none_for_a_file_that_is_not_there(tmp_path: Path) -> None:
@@ -177,6 +180,11 @@ def test_writing_over_a_directory_fails_and_leaves_no_temp_file(tmp_path: Path) 
     with pytest.raises(WorkspaceFileError, match="File exists|Not a directory"):
         write_workspace_file(tmp_path / "a-file" / "below", b"x", 0o600)
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["a-file", "taken"]
+
+
+def test_writing_to_the_root_which_has_no_name_fails_as_any_directory_does() -> None:
+    with pytest.raises(WorkspaceFileError, match="Is a directory"):
+        write_workspace_file(Path("/"), b"x", 0o600)
 
 
 def test_a_line_is_one_event_whatever_reads_it_arrived_in() -> None:
@@ -249,11 +257,29 @@ def test_a_command_ended_by_a_signal_reports_the_code_kept_for_one(tmp_path: Pat
 def test_a_command_out_of_time_is_killed_with_everything_it_started_and_says_so(tmp_path: Path) -> None:
     lifeline = ProcessLifeline(tmp_path)
     try:
-        events = start_holding(lifeline, tmp_path, timeout_seconds=0.3, running=RunningCommands())
+        events = start_holding(lifeline, tmp_path, timeout_seconds=1.0, running=RunningCommands())
         assert list(events) == [{"type": "exit", "code": None, "timed_out": True}]
         assert lifeline.is_released_within(_LIFELINE_WAIT_SECONDS)
     finally:
         lifeline.close()
+
+
+def test_a_command_out_of_time_still_delivers_the_lines_it_had_not_ended(tmp_path: Path) -> None:
+    command = "echo ended; printf 'progress 10%%\\rprogress 20%%'; printf 'waiting for lock...' >&2; sleep 600"
+    assert run_to_completion(["sh", "-c", command], tmp_path, timeout_seconds=1.0) == [
+        {"type": "stdout", "data": "ended\n"},
+        {"type": "stdout", "data": "progress 10%\rprogress 20%"},
+        {"type": "stderr", "data": "waiting for lock..."},
+        {"type": "exit", "code": None, "timed_out": True},
+    ]
+
+
+def test_a_command_that_never_stops_writing_is_still_stopped_when_its_time_runs_out(tmp_path: Path) -> None:
+    events = run_to_completion(["sh", "-c", "while :; do printf x; done"], tmp_path, timeout_seconds=1.0)
+    assert events[-1] == {"type": "exit", "code": None, "timed_out": True}
+    written = "".join(str(event["data"]) for event in events[:-1])
+    assert written and set(written) == {"x"}
+    assert {event["type"] for event in events[:-1]} == {"stdout"}
 
 
 def test_a_command_whose_reader_stops_reading_is_killed_with_everything_it_started(tmp_path: Path) -> None:
@@ -283,6 +309,38 @@ def test_a_command_that_prints_nothing_is_killed_when_its_callers_connection_end
         ours.close()
         lifeline.close()
         running.kill_all()
+
+
+def test_a_command_that_closed_its_output_is_killed_when_its_callers_connection_ends(tmp_path: Path) -> None:
+    lifeline = ProcessLifeline(tmp_path)
+    output_closed = ProcessLifeline(tmp_path)
+    running = RunningCommands()
+    ours, theirs = socket.socketpair()
+    # What `sh -c 'cmd > log 2>&1'` comes to once its shell is cmd: both outputs dropped, and the command runs on.
+    # It lets go of the second FIFO once they are.
+    script = (
+        f"exec 3>{lifeline.path} 4>{output_closed.path}; echo started; exec >/dev/null 2>&1; exec 4>&-; exec sleep 600"
+    )
+    events = stream_command(RunRequest(["sh", "-c", script], tmp_path, 600.0), running, ours)
+    later_events: list[dict[str, object]] = []
+    # The stream is read on a thread: a command with no output left yields nothing while it runs on.
+    reader = threading.Thread(target=lambda: later_events.extend(events), daemon=True)
+    try:
+        assert next(events) == {"type": "stdout", "data": "started\n"}
+        reader.start()
+        assert output_closed.is_released_within(_LIFELINE_WAIT_SECONDS)
+        theirs.close()
+        reader.join(_LIFELINE_WAIT_SECONDS)
+        assert not reader.is_alive()
+        assert later_events == []
+        assert lifeline.is_released_within(_LIFELINE_WAIT_SECONDS)
+    finally:
+        running.kill_all()
+        if reader.is_alive():
+            reader.join(_LIFELINE_WAIT_SECONDS)
+        ours.close()
+        lifeline.close()
+        output_closed.close()
 
 
 def test_bytes_a_caller_sends_while_its_command_runs_do_not_end_the_command(tmp_path: Path) -> None:

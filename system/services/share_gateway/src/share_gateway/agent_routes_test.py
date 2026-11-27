@@ -803,6 +803,7 @@ def test_files_write_refuses_a_body_it_cannot_act_on_and_writes_nothing(tmp_path
         ({"path": "", "content_b64": ""}, "path must be a non-empty string"),
         ({"path": "refused.txt"}, "content_b64 must be a string"),
         ({"path": "refused.txt", "content_b64": "not base64!"}, "content_b64 is not valid base64"),
+        ({"path": "refused.txt", "content_b64": "café"}, "content_b64 is not valid base64"),
         (
             {"path": "refused.txt", "content_b64": "", "mode": "rw"},
             "mode must be the octal digits of permission bits, like 644",
@@ -812,6 +813,7 @@ def test_files_write_refuses_a_body_it_cannot_act_on_and_writes_nothing(tmp_path
             "mode must be the octal digits of permission bits, like 644",
         ),
         ({"path": ".agents", "content_b64": ""}, "could not write .agents: Is a directory"),
+        ({"path": "/", "content_b64": ""}, "could not write /: Is a directory"),
     ]
     for body, error in error_by_body:
         response = harness.client.post("/_agent/files/write", json=body, headers=headers)

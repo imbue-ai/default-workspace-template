@@ -662,6 +662,30 @@ def test_a_create_that_raises_closes_its_attempt_out_as_failed(
     )
 
 
+def test_a_create_that_cannot_write_its_record_closes_its_attempt_out_with_the_reason(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    # A directory where the create writes the id of its attempt, so that write fails.
+    staged.state_path("dispatch-attempt.json").mkdir(parents=True)
+
+    answer = _start(staged)
+
+    assert answer["outcome"] == "STARTING"
+    last_start = _last_start(staged)
+    assert (
+        last_start["attempt_id"],
+        last_start["outcome"],
+        last_start["finished_at"],
+    ) == (answer["attempt_id"], "CREATE_FAILED", _FINISHED_AT)
+    assert last_start["detail"].startswith("The update's chat could not be created: ")
+    assert "dispatch-attempt.json" in last_start["detail"]
+    assert staged.chat_creates() == []
+    assert any(
+        "the start of an update failed" in line
+        for line in staged.dispatcher_log_lines()
+    )
+
+
 def test_starting_creates_the_chat_through_the_templates_messenger_with_the_pinned_message(
     staged: StagedUpdateWorkspace,
 ) -> None:

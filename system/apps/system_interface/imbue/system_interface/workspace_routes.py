@@ -16,6 +16,7 @@ A refusal is ``{"detail", "code"}`` under a 4xx, a route that could not do what 
 5xx, and an answer that describes what the workspace did, including that it declined, is a 200 with an ``outcome``.
 """
 
+import json
 import os
 import threading
 import time
@@ -213,8 +214,10 @@ _OWNER_ONLY_REFUSAL_DETAIL: Final[str] = "Only the workspace's owner may read it
 # What the wallpaper is answered under: a browser may keep it for the one user and asks again before each use, so a
 # changed wallpaper is seen at once and an unchanged one is not sent twice.
 _WALLPAPER_CACHE_CONTROL: Final[str] = "private, no-cache"
+_INVALID_UNICODE_REFUSAL_DETAIL: Final[str] = "the request body holds text that is not valid Unicode"
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
+_Answer = TypeVar("_Answer")
 
 # Every status a workspace route may answer its error object under.
 _ERROR_STATUSES: Final[tuple[int, ...]] = (HTTP_BAD_REQUEST, HTTP_FORBIDDEN, HTTP_CONFLICT, HTTP_INTERNAL_ERROR)
@@ -247,11 +250,19 @@ def _admit(is_changing_the_workspace: bool) -> None:
 
 
 def _body(model: type[_RequestModel]) -> _RequestModel:
-    """The request's body as ``model``; a body of another shape is refused with the routes' own error object."""
+    """The request's body as ``model``; a body of another shape, or one holding text that is not valid Unicode,
+    is refused with the routes' own error object."""
     try:
-        return parse_request_body(model)
+        body = parse_request_body(model)
     except InvalidRequestBodyError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from e
+    # JSON can spell a lone surrogate ("\ud800"), which no file takes. Refused before a route acts: a write that
+    # fails on one would leave whatever the route had already written.
+    try:
+        json.dumps(request.get_json(force=True, silent=True), ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise WorkspaceRouteRefusal(_INVALID_UNICODE_REFUSAL_DETAIL, CODE_INVALID_REQUEST, HTTP_BAD_REQUEST) from e
+    return body
 
 
 def _backup_destination_body() -> BackupDestinationRequest:
@@ -568,6 +579,18 @@ def _require_workspace_root_as_working_directory() -> None:
         )
 
 
+def _changing_update_state(change: Callable[[], _Answer]) -> _Answer:
+    """What ``change`` answers; one that could not write the workspace's update state is refused with the routes'
+    own error object."""
+    try:
+        return change()
+    except OSError as e:
+        logger.opt(exception=e).error("Could not change the workspace's update state")
+        raise WorkspaceRouteRefusal(
+            f"The workspace's update state could not be changed: {e}", CODE_WRITE_FAILED, HTTP_INTERNAL_ERROR
+        ) from e
+
+
 def _observed_agents_reader() -> AgentsReader:
     events_path = str(get_state().shell.avatar_status.events_path)
     return lambda: read_observed_agents(events_path, time.time())
@@ -678,18 +701,20 @@ def start_update_now() -> ResponseReturnValue:
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateStartRequest)
     _require_workspace_root_as_working_directory()
-    answer = start_update(
-        ceiling=body.ceiling,
-        override_ref=body.override_ref,
-        is_backup_configured=body.is_backup_configured,
-        now=time.time(),
-        live_cron_dir=str(get_state().live_cron_directory),
-        proc_root=PROC_ROOT,
-        agent_environment=AgentEnvironment(),
-        read_agents=_observed_agents_reader(),
-        run_in_background=_run_in_background,
-        clock=time.time,
-        fetch_channel_file=get_state().channel_file_fetcher,
+    answer = _changing_update_state(
+        lambda: start_update(
+            ceiling=body.ceiling,
+            override_ref=body.override_ref,
+            is_backup_configured=body.is_backup_configured,
+            now=time.time(),
+            live_cron_dir=str(get_state().live_cron_directory),
+            proc_root=PROC_ROOT,
+            agent_environment=AgentEnvironment(),
+            read_agents=_observed_agents_reader(),
+            run_in_background=_run_in_background,
+            clock=time.time,
+            fetch_channel_file=get_state().channel_file_fetcher,
+        )
     )
     logger.info(
         "Asked to start an update to {}: {}",
@@ -715,18 +740,20 @@ def arm_update_schedule() -> ResponseReturnValue:
     body = _body(UpdateScheduleRequest)
     window = _window_of(body)
     _require_workspace_root_as_working_directory()
-    answer = arm_schedule(
-        ceiling=body.ceiling,
-        override_ref=body.override_ref,
-        window_start_minute_utc=window[0] if window is not None else None,
-        window_length_minutes=window[1] if window is not None else None,
-        is_backup_configured=body.is_backup_configured,
-        is_auto_armed=body.is_auto_armed,
-        is_armed_schedule_kept=False,
-        now=time.time(),
-        live_cron_dir=str(get_state().live_cron_directory),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=get_state().channel_file_fetcher,
+    answer = _changing_update_state(
+        lambda: arm_schedule(
+            ceiling=body.ceiling,
+            override_ref=body.override_ref,
+            window_start_minute_utc=window[0] if window is not None else None,
+            window_length_minutes=window[1] if window is not None else None,
+            is_backup_configured=body.is_backup_configured,
+            is_auto_armed=body.is_auto_armed,
+            is_armed_schedule_kept=False,
+            now=time.time(),
+            live_cron_dir=str(get_state().live_cron_directory),
+            agent_environment=AgentEnvironment(),
+            fetch_channel_file=get_state().channel_file_fetcher,
+        )
     )
     logger.info("Asked to arm an update schedule: {}", answer.get("outcome"))
     return model_response(_outcome_response(answer))
@@ -743,14 +770,16 @@ def refresh_update_schedule() -> ResponseReturnValue:
     body = _body(UpdateScheduleRefreshRequest)
     window = _window_of(body)
     _require_workspace_root_as_working_directory()
-    answer = refresh_schedule(
-        ceiling=body.ceiling,
-        window_start_minute_utc=window[0] if window is not None else None,
-        window_length_minutes=window[1] if window is not None else None,
-        is_backup_configured=body.is_backup_configured,
-        now=time.time(),
-        live_cron_dir=str(get_state().live_cron_directory),
-        fetch_channel_file=get_state().channel_file_fetcher,
+    answer = _changing_update_state(
+        lambda: refresh_schedule(
+            ceiling=body.ceiling,
+            window_start_minute_utc=window[0] if window is not None else None,
+            window_length_minutes=window[1] if window is not None else None,
+            is_backup_configured=body.is_backup_configured,
+            now=time.time(),
+            live_cron_dir=str(get_state().live_cron_directory),
+            fetch_channel_file=get_state().channel_file_fetcher,
+        )
     )
     return model_response(UpdateScheduleRefreshedResponse.model_validate(answer))
 
@@ -759,7 +788,7 @@ def cancel_update_schedule() -> ResponseReturnValue:
     """Cancel the schedule, and answer whether there was one."""
     _admit(is_changing_the_workspace=True)
     _require_workspace_root_as_working_directory()
-    return model_response(UpdateScheduleCancelledResponse.model_validate(cancel_schedule()))
+    return model_response(UpdateScheduleCancelledResponse.model_validate(_changing_update_state(cancel_schedule)))
 
 
 def skip_update() -> ResponseReturnValue:
@@ -767,7 +796,7 @@ def skip_update() -> ResponseReturnValue:
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateSkipRequest)
     _require_workspace_root_as_working_directory()
-    answer = skip_target(target_ref=body.target_ref, skipped_at=body.skipped_at)
+    answer = _changing_update_state(lambda: skip_target(target_ref=body.target_ref, skipped_at=body.skipped_at))
     return model_response(UpdateSkippedResponse.model_validate(answer))
 
 
@@ -776,8 +805,10 @@ def dismiss_update() -> ResponseReturnValue:
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateDismissalsRequest)
     _require_workspace_root_as_working_directory()
-    answer = record_dismissals(
-        note_run_started_at=body.note_run_started_at, outcome_run_started_at=body.outcome_run_started_at
+    answer = _changing_update_state(
+        lambda: record_dismissals(
+            note_run_started_at=body.note_run_started_at, outcome_run_started_at=body.outcome_run_started_at
+        )
     )
     return model_response(UpdateDismissalsResponse.model_validate(answer))
 

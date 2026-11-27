@@ -16,16 +16,26 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 BACKUP_TOML_RELATIVE_PATH: Final[Path] = Path("data/system/backup.toml")
 VERIFICATION_DISABLED_KEY: Final[str] = "verification_disabled"
 
 
 def read_verification_disabled(workspace_root: Path) -> bool:
     """Whether the workspace's backup config turns verification off (absent or unreadable reads enabled)."""
+    path = workspace_root / BACKUP_TOML_RELATIVE_PATH
     try:
-        with (workspace_root / BACKUP_TOML_RELATIVE_PATH).open("rb") as handle:
+        with path.open("rb") as handle:
             raw = tomllib.load(handle)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "Could not read the backup verification flag in {}: {}; reading verification as on",
+            path,
+            e,
+        )
         return False
     return raw.get(VERIFICATION_DISABLED_KEY) is True
 

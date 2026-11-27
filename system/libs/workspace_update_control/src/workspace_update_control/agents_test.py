@@ -11,6 +11,7 @@ from workspace_update_control import agents
 from workspace_update_control.agents import _TAIL_BLOCK_BYTES
 from workspace_update_control.testing import (
     SERVICES_AGENT_ID,
+    StagedUpdateWorkspace,
     agent_removed_line,
     agent_state_line,
     full_state_line,
@@ -249,6 +250,19 @@ def test_an_agent_whose_state_is_missing_is_listed_with_no_state(
 
 def test_a_missing_file_cannot_vouch_for_the_agents(events_path: Path) -> None:
     assert agents.read_observed_agents(str(events_path), _NOW) is None
+
+
+def test_a_file_that_cannot_be_read_cannot_vouch_for_the_agents_and_the_log_says_why(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    # A directory where the file belongs: there, and unreadable as a file by any user.
+    staged.events_path.mkdir(parents=True)
+
+    assert agents.read_observed_agents(str(staged.events_path), _NOW) is None
+
+    log_lines = staged.dispatcher_log_lines()
+    assert len(log_lines) == 1
+    assert f"could not read the agents' events at {staged.events_path}" in log_lines[0]
 
 
 def test_an_empty_file_cannot_vouch_for_the_agents(events_path: Path) -> None:
