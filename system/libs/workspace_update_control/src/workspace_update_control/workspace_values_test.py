@@ -12,6 +12,7 @@ from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
     StagedUpdateWorkspace,
+    arm_schedule_in,
     run_in_place,
     update_settings_document,
 )
@@ -30,17 +31,14 @@ def _arm(
     is_backup_configured: bool | None = None,
     now: float = _NOW,
 ) -> dict[str, Any]:
-    return control.arm_schedule(
+    return arm_schedule_in(
+        staged,
+        feed,
+        now=now,
         ceiling=ceiling,
         override_ref=override_ref,
-        window_start_minute_utc=window[0] if window is not None else None,
-        window_length_minutes=window[1] if window is not None else None,
+        window=window,
         is_backup_configured=is_backup_configured,
-        is_auto_armed=False,
-        now=now,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=feed,
     )
 
 
@@ -87,18 +85,11 @@ def _refresh(
     )
 
 
-def _write_backup_credentials(staged: StagedUpdateWorkspace) -> None:
-    (staged.root / "data" / ".secrets").mkdir(parents=True, exist_ok=True)
-    (staged.root / "data" / ".secrets" / "restic.env").write_text(
-        "RESTIC_REPOSITORY=x\n"
-    )
-
-
 def test_arming_with_nothing_named_takes_the_channels_version_the_settings_window_and_the_workspaces_own_backups(
     staged: StagedUpdateWorkspace,
 ) -> None:
     staged.write_state("settings.json", update_settings_document())
-    _write_backup_credentials(staged)
+    staged.write_backup_credentials()
     feed = RecordingFeed(_ON_THE_CHANNEL)
 
     answer = _arm(staged, feed)
@@ -249,7 +240,7 @@ def test_starting_with_no_version_named_updates_to_the_channels_version(
     staged: StagedUpdateWorkspace,
 ) -> None:
     staged.write_state("settings.json", update_settings_document())
-    _write_backup_credentials(staged)
+    staged.write_backup_credentials()
 
     answer = _start(staged, RecordingFeed(_ON_THE_CHANNEL))
 

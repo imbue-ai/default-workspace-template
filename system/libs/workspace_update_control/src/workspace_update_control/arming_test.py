@@ -2,7 +2,6 @@
 
 import os
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
 
 import pytest
@@ -24,6 +23,8 @@ from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
     StagedUpdateWorkspace,
+    arm_schedule_in,
+    epoch_at,
     stage_checkout_at,
     stage_update_workspace,
     update_settings_document,
@@ -32,14 +33,9 @@ from workspace_update_control.testing import (
 _INSTALLED = "minds-v0.9.0"
 _ON_THE_CHANNEL = "minds-v0.10.0"
 
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
-
-
 # The staged settings' window is 02:00 to 05:00, read in UTC while the workspace records no timezone.
-_OUTSIDE_THE_WINDOW = _epoch("2026-10-20T12:00:00+00:00")
-_INSIDE_THE_WINDOW = _epoch("2026-10-21T03:00:00+00:00")
+_OUTSIDE_THE_WINDOW = epoch_at("2026-10-20T12:00:00+00:00")
+_INSIDE_THE_WINDOW = epoch_at("2026-10-21T03:00:00+00:00")
 _NOW = _OUTSIDE_THE_WINDOW
 
 _NOTHING_IN_THE_WAY = ArmingFacts(
@@ -227,10 +223,7 @@ def test_the_armed_window_is_the_settings_hours_in_the_workspaces_recorded_timez
     (staged.root / "data" / ".state" / "user_timezone").write_text(
         "America/Los_Angeles\n"
     )
-    (staged.root / "data" / ".secrets").mkdir(parents=True)
-    (staged.root / "data" / ".secrets" / "restic.env").write_text(
-        "RESTIC_REPOSITORY=x\n"
-    )
+    staged.write_backup_credentials()
 
     _tick(staged, feed, _NOW)
 
@@ -359,30 +352,14 @@ def test_a_version_a_run_already_went_out_for_is_not_armed_again(
     staged: StagedUpdateWorkspace,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    staged.write_state(
-        "last-dispatch.json",
-        {
-            "chat_agent_name": "update-to-v0100",
-            "chat_id": "",
-            "target_ref": _ON_THE_CHANNEL,
-            "dispatched_at": _NOW - 24 * 60 * 60,
-        },
-    )
-    staged.write_state(
-        "run.json",
-        {
-            "chat_agent_name": "update-to-v0100",
-            "started_at": _NOW - 24 * 60 * 60 + 60,
-            "verdict": "STUCK",
-        },
-    )
+    run_started_at = staged.write_failed_run(_ON_THE_CHANNEL, _NOW - 24 * 60 * 60)
 
     _tick(staged, feed, _NOW)
 
     assert staged.read_state("schedule.json") is None
 
     control.record_dismissals(
-        note_run_started_at=None, outcome_run_started_at=_NOW - 24 * 60 * 60 + 60
+        note_run_started_at=None, outcome_run_started_at=run_started_at
     )
     _tick(staged, feed, _NOW + 60)
 
@@ -594,17 +571,13 @@ def test_a_schedule_a_client_armed_with_its_own_values_is_left_to_that_client(
     staged: StagedUpdateWorkspace,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    armed = control.arm_schedule(
-        ceiling="minds-v0.9.5",
-        override_ref="",
-        window_start_minute_utc=9 * 60,
-        window_length_minutes=3 * 60,
-        is_backup_configured=True,
-        is_auto_armed=False,
+    armed = arm_schedule_in(
+        staged,
+        feed,
         now=_NOW - CLIENT_CEILING_HOLD_SECONDS,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=feed,
+        ceiling="minds-v0.9.5",
+        window=(9 * 60, 3 * 60),
+        is_backup_configured=True,
     )["schedule"]
 
     _tick(staged, feed, _NOW)
@@ -619,23 +592,7 @@ def _skip(staged: StagedUpdateWorkspace, target_ref: str) -> None:
 
 def _fail_a_run_to(staged: StagedUpdateWorkspace, target_ref: str) -> None:
     """A run that went out for ``target_ref`` a day ago and ended stuck."""
-    staged.write_state(
-        "last-dispatch.json",
-        {
-            "chat_agent_name": "update-that-failed",
-            "chat_id": "",
-            "target_ref": target_ref,
-            "dispatched_at": _NOW - 24 * 60 * 60,
-        },
-    )
-    staged.write_state(
-        "run.json",
-        {
-            "chat_agent_name": "update-that-failed",
-            "started_at": _NOW - 24 * 60 * 60 + 60,
-            "verdict": "STUCK",
-        },
-    )
+    staged.write_failed_run(target_ref, _NOW - 24 * 60 * 60)
 
 
 def _hold_nothing_back(staged: StagedUpdateWorkspace, target_ref: str) -> None:
@@ -710,18 +667,7 @@ def test_a_schedule_a_client_armed_follows_the_channel_to_a_version_the_workspac
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
     _skip(staged, "minds-v0.10.1")
-    control.arm_schedule(
-        ceiling=None,
-        override_ref="",
-        window_start_minute_utc=None,
-        window_length_minutes=None,
-        is_backup_configured=None,
-        is_auto_armed=False,
-        now=_NOW,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=feed,
-    )
+    arm_schedule_in(staged, feed, now=_NOW)
     assert _armed_target(staged) == _ON_THE_CHANNEL
 
     feed.template_ref = "minds-v0.10.1"

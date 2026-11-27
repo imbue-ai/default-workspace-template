@@ -23,6 +23,7 @@ from workspace_update_control.testing import (
     ScriptedToolAnswer,
     StagedUpdateWorkspace,
     armed_schedule,
+    epoch_at,
     labels_of,
     listed_agent,
     run_in_place,
@@ -33,10 +34,6 @@ _LEAD = STAGED_CREATED_CHAT["name"]
 _LEAD_ID = f"agent-{uuid4().hex}"
 _WORKER = "update-self"
 _WORKER_ID = f"agent-{uuid4().hex}"
-
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
 
 
 def _utc(epoch: float) -> str:
@@ -56,7 +53,7 @@ def _utc(epoch: float) -> str:
 def test_the_window_opens_daily_at_its_utc_start(
     now: str, start_minute_utc: int, length_minutes: int, opened_at_utc: str
 ) -> None:
-    bounds = dispatcher.current_window(_epoch(now), start_minute_utc, length_minutes)
+    bounds = dispatcher.current_window(epoch_at(now), start_minute_utc, length_minutes)
 
     assert bounds is not None
     assert _utc(bounds[0]) == opened_at_utc
@@ -76,13 +73,14 @@ def test_outside_the_window_there_is_no_window(
     now: str, start_minute_utc: int, length_minutes: int
 ) -> None:
     assert (
-        dispatcher.current_window(_epoch(now), start_minute_utc, length_minutes) is None
+        dispatcher.current_window(epoch_at(now), start_minute_utc, length_minutes)
+        is None
     )
 
 
-_IN_WINDOW = _epoch("2026-10-20T03:00:00-07:00")
-_WINDOW_OPENED = _epoch("2026-10-20T02:00:00-07:00")
-_AFTER_WINDOW = _epoch("2026-10-20T06:00:00-07:00")
+_IN_WINDOW = epoch_at("2026-10-20T03:00:00-07:00")
+_WINDOW_OPENED = epoch_at("2026-10-20T02:00:00-07:00")
+_AFTER_WINDOW = epoch_at("2026-10-20T06:00:00-07:00")
 
 
 def _schedule(**fields: Any) -> dict[str, Any]:

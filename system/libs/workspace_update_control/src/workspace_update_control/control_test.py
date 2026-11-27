@@ -20,6 +20,7 @@ from workspace_update_control.testing import (
     RecordingFeed,
     ScriptedToolAnswer,
     StagedUpdateWorkspace,
+    arm_schedule_in,
     full_state_line,
     labels_of,
     listed_agent,
@@ -47,17 +48,15 @@ def _arm(
     is_auto_armed: bool = False,
     now: float = _NOW,
 ) -> dict[str, Any]:
-    return control.arm_schedule(
+    return arm_schedule_in(
+        staged,
+        RecordingFeed(None),
+        now=now,
         ceiling=ceiling,
         override_ref=override_ref,
-        window_start_minute_utc=9 * 60,
-        window_length_minutes=3 * 60,
+        window=(9 * 60, 3 * 60),
         is_backup_configured=True,
         is_auto_armed=is_auto_armed,
-        now=now,
-        live_cron_dir=str(staged.live_cron_dir),
-        agent_environment=AgentEnvironment(),
-        fetch_channel_file=RecordingFeed(None),
     )
 
 

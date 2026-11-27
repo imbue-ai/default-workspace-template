@@ -14,15 +14,23 @@ from uuid import uuid4
 
 import pytest
 
+from workspace_update_control import control
 from workspace_update_control.agents import agent_events_path
-from workspace_update_control.channel import ChannelFileUnreadableError
+from workspace_update_control.channel import (
+    ChannelFileFetcher,
+    ChannelFileUnreadableError,
+)
 from workspace_update_control.dispatcher import (
     AGENT_PIDS_DIR,
     AgentEnvironment,
     list_agents,
     run_tick,
 )
-from workspace_update_control.protocol import UPDATE_STATE_DIR
+from workspace_update_control.protocol import (
+    BACKUP_CREDENTIALS_FILE_PATH,
+    UPDATE_STATE_DIR,
+)
+from workspace_update_control.settings import OWN_SETTING_NAMES
 from workspace_update_control.stub_programs_testing import (
     STUB_MNGR_SOURCE,
     STUB_TOOL_SOURCE,
@@ -145,6 +153,20 @@ def update_settings_document(**fields: Any) -> dict[str, Any]:
     }
 
 
+def the_accounts_settings(**fields: Any) -> dict[str, Any]:
+    """Update settings as a client sends them when it writes the account's: none of the workspace's own."""
+    return {
+        name: value
+        for name, value in update_settings_document(**fields).items()
+        if name not in OWN_SETTING_NAMES
+    }
+
+
+def epoch_at(iso: str) -> float:
+    """The moment the ISO 8601 text ``iso`` names, in seconds since the epoch."""
+    return datetime.fromisoformat(iso).timestamp()
+
+
 class ScriptedToolAnswer(NamedTuple):
     """One answer a stubbed in-workspace tool gives, in order."""
 
@@ -258,6 +280,35 @@ class StagedUpdateWorkspace(NamedTuple):
     def read_state(self, name: str) -> dict[str, Any] | None:
         path = self.state_path(name)
         return json.loads(path.read_text()) if path.exists() else None
+
+    def write_backup_credentials(self) -> None:
+        """Leave the workspace holding backup credentials, which is how it tells that it has backups."""
+        path = self.root / BACKUP_CREDENTIALS_FILE_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("RESTIC_REPOSITORY=x\n")
+
+    def write_failed_run(self, target_ref: str, dispatched_at: float) -> float:
+        """Leave the records of a run that went out for ``target_ref`` at ``dispatched_at`` and ended stuck;
+        when that run began."""
+        started_at = dispatched_at + 60
+        self.write_state(
+            "last-dispatch.json",
+            {
+                "chat_agent_name": "update-that-failed",
+                "chat_id": "",
+                "target_ref": target_ref,
+                "dispatched_at": dispatched_at,
+            },
+        )
+        self.write_state(
+            "run.json",
+            {
+                "chat_agent_name": "update-that-failed",
+                "started_at": started_at,
+                "verdict": "STUCK",
+            },
+        )
+        return started_at
 
     def dispatcher_log_lines(self) -> list[str]:
         log_path = self.state_path("dispatcher.log")
@@ -377,6 +428,33 @@ def stage_update_workspace(
     monkeypatch.setenv("STUB_CREATED_AGENT_ID", staged.bare_created_agent_id)
     monkeypatch.chdir(root)
     return staged
+
+
+def arm_schedule_in(
+    staged: StagedUpdateWorkspace,
+    feed: ChannelFileFetcher,
+    *,
+    now: float,
+    ceiling: str | None = None,
+    override_ref: str = "",
+    window: tuple[int, int] | None = None,
+    is_backup_configured: bool | None = None,
+    is_auto_armed: bool = False,
+) -> dict[str, Any]:
+    """Arm the staged workspace's schedule at ``now`` as a client does: ``window`` is the start minute in UTC
+    and the length in minutes, and a value left out is left to the workspace."""
+    return control.arm_schedule(
+        ceiling=ceiling,
+        override_ref=override_ref,
+        window_start_minute_utc=window[0] if window is not None else None,
+        window_length_minutes=window[1] if window is not None else None,
+        is_backup_configured=is_backup_configured,
+        is_auto_armed=is_auto_armed,
+        now=now,
+        live_cron_dir=str(staged.live_cron_dir),
+        agent_environment=AgentEnvironment(),
+        fetch_channel_file=feed,
+    )
 
 
 def stage_checkout_at(
