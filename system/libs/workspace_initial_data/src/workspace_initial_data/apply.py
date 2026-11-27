@@ -21,6 +21,11 @@ backup destination would turn backups on again after the user turned them off). 
 it is about to write a part before it writes it (``status.PartProgress``), under the digest of the document. A
 part found half-recorded at a later start was being written when the step ended, and nobody knows whether it
 was: it is not written again, and the status says so for good.
+
+A document found in a workspace that has run an update is deleted and no part of it is written. A template from
+before the initial data ignores the file, and whoever created the workspace deletes it only once the workspace
+has said so. Where that never happened the file is still there when an update brings in a template that applies
+one, and its values are the create's, from before everything the owner has chosen since.
 """
 
 import hashlib
@@ -39,6 +44,7 @@ from workspace_profile.errors import (
 )
 from workspace_profile.snapshot import write_workspace_profile_snapshot
 from workspace_profile.timezone import write_user_timezone
+from workspace_update_control.protocol import RUN_RECORD_PATH
 from workspace_update_control.settings import (
     InvalidUpdateSettingsError,
     take_update_settings,
@@ -219,6 +225,27 @@ def _left_for_the_next_start(
     return status
 
 
+def _delete_unapplied(document_path: Path) -> None:
+    """Delete a document a workspace that has run an update still holds, with no part of it written."""
+    try:
+        document_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        logger.error(
+            "The initial data at {} is from before this workspace's updates and could not be deleted: {}",
+            document_path,
+            e,
+        )
+        _restrict(document_path)
+        return
+    logger.warning(
+        "Deleted the initial data at {} with no part of it written: this workspace has run an update, so the "
+        "document is from before everything its owner has chosen since",
+        document_path,
+    )
+
+
 def _standing(problems: list[str]) -> InitialDataStatus:
     """What the record says while the step is at work, which is what stands if the step ends there."""
     return failed_status("; ".join(problems) or _UNFINISHED_DETAIL)
@@ -242,6 +269,9 @@ def apply_initial_data(
     middle of is not written again either, and reads as failed from then on. A document left again with the
     bytes of one already applied is deleted and nothing is written.
 
+    In a workspace that has run an update (it holds the update's run record) a document is deleted with no part
+    of it written, and the recorded status is answered as it is.
+
     While the record of what was applied is there and cannot be read, any part of a document may have been
     written before, so none is written: the document is left where it is, the record is left as it is, and the
     answer is failed. With no document the answer is then ``NONE``, as the status reads.
@@ -251,6 +281,9 @@ def apply_initial_data(
     operation holds the backup lease, fail that part as any writer's refusal does.
     """
     document_path = host_dir / INITIAL_DATA_FILE_NAME
+    if (workspace_root / RUN_RECORD_PATH).exists():
+        _delete_unapplied(document_path)
+        return read_initial_data_status(workspace_root)
     try:
         recorded = read_initial_data_record(workspace_root)
     except InitialDataRecordUnreadableError as e:
