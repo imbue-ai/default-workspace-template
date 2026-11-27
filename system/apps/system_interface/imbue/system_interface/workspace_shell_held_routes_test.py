@@ -134,7 +134,7 @@ def test_the_switches_of_an_app_that_is_not_running_are_unavailable(
 ) -> None:
     client = _shell_over(tmp_path, broadcaster, _settings_holder_row(f"http://127.0.0.1:{closed_port}")).test_client()
 
-    response = client.open(SUGGESTIONS_ROUTE, method=method, json={})
+    response = client.open(SUGGESTIONS_ROUTE, method=method, json={"is_new_chat_suggestions_enabled": False})
 
     assert response.status_code == 503
     assert response.get_json()["code"] == "SUGGESTIONS_UNAVAILABLE"
@@ -144,7 +144,7 @@ def test_the_switches_of_an_app_that_is_not_running_are_unavailable(
 @pytest.mark.parametrize("method", ["GET", "PUT"])
 def test_a_workspace_whose_apps_declare_no_switches_does_not_support_them(client: FlaskClient, method: str) -> None:
     # The app that holds the switches registered under a template from before it named where they are.
-    response = client.open(SUGGESTIONS_ROUTE, method=method, json={})
+    response = client.open(SUGGESTIONS_ROUTE, method=method, json={"is_new_chat_suggestions_enabled": False})
 
     assert response.status_code == 501
     assert response.get_json()["code"] == "SUGGESTIONS_UNSUPPORTED"
