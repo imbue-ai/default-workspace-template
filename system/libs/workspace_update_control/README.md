@@ -60,7 +60,9 @@ where supervisord runs the shell and where the cron line changes to.
   release channel its settings no longer name
   (`control.cancel_schedule_armed_for_a_channel_left`), so a workspace moved to
   another channel is not updated to the one it left, also while the new
-  channel's version cannot be read.
+  channel's version cannot be read. A start, an arm or a refresh that reads the
+  new channel's version before that minute cancels such a schedule before it
+  reads.
 - `agents` -- the workspace's agents read from the events file `mngr observe`
   writes, for the routes, which run no `mngr`. Where the file cannot vouch for the
   agents the answer is "unknown", never "none".

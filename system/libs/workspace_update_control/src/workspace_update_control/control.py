@@ -182,10 +182,15 @@ def _channel_version_for_request(
     Read off the feed when the last read is an hour old or none has succeeded, and otherwise as last read. It is
     held to the version a client from before the workspace read the feed named, while that client keeps asking,
     where the two can be compared. '' when the workspace has read no version for its channel and cannot.
+
+    A schedule the workspace armed for a channel it has left is cancelled first: the read gives the workspace a
+    version for the channel its settings name, and holding none is what tells such a schedule
+    (``cancel_schedule_armed_for_a_channel_left``).
     """
     settings = read_update_settings()
     if settings is None:
         return ""
+    cancel_schedule_armed_for_a_channel_left(now)
     channel_ref = channel_template_ref(
         refresh_channel_version(
             settings, now, fetch_channel_file, is_due_when_unread=True

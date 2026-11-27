@@ -406,6 +406,48 @@ def test_a_schedule_armed_for_a_channel_the_workspace_left_does_not_stand_while_
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_request_that_reads_the_new_channels_version_cancels_the_schedule_armed_for_the_channel_left_first(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _INSIDE_THE_WINDOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = "minds-v0.8.0"
+
+    # A start that leaves the newest version to the workspace reads the new channel's, so the workspace holds a
+    # version for the channel its settings name from then on. Its chat is still being created a minute later.
+    answer = control.start_update(
+        ceiling=None,
+        override_ref="minds-v0.9.1",
+        is_backup_configured=None,
+        now=_INSIDE_THE_WINDOW + 30,
+        live_cron_dir=str(staged.live_cron_dir),
+        proc_root=str(staged.proc_root),
+        agent_environment=AgentEnvironment(),
+        read_agents=staged.read_listed_agents,
+        run_in_background=lambda create: None,
+        clock=lambda: _INSIDE_THE_WINDOW + 30,
+        fetch_channel_file=feed,
+    )
+
+    assert answer["outcome"] == "STARTING"
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert (channel_version["channel"], channel_version["template_ref"]) == (
+        "stable",
+        "minds-v0.8.0",
+    )
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    # The window is open, and the dispatcher's minute starts nothing for the channel left.
+    assert control.cancel_schedule_armed_for_a_channel_left(_INSIDE_THE_WINDOW + 60) is False
+    staged.tick(_INSIDE_THE_WINDOW + 60)
+
+    assert staged.chat_creates() == []
+
+
 def test_a_schedule_somebody_asked_for_stands_when_the_workspace_leaves_its_channel(
     staged: StagedUpdateWorkspace,
 ) -> None:
