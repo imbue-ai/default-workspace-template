@@ -16,7 +16,6 @@ fetches the template's release tags into such a checkout (``release_tags``), unl
 """
 
 import os
-
 from collections.abc import Callable, Mapping
 from typing import Final, NamedTuple
 

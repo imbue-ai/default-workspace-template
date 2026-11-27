@@ -329,6 +329,42 @@ def test_a_workspace_that_is_not_behind_its_channel_arms_nothing(
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_workspace_moved_to_a_channel_behind_its_version_reads_it_at_once_and_stays_where_it_is(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    # The owner moves the workspace to a channel that is on an older release than the one installed.
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = "minds-v0.8.0"
+    _tick(staged, feed, _NOW + 60)
+
+    assert feed.asked == [
+        f"{STAGED_FEED_BASE_URL}/beta-web.json",
+        f"{STAGED_FEED_BASE_URL}/stable-web.json",
+    ]
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert (channel_version["channel"], channel_version["template_ref"]) == (
+        "stable",
+        "minds-v0.8.0",
+    )
+    # The update armed for the channel it left is cancelled, and none is armed to the older release.
+    assert staged.read_state("schedule.json") is None
+
+    _tick(staged, feed, _NOW + 120)
+
+    assert staged.read_state("schedule.json") is None
+
+    # Once that channel passes the workspace's version, the workspace follows it.
+    feed.template_ref = "minds-v0.9.1"
+    _tick(staged, feed, _NOW + 60 + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == "minds-v0.9.1"
+
+
 def test_a_checkout_that_names_no_version_arms_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:
