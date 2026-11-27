@@ -24,9 +24,7 @@
  *
  * A chrome that said beforehand that it relays no sign-in (Imbue Studio in a browser) is asked
  * nothing: the chooser goes straight to a way in that needs no relay, and opens that sign-in's
- * page itself. A browser opens a tab only at a click, and the page's address is known seconds
- * later, so the tab is opened blank at the click that asks for the sign-in and pointed at the
- * page once the sign-in has started.
+ * page itself (`openPendingTab`).
  *
  * Two shapes worth knowing about:
  *
@@ -304,8 +302,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // fallback below, so it goes straight to that.
     const chosenMethod =
       requested.shape === "browser" && isNothingRelaying() ? (relaylessFallback(chosen) ?? requested) : requested;
-    // Under a chrome that relays nothing, nobody opens the sign-in's page for the user. The tab for it is opened
-    // here, on the click, and shown the page once the sign-in has started and says where it is.
+    // Under a chrome that relays nothing, nobody else opens the sign-in's page for the user.
     const ownTab =
       options.isFromClick === true && isProviderRelayDeclined() && !isPaste(chosenMethod)
         ? openPendingTab(window)
