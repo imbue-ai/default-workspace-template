@@ -18,7 +18,9 @@ from share_gateway.web_client import (
 from workspace_layout.identity import RequestIdentity, is_vouched_web_client_request
 
 
-def test_the_gateway_vouches_for_exactly_the_paths_the_shell_names() -> None:
+def test_the_gateway_vouches_for_paths_under_the_prefix_the_shell_serves_its_workspace_routes_at() -> (
+    None
+):
     assert WEB_CLIENT_ROUTE_PATH_PREFIX == f"{WORKSPACE_ROUTE_PREFIX}/"
     assert all(
         path.startswith(WEB_CLIENT_ROUTE_PATH_PREFIX)

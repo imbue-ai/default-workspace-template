@@ -64,7 +64,10 @@ from imbue.system_interface.workspace_routes import TIMEZONE_ROUTE
 from imbue.system_interface.workspace_routes import WORKSPACE_ROUTE_TABLE
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
+_OWNER = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 _GRANTEE = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
+# A workspace's share address, which is where a page of another origin reaches the shell through the gateway.
+_SHARE_BASE_URL = "https://shell-5f3c.ws.example"
 _VISITING_AGENT = RequestIdentity(owner=False, agent_id="grant-51c0", agent_name="scout", granter="user-owner-9c21")
 _STORAGE_REFUSED = "The storage does not accept the credentials this workspace holds for it."
 # The apps of ``write_two_app_registry`` as the sharing read lists them: neither is internal.
@@ -104,10 +107,21 @@ def backup_workspace(app: Flask, fake_restic_control: Path, monkeypatch: pytest.
 
 
 @pytest.mark.parametrize(("method", "path"), sorted(WORKSPACE_ROUTE_TABLE))
+@pytest.mark.parametrize(
+    ("stamped", "reached_at"),
+    [
+        ({}, None),
+        # Through the share, with a session the gateway accepted, from a page it did not vouch for.
+        (identity_headers(_OWNER), _SHARE_BASE_URL),
+    ],
+    ids=["with-no-identity", "as-an-owner-the-gateway-did-not-vouch-for"],
+)
 def test_every_workspace_route_is_refused_from_a_page_of_another_origin(
-    client: FlaskClient, app: Flask, method: str, path: str
+    client: FlaskClient, app: Flask, method: str, path: str, stamped: dict[str, str], reached_at: str | None
 ) -> None:
-    response = client.open(path, method=method, headers=CROSS_SITE_FETCH_HEADERS, json={})
+    response = client.open(
+        path, method=method, headers={**CROSS_SITE_FETCH_HEADERS, **stamped}, base_url=reached_at, json={}
+    )
 
     assert response.status_code == 403
     assert response.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
@@ -129,9 +143,7 @@ def test_every_workspace_route_refuses_an_identity_header_that_does_not_parse(
 
 
 def test_a_grantee_of_the_whole_workspace_is_admitted_as_the_owner_is(client: FlaskClient) -> None:
-    grantee = RequestIdentity(owner=False, user_id="user-visitor-0001", email="visitor@example.com")
-
-    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(grantee), json={"zone": "Europe/Berlin"})
+    response = client.put(TIMEZONE_ROUTE, headers=identity_headers(_GRANTEE), json={"zone": "Europe/Berlin"})
 
     assert response.status_code == 200
     assert response.get_json() == {"zone": "Europe/Berlin", "is_written": True}
