@@ -14,7 +14,7 @@ the two must agree. The shell's status route answers the same version from the s
 import re
 from typing import Final
 
-from workspace_update_control.support import run_command
+from workspace_update_control.support import COMMAND_NOT_RUN_EXIT_CODE, run_command
 
 _UPDATE_SELF_SUBJECT_PREFIX: Final[str] = "update-self: merge upstream template ("
 UPDATE_SELF_MARKER_COMMAND: Final[tuple[str, ...]] = (
@@ -96,15 +96,22 @@ def resolve_template_ref(marker_subject: str, described_tag: str) -> str:
     return marker_ref
 
 
-def _git_output(command: tuple[str, ...], repo_root: str) -> str:
-    """A read-only git command's output; '' when it could not run or found nothing (a checkout with no tag)."""
+def _git_output(command: tuple[str, ...], repo_root: str) -> str | None:
+    """A read-only git command's output; '' when git found nothing (a checkout with no tag), and None when git
+    could not be run or did not finish in time, which says nothing of the checkout."""
     result = run_command(command, _GIT_TIMEOUT_SECONDS, cwd=repo_root)
+    if result.returncode == COMMAND_NOT_RUN_EXIT_CODE:
+        return None
     return result.stdout if result.returncode == 0 else ""
 
 
-def read_installed_ref(repo_root: str) -> str:
-    """The version of the checkout at ``repo_root``; '' when it names none."""
-    return resolve_template_ref(
-        _git_output(UPDATE_SELF_MARKER_COMMAND, repo_root),
-        _git_output(DESCRIBE_COMMAND, repo_root),
-    )
+def read_installed_ref(repo_root: str) -> str | None:
+    """The version of the checkout at ``repo_root``; '' when it names none, and None when git could not be
+    asked."""
+    marker_subject = _git_output(UPDATE_SELF_MARKER_COMMAND, repo_root)
+    if marker_subject is None:
+        return None
+    described_tag = _git_output(DESCRIBE_COMMAND, repo_root)
+    if described_tag is None:
+        return None
+    return resolve_template_ref(marker_subject, described_tag)

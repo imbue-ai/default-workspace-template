@@ -1,5 +1,6 @@
 """The workspace arming its own updates: the decision, and the minute that makes it against a staged workspace."""
 
+import os
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -503,6 +504,22 @@ def test_the_checkouts_version_is_read_once_while_the_run_record_stands_still(
     # The checkout moved without a run saying so, which is read again only once the hour is out.
     assert read_installed_version(_NOW + 60) == _INSTALLED
     assert read_installed_version(_NOW + 60 * 60) == "minds-v0.10.0"
+
+
+def test_a_read_of_the_checkouts_version_that_git_could_not_make_is_not_kept(
+    staged: StagedUpdateWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", _INSTALLED))
+    path_with_git = os.environ["PATH"]
+    # The stub tools alone, so there is no git to run.
+    monkeypatch.setenv("PATH", str(staged.bin_dir))
+
+    assert read_installed_version(_NOW) == ""
+    assert staged.read_state("installed-version.json") is None
+
+    monkeypatch.setenv("PATH", path_with_git)
+
+    assert read_installed_version(_NOW + 60) == _INSTALLED
 
 
 def test_the_checkouts_version_is_read_again_once_a_run_records_a_verdict(

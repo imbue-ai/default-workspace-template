@@ -179,7 +179,10 @@ def _run_identity(run: Mapping[str, object] | None) -> list[object]:
 
 
 def read_installed_version(now: float) -> str:
-    """The version of the checkout, read from git at most once an hour while the run record stands still."""
+    """The version of the checkout, read from git at most once an hour while the run record stands still.
+
+    A read git could not make is not kept, so the next minute asks again; it answers '' for this one.
+    """
     identity = _run_identity(read_json_object(RUN_RECORD_PATH))
     kept = read_json_object(INSTALLED_VERSION_FILE_PATH)
     if kept is not None and kept.get("run_identity") == identity:
@@ -193,6 +196,11 @@ def read_installed_version(now: float) -> str:
         ):
             return template_ref
     template_ref = read_installed_ref(".")
+    if template_ref is None:
+        write_log_line(
+            "could not read the checkout's version from git; asking again next minute"
+        )
+        return ""
     write_json_atomically(
         INSTALLED_VERSION_FILE_PATH,
         {
