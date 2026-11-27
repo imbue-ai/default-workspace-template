@@ -80,6 +80,7 @@ BackupDestinationRecorder = Callable[[Path, Mapping[str, object]], object]
 _INTERRUPTED_DETAIL: Final[str] = (
     "this part was being written when the step was interrupted, so it is not written again"
 )
+_NOT_AN_OBJECT_DETAIL: Final[str] = "this part is not a JSON object"
 _UNFINISHED_DETAIL: Final[str] = (
     "The step ended before it had applied every part of the document."
 )
@@ -142,9 +143,10 @@ def _backup_destination_writer(
     return write
 
 
-def _parts_of(document_bytes: bytes) -> dict[str, Mapping[str, object]]:
-    """The parts the document carries, by name. Raises ``InitialDataPartRefusedError`` for a document that is not
-    one this template applies, with a reason that quotes none of its values."""
+def _parts_of(document_bytes: bytes) -> dict[str, object]:
+    """The parts the document carries, by name, each as the document has it. Raises
+    ``InitialDataPartRefusedError`` for a document that is not one this template applies, with a reason that
+    quotes none of its values."""
     try:
         document = json.loads(document_bytes)
     except json.JSONDecodeError as e:
@@ -165,17 +167,11 @@ def _parts_of(document_bytes: bytes) -> dict[str, Mapping[str, object]]:
             f"The document's schema is {schema}, and this workspace's template applies up to "
             f"{INITIAL_DATA_SCHEMA}."
         )
-    parts: dict[str, Mapping[str, object]] = {}
-    for name in (PROFILE_PART, TIMEZONE_PART, UPDATE_SETTINGS_PART, BACKUPS_PART):
-        part = document.get(name)
-        if part is None:
-            continue
-        if not isinstance(part, dict):
-            raise InitialDataPartRefusedError(
-                f"The document's {name} is not a JSON object."
-            )
-        parts[name] = part
-    return parts
+    return {
+        name: document[name]
+        for name in (PROFILE_PART, TIMEZONE_PART, UPDATE_SETTINGS_PART, BACKUPS_PART)
+        if document.get(name) is not None
+    }
 
 
 def _keep(
@@ -238,8 +234,8 @@ def apply_initial_data(
 
     With no document nothing is written and the recorded status is answered as it is. A document every part of
     which was written is recorded as applied and deleted, since it holds storage credentials. One that does not
-    parse, whose schema this template does not know, or a part of which its writer refuses, is left where it is
-    with the reason recorded; the parts that could be written are written all the same.
+    parse, whose schema this template does not know, or a part of which is no object or is refused by its writer,
+    is left where it is with the reason recorded; the parts that could be written are written all the same.
 
     A part is written at most once. A later start with the same document tries the parts that were refused and
     leaves every part that was written as the workspace now has it. A part the step was interrupted in the
@@ -301,6 +297,9 @@ def apply_initial_data(
     refusals: list[str] = []
     for name, part in parts.items():
         if name in progress_by_part:
+            continue
+        if not isinstance(part, dict):
+            refusals.append(f"{name}: {_NOT_AN_OBJECT_DETAIL}")
             continue
         # Kept before the part is written: were the step to end between the write and its record, a later start
         # would otherwise write the part again, over whatever the user chose in between.

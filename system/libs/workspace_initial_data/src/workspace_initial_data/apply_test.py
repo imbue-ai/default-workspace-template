@@ -243,7 +243,6 @@ def test_a_timezone_part_of_the_wrong_shape_is_refused(
             '{"schema": 2, "timezone": {"zone": "Europe/Berlin"}}',
             "schema is 2, and this workspace's template applies up to 1",
         ),
-        ('{"schema": 1, "backups": "IMBUE_CLOUD"}', "backups is not a JSON object"),
     ],
 )
 def test_a_document_this_template_cannot_apply_stays_and_reads_failed_with_nothing_written(
@@ -268,6 +267,29 @@ def test_a_document_this_template_cannot_apply_stays_and_reads_failed_with_nothi
     assert stat.S_IMODE(document_path.stat().st_mode) == 0o600
     assert not (workspace_root / USER_TIMEZONE_RELATIVE_PATH).exists()
     assert backup_destination.requests == []
+
+
+def test_a_part_that_is_not_an_object_is_refused_and_the_others_are_written(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(backups="IMBUE_CLOUD")
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == failed_status("backups: this part is not a JSON object")
+    assert read_initial_data_status(workspace_root) == status
+    assert document_path.exists()
+    assert backup_destination.requests == []
+    assert _stored_profile(workspace_root) == PROFILE_PART_DOCUMENT
+    assert read_user_timezone(workspace_root) == "Europe/Berlin"
+    assert read_update_settings() == _STAGED_SETTINGS
+    assert read_initial_data_record(workspace_root).progress_by_part == {
+        "profile": PartProgress.WRITTEN,
+        "timezone": PartProgress.WRITTEN,
+        "update_settings": PartProgress.WRITTEN,
+    }
 
 
 def test_only_the_part_that_was_refused_is_tried_again_and_what_was_written_is_left_as_it_now_is(
