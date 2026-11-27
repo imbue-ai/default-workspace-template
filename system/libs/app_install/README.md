@@ -221,7 +221,7 @@ The template release the workspace is on is the nearest `minds-v` tag in its his
 `[publish] exclude` is gitignore syntax, relative to the app's directory.
 The tree is refused, with nothing left waiting, when:
 
-- it has no `LICENSE` file at its root (`refused`): a published app says on what terms it is shared, whoever can see it for now. The `publish-app` skill's worker writes an MIT one for an app that has none;
+- it has no `LICENSE` file at its root (`refused`): a published app says on what terms it is shared, whoever can see it for now. The `publish-app` skill's worker writes an MIT one for an app built here that has none, and none for an app that was installed from someone else's repository, which keeps the license it came with and cannot be published without one;
 - its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
 - the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
 - a file in it names, by its path under `.agents/skills/` or `data/.skills/`, a skill the app does not carry (`outside_skills_found`, with each line under `uses`). See "Skills the app does not carry" below;
