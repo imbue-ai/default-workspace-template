@@ -5,12 +5,15 @@ live here:
 
 - Files Imbue Studio injects (for example `share.env` for the sharing stack's
   materials).
-- The backup credentials, which the workspace's own `backup-setup` program writes
+- The backup credentials, which the workspace writes itself
   (`system/libs/workspace_backup_setup/`): `restic.env`, the repository, the
-  variables of its storage, and the repository's password, which the workspace
-  makes itself; `restic.env.pending`, the credentials of a setup that has not
-  finished; and `restic.env.<timestamp>`, every `restic.env` that was replaced or
-  turned off, kept so that its repository can be opened again. An Imbue Studio
+  variables of its storage, and the repository's password, which the workspace's
+  `backup-setup` program makes and installs; `restic.env.pending`, the credentials
+  of a setup that has not finished, which a request that names a destination also
+  writes (the shell's backup route, and the boot's `apply-initial-data` step); and
+  `restic.env.<timestamp>`, every `restic.env` that was replaced or turned off and
+  every pending password that was dropped, kept so that its repository can be
+  opened again. An Imbue Studio
   desktop from before the workspace set up its own backups writes `restic.env`
   itself.
 - Files an agent asked the user for through the chat's secret card (the
