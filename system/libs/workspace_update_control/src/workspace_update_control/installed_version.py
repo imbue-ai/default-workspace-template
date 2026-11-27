@@ -9,7 +9,7 @@ reaches the release it brought in.
 This is how the Imbue Studio desktop reads the version too (``workspace_version.py`` in the mngr repository), and
 the two must agree. The shell's status route answers the same version from the same rules
 (``system_interface.template_ref``). A read fetches nothing: a checkout that names no version answers '', and the
-dispatcher fetches the template's release tags into one that does (``release_tags``).
+dispatcher fetches the template's release tags into such a checkout (``release_tags``).
 """
 
 import re
