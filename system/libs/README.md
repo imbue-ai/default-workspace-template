@@ -17,7 +17,8 @@ README for details.
   the mngr commit `pyproject.toml` pins) under the package they had before
   it: an app's request guard, its route helpers, and the OpenAPI document
   built from its routes. Kept for apps built before the SDK, and as what
-  a scaffolded app depends on to get the SDK until `imbue-app-sdk` is on PyPI.
+  an app built in the workspace depends on to get the workspace's SDK; a
+  published app depends on the released `imbue-app-sdk` instead.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.

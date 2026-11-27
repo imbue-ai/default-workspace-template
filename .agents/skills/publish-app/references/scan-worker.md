@@ -17,9 +17,10 @@ time these fields are written, so read the app properly.
 - 1. Leave out what the user asked to leave out
 - 2. Take in the skills the app needs
 - 3. Read the app and write what an adopter needs to know
-- 4. Settle the version and write it
-- 5. Bring the README up to date
-- 6. Check, commit, report
+- 4. Have the app depend on the released SDK
+- 5. Settle the version and write it
+- 6. Bring the README up to date
+- 7. Check, commit, report
 
 ## Before anything else
 
@@ -161,7 +162,61 @@ account id) is better removed than described. If it is quick and safe, make it
 a setting the app reads and note it under `[[adaptation]]`; if it is not, note
 it and say so in your report.
 
-## 4. Settle the version and write it
+## 4. Have the app depend on the released SDK
+
+Skip this step for an app with no `pyproject.toml`, and for one whose
+`pyproject.toml` does not name `app-schema`.
+
+An app built in a workspace gets the app SDK (`imbue.app_sdk`) from the
+workspace: its `pyproject.toml` depends on `app-schema` through a path into
+the workspace, which resolves nowhere else. A published app depends on the
+released SDK, `imbue-app-sdk` on PyPI. In
+`system/apps/<package>/pyproject.toml`:
+
+- in `dependencies`, replace `"app-schema"` with
+  `"imbue-app-sdk>=<version>,<1"`;
+- in the `dev` dependency group, replace `"app-schema[testing]"` with
+  `"imbue-app-sdk[testing]>=<version>,<1"`;
+- delete the `app-schema` line under `[tool.uv.sources]` with the comment
+  above it, and the table's heading when nothing is left under it;
+- under `[tool.uv]`, add `exclude-newer-package = { imbue-app-sdk = false }`,
+  so a fix to the SDK reaches the app without waiting out the two-week window
+  the line above it sets.
+
+`<version>` is the SDK the workspace runs, which is what the app was built
+and tested on. From your worktree root:
+
+```bash
+uv run --no-sync python -c 'from importlib.metadata import version; print(version("imbue-app-sdk"))'
+```
+
+An app from before the SDK imports `app_schema.*` and
+`workspace_layout.identity`. Change each import to the same name under
+`imbue.app_sdk`: `app_schema.routes` is `imbue.app_sdk.routes`,
+`app_schema.testing` is `imbue.app_sdk.app_testing`, and
+`workspace_layout.identity` is `imbue.app_sdk.identity`. Any other dependency
+that is a path into the workspace (`path = "../../..."`) has to go as well; if
+the app cannot do without it, report `stuck` and name it.
+
+Then make the app's lock and environment again, and run its tests on them:
+
+```bash
+(cd system/apps/<package> && uv lock && uv sync && uv run --no-sync pytest -q)
+```
+
+When `uv lock` finds no `imbue-app-sdk` that satisfies the range, the
+workspace runs an SDK newer than the newest released one:
+
+```bash
+curl -s https://pypi.org/pypi/imbue-app-sdk/json | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
+```
+
+Lower `<version>` to the one that prints and run the three commands again.
+If the app's tests pass there, go on. If they fail, or nothing is released,
+the app needs an SDK that is not out yet: report `stuck` and say so. Never
+point the dependency at a path or a git URL to get past this.
+
+## 5. Settle the version and write it
 
 Your task carries the version agreed with the user. A **major** version tells
 everyone who installed the app that they must act. If what you read in step 3
@@ -192,7 +247,7 @@ forward when the new one first runs, with a test of it. Whoever installs the
 update has only their own data and this app's code, and can skip versions, so
 the app keeps a migration for every shape a published version ever wrote.
 
-## 5. Bring the README up to date
+## 6. Bring the README up to date
 
 `system/apps/<package>/README.md` is the repository's landing page: the first
 thing a person sees, and what convinces them to install the app. Write it for
@@ -234,7 +289,7 @@ a person, in this order:
 Mock data only: no real names, addresses, messages or screenshots of the
 user's own data. Do not show the README to the user; the lead does that.
 
-## 6. Check, commit, report
+## 7. Check, commit, report
 
 Commit your work on your branch, then run all three, fixing what they report
 and committing again until they are clean:
@@ -266,6 +321,7 @@ Valid `name:` values: `question` (a gate, at any point), `done`, `stuck`. A
   `data/.apps/<name>/`), and what else you repointed;
 - what whoever installs the app will be asked for, in one plain line per
   table you wrote;
+- the `imbue-app-sdk` range the app now depends on, when step 4 changed it;
 - anything you could not determine, or left hardcoded and noted instead of
   changing.
 

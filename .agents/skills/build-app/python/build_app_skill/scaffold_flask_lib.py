@@ -234,14 +234,13 @@ markers = [
 [tool.uv]
 exclude-newer = "14 days"
 
-# CLEANUP: once imbue-app-sdk 0.1.0 is published to PyPI, depend on it directly: replace
-# "app-schema" with "imbue-app-sdk>=0.1,<1" and "app-schema[testing]" with
-# "imbue-app-sdk[testing]", drop this source entry, and add
-# `exclude-newer-package = {{ imbue-app-sdk = false }}` under [tool.uv].
-# Until then the app SDK (imbue.app_sdk) reaches this app through app-schema, which
-# depends on it. app-schema's own workspace sources apply in this lock, so the SDK and
-# imbue-common come from the commit the workspace pins mngr to; a source for either
-# here as well would be a second URL for one package, which uv refuses to lock.
+# An app built in a workspace runs on the workspace's own app SDK (imbue.app_sdk), which
+# reaches it through app-schema: that package depends on the SDK, and its workspace
+# sources apply in this lock, so the SDK and imbue-common come from the commit the
+# workspace pins mngr to and move with every update of the workspace. A source for
+# either here as well would be a second URL for one package, which uv refuses to lock.
+# Publishing the app replaces this with a dependency on the released imbue-app-sdk,
+# since a path into a workspace resolves nowhere else (the publish-app skill).
 [tool.uv.sources]
 app-schema = {{ path = "../../libs/app_schema", editable = true }}
 

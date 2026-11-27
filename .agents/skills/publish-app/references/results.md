@@ -79,7 +79,10 @@ assemble is what gets pushed.
   inside a workspace: a skill's package (have the worker take the skill in,
   as for `outside_skills_found`), or a `path = "../../libs/..."` entry under
   `[tool.uv.sources]` in its `pyproject.toml`, which resolves nowhere else.
-  For the second, stop, and tell the user the app cannot be published until
+  For `app-schema`, which is how an app built here gets the app SDK, have the
+  worker redo "Have the app depend on the released SDK" in its guide. For any
+  other path, or when the worker reports that the app needs an SDK that is
+  not released yet, stop, and tell the user the app cannot be published until
   that is changed.
 - `refused`: `detail` says why (no version in the manifest, a version not
   newer than the last published, a manifest that fails its check). Have the

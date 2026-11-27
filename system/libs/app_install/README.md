@@ -222,7 +222,7 @@ The tree is refused, with nothing left waiting, when:
 - its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
 - the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
 - a file in it names, by its path under `.agents/skills/` or `data/.skills/`, a skill the app does not carry (`outside_skills_found`, with each line under `uses`). See "Skills the app does not carry" below;
-- it holds a `pyproject.toml` whose lock is not what the project calls for (`lock_check_failed`). `uv lock --check` runs in the assembled directory, so an app that resolves only inside a workspace does not pass;
+- it holds a `pyproject.toml` whose lock is not what the project calls for (`lock_check_failed`). `uv lock --check` runs in the assembled directory, so an app that resolves only inside a workspace does not pass. An app built in a workspace is one until it is published: it gets the app SDK through a path dependency on `app-schema`, which the `publish-app` skill's worker replaces with the released `imbue-app-sdk`;
 - the app was installed and nobody has changed it, so it is its publisher's to publish (`refused`).
 
 The result names what an adopter will be asked for under `needs` (`permissions`, `secrets`, `llm`, `environment`, `dependencies`, `adaptation`).
