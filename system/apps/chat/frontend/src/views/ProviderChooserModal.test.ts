@@ -694,9 +694,14 @@ describe("a sign-in finished in the browser", () => {
   });
 
   describe("under a chrome that said it relays no sign-in", () => {
+    /** A tab as the browser hands one back for `window.open`. */
+    function blankTab() {
+      return { opener: window as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+    }
+
     /** A tab the browser hands back for `window.open`, and what was done with it. */
     function browserOpensTabs() {
-      const tab = { opener: window as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+      const tab = blankTab();
       const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
       return { tab, open };
     }
@@ -742,6 +747,34 @@ describe("a sign-in finished in the browser", () => {
       expect(tab.close).toHaveBeenCalledOnce();
       expect(tab.location.replace).not.toHaveBeenCalled();
       expect(root.textContent).toContain("the sign-in could not be started");
+    });
+
+    it("closes the tab of a click a newer click overtook, and shows the newer sign-in's page only in its own", async () => {
+      const older = blankTab();
+      const newer = blankTab();
+      vi.spyOn(window, "open")
+        .mockReturnValueOnce(older as unknown as Window)
+        .mockReturnValueOnce(newer as unknown as Window);
+      state.lanes = [lane(), CHATGPT];
+      let overtaken: () => void = () => undefined;
+      startFlow.mockImplementationOnce(() => new Promise<boolean>((resolve) => (overtaken = () => resolve(false))));
+      const root = await clickLane("anthropic");
+
+      (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      state.flow = { ...(startedFlow("code_then_wait", null) as object), url: "https://auth.openai.com/device" };
+      (root.querySelector('[data-e2e="lane-openai"]') as HTMLElement).click();
+      await settled();
+      abortFlow.mockClear();
+      overtaken();
+      await settled();
+
+      expect(older.close).toHaveBeenCalledOnce();
+      expect(older.location.replace).not.toHaveBeenCalled();
+      expect(newer.location.replace).toHaveBeenCalledExactlyOnceWith("https://auth.openai.com/device");
+      expect(newer.close).not.toHaveBeenCalled();
+      // The older start has no sign-in of its own left, and the newer one's is not ended for it.
+      expect(abortFlow).not.toHaveBeenCalled();
     });
 
     it("closes the tab and ends the sign-in when the chooser is taken down while the sign-in is still starting", async () => {
