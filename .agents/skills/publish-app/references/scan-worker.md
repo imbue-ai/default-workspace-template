@@ -190,6 +190,10 @@ and tested on. From your worktree root:
 uv run --no-sync python -c 'from importlib.metadata import version; print(version("imbue-app-sdk"))'
 ```
 
+The `<1` that follows it is the bound for a version that starts with `0.`:
+the range always ends at the major version after `<version>`'s own (`<2` for
+`1.4.0`).
+
 An app from before the SDK imports `app_schema.*` and
 `workspace_layout.identity`. Change each import to the same name under
 `imbue.app_sdk`: `app_schema.routes` is `imbue.app_sdk.routes`,
