@@ -153,7 +153,8 @@ def _open_repository(env_values: Mapping[str, str]) -> _ResticFailure | None:
         return _ResticFailure(
             detail="restic did not finish opening the repository in time."
         )
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        # ValueError: a value with a NUL in it, which no process can be handed.
         return _ResticFailure(detail=f"restic could not be run: {e}")
     if opened.returncode == 0:
         return None
@@ -168,7 +169,7 @@ def _initialize_repository(env_values: Mapping[str, str]) -> _ResticFailure | No
         initialized = init_repo(env_values)
     except subprocess.TimeoutExpired:
         return _ResticFailure(detail="restic init did not finish in time.")
-    except OSError as e:
+    except (OSError, ValueError) as e:
         return _ResticFailure(detail=f"restic could not be run: {e}")
     if initialized.returncode == 0:
         return None

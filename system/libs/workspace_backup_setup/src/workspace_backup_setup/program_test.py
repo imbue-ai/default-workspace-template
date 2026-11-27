@@ -561,6 +561,27 @@ def test_a_check_that_fails_for_any_other_reason_changes_nothing(
     assert workspace.state() == before
 
 
+def test_credentials_that_no_process_can_be_handed_end_the_check_and_change_nothing(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    """Another writer's file with a NUL inside a value is no environment a process can be started with."""
+    program = workspace.start_program()
+    workspace.restic_env.parent.mkdir(parents=True)
+    workspace.restic_env.write_text(
+        "RESTIC_REPOSITORY=s3:https://s3.example/bucket\n"
+        "AWS_SECRET_ACCESS_KEY=key\x00id\nRESTIC_PASSWORD=desktop-password\n"
+    )
+    program.run_pass()
+    before = workspace.state()
+    assert before.setup.state is BackupSetupState.READY
+
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    program.run_pass()
+
+    assert fake_restic_calls(fake_restic_control) == []
+    assert workspace.state() == before
+
+
 def test_storage_offered_for_the_repository_in_use_is_let_go_while_the_storage_accepts_what_is_held(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
