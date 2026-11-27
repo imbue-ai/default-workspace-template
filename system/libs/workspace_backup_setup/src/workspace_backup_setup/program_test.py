@@ -640,6 +640,36 @@ def test_storage_offered_for_the_repository_in_use_is_taken_once_the_storage_ref
     assert workspace.kept_aside() == [held]
 
 
+def test_storage_offered_for_the_repository_in_use_is_neither_taken_nor_let_go_while_the_storage_cannot_be_asked(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    program = _set_up_imbue_cloud(workspace, "token-a")
+    installed_text = workspace.restic_env.read_text()
+
+    set_fake_restic_mode(fake_restic_control, FAKE_RESTIC_FAILS)
+    workspace.request(imbue_cloud_request("token-b"))
+    program.run_pass()
+
+    state = workspace.state()
+    assert (state.setup.state, state.setup.retry_at, state.lease) == (
+        BackupSetupState.FAILED,
+        _NOW + 60.0,
+        None,
+    )
+    assert state.setup.detail.startswith(
+        "The credentials in use could not be checked: "
+    )
+    for credential in ("token-a", "token-b", "made-password-1"):
+        assert credential not in state.setup.detail
+    assert workspace.restic_env.read_text() == installed_text
+    offered = read_pending_env(
+        workspace.root, read_setup_record(workspace.root).request_id
+    )
+    assert offered is not None
+    assert offered["RESTIC_REST_PASSWORD"] == "token-b"
+    assert workspace.kept_aside() == []
+
+
 def test_storage_the_storage_refuses_leaves_the_setup_awaiting_storage_until_it_is_accepted(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
