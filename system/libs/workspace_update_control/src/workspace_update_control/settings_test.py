@@ -66,6 +66,9 @@ def test_settings_that_did_not_change_are_not_written_again(
     [
         {"channel": ""},
         {"channel": "../stable"},
+        # A final line break, which ``$`` would match ahead of.
+        {"channel": "stable\n"},
+        {"feed_base_url": "https://feed.example\n"},
         {"channel": "Stable"},
         {"feed_base_url": "file:///etc/passwd"},
         {"feed_base_url": "https://feed.example/a b"},

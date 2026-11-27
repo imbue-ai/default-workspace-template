@@ -36,8 +36,8 @@ from workspace_update_control.protocol import (
 )
 
 # A channel is named in a URL (``<feed>/<channel>-web.json``), so it is held to what a file name's stem can be.
-_CHANNEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_FEED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^https?://\S+$")
+_CHANNEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_FEED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"https?://\S+")
 _LAST_HOUR_OF_THE_DAY: Final[int] = 23
 _HOURS_PER_DAY: Final[int] = 24
 # The settings that are the workspace's own: a request that leaves one out keeps the stored value, and one that
@@ -103,11 +103,11 @@ def _is_hour(value: object) -> bool:
 
 def _refusal(settings: UpdateSettings) -> str:
     """Why ``settings`` cannot be stored; '' when they can."""
-    if _CHANNEL_PATTERN.match(settings.channel) is None:
+    if _CHANNEL_PATTERN.fullmatch(settings.channel) is None:
         return "channel is a release channel's name: lower-case letters, digits and single dashes."
     if (
         settings.feed_base_url
-        and _FEED_URL_PATTERN.match(settings.feed_base_url) is None
+        and _FEED_URL_PATTERN.fullmatch(settings.feed_base_url) is None
     ):
         return "feed_base_url is an http or https address, or empty where no feed is published."
     if not _is_hour(settings.window_start_hour) or not _is_hour(
