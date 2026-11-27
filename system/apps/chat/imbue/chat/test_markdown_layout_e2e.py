@@ -31,7 +31,6 @@ from imbue.chat.testing import running_workspace
 from imbue.chat.testing import tool_call_record
 from imbue.chat.testing import tool_result_record
 from imbue.chat.testing import user_record
-from imbue.system_interface.testing import find_free_port
 
 pytestmark = [
     pytest.mark.browser,
@@ -276,7 +275,7 @@ def test_a_reply_and_a_persons_message_keep_every_markdown_element_inside_their_
     crossing its bubble and without the transcript scrolling sideways; on a phone the wide table scrolls in its own
     box instead."""
     session = _reply_session(_kitchen_sink(_write_wide_picture(tmp_path)))
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session) as server:
+    with running_workspace(tmp_path, session_events=session) as server:
         chat, frame = _open_chat(page, server.chat_url, viewport)
         expect(chat.locator(".message-user-bubble").last).to_contain_text(_LONG_TOKEN, timeout=15000)
         page.screenshot(path=str(tmp_path / "markdown-reply-end.png"))
@@ -307,7 +306,7 @@ def test_a_running_steps_narration_and_opened_work_keep_every_markdown_element_i
     crossing the transcript's column and without the transcript scrolling sideways. The narration's tables paint
     their own text, since its shimmer's clipped gradient does not reach into them."""
     session = _running_step_session(_kitchen_sink(_write_wide_picture(tmp_path)))
-    with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session) as server:
+    with running_workspace(tmp_path, session_events=session) as server:
         chat, frame = _open_chat(page, server.chat_url, viewport)
         expect(chat.locator(".pv-tl-narration .markdown-table-scroll table")).to_have_count(2, timeout=15000)
         page.screenshot(path=str(tmp_path / "markdown-narration.png"))

@@ -14,13 +14,14 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ### Changed
 
-- Changed: The `datalib` skill installs datalib v0.56.0, which renames the sync runner to `datalib-pipeline` with verb subcommands (`datalib-pipeline sync <data_root> <step>`; `datalib-dag` is gone), adds Markdown (Local) and Google Drive folder sources and a Library card, and re-keys the Claude Code raw store on first start.
+- Changed: The `datalib` skill installs datalib v0.57.1 (was v0.55.0), which renames the sync runner to `datalib-pipeline` with verb subcommands (`datalib-pipeline sync <data_root> <step>`; `datalib-dag` is gone), adds Markdown (Local), Google Drive folder and Discord sources, a Library card and a Google method on `contacts`, speeds up search over a large library, and re-keys the Claude Code raw store on first start.
 - Changed: Major skill restructure: `harden-worker` moved from `.agents/shared/worker/` to `.agents/skills/harden-worker/`, references used by several skills moved into `.agents/shared/references/` (including new `review-gates.md`, `apply-exit-codes.md` and `apps/`), and the `dealing-with-the-unexpected` skill was deleted.
 - Changed: `build-app` and `update-app` are rewritten as short numbered checklists (SKILL.md under 14 KB each) with detail in references; `build-app` now asks for approval once, at the mock, instead of first proposing a plan and waiting.
 - Changed: A message sent to a chat from outside it (launcher, Getting Started tile, `workspace-layout open chat --launch`) while its first agent is starting is delivered to that agent instead of being left unsent in the composer.
 - Changed: `submit-upstream-changes` adds the changelog entry CI requires and waits for green CI before reporting the PR ready.
 - Changed: Claude chats tell progress updates from reasoning with mngr_claude's common-transcript rule, matching `mngr transcript`.
 - Changed: Latchkey is bumped to 3.26.0 (was 3.22.1).
+- Changed: The `datalib` skill covers a workspace's first datalib use and checking a synced copy is complete before answering from it, deferring per-source details to `datalib-step help agent` and `datalib-step help <type>`.
 
 ### Fixed
 

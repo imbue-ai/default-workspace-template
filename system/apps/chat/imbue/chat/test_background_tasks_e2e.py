@@ -34,7 +34,6 @@ from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.testing import find_free_port
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RUNNER = _REPO_ROOT / "system" / "scripts" / "workspace_bare_scripts" / "run_in_background.py"
@@ -50,8 +49,6 @@ def _waiting_workspace(tmp_path: Path, messenger: RecordingMngrMessenger) -> Gen
     """The served workspace with its fixture chat between turns, its markers under ``tmp_path``, and its poller on."""
     with running_workspace(
         tmp_path,
-        find_free_port(),
-        find_free_port(),
         additional_agents=((_SUCCESSOR_ID, "Chat-successor"),),
         messenger=messenger,
         background_tasks_root=tmp_path / "background_tasks",

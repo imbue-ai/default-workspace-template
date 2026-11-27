@@ -50,7 +50,6 @@ from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.testing import find_free_port
 
 pytestmark = pytest.mark.real_claude
 
@@ -144,9 +143,7 @@ def test_a_claude_turn_that_ends_on_a_background_bash_command_leaves_its_chat_wa
         "Do not wait for it or check on it. Reply with the single word started. "
         "When it finishes, reply with the single word finished."
     )
-    with running_workspace(
-        tmp_path, find_free_port(), find_free_port(), background_tasks_root=marker_root
-    ) as workspace:
+    with running_workspace(tmp_path, background_tasks_root=marker_root) as workspace:
         manager = workspace.chat_state.agent_manager
         agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
         assert agent is not None
