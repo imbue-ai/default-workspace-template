@@ -75,6 +75,28 @@ def test_a_document_is_applied_once_each_part_through_its_writer_and_then_delete
     assert not document_path.exists()
 
 
+def test_a_member_this_template_does_not_know_is_ignored_and_the_parts_it_knows_are_applied(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(
+        host_dir, initial_data_document(a_part_of_a_later_creator={"anything": 1})
+    )
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == _APPLIED
+    assert read_initial_data_status(workspace_root) == _APPLIED
+    assert read_user_timezone(workspace_root) == "Europe/Berlin"
+    assert backup_destination.requests == [(workspace_root, BACKUPS_PART_DOCUMENT)]
+    assert set(read_initial_data_record(workspace_root).progress_by_part) == {
+        "profile",
+        "timezone",
+        "update_settings",
+        "backups",
+    }
+    assert not document_path.exists()
+
+
 def test_a_later_start_with_no_document_applies_nothing_and_keeps_the_status(
     workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
 ) -> None:
