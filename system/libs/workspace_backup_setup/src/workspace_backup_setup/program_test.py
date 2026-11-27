@@ -29,6 +29,7 @@ from workspace_backup_setup.state import (
     read_backup_credentials,
     read_backup_state,
     read_setup_record,
+    write_setup_record,
 )
 from workspace_backup_setup.testing import (
     FAKE_RESTIC_FAILS,
@@ -620,6 +621,39 @@ def test_storage_offered_for_the_repository_in_use_is_let_go_while_the_storage_a
     assert workspace.restic_env.read_text() == installed_text
     assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
     assert workspace.kept_aside() == []
+
+
+def test_an_offer_left_beside_credentials_recorded_as_kept_is_let_go_by_the_program_that_starts_next(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    """The program records that it keeps the credentials in use before it drops the offer, so one that stops
+    between the two leaves a ready setup with the offer beside it, and never an unfinished one with no storage."""
+    _set_up_imbue_cloud(workspace, "token-a")
+    installed_text = workspace.restic_env.read_text()
+    refuse_fake_restic_token(fake_restic_control, "token-b")
+    workspace.request(imbue_cloud_request("token-b"))
+    asked = read_setup_record(workspace.root)
+    write_setup_record(
+        workspace.root,
+        SetupRecord(
+            request_id=asked.request_id,
+            destination=asked.destination,
+            repository=asked.repository,
+            state=BackupSetupState.READY,
+            installed_digest=env_digest(installed_text),
+        ),
+    )
+    assert (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
+
+    workspace.start_program().run_pass()
+
+    state = workspace.state()
+    assert (state.setup.state, state.credentials_digest) == (
+        BackupSetupState.READY,
+        env_digest(installed_text),
+    )
+    assert workspace.restic_env.read_text() == installed_text
+    assert not (workspace.root / PENDING_ENV_RELATIVE_PATH).exists()
 
 
 def test_storage_offered_for_the_repository_in_use_is_taken_once_the_storage_refuses_what_is_held(
