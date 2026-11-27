@@ -240,10 +240,17 @@ def read_channel_template_ref(repo_root: Path) -> str:
             "again, or name the version to update to."
         )
     channel = settings.get("channel")
+    feed_base_url = settings.get("feed_base_url")
+    if not isinstance(feed_base_url, str) or not feed_base_url:
+        raise ChannelVersionUnavailableError(
+            "this workspace's update settings name no release feed, so it reads no version "
+            f"for its release channel ({channel}) and there is no release to update to by "
+            "default. Name the version to update to."
+        )
     read = _read_json_object(repo_root / _CHANNEL_VERSION_PATH) or {}
-    is_this_channels = read.get("channel") == channel and read.get(
-        "feed_base_url"
-    ) == settings.get("feed_base_url")
+    is_this_channels = (
+        read.get("channel") == channel and read.get("feed_base_url") == feed_base_url
+    )
     template_ref = read.get("template_ref") if is_this_channels else None
     if isinstance(template_ref, str) and template_ref:
         return template_ref

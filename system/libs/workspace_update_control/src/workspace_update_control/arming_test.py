@@ -805,7 +805,7 @@ def _sweep_as_a_client_that_names_its_version(
 def test_a_client_that_names_its_newest_version_holds_the_workspace_to_it_while_it_keeps_asking(
     staged: StagedUpdateWorkspace,
 ) -> None:
-    """A desktop from before the workspace armed its own updates names its newest version in every request."""
+    """A desktop from before the workspace armed its own updates names its newest version when it refreshes."""
     feed = _stage_a_workspace_behind_its_channel(staged)
     _sweep_as_a_client_that_names_its_version(staged, feed, _NOW)
 

@@ -277,6 +277,15 @@ def test_a_file_larger_than_any_channels_file_is_unreadable(local_feed: str) -> 
         fetch_channel_file(channel_file_url(local_feed, OVERSIZED_FEED_CHANNEL))
 
 
+def test_an_address_no_request_can_be_made_for_is_unreadable_and_says_why() -> None:
+    started_at = time.monotonic()
+
+    with pytest.raises(ChannelFileUnreadableError, match="Invalid IPv6 URL"):
+        fetch_channel_file("https://[feed.example/stable-web.json")
+
+    assert time.monotonic() - started_at < 5
+
+
 def test_an_address_that_is_not_http_is_never_opened(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:

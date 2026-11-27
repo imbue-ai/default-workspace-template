@@ -84,7 +84,8 @@ _ALREADY_INITIALIZED_MARKERS: Final[tuple[str, ...]] = (
 )
 _WRONG_PASSWORD_MARKER: Final[str] = "wrong password"
 # How a storage says it does not accept the credentials it was shown, in restic's words and in the storage's own:
-# the backup store's and any REST server's 401 or 403, and an S3 storage's codes with restic's rendering of them.
+# the backup store's and any REST server's 401 or 403, and an S3 storage's codes with its message for each, which
+# is what restic prints where the storage sent one.
 _STORAGE_REFUSAL_MARKERS: Final[tuple[str, ...]] = (
     "(401)",
     "(403)",
@@ -93,6 +94,7 @@ _STORAGE_REFUSAL_MARKERS: Final[tuple[str, ...]] = (
     "accessdenied",
     "invalidaccesskeyid",
     "invalid access key",
+    "access key id you provided does not exist",
     "signaturedoesnotmatch",
     "request signature we calculated does not match",
 )
@@ -151,7 +153,8 @@ def _open_repository(env_values: Mapping[str, str]) -> _ResticFailure | None:
         return _ResticFailure(
             detail="restic did not finish opening the repository in time."
         )
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        # ValueError: a value with a NUL in it, which no process can be handed.
         return _ResticFailure(detail=f"restic could not be run: {e}")
     if opened.returncode == 0:
         return None
@@ -166,7 +169,7 @@ def _initialize_repository(env_values: Mapping[str, str]) -> _ResticFailure | No
         initialized = init_repo(env_values)
     except subprocess.TimeoutExpired:
         return _ResticFailure(detail="restic init did not finish in time.")
-    except OSError as e:
+    except (OSError, ValueError) as e:
         return _ResticFailure(detail=f"restic could not be run: {e}")
     if initialized.returncode == 0:
         return None

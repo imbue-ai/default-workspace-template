@@ -6,9 +6,9 @@ updates to it. The workspace reads the file itself, at most once an hour, and ke
 ``channel-version.json`` with how the last read went, so a client shows what is available without reading the
 feed, and a read that fails leaves the last version on display.
 
-A client from before the workspace read the feed names the newest version it knows in every request
-(``ceiling``). While such a client keeps asking, its version bounds the channel's: that client's own build is what
-it was verified against.
+A client from before the workspace read the feed names the newest version it knows (``ceiling``) when it arms,
+starts, or refreshes an armed schedule. While such a client keeps asking, its version bounds the channel's: that
+client's own build is what it was verified against.
 """
 
 import http.client
@@ -89,8 +89,8 @@ def _read_address(
     if not url.startswith(("https://", "http://")):
         failures.append("%s is not an http address" % url)
         return
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
+        request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read(_MAX_CHANNEL_FILE_BYTES + 1)
     except (OSError, http.client.HTTPException, ValueError) as exc:

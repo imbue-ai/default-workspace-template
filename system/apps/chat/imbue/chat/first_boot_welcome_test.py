@@ -101,3 +101,15 @@ def test_the_debt_stays_while_the_app_stops_before_it_knows_its_agents(tmp_path:
 
     assert owed.exists()
     assert manager.get_provisional_chats() == []
+
+
+def test_the_debt_stays_when_the_chat_cannot_be_written(tmp_path: Path) -> None:
+    not_a_directory = tmp_path / "taken"
+    not_a_directory.write_text("")
+    manager = _manager_that_knows_its_agents(not_a_directory / "chats")
+    owed = _owe_a_welcome_chat(tmp_path)
+
+    open_welcome_chat_owed_from_first_boot(manager, owed, threading.Event())
+
+    assert owed.exists()
+    assert manager.get_provisional_chats() == []

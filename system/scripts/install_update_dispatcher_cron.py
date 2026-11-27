@@ -9,7 +9,7 @@ dispatcher every minute. It puts workspace_update_control's source on sys.path, 
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- the boot runs it before it re-syncs the venv, and it imports only the stdlib-only workspace_update_control
+# import-path: no-venv -- the boot runs it with the machine's own python3, and it imports only the stdlib-only workspace_update_control
 sys.path.insert(
     0,
     str(

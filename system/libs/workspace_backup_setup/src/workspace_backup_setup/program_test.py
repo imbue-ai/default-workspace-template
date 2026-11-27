@@ -41,6 +41,7 @@ from workspace_backup_setup.testing import (
     own_storage_request,
     refuse_fake_restic_token,
     set_fake_restic_mode,
+    word_fake_restic_refusals,
 )
 
 _NOW = 1_795_000_000.0
@@ -492,6 +493,59 @@ def test_a_storage_that_refuses_the_credentials_in_use_leaves_the_setup_awaiting
     assert workspace.state().setup.state is BackupSetupState.READY
 
 
+@pytest.mark.parametrize(
+    "words",
+    [
+        "Fatal: unable to open config file: unexpected HTTP response (403): 403 Forbidden",
+        "Fatal: unable to open config file: Stat: Access Denied.",
+        "Fatal: unable to open config file: Stat: The AWS Access Key Id you provided does not exist in our records.",
+        "Fatal: unable to open config file: Stat: The access key ID you provided does not exist in our records.",
+        "Fatal: unable to open config file: Stat: Error response code InvalidAccessKeyId.",
+        "Fatal: unable to open config file: Stat: The request signature we calculated does not match the signature"
+        " you provided. Check your key and signing method.",
+    ],
+    ids=[
+        "rest-403",
+        "s3-access-denied",
+        "s3-unknown-key-as-aws-says-it",
+        "s3-unknown-key-as-minio-says-it",
+        "s3-unknown-key-by-its-code",
+        "s3-signature-mismatch",
+    ],
+)
+def test_each_way_a_storage_says_it_does_not_accept_the_credentials_leaves_the_setup_awaiting_storage(
+    workspace: _Workspace, fake_restic_control: Path, words: str
+) -> None:
+    program = _set_up_imbue_cloud(workspace, "token-a")
+
+    refuse_fake_restic_token(fake_restic_control, "token-a")
+    word_fake_restic_refusals(fake_restic_control, words)
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    program.run_pass()
+
+    state = workspace.state()
+    assert (state.setup.state, state.setup.detail) == (
+        BackupSetupState.AWAITING_STORAGE,
+        _STORAGE_REFUSED,
+    )
+
+
+def test_a_password_that_opens_no_key_is_not_the_storage_refusing_the_credentials_in_use(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    program = _set_up_imbue_cloud(workspace, "token-a")
+    before = workspace.state()
+
+    refuse_fake_restic_token(fake_restic_control, "token-a")
+    word_fake_restic_refusals(
+        fake_restic_control, "Fatal: wrong password or no key found"
+    )
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    program.run_pass()
+
+    assert workspace.state() == before
+
+
 def test_a_check_that_fails_for_any_other_reason_changes_nothing(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
@@ -504,6 +558,27 @@ def test_a_check_that_fails_for_any_other_reason_changes_nothing(
     program.run_pass()
 
     assert len(fake_restic_calls(fake_restic_control)) == calls_before + 1
+    assert workspace.state() == before
+
+
+def test_credentials_that_no_process_can_be_handed_end_the_check_and_change_nothing(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    """Another writer's file with a NUL inside a value is no environment a process can be started with."""
+    program = workspace.start_program()
+    workspace.restic_env.parent.mkdir(parents=True)
+    workspace.restic_env.write_text(
+        "RESTIC_REPOSITORY=s3:https://s3.example/bucket\n"
+        "AWS_SECRET_ACCESS_KEY=key\x00id\nRESTIC_PASSWORD=desktop-password\n"
+    )
+    program.run_pass()
+    before = workspace.state()
+    assert before.setup.state is BackupSetupState.READY
+
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    program.run_pass()
+
+    assert fake_restic_calls(fake_restic_control) == []
     assert workspace.state() == before
 
 
