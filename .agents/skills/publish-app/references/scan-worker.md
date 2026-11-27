@@ -210,13 +210,14 @@ When `uv lock` finds no `imbue-app-sdk` that satisfies the range, the
 workspace runs an SDK newer than the newest released one:
 
 ```bash
-curl -s https://pypi.org/pypi/imbue-app-sdk/json | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
+curl -s https://pypi.org/pypi/imbue-app-sdk/json | python3 -c 'import json, sys; print(json.load(sys.stdin).get("info", {}).get("version", "none"))'
 ```
 
-Lower `<version>` to the one that prints and run the three commands again.
-If the app's tests pass there, go on. If they fail, or nothing is released,
-the app needs an SDK that is not out yet: report `stuck` and say so. Never
-point the dependency at a path or a git URL to get past this.
+It prints the newest release, or `none` when no SDK has been released.
+Lower `<version>` to the release that prints and run the three commands
+again. If the app's tests pass there, go on. If they fail, or it printed
+`none`, the app needs an SDK that is not out yet: report `stuck` and say so.
+Never point the dependency at a path or a git URL to get past this.
 
 ## 5. Settle the version and write it
 
