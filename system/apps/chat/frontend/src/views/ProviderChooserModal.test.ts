@@ -744,6 +744,24 @@ describe("a sign-in finished in the browser", () => {
       expect(root.textContent).toContain("the sign-in could not be started");
     });
 
+    it("closes the tab and ends the sign-in when the chooser is taken down while the sign-in is still starting", async () => {
+      const { tab } = browserOpensTabs();
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      let started: () => void = () => undefined;
+      startFlow.mockImplementationOnce(() => new Promise<boolean>((resolve) => (started = () => resolve(true))));
+      const root = await clickLane("anthropic");
+
+      m.render(root, null);
+      abortFlow.mockClear();
+      started();
+      await settled();
+
+      expect(tab.location.replace).not.toHaveBeenCalled();
+      expect(tab.close).toHaveBeenCalledOnce();
+      // The sign-in that started after the chooser went belongs to nobody, so it is ended.
+      expect(abortFlow).toHaveBeenCalledOnce();
+    });
+
     it("leaves the link to the sign-in's page as the first step when the browser opens no tab", async () => {
       const open = vi.spyOn(window, "open").mockReturnValue(null);
       state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);

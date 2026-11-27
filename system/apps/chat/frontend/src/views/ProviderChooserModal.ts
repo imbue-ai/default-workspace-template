@@ -1012,6 +1012,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     onremove() {
       // A modal closed mid-flow must not leave a CLI waiting on a browser tab that is gone.
       abortFlow();
+      // A sign-in still starting has no flow to end yet. With no lane it stands down when it lands: it ends that
+      // sign-in and closes the tab it opened.
+      lane = null;
     },
 
     view(vnode) {
