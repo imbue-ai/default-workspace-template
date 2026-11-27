@@ -347,6 +347,7 @@ def apply_initial_data(
         outcome = applied_status(now)
     reached = "; ".join(interrupted) if interrupted else "Every part was written"
     if not _keep(workspace_root, digest, progress_by_part, outcome):
+        _restrict(document_path)
         return failed_status(f"{reached}, and that could not be recorded.")
     try:
         document_path.unlink(missing_ok=True)

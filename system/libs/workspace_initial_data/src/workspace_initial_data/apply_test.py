@@ -533,6 +533,7 @@ def test_a_document_whose_outcome_cannot_be_recorded_stays_and_reads_failed(
     backup_destination: RecordingBackupDestination,
 ) -> None:
     document_path = write_initial_data_document(host_dir, {"schema": 1})
+    document_path.chmod(0o644)
     record_directory = _put_a_link_to_nowhere_in_the_records_place(
         workspace_root, tmp_path
     )
@@ -542,7 +543,7 @@ def test_a_document_whose_outcome_cannot_be_recorded_stays_and_reads_failed(
     assert status == failed_status(
         "Every part was written, and that could not be recorded."
     )
-    assert document_path.exists()
+    assert stat.S_IMODE(document_path.stat().st_mode) == 0o600
 
     record_directory.unlink()
     applied = apply_initial_data(
