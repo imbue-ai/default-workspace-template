@@ -44,6 +44,12 @@ export function isProviderRelayDeclined(): boolean {
   return isRelayDeclinedByChrome;
 }
 
+/** A tab of the browser's, opened before its page is known and pointed there afterwards. */
+export interface PendingTab {
+  show(url: string): void;
+  close(): void;
+}
+
 /** Settles the request still waiting on an ack. The ack has one handler slot, so only one request may own it. */
 let settlePending: ((answer: RelayAnswer) => void) | null = null;
 

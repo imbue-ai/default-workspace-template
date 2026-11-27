@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   finish: vi.fn(() => Promise.resolve()),
   open: vi.fn(),
   reportOnScreen: vi.fn(),
+  // The tab a tile's click opens for its lane's sign-in page, or null where the click opens none.
+  signInTab: null as { show: () => void; close: () => void } | null,
 }));
 
 vi.mock("../shell", () => ({ reportProviderChooserOnScreenOnce: mocks.reportOnScreen }));
@@ -34,7 +36,10 @@ vi.mock("../models/Providers", () => ({
   loadLanesAndAccountsWithRetry: () => Promise.resolve(),
   openProviderChooser: mocks.open,
 }));
-vi.mock("./ProviderChooserModal", () => ({ ProviderChooserModal: { view: () => null } }));
+vi.mock("./ProviderChooserModal", () => ({
+  ProviderChooserModal: { view: () => null },
+  openSignInTab: () => mocks.signInTab,
+}));
 
 import {
   FIRST_RUN_ADD_ANOTHER_HEADING,
@@ -138,6 +143,7 @@ describe("FirstRunProvidersPage", () => {
     mocks.isPending = true;
     mocks.finish.mockClear();
     mocks.open.mockClear();
+    mocks.signInTab = null;
     vi.restoreAllMocks();
   });
 
@@ -169,7 +175,17 @@ describe("FirstRunProvidersPage", () => {
 
     (tile.attrs.onclick as () => void)();
 
-    expect(mocks.open).toHaveBeenCalledWith({ laneId: "anthropic" });
+    expect(mocks.open).toHaveBeenCalledWith({ laneId: "anthropic", signInTab: null });
+  });
+
+  it("hands the chooser the tab the tile's click opened for the sign-in's page", () => {
+    mocks.signInTab = { show: () => undefined, close: () => undefined };
+    const tree = render().view();
+    const tile = nodes(tree).find((node) => node.attrs?.["data-first-run-lane"] === "anthropic")!;
+
+    (tile.attrs.onclick as () => void)();
+
+    expect(mocks.open).toHaveBeenCalledWith({ laneId: "anthropic", signInTab: mocks.signInTab });
   });
 
   it("lists a connected account and lets Next leave", () => {

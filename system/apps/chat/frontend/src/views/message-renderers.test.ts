@@ -20,6 +20,7 @@ import {
   isProviderChooserOpen,
   pickAccount,
   takeChooserAccountId,
+  takeChooserSignInTab,
 } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
 
@@ -44,9 +45,12 @@ const switching = vi.hoisted(() => {
     // When each signed-in account last finished a sign-in; absent reads as never stamped.
     signedInAtById: new Map<string, string>(),
     areAccountsLoaded: true,
+    // The tab a click opens for the page of an account's sign-in, or null where the click opens none.
+    reauthTab: null as { show: () => void; close: () => void } | null,
   };
 });
 vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
+vi.mock("./ProviderChooserModal", () => ({ openReauthTab: () => switching.reauthTab }));
 vi.mock("../models/Providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Providers")>()),
   accountForAgent: (accountId?: string) =>
@@ -689,6 +693,17 @@ describe("the auth-error note's switch link", () => {
     switching.signedInAccountIds = new Set([OPENAI_ID, ANTHROPIC_ID]);
     switching.signedInAtById = new Map();
     switching.areAccountsLoaded = true;
+    switching.reauthTab = null;
+  });
+
+  it("hands the chooser the tab its click opened for the page of the account's sign-in", () => {
+    switching.reauthTab = { show: () => undefined, close: vi.fn() };
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "Sign in again")!.attrs.onclick();
+
+    expect(takeChooserAccountId()).toBe(OPENAI_ID);
+    expect(takeChooserSignInTab()).toBe(switching.reauthTab);
+    closeProviderChooser();
   });
 
   it("signs the chat's own account in again in place while that account is still signed in", () => {

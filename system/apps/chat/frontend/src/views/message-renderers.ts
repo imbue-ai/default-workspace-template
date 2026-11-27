@@ -12,6 +12,7 @@ import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEv
 import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
+import { openReauthTab } from "./ProviderChooserModal";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import {
   isResendingAfterSignIn,
@@ -476,7 +477,7 @@ function renderReauthAction(chatId: string): m.Children {
             accountId !== "" && (!areAccountsLoaded() || accountForAgent(accountId) !== null);
           openProviderChooser(
             isOwnAccountSignedIn
-              ? { accountId }
+              ? { accountId, signInTab: openReauthTab(accountId) }
               : chat === undefined
                 ? {}
                 : { onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) },

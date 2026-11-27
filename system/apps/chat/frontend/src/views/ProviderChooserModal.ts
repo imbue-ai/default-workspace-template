@@ -68,12 +68,18 @@ import {
   pickAccount,
   takeChooserAccountId,
   takeChooserLaneId,
+  takeChooserSignInTab,
   startFlow,
   submitCode,
   submitKey,
 } from "../models/Providers";
 import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import { type RelayAnswer, isProviderRelayDeclined, requestProviderRelay } from "../models/providerRelay";
+import {
+  type PendingTab,
+  type RelayAnswer,
+  isProviderRelayDeclined,
+  requestProviderRelay,
+} from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
@@ -94,12 +100,6 @@ export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
  *  asking the desktop app and signs in without it. */
 export const MAX_SIGN_IN_PORT_DRAWS = 3;
 
-/** A tab of the browser's, opened before its page is known and pointed there afterwards. */
-export interface PendingTab {
-  show(url: string): void;
-  close(): void;
-}
-
 /** Open a blank tab now, for a page whose address comes later; null when the browser refuses one. A browser
  *  opens a tab only while the click that asked for it still counts, and a sign-in's page is known seconds later. */
 export function openPendingTab(view: Pick<Window, "open">): PendingTab | null {
@@ -111,6 +111,41 @@ export function openPendingTab(view: Pick<Window, "open">): PendingTab | null {
     show: (url) => tab.location.replace(url),
     close: () => tab.close(),
   };
+}
+
+function isPaste(candidate: LaneMethod): boolean {
+  return candidate.shape === "paste";
+}
+
+/** The way into a lane that needs no relay and no pasted key, for a browser-only sign-in that
+ *  nothing will relay; null when the lane has none. */
+function relaylessFallback(candidate: Lane): LaneMethod | null {
+  return candidate.methods.find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
+}
+
+/** The method a sign-in asked for starts with: a browser-only one that nothing will relay would only be started
+ *  to be thrown away for the lane's fallback, so it goes straight to that. */
+function methodToStart(lane: Lane, requested: LaneMethod, isNothingRelaying: boolean): LaneMethod {
+  return requested.shape === "browser" && isNothingRelaying ? (relaylessFallback(lane) ?? requested) : requested;
+}
+
+/** The tab for the page of a sign-in the chooser is about to be opened on (`ProviderChooserIntent.signInTab`),
+ *  opened by the click that opens the chooser: the chooser loads its lanes before it starts that sign-in, by when
+ *  the click no longer counts. Null under a chrome that relays, and for a sign-in that has no page. */
+export function openSignInTab(lane: Lane, requested: LaneMethod = lane.methods[0]): PendingTab | null {
+  if (!isProviderRelayDeclined() || isPaste(methodToStart(lane, requested, true))) return null;
+  return openPendingTab(window);
+}
+
+/** `openSignInTab` for signing an account in again; null while the account or its lane is not loaded. */
+export function openReauthTab(accountId: string): PendingTab | null {
+  const account = getAccounts().find((candidate) => candidate.id === accountId);
+  const lane = account === undefined ? undefined : getLanes().find((candidate) => candidate.id === account.lane);
+  if (account === undefined || lane === undefined) return null;
+  return openSignInTab(
+    lane,
+    lane.methods.find((candidate) => candidate.id === account.reauth_method),
+  );
 }
 
 /** The loopback port a sign-in page's `redirect_uri` calls back to, or null when it names none. */
@@ -190,10 +225,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     clearFlow();
   }
 
-  function isPaste(candidate: LaneMethod): boolean {
-    return candidate.shape === "paste";
-  }
-
   /** Whether nothing will relay a sign-in: the chrome said beforehand that it relays none, or answered so, or no
    *  callback port came free. */
   function isNothingRelaying(): boolean {
@@ -203,12 +234,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** A lane's methods this page can offer: a browser-only sign-in needs a relay. */
   function offeredMethods(candidate: Lane): LaneMethod[] {
     return candidate.methods.filter((each) => !(isNothingRelaying() && each.shape === "browser"));
-  }
-
-  /** The way into a lane that needs no relay and no pasted key, for a browser-only sign-in that
-   *  nothing will relay; null when the lane has none. */
-  function relaylessFallback(candidate: Lane): LaneMethod | null {
-    return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
   }
 
   /** Hand a started flow's page to the desktop app; its answer, or null when a newer ask took its
@@ -296,17 +321,17 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       isRelaySkipped?: boolean;
       /** Set by a click that asks for the sign-in, which is when the browser lets a tab be opened. */
       isFromClick?: boolean;
+      /** The tab the click that opened the chooser on this sign-in opened for its page. */
+      signInTab?: PendingTab | null;
     },
   ): Promise<void> {
-    // A browser-only sign-in nothing will relay would only be started to be thrown away for the
-    // fallback below, so it goes straight to that.
-    const chosenMethod =
-      requested.shape === "browser" && isNothingRelaying() ? (relaylessFallback(chosen) ?? requested) : requested;
+    const chosenMethod = methodToStart(chosen, requested, isNothingRelaying());
     // Under a chrome that relays nothing, nobody else opens the sign-in's page for the user.
     const ownTab =
-      options.isFromClick === true && isProviderRelayDeclined() && !isPaste(chosenMethod)
+      options.signInTab ??
+      (options.isFromClick === true && isProviderRelayDeclined() && !isPaste(chosenMethod)
         ? openPendingTab(window)
-        : null;
+        : null);
     lane = chosen;
     method = chosenMethod;
     cameFromChooser = options.fromChooser;
@@ -367,7 +392,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       }
     }
     if (fallback !== null && attempt === generation) {
-      await begin(chosen, fallback, options);
+      await begin(chosen, fallback, { ...options, signInTab: null });
     }
   }
 
@@ -640,7 +665,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           sm: true,
           extra: css.ACCOUNT_ACTION,
           title: "Sign in again, keeping this account and every chat on it",
-          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method, true),
+          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method, { isFromClick: true }),
         },
         "Sign in again",
       ),
@@ -987,12 +1012,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     accountId: string,
     laneId: string,
     methodId: string,
-    isFromClick: boolean,
+    tab: { isFromClick?: boolean; signInTab?: PendingTab | null },
   ): Promise<void> {
     const owner = getLanes().find((candidate) => candidate.id === laneId);
-    if (owner === undefined) return;
+    if (owner === undefined) {
+      tab.signInTab?.close();
+      return;
+    }
     const reauthMethod = owner.methods.find((candidate) => candidate.id === methodId) ?? owner.methods[0];
-    await begin(owner, reauthMethod, { fromChooser: true, accountId, isFromClick });
+    await begin(owner, reauthMethod, { fromChooser: true, accountId, ...tab });
   }
 
   return {
@@ -1002,14 +1030,18 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
       const laneId = takeChooserLaneId();
+      // The lanes have loaded since the click that opened the chooser, which a browser no longer counts: the tab
+      // for the sign-in's page is the one that click opened, if it opened one.
+      const signInTab = takeChooserSignInTab();
       if (accountId !== null) {
         const account = getAccounts().find((candidate) => candidate.id === accountId);
-        // The lanes have loaded since whatever opened the chooser, so this is no click a browser still counts.
-        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method, false);
+        if (account === undefined) signInTab?.close();
+        else await reauthenticate(account.id, account.lane, account.reauth_method, { signInTab });
         return;
       }
       const requested = laneId === null ? undefined : getLanes().find((candidate) => candidate.id === laneId);
-      if (requested !== undefined) await begin(requested, requested.methods[0], { fromChooser: true });
+      if (requested === undefined) signInTab?.close();
+      else await begin(requested, requested.methods[0], { fromChooser: true, signInTab });
     },
 
     onremove() {
