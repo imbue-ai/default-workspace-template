@@ -361,6 +361,18 @@ def test_a_setup_the_program_was_stopped_in_is_taken_up_when_it_starts(
     assert fake_restic_calls(fake_restic_control) == [f"{IMBUE_CLOUD_REPOSITORY}|init"]
 
 
+def test_a_program_that_starts_with_nothing_to_do_gives_back_the_lease_a_previous_run_left(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    # A run killed in the middle of a turn-off, after it had moved the file: nothing is left to attempt.
+    take_lease(workspace.lease_path, "setup", workspace.clock())
+
+    workspace.start_program().run_pass()
+
+    assert read_lease(workspace.lease_path, workspace.clock()) is None
+    assert fake_restic_calls(fake_restic_control) == []
+
+
 def test_a_destination_named_during_an_attempt_ends_the_attempt_and_is_set_up_next(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:
