@@ -207,9 +207,10 @@ def _checked_destination(body: Mapping[str, object]) -> _Destination:
     try:
         request = BackupDestinationRequest.model_validate(dict(body))
     except ValidationError as e:
+        # The error's own text quotes the request, so it is not kept as this one's cause.
         raise InvalidBackupDestinationError(
             f"The destination is not one this workspace can take ({describe_request_problems(e)})."
-        ) from e
+        ) from None
     try:
         kind = BackupDestinationKind(request.destination)
     except ValueError as e:
