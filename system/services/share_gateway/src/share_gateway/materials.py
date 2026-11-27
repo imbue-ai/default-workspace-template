@@ -115,13 +115,14 @@ def parse_share_materials(text: str) -> ShareMaterials | None:
     """Parse share.env text into materials; None when any required key is missing or malformed.
 
     A ``SHARE_CHROME_ORIGIN`` that is not a plain http(s) origin (a scheme, a host, at most a port) reads as none:
-    the share runs with no web client, and the materials say that one was refused.
+    the share runs with no web client, and the materials say that one was refused. An origin is kept in lower
+    case, which is how a browser sends the one every request is compared with.
     """
     values = {match.group(1): match.group(2) for match in _EXPORT_LINE_PATTERN.finditer(text)}
     if any(not values.get(key) for key in _REQUIRED_KEYS):
         return None
     # Optional: absent for shares created before the hosted-chrome rollout.
-    named_chrome_origin = values.get("SHARE_CHROME_ORIGIN", "").rstrip("/")
+    named_chrome_origin = values.get("SHARE_CHROME_ORIGIN", "").rstrip("/").lower()
     is_chrome_origin_usable = _WEB_CLIENT_ORIGIN_PATTERN.fullmatch(named_chrome_origin) is not None
     return ShareMaterials(
         workspace_domain=values["SHARE_WORKSPACE_DOMAIN"].lower(),

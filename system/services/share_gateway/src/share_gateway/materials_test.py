@@ -70,9 +70,11 @@ def test_a_web_client_origin_that_is_no_plain_http_origin_reads_as_none_and_the_
         ("https://minds.imbue.com/", "https://minds.imbue.com"),
         ("https://minds.imbue.com:8443", "https://minds.imbue.com:8443"),
         ("http://localhost:5173", "http://localhost:5173"),
+        ("https://Minds.Imbue.com/", "https://minds.imbue.com"),
+        ("HTTPS://MINDS.IMBUE.COM:8443", "https://minds.imbue.com:8443"),
     ],
 )
-def test_a_web_client_origin_is_kept_as_its_scheme_host_and_port(named: str, origin: str) -> None:
+def test_a_web_client_origin_is_kept_as_its_scheme_host_and_port_in_lower_case(named: str, origin: str) -> None:
     materials = parse_share_materials(_VALID.replace("https://minds.imbue.com/", named))
 
     assert materials is not None
