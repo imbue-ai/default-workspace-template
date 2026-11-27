@@ -177,8 +177,9 @@ released SDK, `imbue-app-sdk` on PyPI. In
   `"imbue-app-sdk>=<version>,<1"`;
 - in the `dev` dependency group, replace `"app-schema[testing]"` with
   `"imbue-app-sdk[testing]>=<version>,<1"`;
-- delete the `app-schema` line under `[tool.uv.sources]` with the comment
-  above it, and the table's heading when nothing is left under it;
+- delete the `app-schema` line under `[tool.uv.sources]` and the comment
+  about it above that table's heading, and the heading too when nothing is
+  left under it;
 - under `[tool.uv]`, add `exclude-newer-package = { imbue-app-sdk = false }`,
   so a fix to the SDK reaches the app without waiting out the two-week window
   the line above it sets.
