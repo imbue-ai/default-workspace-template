@@ -437,6 +437,7 @@ The update dispatcher, which cron runs every minute, reads `<feed_base_url>/<cha
 While arming is on, nothing is armed or running, and no decision waits for the user, the dispatcher arms a schedule for the channel's version when the workspace is behind it, unless the user skipped that version or a run already went out for it.
 A channel file that cannot be read arms nothing, and the last version read stays on display.
 The dispatcher's cron line is written at every boot as well as by the routes, so a workspace no client has asked anything of runs it.
+A write of the update settings is one of the routes that write it: a desktop from before these routes points the line at the dispatcher it ships, which arms nothing by itself, and a current client writes the settings each time it opens the workspace.
 
 In `POST /api/workspace/update/start`, `PUT` and `PATCH /api/workspace/update/schedule`, the values a client used to compute are optional, and one left out is the workspace's own:
 

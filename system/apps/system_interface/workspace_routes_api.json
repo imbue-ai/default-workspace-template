@@ -3209,7 +3209,7 @@
     },
     "/api/workspace/update/settings": {
       "put": {
-        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.",
+        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.\n\nThe cron line that runs the dispatcher is written again too, so that it runs this workspace's own.",
         "operationId": "put_api_workspace_update_settings",
         "requestBody": {
           "content": {

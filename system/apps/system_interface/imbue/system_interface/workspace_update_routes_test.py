@@ -6,6 +6,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from workspace_update_control.control import TICK_ENTRY_PATH
 from workspace_update_control.protocol import DISPATCHER_CRON_NAME
+from workspace_update_control.protocol import DURABLE_CRON_PATH
 from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import STAGED_FEED_BASE_URL
@@ -272,6 +273,23 @@ def test_the_update_settings_are_stored_and_answered_as_stored_and_the_read_answ
     assert staged_update_workspace.read_state("schedule.json") is None
     state = client.get(UPDATE_ROUTE).get_json()
     assert (state["settings"], state["channel_version"]) == (settings, None)
+
+
+def test_a_write_of_the_update_settings_puts_the_templates_dispatcher_back_on_the_cron_line(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    # A desktop from before the update routes writes the line for the dispatcher it ships, which arms nothing.
+    live_cron_line = staged_update_workspace.live_cron_dir / DISPATCHER_CRON_NAME
+    live_cron_line.write_text("* * * * * root python3 data/.state/update-apply/dispatcher.pyz tick\n")
+
+    stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+
+    assert stored.status_code == 200
+    cron_line = live_cron_line.read_text()
+    assert f"cd {staged_update_workspace.root.resolve()} && python3 {TICK_ENTRY_PATH} >>" in cron_line
+    assert "dispatcher.pyz" not in cron_line
+    # The durable copy is what a boot reinstalls.
+    assert (staged_update_workspace.root / DURABLE_CRON_PATH).read_text() == cron_line
 
 
 def test_settings_with_none_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
