@@ -737,6 +737,25 @@ def test_a_schedule_the_user_arms_while_the_minute_decides_stands_as_they_armed_
     assert staged.read_state("schedule.json") == armed_by_the_user
 
 
+def test_a_schedule_the_user_arms_while_the_minute_decides_to_cancel_its_own_stands_as_they_armed_it(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    armed_by_the_user = armed_schedule(
+        _NOW + 1, ceiling="minds-v0.9.5", is_backup_configured=True, is_auto_armed=False
+    )
+    _write_when_git_runs(staged, "schedule.json", armed_by_the_user)
+
+    # A channel taken back to the version the workspace is on, which the minute learns from git.
+    feed.template_ref = _INSTALLED
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert staged.read_state("schedule.json") == armed_by_the_user
+    assert not any("cancelled" in line for line in staged.dispatcher_log_lines())
+
+
 def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(
     staged: StagedUpdateWorkspace,
 ) -> None:

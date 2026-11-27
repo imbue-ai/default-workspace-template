@@ -22,7 +22,7 @@ import os
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Final
+from typing import Final, NamedTuple
 
 from workspace_update_control.channel import (
     ChannelFileFetcher,
@@ -445,34 +445,31 @@ def _followed_ceiling(
     return None
 
 
-def _read_self_armed_schedule(
-    now: float,
-) -> tuple[dict[str, object], dict[str, object]] | None:
-    """``_read_followed_schedule`` for a schedule the workspace armed itself; None for any other."""
+class SelfArmedSchedule(NamedTuple):
+    """One read of a schedule the workspace armed itself."""
+
+    # Which arming it is: a schedule armed again since carries another.
+    armed_at: object
+    # The version it stands at; None when it names none.
+    target_ref: str | None
+    # The version ``refresh_followed_schedule`` is about to move it to; None when it stays at its version.
+    moved_to: str | None
+
+
+def read_self_armed_schedule(now: float) -> SelfArmedSchedule | None:
+    """The schedule the workspace armed itself; None when no such schedule is armed, or a client from before the
+    workspace armed its own updates keeps asking."""
     followed = _read_followed_schedule(now)
     if followed is None or followed[0].get("is_auto_armed") is not True:
         return None
-    return followed
-
-
-def read_self_armed_schedule_target(now: float) -> str | None:
-    """The version a schedule the workspace armed itself stands at; None when no such schedule is armed."""
-    self_armed = _read_self_armed_schedule(now)
-    if self_armed is None:
-        return None
-    ceiling = self_armed[0].get("ceiling")
-    return ceiling if isinstance(ceiling, str) else None
-
-
-def read_self_armed_schedule_move(now: float) -> str | None:
-    """The version ``refresh_followed_schedule`` is about to move a schedule the workspace armed itself to; None
-    when no such schedule is armed, or it stays at its version."""
-    self_armed = _read_self_armed_schedule(now)
-    if self_armed is None:
-        return None
-    schedule, origin = self_armed
-    ceiling = _followed_ceiling(origin, read_update_settings())
-    return ceiling if ceiling != schedule.get("ceiling") else None
+    schedule, origin = followed
+    ceiling = schedule.get("ceiling")
+    followed_ceiling = _followed_ceiling(origin, read_update_settings())
+    return SelfArmedSchedule(
+        armed_at=schedule.get("armed_at"),
+        target_ref=ceiling if isinstance(ceiling, str) else None,
+        moved_to=followed_ceiling if followed_ceiling != ceiling else None,
+    )
 
 
 def refresh_followed_schedule(now: float) -> None:
@@ -520,6 +517,18 @@ def cancel_schedule() -> dict[str, object]:
             pass
     write_log_line("cancelled the schedule")
     return {"is_cancelled": True}
+
+
+def cancel_schedule_armed_at(armed_at: object) -> bool:
+    """Cancel the schedule while it is the one armed at ``armed_at``; whether it was cancelled.
+
+    A schedule armed again since the caller read it is not the one the caller decided to cancel, and stays.
+    """
+    with state_lock():
+        current = read_json_object(SCHEDULE_FILE_PATH)
+        if current is None or current.get("armed_at") != armed_at:
+            return False
+        return bool(cancel_schedule()["is_cancelled"])
 
 
 def _epoch(value: object) -> float | None:

@@ -25,9 +25,8 @@ from workspace_update_control.channel import (
 )
 from workspace_update_control.control import (
     arm_schedule,
-    cancel_schedule,
-    read_self_armed_schedule_move,
-    read_self_armed_schedule_target,
+    cancel_schedule_armed_at,
+    read_self_armed_schedule,
     refresh_followed_schedule,
 )
 from workspace_update_control.dispatcher import (
@@ -255,7 +254,8 @@ def tick_self_arming(
     version. One that stands at a version the user skipped is cancelled as well. A skip cancels whatever is armed
     when it is recorded, so one recorded while a minute was deciding finds nothing to cancel: that minute reads
     the skip again once it has armed, and cancels what it armed. A schedule armed while a minute was deciding
-    stands as it was armed: the minute arms only where none is armed when it comes to write.
+    stands as it was armed: the minute arms only where none is armed when it comes to write, and cancels only
+    the schedule it read.
     """
     settings = read_update_settings()
     if settings is None:
@@ -265,23 +265,27 @@ def tick_self_arming(
     )
     facts = read_arming_facts(settings.is_arming_enabled, now)
     if facts.is_scheduled:
-        armed_for = read_self_armed_schedule_target(now)
-        if armed_for is not None and armed_for == facts.skipped_target_ref:
-            cancel_schedule()
-            write_log_line(
-                "cancelled the workspace's own schedule: %s was skipped" % armed_for
-            )
+        self_armed = read_self_armed_schedule(now)
+        if self_armed is None:
+            refresh_followed_schedule(now)
             return
-        moved_to = read_self_armed_schedule_move(now)
+        armed_for = self_armed.target_ref
+        if armed_for is not None and armed_for == facts.skipped_target_ref:
+            if cancel_schedule_armed_at(self_armed.armed_at):
+                write_log_line(
+                    "cancelled the workspace's own schedule: %s was skipped" % armed_for
+                )
+            return
+        moved_to = self_armed.moved_to
         why_not_armed = (
             _why_not_moved_to(facts, moved_to, now) if moved_to is not None else ""
         )
         if why_not_armed:
-            cancel_schedule()
-            write_log_line(
-                "cancelled the workspace's own schedule: its channel moved to %s, which %s"
-                % (moved_to, why_not_armed)
-            )
+            if cancel_schedule_armed_at(self_armed.armed_at):
+                write_log_line(
+                    "cancelled the workspace's own schedule: its channel moved to %s, which %s"
+                    % (moved_to, why_not_armed)
+                )
             return
         refresh_followed_schedule(now)
         return
@@ -314,10 +318,13 @@ def tick_self_arming(
     if answer.get("outcome") != OUTCOME_ARMED:
         return
     if _read_skipped_target_ref() == target_ref:
-        cancel_schedule()
-        write_log_line(
-            "cancelled the update to %s the workspace had just armed: it was skipped meanwhile"
-            % target_ref
-        )
+        armed = answer.get("schedule")
+        if isinstance(armed, Mapping) and cancel_schedule_armed_at(
+            armed.get("armed_at")
+        ):
+            write_log_line(
+                "cancelled the update to %s the workspace had just armed: it was skipped meanwhile"
+                % target_ref
+            )
         return
     write_log_line("armed the update to %s for the workspace itself" % target_ref)
