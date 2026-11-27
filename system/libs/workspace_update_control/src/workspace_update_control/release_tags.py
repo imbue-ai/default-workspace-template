@@ -56,7 +56,7 @@ def _parent_url() -> str | None:
                 url = tomllib.load(handle).get("url")
         except FileNotFoundError:
             continue
-        except (OSError, tomllib.TOMLDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             write_log_line("could not read %s (%s)" % (path, exc))
             return ""
         return url.strip() if isinstance(url, str) else ""

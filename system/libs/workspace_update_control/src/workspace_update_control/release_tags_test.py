@@ -188,12 +188,19 @@ def test_a_parent_toml_that_names_no_template_fetches_nothing(
     assert staged.read_state(_FETCH_RECORD) is None
 
 
+@pytest.mark.parametrize(
+    "unreadable_bytes",
+    [
+        pytest.param(b"url = not toml\n", id="not-toml"),
+        pytest.param(b'url = "\xff"\n', id="not-utf-8"),
+    ],
+)
 def test_a_parent_toml_that_cannot_be_read_is_logged_and_the_upstream_remote_is_still_fetched_from(
-    staged: StagedUpdateWorkspace,
+    staged: StagedUpdateWorkspace, unreadable_bytes: bytes
 ) -> None:
     upstream = _stage_a_checkout_with_none_of_its_templates_tags(staged)
     parent_file = staged.root / "system" / "config" / "parent.toml"
-    parent_file.write_text("url = not toml\n")
+    parent_file.write_bytes(unreadable_bytes)
 
     assert fetch_release_tags(_NOW) is False
 
