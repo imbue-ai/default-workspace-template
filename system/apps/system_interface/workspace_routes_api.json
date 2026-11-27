@@ -3459,7 +3459,7 @@
     },
     "/api/workspace/wallpaper": {
       "get": {
-        "description": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own\ncontent type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop\nyet.\n\nThe image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again\nand is answered 304 while it has not changed. A page of another origin reads it with a credentialed request\nof its own code, as it reads every workspace route; an image element of another site is refused.",
+        "description": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own\ncontent type; 204 with no body when that desktop wears its theme's default, the workspace has no desktop\nyet, or the image is gone.\n\nThe image carries an ``ETag`` and ``Cache-Control: private, no-cache``, so a browser that holds it asks again\nand is answered 304 while it has not changed. A page of another origin reads it with a credentialed request\nof its own code, as it reads every workspace route; an image element of another site is refused.",
         "operationId": "get_api_workspace_wallpaper",
         "responses": {
           "200": {
@@ -3476,7 +3476,7 @@
             "description": "Error"
           }
         },
-        "summary": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own content type; 204 with no body when that desktop wears its theme's default, or the workspace has no desktop yet.",
+        "summary": "The image of the workspace's wallpaper, which is the one its first desktop wears, under the image's own content type; 204 with no body when that desktop wears its theme's default, the workspace has no desktop yet, or the image is gone.",
         "x-no-schema": "The image of the first desktop's wallpaper, under its own content type; 204 with no body when that desktop wears its theme's default",
         "x-workspace-operation": "wallpaper.read"
       }
