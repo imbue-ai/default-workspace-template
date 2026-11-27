@@ -89,6 +89,16 @@ interrupted, since it holds storage credentials and nothing more will be read
 from it. A document left again with the bytes of one already applied is deleted
 and writes nothing; a document with other bytes is a new one, and is applied.
 
+## The contract with the desktop
+
+The Imbue Studio desktop builds the document and this library applies it, across
+two repos. The desktop publishes `workspace_initial_data_contract.json` beside its
+builder: the documents it writes for one set of inputs, which its own tests hold
+the builder to. `src/workspace_initial_data/workspace_initial_data_contract.json`
+is that file byte for byte, and `document_contract_test.py` applies each of its
+documents and finds every part where its reader looks. A change to the document's
+shape changes the file on both sides.
+
 ## Modules
 
 - `apply` -- reads the document and hands each part to its writer. When every part
