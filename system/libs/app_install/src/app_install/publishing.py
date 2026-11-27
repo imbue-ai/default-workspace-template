@@ -589,9 +589,9 @@ def _check_nothing_pushed_is_unrecorded(repo_root: Path, name: str) -> None:
 def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRuntimeInterface) -> AssembleOutcome:
     """Build the tree a publish of the app ``name`` at ``revision`` would push, in a directory outside the
     workspace, and find it fit to publish: it holds a ``LICENSE`` file, its manifest passes the authoring check
-    and names a version newer than the last one published, the secret scan finds nothing in it, it names no skill of this workspace that
-    it does not carry, and, for a Python app, its lock is what its project calls for with no workspace around
-    it. The tree then waits for ``push_app``. Nothing is pushed.
+    and names a version newer than the last one published, the secret scan finds nothing in it, it names no skill
+    of this workspace that it does not carry, and, for a Python app, its lock is what its project calls for with
+    no workspace around it. The tree then waits for ``push_app``. Nothing is pushed.
 
     Raises AppRecordNotFoundError for an app with no record, NotModifiedAppError for an installed app nobody
     has changed, SecretsFoundError with each finding, OutsideSkillsError with each line that names such a
