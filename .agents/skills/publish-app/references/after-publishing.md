@@ -39,12 +39,22 @@ update copies aside and an uninstall keeps, and only what is under
 
 ## 3. Start the app again
 
+First have supervisord read the app's program files again, in case the merge
+changed one (the worker regenerates them when it changes how the app runs):
+
+```bash
+supervisorctl reread && supervisorctl update
+```
+
+`update` starts each program whose file changed. Then start what is still
+stopped (`supervisorctl status` shows which):
+
 ```bash
 uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 ```
 
-starts the program named after the app; `supervisorctl start <name>-<role>`
-starts each of the others.
+starts the program named after the app, and is safe to run when it is already
+up; `supervisorctl start <name>-<role>` starts each of the others.
 
 An app's program installs the app's package as it starts. The published
 version may run on another build of the app SDK than the one it ran on until
