@@ -1,0 +1,1 @@
+Latchkey is bumped to 3.27.0 (was 3.26.0): `LATCHKEY_VERSION` in `system/scripts/setup_system.sh`. It is the release every latchkey pin of mngr now names; nothing in a workspace depends on what it adds.
