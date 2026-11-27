@@ -46,8 +46,8 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
   token and never embed credentials in URLs or git config.
 - `origin` is reserved for the sync repo. Upstream-template operations keep
   using `system/config/parent.toml` (see the update-self skill) and are unaffected.
-- **A dev repository is private, never a way to publish.** Making an app
-  public is the `publish-app` skill, which scans and filters what it shares.
+- **A dev repository is private, never a way to publish.** Publishing an
+  app is the `publish-app` skill, which scans and filters what it shares.
 
 ## Enable
 
