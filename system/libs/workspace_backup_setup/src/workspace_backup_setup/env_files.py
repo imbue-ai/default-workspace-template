@@ -278,12 +278,18 @@ def kept_env_for_destination(
 
 
 def kept_password_for_repository(workspace_root: Path, repository: str) -> str | None:
-    """The password this workspace keeps for ``repository``: the one in use, else the newest kept aside."""
+    """The password this workspace keeps for ``repository``: the one in use, else the newest kept aside.
+
+    A credential written into the address is the storage's and not the repository's, so an address that
+    differs only in it names the same repository.
+    """
+    address = repository_without_credentials(repository)
     in_use_text = read_restic_env_text(workspace_root)
     in_use = parse_restic_env_file(in_use_text) if in_use_text is not None else {}
     for env_values in (in_use, *kept_envs(workspace_root)):
-        if env_values.get(REPOSITORY_KEY) == repository and env_values.get(
-            PASSWORD_KEY
-        ):
+        kept_address = repository_without_credentials(
+            env_values.get(REPOSITORY_KEY, "")
+        )
+        if kept_address == address and env_values.get(PASSWORD_KEY):
             return env_values[PASSWORD_KEY]
     return None

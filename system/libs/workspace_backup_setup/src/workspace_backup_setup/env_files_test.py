@@ -226,6 +226,30 @@ def test_what_was_kept_is_found_by_destination_and_by_repository(
     )
 
 
+def test_a_kept_password_is_found_when_the_credential_in_the_repositorys_address_changed(
+    workspace_root: Path,
+) -> None:
+    kept = {
+        "RESTIC_REPOSITORY": "rest:https://alice:old-credential@rest.example/alice/",
+        "RESTIC_PASSWORD": "own-password",
+    }
+    install_restic_env(workspace_root, render_restic_env(kept), _NOW)
+    keep_restic_env_aside(workspace_root, _NOW + 10.0)
+
+    assert (
+        kept_password_for_repository(
+            workspace_root, "rest:https://alice:new-credential@rest.example/alice/"
+        )
+        == "own-password"
+    )
+    assert (
+        kept_password_for_repository(
+            workspace_root, "rest:https://alice:new-credential@rest.example/bob/"
+        )
+        is None
+    )
+
+
 def test_dropped_pending_credentials_are_kept_only_when_they_hold_a_password(
     workspace_root: Path,
 ) -> None:
