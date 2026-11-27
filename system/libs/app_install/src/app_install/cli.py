@@ -652,4 +652,3 @@ def run() -> None:
     # driving the group through click's runner would otherwise leave the log sink on the runner's closed stream.
     setup_logging(level=os.environ.get("APP_INSTALL_LOG_LEVEL", "WARNING"))
     main()
-
