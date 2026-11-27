@@ -505,6 +505,8 @@ def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_r
     # The credentials of a setup the source had not finished, and every copy it kept aside.
     assert "--exclude=/.secrets/restic.env.*" in current
     assert "--exclude=/.state/backup_setup/" in current
+    # What the source's boot recorded of its own initial data, which this workspace's boot would read as its own.
+    assert "--exclude=/.state/initial_data/" in current
     assert "--exclude=/.secrets/share.env" in current
     assert "--exclude=/.secrets/share_tls/" in current
     assert "--exclude=/.secrets/agent_access/" in current
@@ -524,7 +526,7 @@ def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_r
         assert f"--exclude=/.state/update-apply/{name}" in current
     assert len(current) == len(
         migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY
-    ) + 1 + len(update_records)
+    ) + 2 + len(update_records)
     # The update settings and the version the owner skipped are the workspace's own, and come over.
     assert not any("settings.json" in flag for flag in current)
     assert not any("skipped-target.json" in flag for flag in current)

@@ -519,17 +519,22 @@ _SECRETS_DIR_BY_LAYOUT = {LAYOUT_CURRENT: ".secrets", LAYOUT_PRE_DECLUTTER: "sec
 
 # What the source keeps about its own machine that this workspace would read as
 # its own, relative to the source's data root: what its backup setup records of
-# the repository it was asked for, and what its update dispatcher and update
+# the repository it was asked for, what its boot records of the initial data it
+# was created with, and what its update dispatcher and update
 # routes record of its own runs (the run and its verdict, the armed schedule,
 # the last dispatch and start, the version its checkout was read at, the last
 # version a client named). This workspace's dispatcher arms its own updates
 # from those files, so a copied one would hold an update back, arm one to the
-# version already here, or start one in this workspace's window. The update
+# version already here, or start one in this workspace's window. Its boot
+# applies each part of its own initial data once by the record it keeps, so the
+# source's record would have it apply a document it kept all over again, or
+# read as failed for a part the source failed. The update
 # settings and the version the owner skipped are the workspace's own and come
 # over. A pre-declutter source has none of this.
 _MACHINE_STATE_EXCLUDED_BY_LAYOUT = {
     LAYOUT_CURRENT: (
         ".state/backup_setup/",
+        ".state/initial_data/",
         ".state/update-apply/run.json",
         ".state/update-apply/schedule.json",
         ".state/update-apply/schedule-origin.json",
@@ -545,7 +550,8 @@ _MACHINE_STATE_EXCLUDED_BY_LAYOUT = {
 
 def data_rsync_exclude_args(layout: str) -> list[str]:
     """The ``--exclude`` flags an rsync of the source's data root takes: one per excluded secret, and
-    one per piece of the source's own machine state (its backup setup's, and its update runs').
+    one per piece of the source's own machine state (its backup setup's, its initial data's, and its
+    update runs').
 
     Anchored at the data root (the leading ``/``), so a user file that happens
     to share a name elsewhere in the tree still comes over.

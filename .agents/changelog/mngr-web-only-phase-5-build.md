@@ -8,6 +8,6 @@
 
 - `manage-routines` says that the workspace schedules its own updates through the `update-self-dispatch` cron entry.
 
-- `migrate-workspace` leaves behind everything the old workspace's backup setup kept: the copies of `restic.env` it kept aside, the credentials of a setup it had not finished, and the record of that setup. This workspace's own backup setup would otherwise install the old workspace's repository as its own. It also leaves behind what the old workspace recorded of its own update runs (the run and its verdict, the armed schedule, the last dispatch and start), which this workspace's dispatcher would act on as its own; the update settings and the skipped version come over.
+- `migrate-workspace` leaves behind everything the old workspace's backup setup kept: the copies of `restic.env` it kept aside, the credentials of a setup it had not finished, and the record of that setup. This workspace's own backup setup would otherwise install the old workspace's repository as its own. It leaves behind the old workspace's record of the initial data it was created with, by which this workspace's boot knows what it has applied of its own. It also leaves behind what the old workspace recorded of its own update runs (the run and its verdict, the armed schedule, the last dispatch and start), which this workspace's dispatcher would act on as its own; the update settings and the skipped version come over.
 
 - `build-app` refuses `backup-setup` and `backup_setup` as an app's name, which the workspace's own backup setup runs under.
