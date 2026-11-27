@@ -22,6 +22,12 @@
  * a way in that needs no relay. Those ways stay one click away while the browser is out, and after
  * a sign-in fails, so a browser that never comes back is never a dead end.
  *
+ * A chrome that said beforehand that it relays no sign-in (Imbue Studio in a browser) is asked
+ * nothing: the chooser goes straight to a way in that needs no relay, and opens that sign-in's
+ * page itself. A browser opens a tab only at a click, and the page's address is known seconds
+ * later, so the tab is opened blank at the click that asks for the sign-in and pointed at the
+ * page once the sign-in has started.
+ *
  * Two shapes worth knowing about:
  *
  *   * there is no `Runs on <harness>` picker -- provider -> harness is fixed in V1, so the
