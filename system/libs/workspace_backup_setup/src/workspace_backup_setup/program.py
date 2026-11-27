@@ -84,7 +84,8 @@ _ALREADY_INITIALIZED_MARKERS: Final[tuple[str, ...]] = (
 )
 _WRONG_PASSWORD_MARKER: Final[str] = "wrong password"
 # How a storage says it does not accept the credentials it was shown, in restic's words and in the storage's own:
-# the backup store's and any REST server's 401 or 403, and an S3 storage's codes with restic's rendering of them.
+# the backup store's and any REST server's 401 or 403, and an S3 storage's codes with its message for each, which
+# is what restic prints where the storage sent one.
 _STORAGE_REFUSAL_MARKERS: Final[tuple[str, ...]] = (
     "(401)",
     "(403)",
@@ -93,6 +94,7 @@ _STORAGE_REFUSAL_MARKERS: Final[tuple[str, ...]] = (
     "accessdenied",
     "invalidaccesskeyid",
     "invalid access key",
+    "access key id you provided does not exist",
     "signaturedoesnotmatch",
     "request signature we calculated does not match",
 )

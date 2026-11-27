@@ -5,8 +5,8 @@ import stat
 from pathlib import Path
 from typing import Final
 
-# Read by the stand-in: the directory holding its ``mode`` file, its ``calls`` log, and the ``refused-tokens``
-# it turns away.
+# Read by the stand-in: the directory holding its ``mode`` file, its ``calls`` log, the ``refused-tokens``
+# it turns away, and the ``refusal-words`` it turns them away with.
 FAKE_RESTIC_CONTROL_DIR_ENV: Final[str] = "FAKE_RESTIC_CONTROL_DIR"
 
 # What the stand-in does, by the word in its ``mode`` file; with no file it creates the repository.
@@ -18,7 +18,11 @@ control="$FAKE_RESTIC_CONTROL_DIR"
 echo "$RESTIC_REPOSITORY|$*" >> "$control/calls"
 mode="$(cat "$control/mode" 2>/dev/null || echo ok)"
 if [ -n "$RESTIC_REST_PASSWORD" ] && grep -qxF "$RESTIC_REST_PASSWORD" "$control/refused-tokens" 2>/dev/null; then
-  echo "Fatal: unable to open config file: unexpected HTTP response (401): 401 Unauthorized" >&2
+  if [ -f "$control/refusal-words" ]; then
+    cat "$control/refusal-words" >&2
+  else
+    echo "Fatal: unable to open config file: unexpected HTTP response (401): 401 Unauthorized" >&2
+  fi
   exit 1
 fi
 if [ "$mode" = "fail" ]; then
@@ -64,6 +68,11 @@ def refuse_fake_restic_token(control_directory: Path, token: str) -> None:
     """Have the stand-in's storage turn away every run that shows ``token`` as ``RESTIC_REST_PASSWORD``."""
     with (control_directory / "refused-tokens").open("a") as out:
         out.write(token + "\n")
+
+
+def word_fake_restic_refusals(control_directory: Path, words: str) -> None:
+    """Have the stand-in turn a token away with ``words``, where it otherwise answers a REST server's 401."""
+    (control_directory / "refusal-words").write_text(words + "\n")
 
 
 def path_with_fake_restic_first(bin_directory: Path) -> str:
