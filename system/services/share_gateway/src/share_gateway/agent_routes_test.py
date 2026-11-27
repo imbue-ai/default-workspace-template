@@ -617,7 +617,10 @@ def test_a_caller_that_hangs_up_on_a_run_that_prints_nothing_stops_the_command(t
         with serve_wsgi(harness.app, is_threaded=True) as origin:
             with httpx.stream("POST", f"{origin}/_agent/run", json=body, headers=headers, timeout=10.0) as response:
                 assert response.status_code == 200 and response.headers["Transfer-Encoding"] == "chunked"
-                assert json.loads(next(response.iter_lines())) == {"type": "stdout", "data": "started\n"}
+                # Held for the life of the block: an iterator that is dropped closes the connection at once,
+                # and the command would be stopped before the check below.
+                lines = response.iter_lines()
+                assert json.loads(next(lines)) == {"type": "stdout", "data": "started\n"}
                 assert not lifeline.is_released_within(0.0)
             # Leaving the block closed the connection on an answer that had ten minutes left to run.
             assert lifeline.is_released_within(5.0)
