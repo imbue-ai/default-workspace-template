@@ -104,10 +104,19 @@ def fetch_release_tags(now: float) -> bool:
         {"schema": UPDATE_PROGRAM_SCHEMA, "attempted_at": now},
     )
     # ``--no-tags`` keeps git from following the template's other tags into the checkout beside the releases.
-    fetch = run_command(
-        ("git", "fetch", "--quiet", "--no-tags", url, _RELEASE_TAG_REFSPEC),
-        _FETCH_TIMEOUT_SECONDS,
-    )
+    try:
+        fetch = run_command(
+            ("git", "fetch", "--quiet", "--no-tags", url, _RELEASE_TAG_REFSPEC),
+            _FETCH_TIMEOUT_SECONDS,
+        )
+    except UnicodeDecodeError as exc:
+        # Git relays what the template's server sent it, which need not be text, and says so whether or not the
+        # tags came.
+        write_log_line(
+            "could not read what the fetch of the template's release tags printed (%s)"
+            % exc
+        )
+        return True
     if fetch.returncode == 0:
         write_log_line("fetched the template's release tags")
     else:

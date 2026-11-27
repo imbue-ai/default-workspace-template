@@ -264,3 +264,37 @@ def test_a_failed_fetch_is_logged_without_the_credentials_its_address_holds(
     assert "'https://example.com/private/template.git/'" in failures[0]
     for part in ("a-user", "a-secret", "token@"):
         assert part not in failures[0]
+
+
+# Stands in for git in a checkout that is not shallow and has no ``upstream`` remote. Its fetch relays a line of
+# the template's server that is not text.
+_GIT_WHOSE_FETCH_PRINTS_WHAT_IS_NOT_TEXT = """#!/bin/sh
+case "$1" in
+    rev-parse) echo false ;;
+    fetch) printf 'remote: \\377\\376 refused\\n' >&2; exit {fetch_exit_code} ;;
+    *) exit 2 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize("fetch_exit_code", [128, 0])
+def test_a_fetch_that_prints_what_is_not_text_is_logged_as_an_attempt_whatever_came_of_it(
+    staged: StagedUpdateWorkspace, fetch_exit_code: int
+) -> None:
+    write_parent_file(staged.root, "https://example.com/template.git")
+    git = staged.bin_dir / "git"
+    git.write_text(
+        _GIT_WHOSE_FETCH_PRINTS_WHAT_IS_NOT_TEXT.format(fetch_exit_code=fetch_exit_code)
+    )
+    git.chmod(0o755)
+
+    assert fetch_release_tags(_NOW) is True
+
+    assert staged.read_state(_FETCH_RECORD) == {"schema": 1, "attempted_at": _NOW}
+    unread = [
+        line
+        for line in staged.dispatcher_log_lines()
+        if "could not read what the fetch of the template's release tags printed"
+        in line
+    ]
+    assert len(unread) == 1
