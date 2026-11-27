@@ -365,6 +365,60 @@ def test_a_workspace_moved_to_a_channel_behind_its_version_reads_it_at_once_and_
     assert _armed_target(staged) == "minds-v0.9.1"
 
 
+def test_a_schedule_armed_for_a_channel_the_workspace_left_is_cancelled_before_the_new_channel_is_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    # Nothing is cancelled while the settings name the channel the schedule was armed for.
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 30) is False
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is True
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+    assert any(
+        line.endswith("it was armed for a channel the workspace no longer follows")
+        for line in staged.dispatcher_log_lines()
+    )
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 120) is False
+
+
+def test_a_schedule_armed_for_a_channel_the_workspace_left_does_not_stand_while_the_new_channel_cannot_be_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = None
+
+    # The arming half has no version of the new channel to hold the schedule against, and leaves it.
+    _tick(staged, feed, _NOW + 60)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 120) is True
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_schedule_somebody_asked_for_stands_when_the_workspace_leaves_its_channel(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    arm_schedule_in(staged, feed, now=_NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+
 def test_a_checkout_that_names_no_version_arms_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:

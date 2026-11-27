@@ -56,6 +56,11 @@ where supervisord runs the shell and where the cron line changes to.
 - `tick` -- the tick as a program. `system/scripts/update_dispatcher_tick.py` is its
   entry file, which the `update-self-dispatch` cron line runs, and
   `system/scripts/install_update_dispatcher_cron.py` writes that line at boot.
+  Before the dispatcher's minute it cancels a schedule the workspace armed for a
+  release channel its settings no longer name
+  (`control.cancel_schedule_armed_for_a_channel_left`), so a workspace moved to
+  another channel is not updated to the one it left, also while the new
+  channel's version cannot be read.
 - `agents` -- the workspace's agents read from the events file `mngr observe`
   writes, for the routes, which run no `mngr`. Where the file cannot vouch for the
   agents the answer is "unknown", never "none".

@@ -1,7 +1,9 @@
 """The dispatcher's minute as a program: what the workspace's cron runs, from the workspace root, with no venv.
 
-``main`` is the minute itself. ``install_cron_line_main`` writes the cron line that runs it, which the workspace's
-boot does so that the dispatcher runs in a workspace no client has asked anything of.
+``main`` is the minute itself: the dispatcher's, then the workspace's own arming, after a schedule the workspace
+armed for a release channel it has left is cancelled, which the dispatcher would otherwise start.
+``install_cron_line_main`` writes the cron line that runs it, which the workspace's boot does so that the dispatcher
+runs in a workspace no client has asked anything of.
 """
 
 import sys
@@ -9,7 +11,10 @@ import time
 
 from workspace_update_control.arming import tick_self_arming
 from workspace_update_control.channel import fetch_channel_file
-from workspace_update_control.control import install_cron_entry
+from workspace_update_control.control import (
+    cancel_schedule_armed_for_a_channel_left,
+    install_cron_entry,
+)
 from workspace_update_control.dispatcher import (
     AGENT_PIDS_DIR,
     PROC_ROOT,
@@ -22,6 +27,8 @@ from workspace_update_control.protocol import LIVE_CRON_DIRECTORY
 def main() -> None:
     now = time.time()
     agent_environment = AgentEnvironment()
+    # Before the dispatcher's minute, which starts whatever schedule stands inside its window.
+    cancel_schedule_armed_for_a_channel_left(now)
     run_tick(
         now=now,
         proc_root=PROC_ROOT,
