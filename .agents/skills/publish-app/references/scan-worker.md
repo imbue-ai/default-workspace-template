@@ -194,9 +194,11 @@ An app from before the SDK imports `app_schema.*` and
 `workspace_layout.identity`. Change each import to the same name under
 `imbue.app_sdk`: `app_schema.routes` is `imbue.app_sdk.routes`,
 `app_schema.testing` is `imbue.app_sdk.app_testing`, and
-`workspace_layout.identity` is `imbue.app_sdk.identity`. Any other dependency
-that is a path into the workspace (`path = "../../..."`) has to go as well; if
-the app cannot do without it, report `stuck` and name it.
+`workspace_layout.identity` is `imbue.app_sdk.identity`. One name is not the
+same: `app_schema.errors.AppSchemaError` is `imbue.app_sdk.errors.AppSdkError`.
+Any other dependency that is a path into the workspace
+(`path = "../../..."`) has to go as well; if the app cannot do without it,
+report `stuck` and name it.
 
 Then make the app's lock and environment again, and run its tests on them:
 
