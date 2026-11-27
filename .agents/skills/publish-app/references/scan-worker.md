@@ -301,7 +301,7 @@ Then the license file the README's last line names. A published app carries
 `system/apps/<package>/LICENSE`, whoever can see it for now, and a publish
 without one is refused:
 
-- **The app has none**: copy
+- **The app has none, and your task's "derived from" says "nothing"**: copy
   `.agents/skills/publish-app/assets/MIT-LICENSE.txt` to
   `system/apps/<package>/LICENSE` and fill in its second line: `<year>` is
   this year, and `<holder>` the account the repository goes under (the
