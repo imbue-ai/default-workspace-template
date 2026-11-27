@@ -15,6 +15,7 @@ An attempt is remembered, and the next is made a day later at the earliest, so a
 costs one fetch a day.
 """
 
+import re
 import tomllib
 from typing import Final
 
@@ -41,6 +42,8 @@ _GIT_TIMEOUT_SECONDS: Final[float] = 10.0
 # whole transfer. It runs inside the dispatcher's minute, which cron does not start again while one is running.
 _FETCH_TIMEOUT_SECONDS: Final[float] = 120.0
 _ERROR_MAX_CHARS: Final[int] = 300
+# The user and password an address may carry (``https://<token>@host/...``), as a private template's may.
+_URL_CREDENTIALS_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/\s@]+@")
 
 
 def _parent_url() -> str | None:
@@ -63,6 +66,11 @@ def _git_line(*arguments: str) -> str:
     """The one line a read-only git command prints; '' when it failed or could not run."""
     result = run_command(("git", *arguments), _GIT_TIMEOUT_SECONDS)
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _without_url_credentials(text: str) -> str:
+    """``text`` with the user and password dropped from every address in it."""
+    return _URL_CREDENTIALS_PATTERN.sub("", text)
 
 
 def _is_fetch_due(now: float) -> bool:
@@ -102,8 +110,9 @@ def fetch_release_tags(now: float) -> bool:
     if fetch.returncode == 0:
         write_log_line("fetched the template's release tags")
     else:
+        # The error may name the address fetched from: git's own, or the whole command when the fetch overran.
         write_log_line(
             "could not fetch the template's release tags: %s"
-            % fetch.stderr.strip()[-_ERROR_MAX_CHARS:]
+            % _without_url_credentials(fetch.stderr.strip())[-_ERROR_MAX_CHARS:]
         )
     return True

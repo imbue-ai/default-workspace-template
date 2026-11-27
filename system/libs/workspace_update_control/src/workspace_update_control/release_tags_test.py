@@ -11,6 +11,7 @@ from workspace_update_control.release_tags import (
     fetch_release_tags,
 )
 from workspace_update_control.testing import (
+    ScriptedToolAnswer,
     StagedUpdateWorkspace,
     epoch_at,
     stage_checkout_at,
@@ -185,3 +186,36 @@ def test_a_parent_toml_that_names_no_template_fetches_nothing(
     assert fetch_release_tags(_NOW) is False
 
     assert staged.read_state(_FETCH_RECORD) is None
+
+
+def test_a_failed_fetch_is_logged_without_the_credentials_its_address_holds(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    write_parent_file(staged.root, "https://example.com/template.git")
+    address = "https://a-user:a-secret-token@example.com/private/template.git"
+    # A checkout that is not shallow, whose ``upstream`` remote holds a token, and whose fetch git refuses.
+    staged.script_program_on_path(
+        "git",
+        [
+            ScriptedToolAnswer(stdout="false\n"),
+            ScriptedToolAnswer(stdout=address + "\n"),
+            ScriptedToolAnswer(
+                exit_code=128,
+                stderr=f"fatal: unable to access '{address}/': The requested URL returned error: 403\n",
+            ),
+        ],
+    )
+
+    assert fetch_release_tags(_NOW) is True
+
+    fetch_argv = staged.tool_calls("git")[-1]
+    assert fetch_argv[0] == "fetch" and address in fetch_argv
+    failures = [
+        line
+        for line in staged.dispatcher_log_lines()
+        if "could not fetch the template's release tags: " in line
+    ]
+    assert len(failures) == 1
+    assert "'https://example.com/private/template.git/'" in failures[0]
+    assert "a-secret-token" not in failures[0]
+    assert "a-user" not in failures[0]
