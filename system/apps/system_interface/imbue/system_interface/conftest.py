@@ -37,12 +37,12 @@ from imbue.system_interface.testing import PIPELINE_SEEDED_APP_NAME
 from imbue.system_interface.testing import PIPELINE_STUB_APP_NAME
 from imbue.system_interface.testing import PipelineHarness
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_server_answering
+from imbue.system_interface.testing import listening_loopback_socket
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.testing import stand_in_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from imbue.system_interface.wsgi import make_threaded_server
+from imbue.system_interface.wsgi import make_threaded_server_on
 
 
 @pytest.fixture(autouse=True)
@@ -334,9 +334,12 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
     registry_path = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
 
-    with serve_app(stand_in_app()) as seeded, serve_app(stand_in_app()) as stub:
-        # Reserved only once both stand-ins are bound, or one of their ephemeral binds can take the freed port.
-        port = find_free_port()
+    with (
+        serve_app(stand_in_app()) as seeded,
+        serve_app(stand_in_app()) as stub,
+        listening_loopback_socket() as listener,
+    ):
+        port = listener.getsockname()[1]
         base_url = f"http://127.0.0.1:{port}"
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         write_registry(
@@ -356,7 +359,7 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
         state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
         app = create_application(state)
 
-        server = make_threaded_server("127.0.0.1", port, app)
+        server = make_threaded_server_on(listener, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:

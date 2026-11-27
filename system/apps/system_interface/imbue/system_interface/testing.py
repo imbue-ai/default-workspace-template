@@ -32,6 +32,7 @@ from app_manifest.registry_location import registry_path
 from flask import Flask
 from pydantic import Field
 from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from werkzeug.serving import LISTEN_QUEUE
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
@@ -327,9 +328,26 @@ def stand_in_app() -> Flask:
 
 
 def find_free_port() -> int:
+    """A loopback port nothing listens on. Free only until something else binds it: a server that must serve on a
+    port picked before it starts adopts a ``listening_loopback_socket`` instead."""
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+@contextmanager
+def listening_loopback_socket() -> Generator[socket.socket, None, None]:
+    """A socket listening on a loopback port the OS picks, held for the block.
+
+    For a server whose port must be known before it is built: the URLs of the apps it serves beside, its own
+    config. A port picked and given back (``find_free_port``) can be handed to any bind or connect in the process
+    before the server binds it, which then fails with "Address already in use"; this one is never free until the
+    block ends. The server adopts it through ``make_threaded_server_on``.
+    """
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(LISTEN_QUEUE)
+        yield listener
 
 
 def can_bind_loopback_port(port: int) -> bool:
@@ -399,13 +417,13 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = find_free_port()
-    server = make_threaded_server(host, port, app)
+    # Bound to port 0 by the server itself: a port picked first and given back could be taken before the bind.
+    server = make_threaded_server(host, 0, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        _wait_until_serving(host, port)
-        yield ServedApp(host, port)
+        _wait_until_serving(host, server.port)
+        yield ServedApp(host, server.port)
     finally:
         server.shutdown()
         thread.join(timeout=5.0)

@@ -1,0 +1,3 @@
+Tests only: the chat's test servers no longer lose their port before they start, as `test_a_drawer_row_kebab_stops_that_chat` did on main with "Address already in use". `running_workspace` and the creation-recovery suite's workspace pick their own ports and hold each until its server adopts it, through the new `make_threaded_server_on` in `wsgi.py`, so they no longer take ports from the caller. `serve_app` binds port 0 itself. The running chat's `make_threaded_server` binds as before.
+
+`test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree` counts only the observers watching its own folder, so an observer another test in the same process starts meanwhile no longer fails it.
