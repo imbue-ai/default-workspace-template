@@ -14,7 +14,6 @@ numbers are SKILL.md's.
 - A skill something else uses too
 - At the scope gate
 - In the worker's task
-- After the version is published
 - When nothing was published
 
 ## Which skills
@@ -112,35 +111,11 @@ The task file's `skills to take in` line names each skill, and after it
 everything else that uses it (the paths the `git grep` above printed), so the
 worker repoints them in the same change. `none` when there is none.
 
-## After the version is published
-
-Step 8 merges the worker's branch, and with it the skill's move. Then, before
-you tell the user it is published:
-
-1. **The workspace's own packages.** When the merge changed the root
-   `uv.lock` (a skill with a Python project of its own left the workspace's
-   lock), run `uv sync --all-packages --frozen`.
-2. **The data the skill kept.** The worker's report names each directory the
-   skill's data moves between (`data/.skills/<skill>/` to a directory under
-   `data/.apps/<name>/`). Data is not in git, so the merge did not move it.
-   Stop the app's programs (`supervisorctl stop <name>`, and each
-   `<name>-<role>`), move the directory (`mv`, never a copy: it can be
-   large), and start them again:
-   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`
-   for the one named after the app, and `supervisorctl start <name>-<role>`
-   for each of the others.
-   An app's data is what an update copies aside and an uninstall keeps, and
-   only what is under `data/.apps/<name>/` counts as that.
-   With no data to move, run that `verify_app.py` call all the same: an
-   app's program installs the app's package as it starts, and the commands
-   the skill now runs are not there until it has.
-3. **Check it on the user's data.** Open the app and confirm it still shows
-   what it showed before, then run the skill once under the name the
-   worker's report gives it.
-4. **Tell the user** the skill's new command, when it changed and they run
-   it by name.
-
 ## When nothing was published
 
 The move lives only on the worker's branch until step 8, so a publish that
 stops or is called off leaves the skill where it was and the app as it was.
+
+Once the version is published, step 8 merges the branch, and
+`after-publishing.md` has what the move still needs from you then: the
+skill's data moved, the app started again, the skill run once.

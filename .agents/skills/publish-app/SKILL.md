@@ -45,8 +45,8 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 - **Keep git and file words out of what you say**
   (`.agents/shared/references/user-facing-language.md`): the user is sharing
   an app, and the one technical noun they need is the address of its page.
-  Their progress view shows a few plain steps ("Decide what to share",
-  "Publish it"), not the list below.
+  Their progress view shows a few plain steps ("Decide what to share", "Get
+  the app ready (in the background)", "Publish it"), not the list below.
 
 ## Other tasks
 
@@ -132,7 +132,9 @@ Work out the proposal first:
   want public: internal notes, drafts, sample data about real people. Each
   becomes a glob in the manifest's `[publish] exclude`.
 
-Then send ONE message saying, in plain language:
+Then send ONE message saying, in plain language (with what "At the scope
+gate" in `references/skills-the-app-needs.md` adds, when step 1 sent you
+there):
 
 - what WILL be published: the app, with the skills and automations it carries,
   described as features and not as a file list;
@@ -156,58 +158,19 @@ Only after the user replied to the scope gate.
 1. Confirm the GitHub access and read the account the repository goes under
    (`owner`): "Confirming the access" in `references/github-access.md`. End
    your turn if the approval is not there yet.
-2. Dispatch the worker with the commands below, as `<slug>`: `publish-`
-   followed by the app's name (`publish-notes`). Its branch is `mngr/<slug>`.
-   Remove one an earlier attempt left first ("A worker an earlier attempt
-   left" in `references/results.md`).
+2. Dispatch the worker as `references/dispatching-the-worker.md` says: it has
+   the task file and the commands. The worker is `<slug>`, `publish-`
+   followed by the app's name (`publish-notes`), and its branch is
+   `mngr/<slug>`. Its own instructions are `references/scan-worker.md`, a
+   guide written for it and not for you.
 3. Lead it as the `launch-task` skill says a lead does: its `question` gates,
    a timeout, a message to it.
-
-The task file holds parameters only; the worker's instructions are in
-`references/scan-worker.md`, a guide written for it and not for you:
-
-````bash
-mkdir -p data/.tasks/launch-task/<slug>
-cat > data/.tasks/launch-task/<slug>/task.md << 'TASK_EOF'
----
-finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
----
-
-# Task: Get the "<name>" app ready to publish
-
-Read `.agents/skills/publish-app/references/scan-worker.md` in your checkout
-and follow it.
-
-- app: <name>
-- package: <package>
-- version: <version>
-- last published: <published_version, or "never: this is the first publish">
-- repository: https://github.com/<owner>/<repo_name>
-- leave out of what is published: <one glob per line, relative to the app's directory, or "nothing more">
-- skills to take in: <each skill, then the paths that also use it, or "none">
-- derived from: <upstream_url, for a modified app, or "nothing">
-- context: <what the app does for its user, the accounts and services it
-  depends on, known gaps -- what the worker needs to write good guidance for
-  whoever installs it, and a good README>
-TASK_EOF
-````
-
-```bash
-uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name <slug> --template worker \
-    --runtime-dir data/.tasks/launch-task/<slug>/ \
-    --task-file data/.tasks/launch-task/<slug>/task.md
-```
-
-```bash
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
-    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
-    --name <slug> --task-file data/.tasks/launch-task/<slug>/task.md
-```
 
 On `done`, the report names the version the worker settled on (it raises the
 version to a major one when it finds that whoever installed the app must act)
 and anything it could not determine. Do not merge or destroy the worker yet.
+On `stuck`, nothing was published: read "When the worker is stuck" in
+`references/results.md`.
 
 ## Step 5: Assemble and scan what will be published
 
@@ -280,8 +243,8 @@ uv run --no-sync app-install publish record <name>
 It writes what was published into the app's record. If this step is
 interrupted, or its result is not `recorded` with no `problems`, the app IS
 published: never push again, and read "When recording stops" in
-`references/results.md`. When the app took in a skill, finish with "After
-the version is published" in `references/skills-the-app-needs.md`.
+`references/results.md`. Then do what `references/after-publishing.md` says,
+before you tell the user anything.
 
 Then destroy the worker and its branch:
 

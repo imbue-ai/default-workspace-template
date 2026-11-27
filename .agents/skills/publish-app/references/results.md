@@ -10,6 +10,7 @@ and a publish the user calls off. Step numbers are SKILL.md's.
 - An app that cannot be published
 - A publish that was pushed and never finished
 - A worker an earlier attempt left
+- When the worker is stuck
 - When assembling stops
 - When the user calls it off
 - After a push
@@ -50,6 +51,29 @@ git branch -D mngr/<slug>
 
 Never do that for a version that was pushed and not recorded (the section
 above): you are not at the dispatch step at all.
+
+## When the worker is stuck
+
+A `stuck` report quotes what stopped the worker. Nothing was published, and
+the workspace's copy of the app is as it was: the worker's branch is not
+merged.
+
+- **The app needs an app SDK that is not released yet.** An app built here
+  runs on the workspace's own app SDK, and a published one has to run on a
+  released one. The worker found none the app's tests pass on. The app works
+  and cannot be shared yet. Tell the user that in their terms (it is built on
+  a part of Imbue Studio that is newer than the last release, so sharing it
+  has to wait for the next one), and that nothing was published.
+- **The app cannot take in a skill it needs**, or cannot do without something
+  else that exists only in this workspace (the report names it). Decide with
+  the user whether the app is worth publishing without it ("Which skills" in
+  `skills-the-app-needs.md`); if not, it cannot be published as it is.
+- **Anything else.** When the report shows a fix you can describe, send it to
+  the worker as a message and wait for its next report. Otherwise tell the
+  user plainly that nothing was published, and why.
+
+When the publish stops here, remove the worker as "When the user calls it
+off" below does.
 
 ## When assembling stops
 
