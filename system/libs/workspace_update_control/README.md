@@ -85,8 +85,10 @@ requests as they always did and record the last one that named a version
 (`client-ceiling.json`). For
 `CLIENT_CEILING_HOLD_SECONDS` after it, the dispatcher arms nothing past that
 version, a request that names none takes the older of the two, and an armed schedule
-is left to that desktop's refreshes. A workspace no such desktop is asking follows
-its channel.
+is left to that desktop's refreshes. A refresh that names a release the checkout is at
+or past leaves the version of a schedule the workspace filled in itself as it is, and
+rewrites the rest: written there, that release would start an update to what is
+already installed. A workspace no such desktop is asking follows its channel.
 
 A desktop from before the update routes asks no route: it runs the program it ships,
 which points the cron line at that program's own dispatcher. That dispatcher reads no
