@@ -362,7 +362,8 @@ def _scripted_messenger(
     discovered: AgentMatch | None = None,
     pause: Callable[[float], None] = lambda _seconds: None,
 ) -> MngrMessenger:
-    """A messenger whose sends answer with ``results`` in order and then deliver, each recorded in ``send_calls``.
+    """A messenger whose sends and key presses answer with ``results`` in order and then deliver, each recorded in
+    ``send_calls``.
 
     The agent is found at ``discovered``; with none given, looking it up fails the test.
     """
@@ -377,7 +378,7 @@ def _scripted_messenger(
         send_calls.append(tuple(matches))
         return remaining.pop(0) if remaining else _delivered_to(matches)
 
-    return MngrMessenger(discover=_discover, send=_send, pause=pause)
+    return MngrMessenger(discover=_discover, send=_send, press=_send, pause=pause)
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -553,6 +554,61 @@ def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> Non
     messenger = _scripted_messenger([_not_ready(), _submission_unconfirmed()], send_calls)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
     assert send_calls == [(known,)] * 3
+
+
+def _not_running() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="Agent is not running (state: STOPPED)",
+                kind=SendFailureKind.AGENT_UNREACHABLE,
+            )
+        ]
+    )
+
+
+def _refused_press() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(agent_name="alpha", reason="refused to press C-c", kind=SendFailureKind.INPUT_BLOCKED)
+        ]
+    )
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "known_location_result",
+    [_not_found_on_host, _not_running, MessageResult],
+    ids=["agent-not-found", "not-running", "matched-nothing"],
+)
+def test_a_key_press_that_reached_no_agent_is_pressed_at_a_discovered_location(
+    known_location_result: Callable[[], MessageResult],
+) -> None:
+    """Nothing was pressed where no running agent was found, so the key is pressed where discovery finds it."""
+    known = _make_match(host="host-a")
+    discovered = _make_match(host="host-b")
+    press_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([known_location_result()], press_calls, discovered=discovered)
+    assert messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
+    assert press_calls == [(known,), (discovered,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "known_location_result",
+    [_refused_press, _unclassified_failure, _state_unknown],
+    ids=["refused", "unclassified", "state-unknown"],
+)
+def test_a_key_press_that_failed_at_the_agent_is_not_pressed_again(
+    known_location_result: Callable[[], MessageResult],
+) -> None:
+    """The press found the agent, so the chat neither looks it up again nor presses a second time."""
+    known = _make_match()
+    press_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([known_location_result()], press_calls)
+    assert not messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
+    assert press_calls == [(known,)]
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
