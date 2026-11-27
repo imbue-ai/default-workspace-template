@@ -4,7 +4,7 @@ The update dispatcher arms a workspace's own updates, with no client present.
 
 - `channel` reads the version the channel is on from `<feed>/<channel>-web.json`, at most once an hour and within a hard timeout, and keeps the last answer with how the last read went (`channel-version.json`). A read that fails keeps the last version for display.
 
-- `arming` is the desktop sweep's `should_auto_arm` taken from the workspace's own files. Each minute, when arming is on, nothing is armed or running and no decision is waiting, it arms a schedule for the channel's version if the workspace is behind it, unless the user skipped that version or a run already went out for it. A channel file that cannot be read arms nothing. A workspace behind by a patch alone is armed too.
+- `arming` is the desktop sweep's `should_auto_arm` taken from the workspace's own files. Each minute, when arming is on, nothing is armed or running and no decision is waiting, it arms a schedule for the channel's version if the workspace is behind it, unless the user skipped that version or a run already went out for it. A channel file that cannot be read arms nothing. A workspace behind by a patch alone is armed too. An arm that is refused, as one is while no AI account is signed in, is written to the dispatcher's log once an hour, when the channel's version is read.
 
 - `control` takes `ceiling`, the window and the backup flag as optional. A value left out is the workspace's own, and a schedule armed with such values keeps them current. A request that names a `ceiling` comes from a desktop built before this: its version is recorded (`client-ceiling.json`), and for 15 minutes after it the workspace arms nothing past it and leaves an armed schedule to that desktop's refreshes.
 

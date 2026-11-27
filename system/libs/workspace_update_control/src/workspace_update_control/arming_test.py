@@ -895,6 +895,36 @@ def test_a_workspace_with_no_account_signed_in_arms_nothing_and_reads_git_once(
     assert (installed["template_ref"], installed["read_at"]) == (_INSTALLED, _NOW)
 
 
+def _refused_arm_lines(staged: StagedUpdateWorkspace) -> list[str]:
+    return [
+        line
+        for line in staged.dispatcher_log_lines()
+        if "did not arm the update" in line
+    ]
+
+
+def test_a_refused_arm_is_logged_when_the_channel_is_read_and_not_in_every_minute(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged = _stage_signed_out(tmp_path_factory, monkeypatch)
+    feed = _stage_a_workspace_behind_its_channel(staged)
+
+    _tick(staged, feed, _NOW)
+    _tick(staged, feed, _NOW + 60)
+    _tick(staged, feed, _NOW + 120)
+
+    lines = _refused_arm_lines(staged)
+    assert len(lines) == 1
+    assert lines[0].endswith(
+        f"did not arm the update to {_ON_THE_CHANNEL} for the workspace itself: "
+        "NEEDS_SIGN_IN (No AI account is signed in to this workspace.)"
+    )
+
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert len(_refused_arm_lines(staged)) == 2
+
+
 def _stage_signed_out(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> StagedUpdateWorkspace:
