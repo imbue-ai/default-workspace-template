@@ -1,0 +1,1 @@
+- A workspace that has run an update deletes an initial data document it finds, with no part of it written. A template from before the initial data ignores the document, and one left behind there would otherwise be applied at the first boot after an update, putting the create's settings back over what the owner has chosen since.

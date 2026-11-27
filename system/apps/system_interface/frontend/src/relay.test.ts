@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   initEmbedderRelay,
   isWorkspaceFamilyOrigin,
+  repeatEmbedderCapabilitiesTo,
   resetEmbedderRelayForTesting,
   sendToChildFrame,
   setChildFrameMessageHandler,
@@ -128,6 +129,24 @@ describe("the embedder relay", () => {
 
     expect(firstSpy).toHaveBeenCalledWith(verdicts, "*");
     expect(secondSpy).toHaveBeenCalledWith(verdicts, "*");
+  });
+
+  it("repeats what the chrome last said it can do to a frame created since, unchanged, and nothing before it said", () => {
+    const chrome = framedUnderChrome();
+    const early = mountFrame();
+    const earlySpy = vi.spyOn(frameWindow(early), "postMessage");
+    repeatEmbedderCapabilitiesTo(early);
+    expect(earlySpy).not.toHaveBeenCalled();
+
+    post({ type: "minds:embedder-capabilities", canPopOut: true }, "https://chrome.example", chrome);
+    const said = { type: "minds:embedder-capabilities", canPopOut: false, declinesProviderRelay: true };
+    post(said, "https://chrome.example", chrome);
+    post({ type: "minds:immersive-changed", on: false }, "https://chrome.example", chrome);
+    const late = mountFrame();
+    const lateSpy = vi.spyOn(frameWindow(late), "postMessage");
+    repeatEmbedderCapabilitiesTo(late);
+
+    expect(lateSpy).toHaveBeenCalledExactlyOnceWith(said, "*");
   });
 
   it("hands a chrome message of a type the contract does not define to the app-message handler, beside the frames", () => {

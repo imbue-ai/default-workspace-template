@@ -1410,6 +1410,24 @@ ports in all before it falls back as below. A fresh sign-in that lands on a
 port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
 fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 
+A chrome with no computer behind it, as Imbue Studio in a browser, cannot listen
+on a port of the user's machine, and says so before any sign-in
+(`declinesProviderRelay` in `minds:embedder-capabilities`, which reaches a page
+in the shell's handshake, and the first run's provider page, which the shell
+greets with none, as that message itself, repeated to it once it has loaded).
+Under such a chrome the chooser asks for no relay. It opens a browser tab at
+the click that asks for the sign-in, which is when a browser allows one, and
+shows the sign-in's page in it once the sign-in has started and says where that
+is; the chooser is then on the step that takes the code. A click outside the
+chooser that opens it on one sign-in (a tile of the first run's provider page,
+"Sign in again" in a chat's notice) opens that tab itself and hands it over
+(`signInTab` in the chooser's intent), since the chooser loads its lanes before
+it starts the sign-in. That click goes by the lanes itself, to open no tab for
+a pasted key, and a chat's page otherwise loads them only with its chooser: it
+asks for them when it draws the notice. A sign-in that does not start closes
+the tab, and a browser that opens none leaves the link to the page as the first
+step.
+
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
 the browser is out ("Finish signing in to <provider> in your browser", with

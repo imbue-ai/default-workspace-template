@@ -12,6 +12,7 @@ import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEv
 import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
+import { openReauthTab, prepareReauthTab } from "./ProviderChooserModal";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import {
   isResendingAfterSignIn,
@@ -462,6 +463,7 @@ const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent
 function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
   const accountId = chat?.active_agent.account_id ?? "";
+  prepareReauthTab();
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
@@ -476,7 +478,7 @@ function renderReauthAction(chatId: string): m.Children {
             accountId !== "" && (!areAccountsLoaded() || accountForAgent(accountId) !== null);
           openProviderChooser(
             isOwnAccountSignedIn
-              ? { accountId }
+              ? { accountId, signInTab: openReauthTab(accountId) }
               : chat === undefined
                 ? {}
                 : { onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) },

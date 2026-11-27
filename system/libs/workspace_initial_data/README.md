@@ -89,6 +89,28 @@ interrupted, since it holds storage credentials and nothing more will be read
 from it. A document left again with the bytes of one already applied is deleted
 and writes nothing; a document with other bytes is a new one, and is applied.
 
+## A document found after an update
+
+A template from before the initial data ignores the file, and whoever created the
+workspace deletes it once the workspace's status has shown that. A create that
+ended before that read leaves the file behind. When such a workspace later
+updates to a template that applies one, the document's values are the create's:
+writing them would put a backup destination of `NONE` back over backups the owner
+has turned on since.
+
+So the step first looks for the record the update-self skill writes for every run,
+`data/.state/update-apply/run.json`. In a workspace that holds it, a document is
+deleted with no part of it written, and the status stays as it was recorded:
+`NONE` for a workspace that never applied one. A new workspace cannot hold that
+record: everything under `data/.state/` is outside git, so neither a fresh
+checkout, nor a baked pool machine, nor a published template carries it, and the
+migration skill leaves it behind.
+
+The step is the first place the template's own code is sure to run after such an
+update, since the update itself is run by the older template's code. It runs when
+the machine boots and not when an update restarts the services, so the document is
+deleted at the workspace's first stop and start after the update.
+
 ## The contract with the desktop
 
 The Imbue Studio desktop builds the document and this library applies it, across

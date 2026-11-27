@@ -10,8 +10,13 @@ repository's ``workspace_update_state.py``), with the newest version taken from 
 client's build. Two things differ, because the workspace has only its own files to go by: a run with no verdict
 holds an arm back for as long as it has none (the watchdog closes out a run whose lead is gone), and a workspace
 behind its channel by a patch alone is armed like any other.
+
+A checkout that names no version cannot be behind anything. In the minute the channel's version is read, the tick
+fetches the template's release tags into such a checkout (``release_tags``), unless an update is running. Where
+the settings name no feed there is no such read, and the fetch is due in any minute.
 """
 
+import os
 from collections.abc import Callable, Mapping
 from typing import Final, NamedTuple
 
@@ -53,6 +58,7 @@ from workspace_update_control.protocol import (
     SCHEDULE_FILE_PATH,
     SKIPPED_TARGET_FILE_PATH,
 )
+from workspace_update_control.release_tags import fetch_release_tags
 from workspace_update_control.settings import read_update_settings
 
 # How a run that ended short is recorded (the update-self skill's verdicts, the desktop's
@@ -185,11 +191,9 @@ def _run_identity(run: Mapping[str, object] | None) -> list[object]:
     return [run_started_at(run), run.get("verdict") if run is not None else None]
 
 
-def read_installed_version(now: float) -> str:
-    """The version of the checkout, read from git at most once an hour while the run record stands still.
-
-    A read git could not make is not kept, so the next minute asks again; it answers '' for this one.
-    """
+def _read_installed_version(now: float) -> str | None:
+    """The version of the checkout, read from git at most once an hour while the run record stands still; None
+    when git could not be asked. A read git could not make is not kept, so the next minute asks again."""
     identity = _run_identity(read_json_object(RUN_RECORD_PATH))
     kept = read_json_object(INSTALLED_VERSION_FILE_PATH)
     if kept is not None and kept.get("run_identity") == identity:
@@ -207,7 +211,7 @@ def read_installed_version(now: float) -> str:
         write_log_line(
             "could not read the checkout's version from git; asking again next minute"
         )
-        return ""
+        return None
     write_json_atomically(
         INSTALLED_VERSION_FILE_PATH,
         {
@@ -218,6 +222,26 @@ def read_installed_version(now: float) -> str:
         },
     )
     return template_ref
+
+
+def read_installed_version(now: float) -> str:
+    """The version of the checkout, read from git at most once an hour while the run record stands still.
+
+    A read git could not make is not kept, so the next minute asks again; it answers '' for this one.
+    """
+    return _read_installed_version(now) or ""
+
+
+def _fetch_release_tags_where_no_version_is_named(now: float) -> None:
+    """Fetch the template's release tags into a checkout that names no version, and have its version read again."""
+    if _read_installed_version(now) != "":
+        return
+    if not fetch_release_tags(now):
+        return
+    try:
+        os.remove(INSTALLED_VERSION_FILE_PATH)
+    except FileNotFoundError:
+        pass
 
 
 def _why_not_moved_to(facts: ArmingFacts, moved_to: str, now: float) -> str:
@@ -252,6 +276,11 @@ def tick_self_arming(
     as one is while no AI account is signed in, is tried again every minute, and is written to the dispatcher's
     log in the minute the channel's version was read.
 
+    A checkout that names no version has the template's release tags fetched into it in the minute the channel's
+    version is read, or in any minute where the settings name no feed to read one from, and again a day later at
+    the earliest while it still names none. Nothing is fetched while an
+    update is running, which fetches into the same checkout.
+
     A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
     skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
     version. One that stands at a version the user skipped is cancelled as well. A skip cancels whatever is armed
@@ -267,6 +296,14 @@ def tick_self_arming(
         settings, now, fetch_channel_file, is_due_when_unread=False
     )
     facts = read_arming_facts(settings.is_arming_enabled, now)
+    is_channel_read_this_minute = (
+        channel_version is not None and channel_version.get("checked_at") == now
+    )
+    # Settings that name no feed, as a tier that publishes none writes them, come with no read of the channel to
+    # go by. The fetch's own record of its last attempt still spaces the fetches a day apart.
+    is_tag_fetch_minute = is_channel_read_this_minute or not settings.feed_base_url
+    if is_tag_fetch_minute and not facts.is_run_in_flight:
+        _fetch_release_tags_where_no_version_is_named(now)
     if facts.is_scheduled:
         self_armed = read_self_armed_schedule(now)
         if self_armed is None:
@@ -321,11 +358,7 @@ def tick_self_arming(
     if answer.get("outcome") != OUTCOME_ARMED:
         # Said in the minute the channel's version was read, which comes once an hour, and not in each of the
         # minutes between. A schedule that stands says so itself where it is found.
-        if (
-            answer.get("outcome") != OUTCOME_ALREADY_ARMED
-            and channel_version is not None
-            and channel_version.get("checked_at") == now
-        ):
+        if answer.get("outcome") != OUTCOME_ALREADY_ARMED and is_channel_read_this_minute:
             write_log_line(
                 "did not arm the update to %s for the workspace itself: %s (%s)"
                 % (target_ref, answer.get("outcome"), answer.get("detail"))

@@ -23,7 +23,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
-import { endProviderRelay } from "./providerRelay";
+import { type PendingTab, endProviderRelay } from "./providerRelay";
 
 export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
 export type FlowState = "pending" | "ok" | "failed";
@@ -251,6 +251,18 @@ export function loadLanesAndAccountsWithRetry(): Promise<void> {
   }, LANES_AND_ACCOUNTS_ATTEMPTS);
 }
 
+let isLanesLoadRequested = false;
+
+/** Kick off the lanes' load ahead of the chooser's own, for a page that must know a lane before its chooser
+ *  opens. Idempotent, and asked once per page: the chooser's own load covers one that gave up. */
+export function requestLanes(): void {
+  if (lanesLoaded || isLanesLoadRequested) return;
+  isLanesLoadRequested = true;
+  retryWithBackoff(loadLanes, LANES_AND_ACCOUNTS_ATTEMPTS).catch((error: unknown) => {
+    console.warn("Could not load the providers ahead of a sign-in", error);
+  });
+}
+
 /** Name an account, or pass "" to go back to the provider's own name.
  *
  * Display only: nothing keys off the name, so this cannot strand a chat. */
@@ -462,6 +474,8 @@ let chooserOpen = false;
 let chooserAccountId: string | null = null;
 // Which lane the chooser should open ON, for a caller that already showed the lanes itself.
 let chooserLaneId: string | null = null;
+// The tab the opening click opened for the page of the sign-in the chooser opens on.
+let chooserSignInTab: PendingTab | null = null;
 // What to do once a sign-in succeeds or a signed-in account is picked: launch a chat waiting for
 // an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
 // can tell.
@@ -492,6 +506,9 @@ export interface ProviderChooserIntent {
   accountId?: string;
   /** Open on THIS lane's sign-in rather than the lane list: the caller listed the lanes itself. */
   laneId?: string;
+  /** The tab the opening click opened for the page of the sign-in the chooser opens on (`accountId` or `laneId`),
+   *  under a chrome that opens no page for it. The chooser shows the page there, or closes the tab. */
+  signInTab?: PendingTab | null;
   /** Run once a sign-in succeeds, with the account it produced. Also run when a signed-in
    *  account is picked instead, which is why its presence makes those rows pickable. */
   onSignedIn?: (accountId: string) => void;
@@ -506,10 +523,14 @@ export interface ProviderChooserIntent {
 
 /** Open the chooser, optionally saying why it was opened. */
 export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
-  if (chooserOpen) return;
+  if (chooserOpen) {
+    intent.signInTab?.close();
+    return;
+  }
   chooserOpen = true;
   chooserAccountId = intent.accountId ?? null;
   chooserLaneId = intent.laneId ?? null;
+  chooserSignInTab = intent.signInTab ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
@@ -566,6 +587,14 @@ export function takeChooserLaneId(): string | null {
   return laneId;
 }
 
+/** The tab the opening click opened for the sign-in's page, or null. Read once by the modal at init, which then
+ *  owns it. */
+export function takeChooserSignInTab(): PendingTab | null {
+  const tab = chooserSignInTab;
+  chooserSignInTab = null;
+  return tab;
+}
+
 export function closeProviderChooser(): void {
   if (!chooserOpen) return;
   chooserOpen = false;
@@ -577,6 +606,10 @@ export function closeProviderChooser(): void {
   chooserOnDismissed = null;
   chooserUnpickable = null;
   chooserOnRoomChosen = null;
+  // A chooser closed before it read what it was opened on starts no sign-in, and its tab is open on nothing.
+  chooserAccountId = null;
+  chooserLaneId = null;
+  takeChooserSignInTab()?.close();
   dismissed?.();
   m.redraw();
 }

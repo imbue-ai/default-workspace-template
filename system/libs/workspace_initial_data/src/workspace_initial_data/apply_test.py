@@ -9,7 +9,12 @@ from workspace_profile.snapshot import (
     SNAPSHOT_RELATIVE_PATH,
     write_workspace_profile_snapshot,
 )
-from workspace_profile.timezone import USER_TIMEZONE_RELATIVE_PATH, read_user_timezone
+from workspace_profile.timezone import (
+    USER_TIMEZONE_RELATIVE_PATH,
+    read_user_timezone,
+    write_user_timezone,
+)
+from workspace_update_control.protocol import RUN_RECORD_PATH
 from workspace_update_control.settings import (
     UpdateSettings,
     read_update_settings,
@@ -57,6 +62,15 @@ def _stored_profile(workspace_root: Path) -> object:
 
 def _is_nothing_written(workspace_root: Path) -> bool:
     return not (workspace_root / "data").exists()
+
+
+def _record_an_update_run(workspace_root: Path) -> None:
+    """Leave the record the update-self skill writes for every run, as a workspace that has updated holds it."""
+    run_record_path = workspace_root / RUN_RECORD_PATH
+    run_record_path.parent.mkdir(parents=True, exist_ok=True)
+    run_record_path.write_text(
+        json.dumps({"chat_agent_name": "update", "verdict": "UPDATED"})
+    )
 
 
 def test_a_document_is_applied_once_each_part_through_its_writer_and_then_deleted(
@@ -787,3 +801,81 @@ def test_the_update_settings_are_refused_from_anywhere_but_the_workspaces_root(
     assert status.state is InitialDataState.FAILED
     assert "not the working directory" in status.detail
     assert _is_nothing_written(workspace_root)
+
+
+def test_a_document_found_in_a_workspace_that_has_run_an_update_is_deleted_with_no_part_written(
+    workspace_root: Path,
+    host_dir: Path,
+    backup_destination: RecordingBackupDestination,
+    logged: list[str],
+) -> None:
+    # What the owner chose while the workspace ran a template that ignored the document.
+    take_update_settings({**UPDATE_SETTINGS_PART_DOCUMENT, "channel": "beta"})
+    write_user_timezone(workspace_root, "Asia/Tokyo", False)
+    _record_an_update_run(workspace_root)
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == NO_INITIAL_DATA
+    assert not document_path.exists()
+    assert not (workspace_root / STATUS_RELATIVE_PATH).exists()
+    assert not (workspace_root / SNAPSHOT_RELATIVE_PATH).exists()
+    assert read_user_timezone(workspace_root) == "Asia/Tokyo"
+    stored_settings = read_update_settings()
+    assert stored_settings is not None and stored_settings.channel == "beta"
+    assert backup_destination.requests == []
+    assert any("with no part of it written" in message for message in logged)
+    assert not any(STORAGE_TOKEN in message for message in logged)
+
+
+def test_a_kept_document_is_deleted_once_the_workspace_has_run_an_update_and_its_failure_stays_recorded(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    document_path = write_initial_data_document(host_dir, initial_data_document())
+    backup_destination.refusal = "a backup operation is running"
+    failed = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+    assert failed.state is InitialDataState.FAILED and document_path.exists()
+    backup_destination.refusal = ""
+    _record_an_update_run(workspace_root)
+
+    status = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 86_400
+    )
+
+    assert status == failed
+    assert read_initial_data_status(workspace_root) == failed
+    assert not document_path.exists()
+    # The refused part is not tried again: the one request is the refused one.
+    assert len(backup_destination.requests) == 1
+
+
+def test_a_workspace_that_has_run_an_update_and_holds_no_document_keeps_its_status(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    write_initial_data_document(host_dir, initial_data_document())
+    apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+    _record_an_update_run(workspace_root)
+
+    status = apply_initial_data(
+        host_dir, workspace_root, backup_destination, _NOW + 86_400
+    )
+
+    assert status == _APPLIED
+    assert len(backup_destination.requests) == 1
+
+
+def test_a_stale_document_that_cannot_be_deleted_is_still_not_applied(
+    workspace_root: Path, host_dir: Path, backup_destination: RecordingBackupDestination
+) -> None:
+    _record_an_update_run(workspace_root)
+    document_path = host_dir / INITIAL_DATA_FILE_NAME
+    document_path.mkdir()
+
+    status = apply_initial_data(host_dir, workspace_root, backup_destination, _NOW)
+
+    assert status == NO_INITIAL_DATA
+    assert document_path.is_dir()
+    assert stat.S_IMODE(document_path.stat().st_mode) == 0o600
+    assert not (workspace_root / STATUS_RELATIVE_PATH).exists()
+    assert backup_destination.requests == []

@@ -80,6 +80,44 @@ def test_the_tick_runs_the_workspaces_own_arming_which_reads_its_channel_off_the
     assert staged.read_state("schedule.json") is None
 
 
+def test_the_tick_starts_no_update_a_schedule_armed_for_a_channel_the_workspace_left_stands_for(
+    staged: StagedUpdateWorkspace, local_feed: str
+) -> None:
+    """The window is open all day, so the dispatcher's minute would start the schedule if it still stood."""
+    left = {"channel": "stable", "feed_base_url": local_feed}
+    staged.write_state(
+        "channel-version.json",
+        {
+            **left,
+            "template_ref": "minds-v0.10.5",
+            "read_at": 1.0,
+            "checked_at": 1.0,
+            "error": "",
+        },
+    )
+    staged.write_state(
+        "schedule.json",
+        {
+            **armed_schedule(1.0, ceiling="minds-v0.10.5", is_auto_armed=True),
+            **_ALL_DAY,
+        },
+    )
+    staged.write_state(
+        "schedule-origin.json", {"armed_at": 1.0, "is_ceiling_followed": True}
+    )
+    # The owner moves the workspace to a channel the feed publishes no file for.
+    staged.write_state(
+        "settings.json",
+        update_settings_document(channel="beta", feed_base_url=local_feed),
+    )
+
+    tick.main()
+
+    assert staged.chat_creates() == []
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+
 def test_the_entry_file_runs_the_tick_with_no_venv_in_the_workspace_it_is_run_from(
     staged: StagedUpdateWorkspace,
 ) -> None:

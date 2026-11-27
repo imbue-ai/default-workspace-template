@@ -31,6 +31,8 @@ CLIENT_CEILING_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/client-ceiling.json"
 SCHEDULE_ORIGIN_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/schedule-origin.json"
 # The version of the checkout as the dispatcher last read it from git.
 INSTALLED_VERSION_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/installed-version.json"
+# When the dispatcher last tried to fetch the template's release tags into a checkout that named no version.
+RELEASE_TAG_FETCH_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/release-tags-fetch.json"
 
 # The user's timezone as the workspace records it (``workspace_profile.timezone`` writes it), which the update
 # window's hours are read in.

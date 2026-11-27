@@ -19,6 +19,7 @@ const HANDSHAKE: ShellHandshake = {
   opensLocalFiles: false,
   opensWorkspaceSettings: false,
   showsCoachMarks: false,
+  declinesProviderRelay: false,
   isViewing: false,
 };
 

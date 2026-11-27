@@ -593,6 +593,8 @@ export class DesktopStore {
   private opensWorkspaceSettings = false;
   /** Whether the embedder draws coach marks on its own controls when a page asks; off until it says so. */
   private showsCoachMarks = false;
+  /** Whether the embedder said it relays no provider sign-in; off until it says so, and under one that relays. */
+  private declinesProviderRelay = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -752,6 +754,17 @@ export class DesktopStore {
    *  as the shell's rebroadcast of that message. */
   setShowsCoachMarks(showsCoachMarks: boolean): void {
     this.showsCoachMarks = showsCoachMarks;
+  }
+
+  /** Whether the embedder said it relays no provider sign-in, which each page is told in its handshake. */
+  getDeclinesProviderRelay(): boolean {
+    return this.declinesProviderRelay;
+  }
+
+  /** The embedder said whether it relays provider sign-ins (``minds:embedder-capabilities``). Pages already greeted
+   *  hear it as the shell's rebroadcast of that message. */
+  setDeclinesProviderRelay(declinesProviderRelay: boolean): void {
+    this.declinesProviderRelay = declinesProviderRelay;
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */

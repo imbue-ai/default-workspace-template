@@ -1046,6 +1046,7 @@ export class LivePagesLayer implements PageDriver {
       opensLocalFiles: this.store.getOpensLocalFiles(),
       opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
       showsCoachMarks: this.store.getShowsCoachMarks(),
+      declinesProviderRelay: this.store.getDeclinesProviderRelay(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;

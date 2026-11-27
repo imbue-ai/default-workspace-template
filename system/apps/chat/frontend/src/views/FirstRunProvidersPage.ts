@@ -33,7 +33,7 @@ import {
   setDefaultAccount,
 } from "../models/Providers";
 import { reportProviderChooserOnScreenOnce } from "../shell";
-import { ProviderChooserModal } from "./ProviderChooserModal";
+import { ProviderChooserModal, openSignInTab } from "./ProviderChooserModal";
 import { providerMark } from "./providerMarks";
 import { FIRST_RUN_DIALOG } from "./providerSignInStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
@@ -155,7 +155,7 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
         type: "button",
         "data-first-run-lane": lane.id,
         class: "first-run-tile",
-        onclick: () => openProviderChooser({ laneId: lane.id }),
+        onclick: () => openProviderChooser({ laneId: lane.id, signInTab: openSignInTab(lane) }),
       },
       [
         m("span", { class: "first-run-tile-mark", "aria-hidden": "true" }, m.trust(providerMark(lane.id, MARK_SIZE))),

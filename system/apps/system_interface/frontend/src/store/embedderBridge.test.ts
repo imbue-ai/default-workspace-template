@@ -75,6 +75,14 @@ describe("connectEmbedderToStore", () => {
     expect(store.getShowsCoachMarks()).toBe(false);
   });
 
+  it("keeps whether the chrome said it relays no provider sign-in, off until it says so", () => {
+    expect(store.getDeclinesProviderRelay()).toBe(false);
+    embedderSays({ type: "minds:embedder-capabilities", canPopOut: false, declinesProviderRelay: true });
+    expect(store.getDeclinesProviderRelay()).toBe(true);
+    embedderSays({ type: "minds:embedder-capabilities", canPopOut: false });
+    expect(store.getDeclinesProviderRelay()).toBe(false);
+  });
+
   it("lands the chrome's immersive changes in the store, an error as a notice, and drops a malformed one", () => {
     embedderSays({ type: "minds:immersive-changed", on: true, keyboardLocked: true });
     expect(store.getImmersive()).toEqual({ windowId: null, isKeyboardLocked: true });

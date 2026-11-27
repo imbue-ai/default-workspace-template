@@ -852,6 +852,7 @@ describe("the contract", () => {
         opensLocalFiles: false,
         opensWorkspaceSettings: false,
         showsCoachMarks: false,
+        declinesProviderRelay: false,
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
@@ -874,6 +875,7 @@ describe("the contract", () => {
         opensLocalFiles: false,
         opensWorkspaceSettings: false,
         showsCoachMarks: false,
+        declinesProviderRelay: false,
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -929,6 +931,13 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, showsCoachMarks: true });
+  });
+
+  it("tells a page in its handshake whether the embedder said it relays no provider sign-in", () => {
+    store.setDeclinesProviderRelay(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, declinesProviderRelay: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

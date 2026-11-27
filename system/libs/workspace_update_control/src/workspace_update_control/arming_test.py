@@ -22,6 +22,7 @@ from workspace_update_control.channel import (
     CLIENT_CEILING_HOLD_SECONDS,
 )
 from workspace_update_control.dispatcher import AgentEnvironment
+from workspace_update_control.release_tags import RELEASE_TAG_FETCH_RETRY_SECONDS
 from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
@@ -30,8 +31,10 @@ from workspace_update_control.testing import (
     armed_schedule,
     epoch_at,
     stage_checkout_at,
+    stage_template_upstream,
     stage_update_workspace,
     update_settings_document,
+    write_parent_file,
 )
 
 _INSTALLED = "minds-v0.9.0"
@@ -326,6 +329,201 @@ def test_a_workspace_that_is_not_behind_its_channel_arms_nothing(
     assert staged.read_state("schedule.json") is None
 
 
+def test_a_workspace_moved_to_a_channel_behind_its_version_reads_it_at_once_and_stays_where_it_is(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    # The owner moves the workspace to a channel that is on an older release than the one installed.
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = "minds-v0.8.0"
+    _tick(staged, feed, _NOW + 60)
+
+    assert feed.asked == [
+        f"{STAGED_FEED_BASE_URL}/beta-web.json",
+        f"{STAGED_FEED_BASE_URL}/stable-web.json",
+    ]
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert (channel_version["channel"], channel_version["template_ref"]) == (
+        "stable",
+        "minds-v0.8.0",
+    )
+    # The update armed for the channel it left is cancelled, and none is armed to the older release.
+    assert staged.read_state("schedule.json") is None
+
+    _tick(staged, feed, _NOW + 120)
+
+    assert staged.read_state("schedule.json") is None
+
+    # Once that channel passes the workspace's version, the workspace follows it.
+    feed.template_ref = "minds-v0.9.1"
+    _tick(staged, feed, _NOW + 60 + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == "minds-v0.9.1"
+
+
+def test_a_schedule_armed_for_a_channel_the_workspace_left_is_cancelled_before_the_new_channel_is_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    # Nothing is cancelled while the settings name the channel the schedule was armed for.
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 30) is False
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is True
+
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+    assert any(
+        line.endswith("it was armed for a channel the workspace no longer follows")
+        for line in staged.dispatcher_log_lines()
+    )
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 120) is False
+
+
+def test_a_schedule_armed_for_a_channel_the_workspace_left_does_not_stand_while_the_new_channel_cannot_be_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = None
+
+    # The arming half has no version of the new channel to hold the schedule against, and leaves it.
+    _tick(staged, feed, _NOW + 60)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 120) is True
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_request_that_reads_the_new_channels_version_cancels_the_schedule_armed_for_the_channel_left_first(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _INSIDE_THE_WINDOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    feed.template_ref = "minds-v0.8.0"
+
+    # A start that leaves the newest version to the workspace reads the new channel's, so the workspace holds a
+    # version for the channel its settings name from then on. Its chat is still being created a minute later.
+    answer = control.start_update(
+        ceiling=None,
+        override_ref="minds-v0.9.1",
+        is_backup_configured=None,
+        now=_INSIDE_THE_WINDOW + 30,
+        live_cron_dir=str(staged.live_cron_dir),
+        proc_root=str(staged.proc_root),
+        agent_environment=AgentEnvironment(),
+        read_agents=staged.read_listed_agents,
+        run_in_background=lambda create: None,
+        clock=lambda: _INSIDE_THE_WINDOW + 30,
+        fetch_channel_file=feed,
+    )
+
+    assert answer["outcome"] == "STARTING"
+    channel_version = staged.read_state("channel-version.json")
+    assert channel_version is not None
+    assert (channel_version["channel"], channel_version["template_ref"]) == (
+        "stable",
+        "minds-v0.8.0",
+    )
+    assert staged.read_state("schedule.json") is None
+    assert staged.read_state("schedule-origin.json") is None
+
+    # The window is open, and the dispatcher's minute starts nothing for the channel left.
+    assert control.cancel_schedule_armed_for_a_channel_left(_INSIDE_THE_WINDOW + 60) is False
+    staged.tick(_INSIDE_THE_WINDOW + 60)
+
+    assert staged.chat_creates() == []
+
+
+def test_a_schedule_somebody_asked_for_stands_when_the_workspace_leaves_its_channel(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    arm_schedule_in(staged, feed, now=_NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+
+def test_a_schedule_armed_for_a_version_a_client_named_stands_when_the_workspace_leaves_its_channel(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    # Armed by a client for the version it names, with the window and the backup flag left to the workspace.
+    armed = arm_schedule_in(
+        staged,
+        feed,
+        now=_NOW - CLIENT_CEILING_HOLD_SECONDS,
+        ceiling="minds-v0.9.5",
+        is_auto_armed=True,
+    )["schedule"]
+    assert staged.read_state("schedule-origin.json") is not None
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW) is False
+
+    assert staged.read_state("schedule.json") == armed
+
+
+def test_a_schedule_armed_for_a_channel_left_stands_while_a_client_that_names_its_version_keeps_asking(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+    staged.write_state("settings.json", update_settings_document(channel="stable"))
+    # A desktop from before the workspace armed its own updates rewrites the schedule with its own values.
+    swept_at = _NOW + 30
+    refreshed = _sweep_as_a_client_that_names_its_version(staged, feed, swept_at)
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert refreshed is not None
+    assert staged.read_state("schedule.json") == refreshed
+
+    # Once that client stops asking, the schedule is the workspace's own to cancel again.
+    assert (
+        control.cancel_schedule_armed_for_a_channel_left(
+            swept_at + CLIENT_CEILING_HOLD_SECONDS
+        )
+        is True
+    )
+
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_schedule_the_workspace_armed_stands_once_it_holds_no_update_settings(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged, channel="beta")
+    _tick(staged, feed, _NOW)
+    armed = staged.read_state("schedule.json")
+    origin = staged.read_state("schedule-origin.json")
+    assert armed is not None and origin is not None
+    staged.state_path("settings.json").unlink()
+
+    assert control.cancel_schedule_armed_for_a_channel_left(_NOW + 60) is False
+
+    assert staged.read_state("schedule.json") == armed
+    assert staged.read_state("schedule-origin.json") == origin
+
+
 def test_a_checkout_that_names_no_version_arms_nothing(
     staged: StagedUpdateWorkspace,
 ) -> None:
@@ -334,6 +532,143 @@ def test_a_checkout_that_names_no_version_arms_nothing(
     _tick(staged, RecordingFeed(_ON_THE_CHANNEL), _NOW)
 
     assert staged.read_state("schedule.json") is None
+
+
+def _stage_a_workspace_with_none_of_its_templates_tags(
+    staged: StagedUpdateWorkspace,
+) -> RecordingFeed:
+    """A checkout at ``_INSTALLED`` that holds no tag saying so, as one made from a published copy of the
+    template, with update settings and a feed whose stable channel is on ``_ON_THE_CHANNEL``."""
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    stage_template_upstream(
+        staged.root, staged.root.parent / "template-upstream", _INSTALLED
+    )
+    staged.write_state("settings.json", update_settings_document())
+    return RecordingFeed(_ON_THE_CHANNEL)
+
+
+def _tag_fetch_attempted_at(staged: StagedUpdateWorkspace) -> float | None:
+    """When the staged workspace last tried to fetch its template's release tags; None when it never did."""
+    record = staged.read_state("release-tags-fetch.json")
+    return record["attempted_at"] if record is not None else None
+
+
+def test_a_checkout_with_none_of_its_templates_tags_fetches_them_and_arms_in_the_same_minute(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+
+    _tick(staged, feed, _NOW)
+
+    installed = staged.read_state("installed-version.json")
+    assert installed is not None and installed["template_ref"] == _INSTALLED
+    assert _armed_target(staged) == _ON_THE_CHANNEL
+
+
+def test_a_workspace_that_does_not_arm_itself_still_fetches_the_tags_that_name_its_version(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    staged.write_state(
+        "settings.json", update_settings_document(is_auto_update_enabled=False)
+    )
+
+    _tick(staged, feed, _NOW)
+
+    assert read_installed_version(_NOW) == _INSTALLED
+    assert staged.read_state("schedule.json") is None
+
+
+def test_no_tags_are_fetched_while_an_update_is_running(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    staged.write_state("run.json", {"chat_agent_name": "update", "started_at": _NOW})
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("release-tags-fetch.json") is None
+    assert read_installed_version(_NOW) == ""
+
+    # The run ends, and the next read of the channel fetches them.
+    staged.write_state(
+        "run.json",
+        {"chat_agent_name": "update", "started_at": _NOW, "verdict": "REFUSED"},
+    )
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert read_installed_version(_NOW + CHANNEL_READ_INTERVAL_SECONDS) == _INSTALLED
+
+
+def test_tags_that_cannot_be_fetched_are_tried_again_once_a_day_and_only_when_the_channel_is_read(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+    staged.write_state("settings.json", update_settings_document())
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+
+    _tick(staged, feed, _NOW)
+    assert _tag_fetch_attempted_at(staged) == _NOW
+
+    _tick(staged, feed, _NOW + 60)
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+    assert _tag_fetch_attempted_at(staged) == _NOW
+
+    # The channel is read a minute before the day is out, so the minute the day is out in reads nothing.
+    a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
+    _tick(staged, feed, a_day_later - 60)
+    _tick(staged, feed, a_day_later)
+    assert _tag_fetch_attempted_at(staged) == _NOW
+
+    the_next_read = a_day_later - 60 + CHANNEL_READ_INTERVAL_SECONDS
+    _tick(staged, feed, the_next_read)
+    assert _tag_fetch_attempted_at(staged) == the_next_read
+    assert staged.read_state("schedule.json") is None
+
+
+def test_a_workspace_whose_settings_name_no_feed_still_fetches_the_tags_that_name_its_version(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_with_none_of_its_templates_tags(staged)
+    # What a tier that publishes no release feed writes: there is no channel to read a version for.
+    staged.write_state("settings.json", update_settings_document(feed_base_url=""))
+
+    _tick(staged, feed, _NOW)
+
+    assert feed.asked == []
+    assert read_installed_version(_NOW) == _INSTALLED
+    assert staged.read_state("schedule.json") is None
+
+
+def test_tags_that_cannot_be_fetched_with_no_feed_named_are_still_tried_only_once_a_day(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    stage_checkout_at(staged.root, ("the template at a release", ""))
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+    staged.write_state("settings.json", update_settings_document(feed_base_url=""))
+    feed = RecordingFeed(_ON_THE_CHANNEL)
+
+    _tick(staged, feed, _NOW)
+    _tick(staged, feed, _NOW + 60)
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+    assert _tag_fetch_attempted_at(staged) == _NOW
+
+    a_day_later = _NOW + RELEASE_TAG_FETCH_RETRY_SECONDS
+    _tick(staged, feed, a_day_later)
+    assert _tag_fetch_attempted_at(staged) == a_day_later
+
+
+def test_a_checkout_that_names_its_version_fetches_nothing(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    write_parent_file(staged.root, str(staged.root.parent / "no-such-template"))
+
+    _tick(staged, feed, _NOW)
+
+    assert staged.read_state("release-tags-fetch.json") is None
+    assert _armed_target(staged) == _ON_THE_CHANNEL
 
 
 def test_a_version_the_user_skipped_is_not_armed_and_the_next_one_is(

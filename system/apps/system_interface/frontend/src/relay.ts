@@ -9,7 +9,9 @@
  *   shell, so an app page cannot reach it. Any `minds:` message from a child frame in the
  *   workspace origin family is forwarded up to `window.parent`
  *   unchanged, and any message from `window.parent` is rebroadcast to every child frame the
- *   shell created. A chrome message of a type the embed contract does not define (an app
+ *   shell created. A frame the shell does not greet (the first run's cover) is created after the
+ *   chrome has said what it can do, so the shell repeats that one message to it when it loads
+ *   (`repeatEmbedderCapabilitiesTo`). A chrome message of a type the embed contract does not define (an app
  *   message, such as a notification's destination) is also handed to the app-message handler,
  *   since the contract's endpoint in `embed.ts` drops it before its observer; a contract type
  *   reaches that observer instead, so neither is relayed twice. No payload is inspected.
@@ -26,7 +28,7 @@
  */
 
 import { workspaceHostCoordinate } from "@imbue/workspace-ui/src/app_contract";
-import { isContractEmbedderMessageType } from "@imbue/workspace-ui/src/embed";
+import { EMBEDDER_CAPABILITIES, isContractEmbedderMessageType } from "@imbue/workspace-ui/src/embed";
 
 export type ChildFrameMessageHandler = (frame: HTMLIFrameElement, payload: Record<string, unknown>) => void;
 /** Takes a chrome message of a type the embed contract does not define: its type beside its fields. */
@@ -37,6 +39,8 @@ const SHELL_TYPE_PREFIX = "shell:";
 
 const handlerByType: Partial<Record<string, ChildFrameMessageHandler>> = {};
 let embedderAppMessageHandler: EmbedderAppMessageHandler | null = null;
+// What the chrome last said it can do, as it was sent.
+let embedderCapabilities: unknown = null;
 let isInitialized = false;
 
 /** Whether an origin belongs to this workspace's origin family: the same coordinate as the shell's own host. */
@@ -78,6 +82,7 @@ function handleMessage(event: MessageEvent): void {
 
   // Downward: whatever the chrome sends, every frame the shell created gets, unchanged.
   if (window.parent !== window && event.source === window.parent) {
+    if (type === EMBEDDER_CAPABILITIES) embedderCapabilities = data;
     for (const frame of childFrames()) {
       frame.contentWindow?.postMessage(data, "*");
     }
@@ -121,6 +126,12 @@ export function sendToChildFrame(frame: HTMLIFrameElement, type: string, payload
   frame.contentWindow?.postMessage({ type, ...payload }, "*");
 }
 
+/** Give a frame what the chrome last said it can do, unchanged; nothing while the chrome has not said. For a frame
+ *  created since, which the shell tells in no handshake. */
+export function repeatEmbedderCapabilitiesTo(frame: HTMLIFrameElement): void {
+  if (embedderCapabilities !== null) frame.contentWindow?.postMessage(embedderCapabilities, "*");
+}
+
 /** Tear the boundary down so the next init rebinds to the current `window`. Test-only. */
 export function resetEmbedderRelayForTesting(): void {
   if (isInitialized) {
@@ -129,4 +140,5 @@ export function resetEmbedderRelayForTesting(): void {
   }
   for (const type of Object.keys(handlerByType)) delete handlerByType[type];
   embedderAppMessageHandler = null;
+  embedderCapabilities = null;
 }

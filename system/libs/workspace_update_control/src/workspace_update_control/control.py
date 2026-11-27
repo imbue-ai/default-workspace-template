@@ -182,10 +182,15 @@ def _channel_version_for_request(
     Read off the feed when the last read is an hour old or none has succeeded, and otherwise as last read. It is
     held to the version a client from before the workspace read the feed named, while that client keeps asking,
     where the two can be compared. '' when the workspace has read no version for its channel and cannot.
+
+    A schedule the workspace armed for a channel it has left is cancelled first: the read gives the workspace a
+    version for the channel its settings name, and holding none is what tells such a schedule
+    (``cancel_schedule_armed_for_a_channel_left``).
     """
     settings = read_update_settings()
     if settings is None:
         return ""
+    cancel_schedule_armed_for_a_channel_left(now)
     channel_ref = channel_template_ref(
         refresh_channel_version(
             settings, now, fetch_channel_file, is_due_when_unread=True
@@ -496,6 +501,36 @@ def read_self_armed_schedule(now: float) -> SelfArmedSchedule | None:
         target_ref=ceiling if isinstance(ceiling, str) else None,
         moved_to=followed_ceiling if followed_ceiling != ceiling else None,
     )
+
+
+def cancel_schedule_armed_for_a_channel_left(now: float) -> bool:
+    """Cancel the schedule the workspace armed itself for its channel's version, once its settings name a channel
+    it has read no version for; whether one was cancelled.
+
+    The workspace arms such a schedule from the version it read for its channel, and keeps that version when a
+    later read fails. With none read for the channel in force, the schedule stands at the version of a channel
+    (or a feed) the settings have left, and would start the workspace's update to it. Nothing is cancelled in a
+    workspace that holds no update settings, or while a client from before the workspace armed its own updates
+    keeps asking.
+    """
+    settings = read_update_settings()
+    if settings is None or channel_template_ref(read_channel_version(settings)):
+        return False
+    followed = _read_followed_schedule(now)
+    if followed is None:
+        return False
+    schedule, origin = followed
+    if (
+        schedule.get("is_auto_armed") is not True
+        or origin.get(_FOLLOWED_CEILING) is not True
+    ):
+        return False
+    if not cancel_schedule_armed_at(schedule.get("armed_at")):
+        return False
+    write_log_line(
+        "cancelled the workspace's own schedule: it was armed for a channel the workspace no longer follows"
+    )
+    return True
 
 
 def refresh_followed_schedule(now: float) -> None:

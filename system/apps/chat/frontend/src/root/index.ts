@@ -55,6 +55,7 @@ import {
 } from "../models/Chats";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { isNothingSignedIn, makeRootFirstSendChooser } from "../models/firstSendChooser";
+import { noteProviderRelayDeclined } from "../models/providerRelay";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
@@ -91,6 +92,7 @@ import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { FirstRunProvidersPage } from "../views/FirstRunProvidersPage";
+import { connectFirstRunCoverToShell } from "./firstRunCover";
 import { makeFirstConversationReport } from "./firstConversationReport";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -617,6 +619,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
+      noteProviderRelayDeclined(received.declinesProviderRelay);
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
       pool?.setHandshake(received);
       // Whatever went up before the shell was listening is told again.
@@ -674,7 +677,9 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       ...handshake,
       opensWorkspaceSettings: message.opensWorkspaceSettings === true,
       showsCoachMarks: message.showsCoachMarks === true,
+      declinesProviderRelay: message.declinesProviderRelay === true,
     };
+    noteProviderRelayDeclined(handshake.declinesProviderRelay);
     pool?.setHandshake(handshake);
   });
   // Hidden until the shell says shown: the root can load into a background tab.
@@ -707,8 +712,7 @@ function bootstrap(): void {
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   if (isFirstRunProvidersViewRequested(window.location.search)) {
-    // The shell's cover over a first-run workspace: the provider page alone, with no chats behind it.
-    const cover = connectToShell({ capabilities: { navigation: false, closeChord: false } });
+    const cover = connectFirstRunCoverToShell();
     m.mount(rootElement, { view: () => m(FirstRunProvidersPage, { shell: cover }) });
     return;
   }
