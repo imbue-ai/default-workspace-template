@@ -47,7 +47,7 @@ def open_welcome_chat_owed_from_first_boot(
         created = agent_manager.seed_chat(MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context="", is_first_run=True)
     except AgentNameConflictError:
         logger.info("The welcome chat was already opened by a client")
-    except AgentCreationError as e:
+    except (AgentCreationError, OSError) as e:
         logger.warning("Could not open the welcome chat a first boot owes: {}", e)
         return
     else:
