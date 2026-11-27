@@ -68,8 +68,11 @@ the user's own storage is refused.
 ## What is on disk
 
 - `data/.state/backup_setup/state.json` -- what the workspace was asked and how the
-  setup stands. It holds no credential. Reads and writes of it are serialized by
-  `state.lock` beside it.
+  setup stands. It holds no credential. A read of it that a write follows is
+  serialized with that write by `state.lock` beside it (the destination request and
+  the program); a client's read of the backup state takes no lock, so one made
+  while the program installs the credentials can describe the moment between two
+  of its files, and the next read is right.
 - `data/.secrets/restic.env.pending` (mode 0600) -- the credentials of a setup that
   has not finished: the storage that was offered, and the repository's password
   once it is made.
