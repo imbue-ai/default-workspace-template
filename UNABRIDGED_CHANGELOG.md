@@ -4,6 +4,28 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-26
+
+### .agents
+
+The `datalib` skill now installs datalib v0.57.1 (from v0.56.0, so it carries v0.57.0 too). For an agent, the main change is in `datalib-step help <type>`: each source's page now says what that source can never see, how to read its raw store's tables, and how to check whether a copy is complete, and `datalib-step help agent` gains the checks to make before answering from a copy. v0.57.0 also adds a Discord source, a Google method on the `contacts` source, and faster search over a large library; v0.57.1 fixes a sync run's problem counts and grouping a grid column by a list of values.
+
+`.agents/changelog/` keeps a README, so the folder the `submit-upstream-changes` skill names as where an entry goes still exists after the nightly consolidation moves every entry out. Without it, `test_every_skill_passes_the_skill_checks` failed on main from the 2026-11-26 consolidation on.
+
+The `datalib` skill sends the agent to datalib's own help for what is datalib's to say, and keeps only what is particular to the workspace. The checks before answering from a copy (search first, wait for the sync, is the copy complete, what it covers) are now in `datalib-step help agent`; what each source can never see, its raw store's tables and its own completeness check are on its `datalib-step help <type>` page; so the skill's Slack-specific section, its first-use config commands, its per-source notes on Linear and Gmail, and its SQL details are replaced by pointers to those pages. Those pages are in datalib v0.57.1, the version the skill now installs.
+
+The `datalib` skill covers the first use of datalib in a workspace and the checks after a sync, which the first eval trials on it showed agents working out by trial: it gives the shell steps that create the config before the first sync (the Datalib app's 409 "create one from the Setup tab" otherwise), says that a sync is over only when the wait prints its outcome and that the `step_finish ... succeeded` lines at the start are the prepare pass, gives the two queries that tell whether a Slack copy is whole (the store's `problems`, and threads still owed) before an answer is built on it, says that `payload` is JSONB and must be read through `json()`, asks the agent to say what the copy covers (member channels, no DMs unless configured), to open the Datalib app for the user when the first sync starts, and to keep paths, commands, SQL and error text out of chat messages.
+
+### system/apps/chat
+
+Tests only: the chat's test servers no longer lose their port before they start, as `test_a_drawer_row_kebab_stops_that_chat` did on main with "Address already in use". `running_workspace` and the creation-recovery suite's workspace pick their own ports and hold each until its server adopts it, through the new `make_threaded_server_on` in `wsgi.py`, so they no longer take ports from the caller. `serve_app` binds port 0 itself. The running chat's `make_threaded_server` binds as before.
+
+`test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree` counts only the observers watching its own folder, so an observer another test in the same process starts meanwhile no longer fails it.
+
+### system/apps/system_interface
+
+Tests only: the shell's test servers no longer lose their port before they start. The harnesses picked a free port, gave it back, started other servers, and bound it only then, so a bind in between could be handed that port and the shell's server failed to start with "Address already in use", as `test_shortcut_menu_changes_mode_and_removes` did on main. A server whose port must be known before it is built (the e2e shell, the layout pipeline's, the theme gallery's) now adopts a socket held listening since the port was picked: `listening_loopback_socket` in `testing.py`, served by the new `make_threaded_server_on` in `wsgi.py`, which takes its address from the socket. `serve_app` binds port 0 itself. The running shell's `make_threaded_server` binds as before.
+
 ## 2026-11-25
 
 ### .agents

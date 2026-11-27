@@ -1,1 +1,0 @@
-`.agents/changelog/` keeps a README, so the folder the `submit-upstream-changes` skill names as where an entry goes still exists after the nightly consolidation moves every entry out. Without it, `test_every_skill_passes_the_skill_checks` failed on main from the 2026-11-26 consolidation on.
