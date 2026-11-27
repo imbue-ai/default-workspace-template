@@ -132,6 +132,7 @@ def build_agent_test_app(
         connector_url=f"https://connector.{workspace_domain}",
         broker_url=f"https://accounts.{workspace_domain}",
         chrome_origin="",
+        is_chrome_origin_refused=False,
     )
     app = build_gateway_app(
         materials=materials,

@@ -114,6 +114,7 @@ def _make_harness(
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=chrome_origin,
+        is_chrome_origin_refused=False,
     )
     pending_logins = PendingLoginRegistry()
     app = build_gateway_app(
@@ -893,6 +894,7 @@ def test_connect_info_answers_what_the_stack_holds_without_caching(
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=_CHROME_ORIGIN,
+        is_chrome_origin_refused=False,
     )
     answers: list[dict[str, object]] = [
         {"ice_servers": [], "candidates": []},

@@ -289,7 +289,10 @@ too, as that grantee already reaches the terminal. A program that is not a
 browser can send any `Origin` and gains nothing by it, since it holds no
 session and the mark is set only on a request whose session the gateway
 accepted. A share with no web client (`SHARE_CHROME_ORIGIN` unset) renders
-none of this.
+none of this. Neither does one whose `SHARE_CHROME_ORIGIN` is not a plain
+http(s) origin (a scheme, a host and at most a port): the value is written into
+caddy's matchers, so anything else is read as no web client, the share comes up
+without one, and the gateway's log says so.
 
 `share_gateway/web_client.py` holds the paths, the mark's name and what the
 permission check allows. `system/test_web_client_routes.py` holds them to what
