@@ -319,6 +319,23 @@ def test_a_channel_whose_file_was_never_read_names_no_version_and_says_why(
     assert "HTTP Error 404: Not Found" in message
 
 
+def test_a_workspace_whose_settings_name_no_release_feed_is_not_told_to_try_again_later(
+    tmp_path: Path,
+) -> None:
+    _stage_channel_version(tmp_path, "minds-v0.3.9")
+    settings_path = tmp_path / "data" / ".state" / "update-apply" / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings_path.write_text(json.dumps({**settings, "feed_base_url": ""}))
+
+    with pytest.raises(update_target.ChannelVersionUnavailableError) as raised:
+        update_target.read_channel_template_ref(tmp_path)
+
+    message = str(raised.value)
+    assert "name no release feed" in message
+    assert "Name the version to update to" in message
+    assert "again later" not in message
+
+
 def test_a_version_read_for_another_channel_is_not_the_workspaces(
     tmp_path: Path,
 ) -> None:

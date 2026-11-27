@@ -24,9 +24,10 @@ user, never a version the script picks.
 
 - The workspace has read no version for its channel: it holds no update
   settings yet (Imbue Studio writes them when it opens the workspace) and no
-  desktop app answered for it, or the channel's file could not be read. Only a
-  pass with no pin depends on it; a pinned pass takes the ceiling from its
-  message.
+  desktop app answered for it, its settings name no release feed (so it never
+  reads one, and only a named version helps), or the channel's file could not
+  be read. Only a pass with no pin depends on it; a pinned pass takes the
+  ceiling from its message.
 - The ceiling names a release the upstream does not carry -- so that release
   was never published as claimed.
 - It names no release at all; a development build of Imbue Studio pins its
