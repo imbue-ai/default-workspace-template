@@ -28,8 +28,9 @@ def main() -> None:
         agent_pids_dir=AGENT_PIDS_DIR,
         agent_environment=agent_environment,
     )
+    # The dispatcher's minute may have taken minutes; what a client recorded meanwhile is not in the future.
     tick_self_arming(
-        now=now,
+        now=time.time(),
         live_cron_dir=LIVE_CRON_DIRECTORY,
         agent_environment=agent_environment,
         fetch_channel_file=fetch_channel_file,
