@@ -3,7 +3,7 @@ class InitialDataError(Exception):
 
 
 class InitialDataPartRefusedError(InitialDataError):
-    """A part of the initial data could not be written; the message says which part and why, and names no secret."""
+    """A part of the initial data, or the document as a whole, could not be written; the message says why and names no secret."""
 
 
 class InitialDataRecordUnreadableError(InitialDataError):
