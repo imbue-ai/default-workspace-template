@@ -6,22 +6,19 @@ joining agent's key) stays in the gateway (``share_gateway.agent_keys``).
 
 A visiting agent is a coding agent running outside the workspace that holds an
 **agent grant**: a record bound to the Ed25519 key the agent generated itself,
-scoped to the whole workspace (exec authority through owner-exec, every origin
-admitted) or to named apps (those origins only, no exec). Agents are a grant
-kind of their own beside the user, email, and domain grants of
-``share_grants.toml``; they live in their own file so an older desktop that
-rewrites that document wholesale can never touch them.
+scoped to the whole workspace (every origin admitted, and the gateway's routes
+that run a command and read or write a file) or to named apps (those origins
+only). Agents are a grant kind of their own beside the user, email, and domain
+grants of ``share_grants.toml``; they live in their own file so an older
+desktop that rewrites that document wholesale can never touch them.
 
     data/.secrets/agent_access/grants.toml   -- one [[agents]] table per grant
     data/.secrets/agent_access/invites.toml  -- unconsumed one-time codes
 
-The grants file is the source of truth for the ``authorized_keys`` lines that
-give a workspace-scope agent exec authority: ``reconcile_authorized_keys``
-adds the line for every unexpired workspace-scope grant and removes every
-marked line whose grant is gone, so no other writer of that file can leave an
-agent with authority the grants file does not show. Every writer holds the
-same ``flock`` on the sibling lock file and replaces files atomically, as the
-share grants document does.
+The grants file is the whole of an agent's authority: the gateway looks the
+grant up on every request, so removing it ends the agent's access at the next
+one. Every writer holds the same ``flock`` on the sibling lock file and
+replaces files atomically, as the share grants document does.
 """
 
 import base64
@@ -40,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from share_grants.grants import toml_string, write_text_atomic
+from share_grants.grants import toml_string
 from share_grants.json_values import is_json_object
 
 _logger = logging.getLogger(__name__)
@@ -54,8 +51,6 @@ AGENT_LAST_SEEN_FILE = AGENT_ACCESS_STATE_DIR / "last_seen.json"
 
 WORKSPACE_SCOPE = "workspace"
 AGENT_ID_PREFIX = "va-"
-# The marker comment that makes an ``authorized_keys`` line ours to add and remove.
-AUTHORIZED_KEYS_MARKER = "imbue-agent-access"
 INVITE_LIFETIME = timedelta(minutes=15)
 INVITE_MAX_FAILED_ATTEMPTS = 5
 MAX_AGENT_NAME_LENGTH = 60
@@ -216,7 +211,7 @@ def is_agent_id(value: str) -> bool:
 
 
 def fingerprint_of_public_key_line(line: str) -> str:
-    """The standard OpenSSH SHA256 fingerprint (what owner-exec uses as keyid)."""
+    """The standard OpenSSH SHA256 fingerprint."""
     blob = base64.b64decode(line.split()[1])
     digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
     return f"SHA256:{digest}"
@@ -399,7 +394,7 @@ def render_agent_invites(invites: Sequence[AgentInvite]) -> str:
 
 
 def agent_access_lock_path(grants_path: Path) -> Path:
-    """The one lock every agent-access writer holds (grants, invites, and the authorized_keys reconcile)."""
+    """The one lock every agent-access writer holds (grants and invites)."""
     return grants_path.with_name(grants_path.name + ".lock")
 
 
@@ -455,61 +450,6 @@ def find_invite_by_code(invites: Sequence[AgentInvite], raw_code: str) -> AgentI
         if hmac.compare_digest(invite.code_sha256, presented):
             return invite
     return None
-
-
-# --- authorized_keys ---
-
-
-def _authorized_keys_line(grant: AgentGrant) -> str:
-    return f"{grant.public_key} {AUTHORIZED_KEYS_MARKER} agent_id={grant.agent_id}"
-
-
-def is_agent_access_line(line: str) -> bool:
-    return f" {AUTHORIZED_KEYS_MARKER} " in line
-
-
-def reconcile_authorized_keys_text(existing_text: str, grants: Sequence[AgentGrant], now: datetime) -> str:
-    """``existing_text`` with exactly one marked line per unexpired workspace-scope grant and no other marked line.
-
-    Lines without the marker (the owner's keys, the desktop's, the cross-workspace
-    SSH grants) are kept exactly as they are, in their order.
-    """
-    kept = [line for line in existing_text.splitlines() if not is_agent_access_line(line)]
-    desired = [
-        _authorized_keys_line(grant)
-        for grant in sorted(grants, key=lambda entry: entry.agent_id)
-        if grant.is_workspace_scope and not grant.is_expired(now)
-    ]
-    lines = kept + desired
-    return ("\n".join(lines) + "\n") if lines else ""
-
-
-def authorized_keys_lock_path(authorized_keys_path: Path) -> Path:
-    """The lock every writer of ``authorized_keys`` holds across its read and write (the desktop's SSH grant too)."""
-    return authorized_keys_path.with_name(authorized_keys_path.name + ".lock")
-
-
-def reconcile_authorized_keys(authorized_keys_path: Path, grants: Sequence[AgentGrant], now: datetime) -> bool:
-    """Bring the agent lines of ``authorized_keys_path`` in line with ``grants``; True when the file changed.
-
-    The caller holds the agent-access lock; the read-and-replace also holds the
-    ``authorized_keys`` lock, which other writers of the file (the desktop's
-    cross-workspace SSH grant) take around their own read-and-write so neither
-    overwrites the other's lines. The ``.ssh`` directory is created ``0700`` and
-    the file replaced atomically ``0600``, so sshd keeps honouring it.
-    """
-    authorized_keys_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with open(authorized_keys_lock_path(authorized_keys_path), "a+") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            existing_text = authorized_keys_path.read_text() if authorized_keys_path.exists() else ""
-            desired_text = reconcile_authorized_keys_text(existing_text, grants, now)
-            if desired_text == existing_text:
-                return False
-            write_text_atomic(authorized_keys_path, desired_text, 0o600)
-            return True
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def utc_now() -> datetime:

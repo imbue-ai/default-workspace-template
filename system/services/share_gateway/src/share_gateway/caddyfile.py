@@ -306,8 +306,7 @@ def render_caddyfile(
             # A visiting agent's admission token rides the Authorization header
             # for the gateway alone; the service never sees it, as it never
             # sees the session cookie. No app reads an inbound Authorization
-            # header over the share, and owner-exec's signature headers are
-            # separate and untouched.
+            # header over the share.
             header_up -Authorization
         }}
     }}
@@ -422,8 +421,8 @@ https://*.{workspace_domain}:{https_port} {{
             reverse_proxy {gateway_backend}
         }}
         # The visiting-agent surface (join, orientation, invites, the grant
-        # list): the gateway authenticates each request itself, by session
-        # cookie or bearer admission token.
+        # list, an agent's commands and files): the gateway authenticates
+        # each request itself, by session cookie or bearer admission token.
         handle /_agent/* {{
             reverse_proxy {gateway_backend}
         }}

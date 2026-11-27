@@ -23,10 +23,10 @@ APP_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]
 MAX_APP_NAME_LENGTH: Final[int] = 32
 # ``localhost`` and ``auth`` are origin labels. The rest are the first label of every
 # standalone supervisord program with a hyphen in its name (``share-gateway``,
-# ``owner-exec``, ``host-backup``, ``env-converge``, ``agent-observer``; ``app`` stays
-# reserved from the retired ``app-watcher``, and ``vm`` from the retired
-# ``vm-exec-register``, whose ``vm-exec`` row a workspace's registry may still hold): an
-# app named after one would claim that program as its ``<name>-<role>`` sidecar.
+# ``host-backup``, ``env-converge``, ``agent-observer``; ``app``, ``owner`` and ``vm``
+# stay reserved from the retired ``app-watcher``, ``owner-exec`` and
+# ``vm-exec-register``): an app named after one would claim that program as its
+# ``<name>-<role>`` sidecar.
 # ``system/test_app_manifests.py`` keeps this set in step with
 # ``system/supervisord.conf``. ``github`` is the one it cannot see: ``github-sync`` is
 # only written once GitHub sync is enabled.

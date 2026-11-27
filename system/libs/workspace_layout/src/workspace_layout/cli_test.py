@@ -530,7 +530,7 @@ def test_desktops_and_list_read_the_inventory_document(
         is_preview=False,
         workspace_name="workspace",
         desktops=(home,),
-        apps=(files, fake_app("owner-exec", is_internal=True)),
+        apps=(files, fake_app("terminal-pty", is_internal=True)),
         clients=clients,
     )
     loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory.model_dump(mode="json"))

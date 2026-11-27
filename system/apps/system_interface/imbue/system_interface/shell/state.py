@@ -273,8 +273,8 @@ class ShellState(MutableModel):
         )
         theme_watch.start()
         self._theme_watch = theme_watch
-        # The profile snapshot is written from outside the workspace (the Imbue Studio desktop or
-        # the web chrome, over exec), so a change announces itself only through this watch: every
+        # The profile snapshot's content comes from a client outside the workspace (the Imbue Studio
+        # desktop or the hosted web client), so a change announces itself only through this watch: every
         # page then re-fetches its resolved keybindings. The directory is made first so the watch
         # can start before any client has written a snapshot.
         snapshot_path = self.repo_root / SNAPSHOT_RELATIVE_PATH

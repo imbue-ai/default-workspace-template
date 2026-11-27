@@ -52,10 +52,10 @@ from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
 from share_gateway.agent_audit import events_dir_from_environ
+from share_gateway.agent_exec import RunningCommands
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
-from share_gateway.agent_workspace import HOST_KEY_PUBLIC_PATH
 from share_gateway.agent_workspace import read_workspace_coordinates
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
@@ -84,6 +84,8 @@ from share_gateway.request_counts import RequestCountFlusher
 from share_gateway.request_counts import RequestCounter
 from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
 from share_gateway.request_handler import SilentRequestHandler
+from share_gateway.retired_agent_keys import DEFAULT_AUTHORIZED_KEYS_PATH
+from share_gateway.retired_agent_keys import remove_agent_key_lines
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
@@ -191,8 +193,8 @@ def _reload_frpc(config_path: Path) -> bool:
 
 
 class ShareStack:
-    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, and the relay
-    credential brokered for the Screen."""
+    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, the relay
+    credential brokered for the Screen, and the commands visiting agents have in flight."""
 
     def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
         self.materials = materials
@@ -200,6 +202,7 @@ class ShareStack:
         self.assignment = assignment
         self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
+        self.running_commands: RunningCommands | None = None
         self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
@@ -319,6 +322,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     agent_access = _build_agent_access_context(materials.workspace_domain)
+    stack.running_commands = agent_access.running_commands
     request_counter = RequestCounter(request_counts_events_path(os.environ))
     app = build_gateway_app(
         materials=materials,
@@ -343,6 +347,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         signing_secret=signing_secret,
         share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        chrome_origin=materials.chrome_origin,
     )
     stack.gateway_server = make_server(
         "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
@@ -413,6 +418,10 @@ def _stop_stack(stack: ShareStack | None) -> None:
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
+    # A command runs in a process group of its own, so stopping this service does not reach it, and once the
+    # gateway is gone nothing would enforce its timeout.
+    if stack.running_commands is not None:
+        stack.running_commands.kill_all()
     if stack.request_count_flusher is not None:
         stack.request_count_flusher.stop()
     _log("Share stack stopped")
@@ -509,9 +518,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
 
 def _build_agent_access_context(workspace_domain: str) -> AgentAccessContext:
     paths = default_agent_access_paths(events_dir_from_environ(os.environ))
-    coordinates = read_workspace_coordinates(
-        os.environ, HOST_KEY_PUBLIC_PATH, fallback_display_name=workspace_domain.split(".", 1)[0]
-    )
+    coordinates = read_workspace_coordinates(os.environ, fallback_display_name=workspace_domain.split(".", 1)[0])
     return AgentAccessContext(
         paths=paths,
         coordinates=coordinates,
@@ -546,19 +553,29 @@ def build_agent_admitter(
 
 
 def _reconcile_agent_access_at_start() -> None:
-    """Prune expired grants and invites and re-assert the authorized_keys lines from the grants file."""
+    """Prune expired grants and invites."""
     paths = default_agent_access_paths(events_dir_from_environ(os.environ))
     try:
         if reconcile_agent_access(paths, agent_access_now()):
-            _log("Reconciled the visiting-agent grants and their authorized_keys lines")
+            _log("Pruned the expired visiting-agent grants and invites")
     except (AgentGrantsError, OSError) as exc:
         _log(f"Could not reconcile the visiting-agent grants: {exc}")
+
+
+# CLEANUP: remove with ``share_gateway.retired_agent_keys``.
+def _remove_retired_agent_key_lines_at_start() -> None:
+    try:
+        if remove_agent_key_lines(DEFAULT_AUTHORIZED_KEYS_PATH):
+            _log("Removed the visiting agents' lines from authorized_keys")
+    except (OSError, UnicodeError) as exc:
+        _log(f"Could not remove the visiting agents' lines from authorized_keys: {exc}")
 
 
 def main() -> None:
     _log(f"Watching {materials_module.MATERIALS_FILE} for share materials")
     materials_module.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
     _reconcile_agent_access_at_start()
+    _remove_retired_agent_key_lines_at_start()
 
     inotify_fd = _try_setup_inotify([materials_module.MATERIALS_FILE, APPS_TOML_PATH])
     stack: ShareStack | None = None

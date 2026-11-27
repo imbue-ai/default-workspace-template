@@ -434,17 +434,11 @@ else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
 fi
 
-# owner-exec (the in-container exec daemon) and earlyoom (the OOM-prevention
-# daemon; see install_earlyoom.sh for why it is a fork), each a pinned,
-# sha256-verified static binary with its own idempotent installer.
-# Invoked from here rather than as their own Dockerfile layers so that a live
-# re-provision (the update apply) and a non-Docker provider get them too: this
-# script is the only provisioning path every provider shares.
-if [ -f "$setup_dir/install_owner_exec.sh" ]; then
-    bash "$setup_dir/install_owner_exec.sh"
-else
-    bash "$setup_dir/default-workspace-template-install-owner-exec"
-fi
+# earlyoom (the OOM-prevention daemon; see install_earlyoom.sh for why it is a
+# fork), a pinned, sha256-verified static binary with its own idempotent
+# installer. Invoked from here rather than as its own Dockerfile layer so that
+# a live re-provision (the update apply) and a non-Docker provider get it too:
+# this script is the only provisioning path every provider shares.
 if [ -f "$setup_dir/install_earlyoom.sh" ]; then
     bash "$setup_dir/install_earlyoom.sh"
 else
@@ -464,6 +458,14 @@ fi
 if dpkg -s earlyoom >/dev/null 2>&1; then
     apt-get purge -y earlyoom
 fi
+# A host provisioned by a release that ran the owner-exec daemon still has its
+# binary, its version stamp and, in a Docker-built image, its installer. No
+# program runs them, and a rollback to such a release installs the binary
+# again when its daemon starts.
+# CLEANUP: remove once no supported workspace was provisioned by a release
+# that installed owner-exec.
+rm -f /usr/local/bin/owner-exec /usr/local/bin/.owner-exec-version \
+    /usr/local/bin/default-workspace-template-install-owner-exec
 
 # Playwright + Chromium is deliberately NOT installed here; the deferred-install
 # service installs it idempotently on first boot.

@@ -104,7 +104,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 | Add to project, Remove from project | Shell, shared |
 | Arrangement, docked set, last-focused per tab, active view | Shell, per client |
 | Close (undock) a tab | Shell, per client |
-| Workspace-level facts minds needs (service discovery events, owner-exec, share materials) | Mind, through its own contract with the workspace, which this model does not touch |
+| Workspace-level facts minds needs (service discovery events, share materials) | Mind, through its own contract with the workspace, which this model does not touch |
 
 ### 3.5 Invariants
 
@@ -144,7 +144,7 @@ label = "New File Viewer"      # every action is a create: POST /_instances with
 An app with `instances = false` declares no actions; the shell synthesizes its one action, `open`, which focuses the app's tab.
 `forward_port.py --manifest <path>` reads every static field from the manifest, with `--name` and `--url` for the runtime facts and `--remove` for teardown; the script is stdlib-only so registration never depends on the root venv.
 `--icon-file` and `--program` serve a pre-manifest app, which registers by `--name` without a manifest; `build-app` scaffolds a manifest and the manifest-driven registration line.
-`--internal` and `--no-icon` serve registrations that have no app directory: owner-exec, the VM exec service, preview instances, and isolated test servers.
+`--internal` and `--no-icon` serve registrations that have no app directory: preview instances and isolated test servers.
 
 ### 4.2 Registry rows
 

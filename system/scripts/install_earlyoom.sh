@@ -3,8 +3,7 @@
 # that picks its victim by the kernel badness computed from oom_score_adj
 # (upstream reads /proc/<pid>/oom_score, which gVisor serves as 0 for every
 # process, so under gVisor it ignored the priority bands). Idempotent and
-# version-gated like install_owner_exec.sh: a binary already at the pinned
-# version is left in place.
+# version-gated: a binary already at the pinned version is left in place.
 #
 # To bump: tag a new v1.9.0-imbue.N release on imbue-ai/earlyoom, then set
 # EARLYOOM_VERSION and both sha256s below from its published .sha256 assets.

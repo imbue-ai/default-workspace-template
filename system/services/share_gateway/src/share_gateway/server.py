@@ -290,8 +290,9 @@ def build_gateway_app(
         }
         if identity.is_owner:
             # The owner's chrome needs the service origins (unguessable labels)
-            # to reach individual services -- most importantly owner-exec. Only
-            # the owner gets the map; a visitor sees just liveness + backend.
+            # to reach individual services -- most importantly the shell, which
+            # serves the workspace routes. Only the owner gets the map; a
+            # visitor sees just liveness + backend.
             detail["services"] = {name: label for label, name in label_to_name.items()}
             # The gateway's own agent routes answer only at its auth address, which the owner's
             # page of another origin has no other way to learn.

@@ -15,8 +15,7 @@ renderers, and the file locks every writer of them holds:
   `invites.toml`, the visiting agents admitted by a bearer token and the
   one-time codes they join with (`share_gateway/README.md`, "Visiting
   agents"). The records, their parsers and renderers, the invite codes and
-  admission tokens, the `authorized_keys` reconcile, and the agent-access
-  lock. The one check that needs a key library (that a joining agent's key is
+  admission tokens, and the agent-access lock. The one check that needs a key library (that a joining agent's key is
   an Ed25519 OpenSSH key) is the gateway's own, in its `agent_keys` module.
 - `json_values` -- the `is_json_object` guard both parsers read TOML tables
   with.

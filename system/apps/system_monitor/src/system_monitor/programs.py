@@ -44,7 +44,6 @@ PROGRAM_NAMES = {
     "cron": "Scheduled tasks",
     "xvfb": "Virtual display",
     "terminal-pty": "Terminal",
-    "owner-exec": "Web access",
     "env-converge": "Environment setup",
 }
 

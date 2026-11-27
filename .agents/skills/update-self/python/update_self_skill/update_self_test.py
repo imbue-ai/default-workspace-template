@@ -5631,7 +5631,7 @@ def test_the_apply_bands_itself_to_the_pre_merge_trees_system_interface_band(
     _write_bands_package(
         tmp_path,
         "AGENT_SUBPROCESS = 900\n"
-        "SERVICE_BANDS = {'owner-exec': 5, 'system_interface': 33, 'cron': 55}\n"
+        "SERVICE_BANDS = {'terminal': 10, 'system_interface': 33, 'cron': 55}\n"
         "BANDED_AS = []\n"
         "def set_oom_score_adj(pid, adj):\n"
         "    BANDED_AS.append(adj)\n"
@@ -5660,7 +5660,7 @@ def test_a_bands_module_whose_map_lacks_the_applys_service_is_refused(
     _write_bands_package(
         tmp_path,
         "AGENT_SUBPROCESS = 900\n"
-        "SERVICE_BANDS = {'owner-exec': 5, 'cron': 55}\n"
+        "SERVICE_BANDS = {'terminal': 10, 'cron': 55}\n"
         "def set_oom_score_adj(pid, adj):\n"
         "    return True\n"
         "def oom_tag_shell_prefix(adj):\n"
@@ -10065,7 +10065,7 @@ def test_the_apply_prunes_registry_rows_whose_program_the_merged_tree_no_longer_
     registry.write_text(
         '[[apps]]\nname = "screen"\nurl = "http://localhost:8090"\nprogram = "screen"\n\n'
         '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n\n'
-        '[[apps]]\nname = "owner-exec"\nurl = "http://localhost:8650"\n'
+        '[[apps]]\nname = "files-preview"\nurl = "http://localhost:8650"\n'
     )
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
 

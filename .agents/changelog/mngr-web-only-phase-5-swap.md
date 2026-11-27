@@ -1,0 +1,1 @@
+- `service-processes.md` no longer lists the owner-exec service among the registrations that have no app directory, and `update-self`'s description of what sits below the apply's memory band names the terminal alone. The owner-exec daemon is removed from the workspace in this release.

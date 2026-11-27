@@ -941,7 +941,7 @@ def test_icon_is_required_unless_internal() -> None:
     with pytest.raises(ValidationError, match="icon is required"):
         AppManifest.model_validate({"name": "news", "display_name": "News"})
 
-    internal = AppManifest.model_validate({"name": "owner-exec", "display_name": "Owner exec", "internal": True})
+    internal = AppManifest.model_validate({"name": "terminal-pty", "display_name": "Terminal pty", "internal": True})
     assert internal.icon is None
 
 
