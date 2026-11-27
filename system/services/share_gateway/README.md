@@ -346,14 +346,16 @@ event envelope (`type` `gateway_request_count`, `source` `gateway_requests`):
 - `outcome` is `allowed` or `denied:<reason>`, the reason one of
   `foreign_host`, `origin`, `agent_access_unconfigured`, `agent_token`,
   `no_session`, `grants_misconfigured` and `no_grant`. A redirect to the
-  broker counts as `denied:no_session`; the hosted chrome's CORS preflight
-  counts as allowed by nobody.
+  broker counts as `denied:no_session`; a CORS preflight of the hosted chrome
+  that reaches the auth step counts as allowed by nobody.
 - `timestamp` is the window's end, when the count became final; a replay of
   the stream is deduplicated by `event_id` downstream.
 
 Never a path, a query string, an address or a header. The auth label's
-`/_auth/*` and `/_agent/*` surfaces, `/_health` and the loading page are
-routed without the auth step and are not counted (the access log has them).
+`/_auth/*` and `/_agent/*` surfaces, `/_health`, the loading page, and the web
+client's permission checks for an internal app's workspace routes
+(`/api/workspace/...`, which caddy answers itself) are routed without the auth
+step and are not counted (the access log has them).
 A window keeps at most 256 distinct keys; every further key folds into one
 `overflow` record, so a flood bounds itself. The stream archives itself at
 32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`
