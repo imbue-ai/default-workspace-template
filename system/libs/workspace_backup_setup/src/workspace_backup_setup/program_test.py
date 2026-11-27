@@ -777,6 +777,28 @@ def test_the_setup_waits_while_someone_else_holds_the_backup_lease(
     assert workspace.state().lease is None
 
 
+def test_storage_kept_for_the_hourly_check_is_tried_as_soon_as_the_backup_lease_is_given_back(
+    workspace: _Workspace, fake_restic_control: Path
+) -> None:
+    refuse_fake_restic_token(fake_restic_control, "token-a")
+    program = workspace.start_program()
+    workspace.request(imbue_cloud_request("token-a"))
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.AWAITING_STORAGE
+    (fake_restic_control / "refused-tokens").unlink()
+
+    workspace.clock.advance(CREDENTIALS_CHECK_INTERVAL_SECONDS)
+    take_lease(workspace.lease_path, "restore", workspace.clock())
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.AWAITING_STORAGE
+    assert len(fake_restic_calls(fake_restic_control)) == 1
+
+    release_lease(workspace.lease_path, "restore", workspace.clock())
+    workspace.clock.advance(1.0)
+    program.run_pass()
+    assert workspace.state().setup.state is BackupSetupState.READY
+
+
 def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     workspace: _Workspace, fake_restic_control: Path
 ) -> None:

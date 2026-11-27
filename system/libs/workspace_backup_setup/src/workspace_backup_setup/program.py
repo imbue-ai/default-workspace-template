@@ -228,7 +228,9 @@ class BackupSetupProgram:
         if is_check_due:
             self._next_credentials_check_at = now + CREDENTIALS_CHECK_INTERVAL_SECONDS
         if is_attempt_due or (is_check_due and pending is not None):
-            self._attempt(record, pending)
+            if not self._attempt(record, pending) and is_check_due:
+                # Storage kept for the hourly check is still to be tried, once the lease is given back.
+                self._next_credentials_check_at = now
         elif is_check_due and env_text is not None:
             in_use = parse_restic_env_file(env_text)
             # A destination that awaits its first storage says nothing of the previous one's file, still in place.
@@ -279,7 +281,8 @@ class BackupSetupProgram:
         finally:
             release_lease(self._lease_path, HOLDER_SETUP, self._clock())
 
-    def _attempt(self, record: SetupRecord, pending: dict[str, str] | None) -> None:
+    def _attempt(self, record: SetupRecord, pending: dict[str, str] | None) -> bool:
+        """Try the setup once; False when it waits for whoever holds the backup lease, and nothing was tried."""
         now = self._clock()
         if pending is None or not pending.get(REPOSITORY_KEY):
             with setup_lock(self._workspace_root):
@@ -293,17 +296,18 @@ class BackupSetupProgram:
                         installed_digest=record.installed_digest,
                     ),
                 )
-            return
+            return True
         try:
             take_or_renew_lease(self._lease_path, HOLDER_SETUP, now)
         except BackupLeaseHeldError as e:
             self._note_waiting_for(e.lease.holder)
-            return
+            return False
         self._awaited_holder = ""
         try:
             self._attempt_holding_the_lease(record, pending)
         finally:
             release_lease(self._lease_path, HOLDER_SETUP, self._clock())
+        return True
 
     def _attempt_holding_the_lease(
         self, record: SetupRecord, pending: dict[str, str]
