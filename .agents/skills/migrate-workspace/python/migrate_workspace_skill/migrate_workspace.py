@@ -523,9 +523,10 @@ _SECRETS_DIR_BY_LAYOUT = {LAYOUT_CURRENT: ".secrets", LAYOUT_PRE_DECLUTTER: "sec
 # was created with, and what its update dispatcher and update
 # routes record of its own runs (the run and its verdict, the armed schedule,
 # the last dispatch and start, the version its checkout was read at, when it
-# last fetched its template's release tags, the last version a client named). This workspace's dispatcher arms its own updates
-# from those files, so a copied one would hold an update back, arm one to the
-# version already here, or start one in this workspace's window. Its boot
+# last fetched its template's release tags, the last version a client named).
+# This workspace's dispatcher arms its own updates from those files, so a
+# copied one would hold an update back, arm one to the version already here,
+# or start one in this workspace's window. Its boot
 # applies each part of its own initial data once by the record it keeps, so the
 # source's record would have it apply a document it kept all over again, or
 # read as failed for a part the source failed. The update

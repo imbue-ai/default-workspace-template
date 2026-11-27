@@ -407,11 +407,11 @@ desktop's Share panel. Also left behind is what the old workspace recorded of it
 own update runs under `data/.state/update-apply/` (`run.json`, `schedule.json`,
 `schedule-origin.json`, `last-dispatch.json`, `last-start.json`,
 `installed-version.json`, `release-tags-fetch.json`, `client-ceiling.json`,
-`watchdog.json`, `dispatch-attempt.json`): this workspace arms its own updates from those files,
-so a copied one would hold an update back, or start one here that the old
-workspace had scheduled. The update settings (`settings.json`) and the version
-the owner skipped (`skipped-target.json`) do come over. The script owns the list,
-so take the excludes from it:
+`watchdog.json`, `dispatch-attempt.json`): this workspace arms its own updates
+from those files, so a copied one would hold an update back, or start one here
+that the old workspace had scheduled. The update settings (`settings.json`) and
+the version the owner skipped (`skipped-target.json`) do come over. The script
+owns the list, so take the excludes from it:
 
 ```bash
 rsync -a -e "ssh -i /tmp/mind_key -p <port> -o StrictHostKeyChecking=no" \
