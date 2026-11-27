@@ -171,11 +171,21 @@ def _own_storage(storage: OwnStorage) -> dict[str, str]:
                 f"{name} must not be among the storage's variables: name the repository as `repository`."
             )
         if _VARIABLE_NAME.fullmatch(name) is None:
+            # The name is not quoted: a line typed `NAME: value` arrives as a name that holds the value.
             raise InvalidBackupDestinationError(
-                f"{name!r} is not the name of an environment variable."
+                "A variable of the storage has a name that is not the name of an environment variable."
             )
         env_values[name] = _checked_value(name, value.get_secret_value())
     return env_values
+
+
+def _place_of(loc: tuple[int | str, ...]) -> str:
+    """Where in a request a problem is, with a variable's name that is not one left out, as it may hold a value."""
+    parts = [str(part) for part in loc]
+    is_a_variable_named = parts[:2] == ["own_storage", "backend_env"] and len(parts) > 2
+    if is_a_variable_named and _VARIABLE_NAME.fullmatch(parts[2]) is None:
+        parts[2] = "a variable"
+    return ".".join(parts) or "the request"
 
 
 def _checked_destination(body: Mapping[str, object]) -> _Destination:
@@ -183,7 +193,7 @@ def _checked_destination(body: Mapping[str, object]) -> _Destination:
         request = BackupDestinationRequest.model_validate(dict(body))
     except ValidationError as e:
         problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc']) or 'the request'}: {error['msg']}"
+            f"{_place_of(error['loc'])}: {error['msg']}"
             for error in e.errors(include_input=False, include_url=False)
         )
         raise InvalidBackupDestinationError(

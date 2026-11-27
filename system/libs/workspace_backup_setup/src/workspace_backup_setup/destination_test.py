@@ -210,8 +210,31 @@ def test_a_destination_named_with_no_storage_is_set_up_from_what_was_kept_for_it
             "name the repository as `repository`",
         ),
         (
-            own_storage_request("s3:https://s3.example/bucket", {"AWS KEY": "v"}),
-            "'AWS KEY' is not the name",
+            own_storage_request(
+                "s3:https://s3.example/bucket",
+                {"AZURE_ACCOUNT_KEY: typed-password": "="},
+            ),
+            "A variable of the storage has a name that is not the name of an environment variable",
+        ),
+        (
+            {
+                "destination": "OWN_STORAGE",
+                "own_storage": {
+                    "repository": "s3:https://s3.example/bucket",
+                    "backend_env": {"AZURE_ACCOUNT_KEY: typed-password": 7},
+                },
+            },
+            "own_storage.backend_env.a variable: Input should be a valid string",
+        ),
+        (
+            {
+                "destination": "OWN_STORAGE",
+                "own_storage": {
+                    "repository": "s3:https://s3.example/bucket",
+                    "backend_env": {"AWS_ACCESS_KEY_ID": 7},
+                },
+            },
+            "own_storage.backend_env.AWS_ACCESS_KEY_ID: Input should be a valid string",
         ),
         (
             own_storage_request(

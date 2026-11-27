@@ -184,6 +184,14 @@ def test_none_is_applied_and_leaves_the_backups_off(
             {**imbue_cloud_request(STORAGE_TOKEN), "destination": "NONE"},
             "NONE takes neither",
         ),
+        # A line typed `NAME: value` reaches the workspace as a name that holds the value.
+        (
+            own_storage_request(
+                "s3:https://s3.example/bucket",
+                {f"AZURE_ACCOUNT_KEY: {STORAGE_TOKEN}": "="},
+            ),
+            "not the name of an environment variable",
+        ),
     ],
 )
 @pytest.mark.usefixtures("boot_environment")
@@ -204,6 +212,7 @@ def test_a_destination_the_backup_setup_refuses_fails_that_part_and_the_others_a
     assert status.detail.startswith("backups: ")
     assert said in status.detail
     assert STORAGE_TOKEN not in status.detail
+    assert STORAGE_TOKEN not in (workspace_root / STATUS_RELATIVE_PATH).read_text()
     assert document_path.exists()
     assert read_user_timezone(workspace_root) == "Europe/Berlin"
     assert not (workspace_root / SETUP_STATE_RELATIVE_PATH).exists()
