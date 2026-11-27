@@ -638,31 +638,58 @@ def _fail_a_run_to(staged: StagedUpdateWorkspace, target_ref: str) -> None:
     )
 
 
+def _hold_nothing_back(staged: StagedUpdateWorkspace, target_ref: str) -> None:
+    pass
+
+
 @pytest.mark.parametrize(
-    "hold_back", [_skip, _fail_a_run_to], ids=["skipped", "already-tried"]
+    ("hold_back", "moved_to", "reason"),
+    [
+        (_skip, "minds-v0.10.1", "was skipped or already tried"),
+        (_fail_a_run_to, "minds-v0.10.1", "was skipped or already tried"),
+        # A channel taken back to the version the workspace is on.
+        (_hold_nothing_back, _INSTALLED, "is not behind"),
+    ],
+    ids=["skipped", "already-tried", "not-behind"],
 )
 def test_a_self_armed_schedule_is_cancelled_when_its_channel_moves_to_a_version_the_workspace_does_not_arm(
     staged: StagedUpdateWorkspace,
     hold_back: Callable[[StagedUpdateWorkspace, str], None],
+    moved_to: str,
+    reason: str,
 ) -> None:
     feed = _stage_a_workspace_behind_its_channel(staged)
-    hold_back(staged, "minds-v0.10.1")
+    hold_back(staged, moved_to)
     _tick(staged, feed, _NOW)
     assert _armed_target(staged) == _ON_THE_CHANNEL
 
-    feed.template_ref = "minds-v0.10.1"
+    feed.template_ref = moved_to
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
 
     assert staged.read_state("schedule.json") is None
     assert staged.read_state("schedule-origin.json") is None
     assert any(
-        "minds-v0.10.1" in line and "cancelled" in line
+        moved_to in line and "cancelled" in line and reason in line
         for line in staged.dispatcher_log_lines()
     )
 
     _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS + 60)
 
     assert staged.read_state("schedule.json") is None
+
+
+def test_a_self_armed_schedule_follows_its_channel_back_while_the_checkouts_version_cannot_be_read(
+    staged: StagedUpdateWorkspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed = _stage_a_workspace_behind_its_channel(staged)
+    _tick(staged, feed, _NOW)
+    # The stub tools alone, so there is no git to run once the hour's read is out.
+    monkeypatch.setenv("PATH", str(staged.bin_dir))
+
+    feed.template_ref = _INSTALLED
+    _tick(staged, feed, _NOW + CHANNEL_READ_INTERVAL_SECONDS)
+
+    assert _armed_target(staged) == _INSTALLED
 
 
 def test_a_self_armed_schedule_follows_its_channel_past_a_version_skipped_earlier(

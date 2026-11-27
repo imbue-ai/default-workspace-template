@@ -41,6 +41,7 @@ from workspace_update_control.dispatcher import (
 from workspace_update_control.installed_version import (
     is_release_behind,
     read_installed_ref,
+    release_sort_key,
 )
 from workspace_update_control.protocol import (
     DISMISSALS_FILE_PATH,
@@ -213,6 +214,22 @@ def read_installed_version(now: float) -> str:
     return template_ref
 
 
+def _why_not_moved_to(facts: ArmingFacts, moved_to: str, now: float) -> str:
+    """Why the workspace's own schedule does not follow its channel to ``moved_to``; '' when it does.
+
+    A checkout whose version could not be read, or names no release, says nothing of whether the workspace is
+    behind, and the schedule follows.
+    """
+    if _is_version_held_back(facts, moved_to):
+        return "was skipped or already tried"
+    installed_ref = read_installed_version(now)
+    if release_sort_key(installed_ref) is not None and not is_release_behind(
+        installed_ref, moved_to
+    ):
+        return "the workspace is not behind"
+    return ""
+
+
 def tick_self_arming(
     *,
     now: float,
@@ -228,7 +245,8 @@ def tick_self_arming(
     before the workspace armed its own updates named, while that client keeps asking.
 
     A schedule the workspace armed itself is cancelled, not moved, when its channel moves to a version the user
-    skipped or a run already went out for: the workspace would not have armed that version.
+    skipped, a run already went out for, or the workspace is not behind: the workspace would not have armed that
+    version.
     """
     settings = read_update_settings()
     if settings is None:
@@ -239,11 +257,14 @@ def tick_self_arming(
     facts = read_arming_facts(settings.is_arming_enabled, now)
     if facts.is_scheduled:
         moved_to = read_self_armed_schedule_move(now)
-        if moved_to is not None and _is_version_held_back(facts, moved_to):
+        why_not_armed = (
+            _why_not_moved_to(facts, moved_to, now) if moved_to is not None else ""
+        )
+        if why_not_armed:
             cancel_schedule()
             write_log_line(
-                "cancelled the workspace's own schedule: its channel moved to %s, which was skipped or already tried"
-                % moved_to
+                "cancelled the workspace's own schedule: its channel moved to %s, which %s"
+                % (moved_to, why_not_armed)
             )
             return
         refresh_followed_schedule(now)
