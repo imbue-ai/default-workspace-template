@@ -14,7 +14,9 @@ One workspace still asks an app: one that holds no update settings at all,
 because the only Imbue Studio that has opened it is a desktop app from before
 those settings existed. `resolve-target` then takes the release that app says
 it supports, as every pass did before, and only when no app answers is the
-missing channel a fault.
+missing channel a fault. The fault then says why the app did not answer, which
+is what the user can act on: an app too old to report its version is updated
+first, and one that is closed is started.
 
 Three things leave that release out of reach, and all three are **faults**, not
 refusals: `resolve-target` fails, and what to do next is your call with the

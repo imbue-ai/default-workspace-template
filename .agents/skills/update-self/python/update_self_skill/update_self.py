@@ -335,8 +335,17 @@ def _ceiling(args: argparse.Namespace, repo_root: Path) -> str | None:
         return args.ceiling
     try:
         return read_channel_template_ref(repo_root)
-    except ChannelVersionUnavailableError:
-        desktop_ref = _desktop_template_ref(repo_root)
+    except ChannelVersionUnavailableError as channel_error:
+        try:
+            desktop_ref = _desktop_template_ref(repo_root)
+        except DesktopVersionUnavailableError as desktop_error:
+            if args.override is None:
+                # Opening the workspace in an app that writes no update settings changes nothing, so what
+                # that app answered is the part the user can act on.
+                raise ChannelVersionUnavailableError(
+                    f"{channel_error} The Imbue Studio app was asked instead: {desktop_error}"
+                ) from desktop_error
+            return None
         if desktop_ref is not None:
             return desktop_ref
         if args.override is None:
@@ -346,13 +355,10 @@ def _ceiling(args: argparse.Namespace, repo_root: Path) -> str | None:
 
 def _desktop_template_ref(repo_root: Path) -> str | None:
     """The release a desktop app from before the update settings supports, for a workspace that holds none;
-    None for a workspace that holds settings, and when no such app answers."""
+    None for a workspace that holds settings. ``DesktopVersionUnavailableError`` when no such app answers."""
     if not is_workspace_without_update_settings(repo_root):
         return None
-    try:
-        return fetch_desktop_template_ref()
-    except DesktopVersionUnavailableError:
-        return None
+    return fetch_desktop_template_ref()
 
 
 def _cmd_resolve_target(args: argparse.Namespace) -> int:
