@@ -267,6 +267,7 @@ Then destroy the worker and its branch:
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git worktree prune
 git branch -d "mngr/<slug>"
+rm -rf data/.tasks/launch-task/<slug>
 ```
 
 If you are stopping after a failure instead, leave the worker and its branch

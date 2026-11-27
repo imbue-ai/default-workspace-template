@@ -246,7 +246,8 @@ than keep copies:
 
 - `github_sync.repositories`: `create_repository(name, description,
   is_private)` returns `<owner>/<repo>` (`RepositoryNameTakenError` when the
-  account has one of that name, `GithubRequestError` for any other refusal),
+  account has one of that name, `GithubRequestError` for any other refusal
+  and when GitHub's answer does not confirm the visibility asked for),
   and `lock_down_repository(repository)` closes issues, wiki, projects,
   discussions and outside pull requests, returning the problem when that did
   not take. `read_repository_is_private(repository)` asks GitHub whether a

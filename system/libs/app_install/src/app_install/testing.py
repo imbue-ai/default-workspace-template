@@ -104,6 +104,7 @@ def make_published_app_repository(directory: Path, name: str, extra_manifest: st
     (directory / "app.toml").write_text(manifest_body(name, extra_manifest))
     (directory / "icon.svg").write_text(APP_ICON_MARKUP)
     (directory / "README.md").write_text(f"# {name}\n")
+    (directory / "LICENSE").write_text("MIT License\n")
     commit_all(directory, f"{name}: first version")
     return directory
 

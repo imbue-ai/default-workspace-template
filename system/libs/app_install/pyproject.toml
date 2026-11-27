@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-app-install = "app_install.cli:main"
+app-install = "app_install.cli:run"
 
 [build-system]
 requires = ["hatchling"]

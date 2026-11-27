@@ -100,6 +100,8 @@ _NON_FAST_FORWARD_MARKERS: Final[tuple[str, ...]] = ("(non-fast-forward)", "(fet
 _ALREADY_EXISTS_MARKER: Final[str] = "already exists"
 # How many paths one git command is given, so that its arguments stay within what a command line can hold.
 _PATHS_PER_COMMAND: Final[int] = 200
+# The file at a published tree's root that says on what terms the app is shared.
+_LICENSE_FILENAME: Final[str] = "LICENSE"
 # A skill named by where it lives in a workspace, or by where it keeps its data there.
 _SKILL_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:\.agents/skills|data/\.skills)/([a-z0-9]+(?:-[a-z0-9]+)*)"
@@ -586,8 +588,8 @@ def _check_nothing_pushed_is_unrecorded(repo_root: Path, name: str) -> None:
 
 def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRuntimeInterface) -> AssembleOutcome:
     """Build the tree a publish of the app ``name`` at ``revision`` would push, in a directory outside the
-    workspace, and find it fit to publish: its manifest passes the authoring check and names a version newer
-    than the last one published, the secret scan finds nothing in it, it names no skill of this workspace that
+    workspace, and find it fit to publish: it holds a ``LICENSE`` file, its manifest passes the authoring check
+    and names a version newer than the last one published, the secret scan finds nothing in it, it names no skill of this workspace that
     it does not carry, and, for a Python app, its lock is what its project calls for with no workspace around
     it. The tree then waits for ``push_app``. Nothing is pushed.
 
@@ -610,6 +612,11 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
             raise PublishError(
                 f"[publish] exclude leaves {MANIFEST_FILENAME} out of the published tree, and a repository "
                 "without one is not an app"
+            )
+        if not (tree_directory / _LICENSE_FILENAME).is_file():
+            raise PublishError(
+                f"what would be published of {name} has no {_LICENSE_FILENAME} file: a published app says on what "
+                "terms it is shared, whoever can see it now"
             )
         manifest = _load_manifest_for_publish(tree_directory / MANIFEST_FILENAME, record)
         if manifest.version is None:

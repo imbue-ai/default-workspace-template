@@ -6,6 +6,7 @@ A user app is one self-contained directory, `system/apps/<package>/`.
 Everything the app owns is inside it: its code, its routines (`routines/<id>.toml`), its environment units (`env.d/<NNNN>-<name>.sh`), and the skills it carries (`skills/<name>/`).
 A skill built for an app is made under `.agents/skills/` like any other and listed in the app's record as a reference; the app comes to carry it when it is published (the `publish-app` skill), which is also how an installed app arrives with skills.
 The command is deterministic and asks nothing; every run ends in one JSON line on stdout.
+It logs to stderr, and only warnings unless `APP_INSTALL_LOG_LEVEL` asks for more (`DEBUG`), so a caller that reads both streams together still gets the one line.
 
 ```bash
 uv run --no-sync app-install add <package> [--port <n>]
@@ -220,6 +221,7 @@ The template release the workspace is on is the nearest `minds-v` tag in its his
 `[publish] exclude` is gitignore syntax, relative to the app's directory.
 The tree is refused, with nothing left waiting, when:
 
+- it has no `LICENSE` file at its root (`refused`): a published app says on what terms it is shared, whoever can see it for now. The `publish-app` skill's worker writes an MIT one for an app that has none;
 - its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
 - the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
 - a file in it names, by its path under `.agents/skills/` or `data/.skills/`, a skill the app does not carry (`outside_skills_found`, with each line under `uses`). See "Skills the app does not carry" below;
@@ -239,6 +241,7 @@ A file over 1 MB, a file that is not text, a link, and a repository nested in th
 
 **The push.**
 On the first publish the repository is created under the workspace's GitHub account through `latchkey curl`, private unless `--public` is given (`is_private` in the result says which), closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+The push goes ahead only once GitHub's answer says the new repository has the visibility that was asked for: one that was to be private and is not confirmed so is left empty, and the result says to check and delete it on GitHub.
 A later publish never changes who can see the repository: its `is_private` is null, and `--public` is refused with the command that does.
 A first publish that is run again may carry `--public` as its first run did, and is refused only when the repository it finds is private.
 Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.

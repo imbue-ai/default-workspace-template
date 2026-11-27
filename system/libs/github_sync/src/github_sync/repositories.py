@@ -114,7 +114,9 @@ def create_repository(name: str, description: str, is_private: bool) -> str:
     `<owner>/<repo>`.
 
     Raises RepositoryNameTakenError when the account already has one of that
-    name, and GithubRequestError for every other refusal.
+    name, and GithubRequestError for every other refusal, and when GitHub's
+    answer does not say the repository has the visibility asked for: a
+    repository that was to be private is never taken to be so unconfirmed.
     """
     response = request_github(
         "POST",
@@ -128,6 +130,13 @@ def create_repository(name: str, description: str, is_private: bool) -> str:
         if _NAME_TAKEN_MARKER in json.dumps(response):
             raise RepositoryNameTakenError(explanation)
         raise GithubRequestError(explanation)
+    if response.get("private") is not is_private:
+        wanted = "private" if is_private else "public"
+        raise GithubRequestError(
+            f"{login}/{name} was created, but GitHub did not confirm it is {wanted} "
+            f"(it answered private={json.dumps(response.get('private'))}): nothing was "
+            "pushed to it; check it on GitHub, and delete it there before trying again"
+        )
     return f"{login}/{name}"
 
 

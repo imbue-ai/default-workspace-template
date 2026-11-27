@@ -55,6 +55,7 @@ def test_an_app_is_published_installed_published_again_and_updated_over_the_adop
     point_url_at(publisher, _PUBLISHED_URL, published)
     package = write_user_app(publisher, "notes", '\n[publish]\nexclude = ["docs/internal/**"]\n')
     write_app_file(publisher, package, "src/notes/runner.py", _notes_module("hello", 10))
+    write_app_file(publisher, package, "LICENSE", "MIT License\n")
     write_app_file(publisher, package, "docs/internal/plans.md", _EXCLUDED_NOTE)
     add_app(publisher, package, None, never_bound)
     commit_all(publisher, "Add the notes app")

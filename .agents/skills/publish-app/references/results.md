@@ -50,6 +50,7 @@ before dispatching a new one:
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git branch -D mngr/<slug>
+rm -rf data/.tasks/launch-task/<slug>
 ```
 
 Never do that for a version that was pushed and not recorded (the section
@@ -120,9 +121,9 @@ assemble is what gets pushed.
   other path, or when the worker reports that the app needs an SDK that is
   not released yet, stop, and tell the user the app cannot be published until
   that is changed.
-- `refused`: `detail` says why (no version in the manifest, a version not
-  newer than the last published, a manifest that fails its check). Have the
-  worker fix it.
+- `refused`: `detail` says why (no `LICENSE` file, no version in the
+  manifest, a version not newer than the last published, a manifest that
+  fails its check). Have the worker fix it.
 
 ## When the user calls it off
 
@@ -134,6 +135,7 @@ stays as it was:
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git worktree prune
 git branch -D "mngr/<slug>"
+rm -rf data/.tasks/launch-task/<slug>
 ```
 
 `-D` because git refuses `-d` for a branch that was never merged.
@@ -172,6 +174,10 @@ wiki, projects, discussions and outside pull requests, and gave it the topic
   then run the push again). Run it again once the cause is fixed: a
   repository that was created is not created twice, and a version that
   reached the repository is not pushed twice.
+  One refusal is not run again: a repository that was created and that
+  GitHub did not confirm as private (or public) when that was asked for.
+  Nothing was pushed to it. Stop, give the user its address, and ask them to
+  check it and delete it on GitHub before anything else.
 
 ## When recording stops
 

@@ -39,7 +39,7 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requests = _latchkey_answering_a_publish(
-        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"names": ["imbue-studio-app"]}'
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}, "private": false}', '{"names": ["imbue-studio-app"]}'
     )
 
     created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository(
@@ -59,7 +59,7 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
 
 def test_a_published_repository_is_created_private_when_asked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     requests = _latchkey_answering_a_publish(
-        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"names": ["imbue-studio-app"]}'
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}, "private": true}', '{"names": ["imbue-studio-app"]}'
     )
 
     WorkspaceRuntime(repo_root=tmp_path).create_published_repository("notes", "Keep short notes", is_private=True)
@@ -120,7 +120,7 @@ def test_a_dev_repository_is_created_private_and_closed_to_outsiders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requests = _latchkey_answering_a_publish(
-        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', "{}"
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}, "private": true}', "{}"
     )
     runtime = WorkspaceRuntime(repo_root=tmp_path)
 
@@ -144,7 +144,7 @@ def test_a_topic_that_is_not_set_is_a_problem_of_a_repository_that_was_created(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _latchkey_answering_a_publish(
-        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', '{"message": "Not Found"}'
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}, "private": false}', '{"message": "Not Found"}'
     )
 
     created = WorkspaceRuntime(repo_root=tmp_path).create_published_repository(

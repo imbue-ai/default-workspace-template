@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,7 @@ def _publisher(
     run_git(workspace, ["tag", _TEMPLATE_VERSION])
     package = write_user_app(workspace, "notes", extra_manifest, is_python=is_python)
     write_app_file(workspace, package, "src/notes/runner.py", "GREETING = 'hello'\n")
+    write_app_file(workspace, package, "LICENSE", "MIT License\n")
     add_app(workspace, package, None, never_bound)
     commit_all(workspace, "Add the notes app")
     published = make_bare_repository(tmp_path / "github" / "notes.git")
@@ -201,6 +203,7 @@ def test_the_published_tree_leaves_out_what_the_manifest_excludes(tmp_path: Path
     assembled = assemble_app(workspace, "notes", "HEAD", runtime)
 
     kept = [
+        "LICENSE",
         "app.toml",
         "docs/guide.md",
         "icon.svg",
@@ -420,6 +423,24 @@ def test_an_app_must_name_a_version_and_a_commit_that_holds_it(tmp_path: Path) -
         assemble_app(workspace, "notes", "HEAD~1", runtime)
     with pytest.raises(PublishError, match="not a commit"):
         assemble_app(workspace, "notes", "no-such-branch", runtime)
+
+
+def test_a_tree_with_no_license_file_is_not_published(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    (workspace / "system" / "apps" / "notes" / "LICENSE").unlink()
+    _versioned(workspace, runtime, "0.1.0")
+
+    with pytest.raises(PublishError, match="has no LICENSE file"):
+        assemble_app(workspace, "notes", "HEAD", runtime)
+
+    assert not pending_publish_path(workspace, "notes").exists()
+    # Leaving it out of what is published is the same as not having one.
+    write_app_file(workspace, "notes", "LICENSE", "MIT License\n")
+    manifest_file = workspace / "system" / "apps" / "notes" / "app.toml"
+    manifest_file.write_text(manifest_file.read_text() + '\n[publish]\nexclude = ["LICENSE"]\n')
+    commit_all(workspace, "Leave the license out of what is published")
+    with pytest.raises(PublishError, match="has no LICENSE file"):
+        assemble_app(workspace, "notes", "HEAD", runtime)
 
 
 def test_a_tree_that_excludes_its_own_manifest_or_icon_is_not_published(tmp_path: Path) -> None:
@@ -863,7 +884,13 @@ def test_comparing_says_what_changed_since_the_last_publish(tmp_path: Path) -> N
     assert never.record.published_commit == ""
     assert never.version == ""
     assert never.changed_paths == ()
-    assert sorted(never.published.paths) == ["app.toml", "docs/guide.md", "icon.svg", "src/notes/runner.py"]
+    assert sorted(never.published.paths) == [
+        "LICENSE",
+        "app.toml",
+        "docs/guide.md",
+        "icon.svg",
+        "src/notes/runner.py",
+    ]
 
     _publish(workspace, runtime, "0.1.0")
     assert compare_with_published(workspace, "notes", "HEAD").changed_paths == ()
@@ -1127,6 +1154,31 @@ def test_the_command_says_who_can_see_a_published_app_and_makes_it_public_when_a
     asked, asked_again, changed = (tmp_path / "bin" / "requests").read_text().splitlines()
     assert (asked, asked_again) == (read, read)
     assert "-X PATCH https://api.github.com/repos/octo/notes" in changed and '{"private": false}' in changed
+
+
+def test_the_installed_command_logs_only_what_needs_acting_on_unless_asked_for_more(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    add_app(workspace, write_user_app(workspace, "notes", is_python=False), None, never_bound)
+    commit_all(workspace, "Add the notes app")
+    # Comparing in a workspace with no template release logs that at debug level.
+    command = [
+        sys.executable,
+        "-c",
+        "from app_install.cli import run; run()",
+        "--repo-root",
+        str(workspace),
+        "publish",
+        "compare",
+        "notes",
+    ]
+
+    quiet = subprocess.run(command, capture_output=True, text=True, check=False)
+    verbose = subprocess.run(
+        command, capture_output=True, text=True, check=False, env={**os.environ, "APP_INSTALL_LOG_LEVEL": "DEBUG"}
+    )
+
+    assert (quiet.returncode, json.loads(quiet.stdout)["result"], quiet.stderr) == (0, "compared", "")
+    assert "No template release tag" in verbose.stderr
 
 
 def test_the_command_names_each_line_that_names_a_skill_the_app_does_not_carry(

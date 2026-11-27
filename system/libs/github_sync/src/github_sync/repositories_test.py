@@ -53,6 +53,22 @@ def test_a_repository_is_created_private_under_the_authenticated_account(
     }
 
 
+@pytest.mark.parametrize(
+    ("answered", "is_private", "wanted"),
+    [(False, True, "private"), (None, True, "private"), (True, False, "public")],
+)
+def test_a_repository_whose_visibility_github_does_not_confirm_is_a_refused_request(
+    fake_latchkey_bin: Path, tmp_path: Path, answered: bool | None, is_private: bool, wanted: str
+) -> None:
+    body: dict[str, object] = {"name": "notes", "owner": {"login": "octo"}}
+    if answered is not None:
+        body["private"] = answered
+    _answer(fake_latchkey_bin, body, tmp_path / "log")
+
+    with pytest.raises(GithubRequestError, match=f"octo/notes was created, but GitHub did not confirm it is {wanted}"):
+        create_repository("notes", "notes", is_private=is_private)
+
+
 def test_a_taken_name_is_told_apart_from_every_other_refusal(
     fake_latchkey_bin: Path, tmp_path: Path
 ) -> None:

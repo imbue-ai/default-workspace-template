@@ -27,10 +27,12 @@ Imbue Studio app can read it. A run that changed nothing because it was refused 
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Final
 
 import click
+from imbue.imbue_common.logging import setup_logging
 
 from app_install.errors import AppChecksFailedError
 from app_install.errors import AppInstallError
@@ -642,3 +644,12 @@ def list_command(repo_root: Path) -> None:
             for app in apps
         ],
     )
+
+
+def run() -> None:
+    # Every run ends in one JSON line that its caller reads, often with stderr merged into stdout, so only what
+    # needs acting on is logged. Configured here, in the process entry point, and never in the group: a test
+    # driving the group through click's runner would otherwise leave the log sink on the runner's closed stream.
+    setup_logging(level=os.environ.get("APP_INSTALL_LOG_LEVEL", "WARNING"))
+    main()
+

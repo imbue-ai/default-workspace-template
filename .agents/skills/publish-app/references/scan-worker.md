@@ -297,6 +297,19 @@ a person, in this order:
 Mock data only: no real names, addresses, messages or screenshots of the
 user's own data. Do not show the README to the user; the lead does that.
 
+Then the license file the README's last line names. A published app carries
+`system/apps/<package>/LICENSE`, whoever can see it for now, and a publish
+without one is refused:
+
+- **The app has none**: copy
+  `.agents/skills/publish-app/assets/MIT-LICENSE.txt` to
+  `system/apps/<package>/LICENSE` and fill in its second line: `<year>` is
+  this year, and `<holder>` the account the repository goes under (the
+  `<owner>` in your task's `repository`).
+- **The app has one**: leave it exactly as it is. An app that was installed
+  and changed keeps the license it came with, and the README's license line
+  names that one.
+
 ## 7. Check, commit, report
 
 Commit your work on your branch, then run all three, fixing what they report
@@ -330,6 +343,7 @@ Valid `name:` values: `question` (a gate, at any point), `done`, `stuck`. A
 - what whoever installs the app will be asked for, in one plain line per
   table you wrote;
 - the `imbue-app-sdk` range the app now depends on, when step 4 changed it;
+- the license file: written, or the one the app already had;
 - anything you could not determine, or left hardcoded and noted instead of
   changing.
 

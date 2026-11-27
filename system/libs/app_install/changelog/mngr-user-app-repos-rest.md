@@ -15,3 +15,5 @@
 `app-install verify <name> [--template <version>]` runs an app's own checks and, when they pass, records the template version they passed on as the record's `verified_template`; the update pass runs it for each app it converted or regenerated.
 
 A commit the installer makes on the primary checkout (an uninstall, a record change) is authored `app-install` even when the shell it runs in exports another git identity, as an agent's does.
+
+`publish assemble` refuses a tree with no `LICENSE` file. `publish push` goes ahead only once GitHub confirms the new repository has the visibility asked for. The `app-install` command logs warnings only, on stderr, unless `APP_INSTALL_LOG_LEVEL` asks for more, so its one JSON line is not preceded by debug lines when a caller merges the two streams.
