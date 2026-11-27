@@ -199,7 +199,8 @@ def drop_pending_env(workspace_root: Path, now: float) -> None:
     """Let go of the credentials of a setup that will not finish.
 
     Ones that hold a password are kept aside instead of deleted: the repository may already be initialised
-    with it, and then it is the only key.
+    with it, and then it is the only key. Where that password is already the one the workspace keeps for the
+    repository, nothing is added: storage offered again and again for one repository leaves one copy.
     """
     pending_path = workspace_root / PENDING_ENV_RELATIVE_PATH
     try:
@@ -208,10 +209,12 @@ def drop_pending_env(workspace_root: Path, now: float) -> None:
         pending_path.unlink(missing_ok=True)
         return
     env_values = parse_restic_env_file(text)
+    password = env_values.get(PASSWORD_KEY)
+    repository = env_values.get(REPOSITORY_KEY)
     if (
-        env_values.get(PASSWORD_KEY)
-        and env_values.get(REPOSITORY_KEY)
-        and env_values not in kept_envs(workspace_root)
+        password
+        and repository
+        and kept_password_for_repository(workspace_root, repository) != password
     ):
         write_atomically(
             _archive_path(workspace_root, now),

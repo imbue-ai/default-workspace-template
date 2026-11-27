@@ -246,3 +246,37 @@ def test_dropped_pending_credentials_are_kept_only_when_they_hold_a_password(
 
     assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
     assert kept_envs(workspace_root) == [_IMBUE_CLOUD_ENV]
+
+
+def test_dropped_pending_credentials_whose_password_is_kept_for_the_repository_add_no_copy(
+    workspace_root: Path,
+) -> None:
+    write_pending_env(workspace_root, "request-1", _IMBUE_CLOUD_ENV)
+    drop_pending_env(workspace_root, _NOW)
+    # Storage offered again for the same repository is attempted with the password that was kept.
+    for attempt, token in enumerate(("token-b", "token-c"), start=1):
+        write_pending_env(
+            workspace_root,
+            f"request-{attempt + 1}",
+            {**_IMBUE_CLOUD_ENV, "RESTIC_REST_PASSWORD": token},
+        )
+        drop_pending_env(workspace_root, _NOW + attempt)
+
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    assert kept_envs(workspace_root) == [_IMBUE_CLOUD_ENV]
+
+
+def test_dropped_pending_credentials_with_the_password_in_use_add_no_copy(
+    workspace_root: Path,
+) -> None:
+    install_restic_env(workspace_root, render_restic_env(_IMBUE_CLOUD_ENV), _NOW)
+    write_pending_env(
+        workspace_root,
+        "request-1",
+        {**_IMBUE_CLOUD_ENV, "RESTIC_REST_PASSWORD": "token-b"},
+    )
+
+    drop_pending_env(workspace_root, _NOW + 1.0)
+
+    assert not (workspace_root / PENDING_ENV_RELATIVE_PATH).exists()
+    assert kept_envs(workspace_root) == []
