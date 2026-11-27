@@ -1,7 +1,8 @@
 """The request identity and the provenance check, which live in the app SDK (``imbue.app_sdk.identity``).
 
-# CLEANUP: delete this module once every supported workspace has run the update that converts its apps to the SDK
-# (``app-install migrate``); nothing built in imports it, and it is kept only for user apps written before the SDK.
+# CLEANUP: delete this module once no supported workspace holds an app written before the SDK that has not been
+# published since; nothing built in imports it, it is kept only for such apps, and publishing one is what moves it
+# to the SDK's names.
 """
 
 from imbue.app_sdk.identity import ANONYMOUS_OWNER as ANONYMOUS_OWNER
