@@ -1422,8 +1422,11 @@ is; the chooser is then on the step that takes the code. A click outside the
 chooser that opens it on one sign-in (a tile of the first run's provider page,
 "Sign in again" in a chat's notice) opens that tab itself and hands it over
 (`signInTab` in the chooser's intent), since the chooser loads its lanes before
-it starts the sign-in. A sign-in that does not start closes the tab, and a
-browser that opens none leaves the link to the page as the first step.
+it starts the sign-in. That click goes by the lanes itself, to open no tab for
+a pasted key, and a chat's page otherwise loads them only with its chooser: it
+asks for them when it draws the notice. A sign-in that does not start closes
+the tab, and a browser that opens none leaves the link to the page as the first
+step.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While

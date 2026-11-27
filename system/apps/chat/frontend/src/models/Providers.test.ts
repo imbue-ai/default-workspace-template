@@ -128,6 +128,37 @@ describe("loadLanesAndAccountsWithRetry", () => {
     expect(lanesRequestCount()).toBe(5);
     expect(providers.areLanesLoaded()).toBe(false);
   });
+
+  it("loads the lanes alone when they are asked for ahead of a chooser, once however often they are asked for", async () => {
+    mockRequest.mockResolvedValue(LANES_BODY);
+
+    providers.requestLanes();
+    providers.requestLanes();
+    await vi.advanceTimersByTimeAsync(0);
+    providers.requestLanes();
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(lanesRequestCount()).toBe(1);
+    expect(providers.getLanes().map((lane) => lane.id)).toEqual(["anthropic"]);
+  });
+
+  it("gives up asking ahead of a chooser after five failures, and leaves the chooser's own load to ask", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockRequest.mockRejectedValue(requestFailure(502));
+
+    providers.requestLanes();
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS * (1 + 2 + 4 + 8) * 1.3);
+    providers.requestLanes();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(lanesRequestCount()).toBe(5);
+    expect(warn).toHaveBeenCalledOnce();
+    mockRequest.mockReset();
+    mockRequest.mockResolvedValueOnce(LANES_BODY).mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadLanesAndAccountsWithRetry();
+    expect(providers.areLanesLoaded()).toBe(true);
+    warn.mockRestore();
+  });
 });
 
 describe("whenAccountsReadyToChoose", () => {

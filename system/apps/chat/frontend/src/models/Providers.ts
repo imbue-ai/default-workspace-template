@@ -251,6 +251,18 @@ export function loadLanesAndAccountsWithRetry(): Promise<void> {
   }, LANES_AND_ACCOUNTS_ATTEMPTS);
 }
 
+let isLanesLoadRequested = false;
+
+/** Kick off the lanes' load ahead of the chooser's own, for a page that must know a lane before its chooser
+ *  opens. Idempotent, and asked once per page: the chooser's own load covers one that gave up. */
+export function requestLanes(): void {
+  if (lanesLoaded || isLanesLoadRequested) return;
+  isLanesLoadRequested = true;
+  retryWithBackoff(loadLanes, LANES_AND_ACCOUNTS_ATTEMPTS).catch((error: unknown) => {
+    console.warn("Could not load the providers ahead of a sign-in", error);
+  });
+}
+
 /** Name an account, or pass "" to go back to the provider's own name.
  *
  * Display only: nothing keys off the name, so this cannot strand a chat. */

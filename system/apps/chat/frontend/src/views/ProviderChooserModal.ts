@@ -66,6 +66,7 @@ import {
   pickRoom,
   loadLanesAndAccountsWithRetry,
   pickAccount,
+  requestLanes,
   takeChooserAccountId,
   takeChooserLaneId,
   takeChooserSignInTab,
@@ -146,6 +147,13 @@ export function openReauthTab(accountId: string): PendingTab | null {
     lane,
     lane.methods.find((candidate) => candidate.id === account.reauth_method),
   );
+}
+
+/** Ask for the lanes `openReauthTab` goes by, ahead of its click: a page loads them only with a chooser, and the
+ *  click that opens its first one must already know the account's. Nothing under a chrome that relays, where that
+ *  click opens no tab. Idempotent, for the view that draws the click's control. */
+export function prepareReauthTab(): void {
+  if (isProviderRelayDeclined()) requestLanes();
 }
 
 /** The loopback port a sign-in page's `redirect_uri` calls back to, or null when it names none. */

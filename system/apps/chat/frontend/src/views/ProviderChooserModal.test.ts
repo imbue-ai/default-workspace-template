@@ -35,6 +35,7 @@ const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]):
 const isProviderRelayDeclined = vi.hoisted(() => vi.fn(() => false));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 const abortFlow = vi.hoisted(() => vi.fn());
+const requestLanes = vi.hoisted(() => vi.fn());
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay, isProviderRelayDeclined }));
 
@@ -47,6 +48,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   areLanesLoaded: () => state.loaded,
   getFlow: () => state.flow,
   loadLanesAndAccountsWithRetry,
+  requestLanes,
   deleteAccount: async () => undefined,
   startFlow,
   submitCode: async () => undefined,
@@ -65,6 +67,7 @@ import {
   ProviderChooserModal,
   openReauthTab,
   openSignInTab,
+  prepareReauthTab,
 } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE, FIRST_RUN_DIALOG } from "./providerSignInStyles";
 
@@ -141,6 +144,7 @@ beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
   abortFlow.mockClear();
+  requestLanes.mockClear();
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue("relaying");
   isProviderRelayDeclined.mockReset();
@@ -906,6 +910,16 @@ describe("a sign-in finished in the browser", () => {
       isProviderRelayDeclined.mockReturnValue(false);
       expect(openSignInTab(lane())).toBeNull();
       expect(open).not.toHaveBeenCalled();
+    });
+
+    it("asks for the lanes ahead of the click that signs an account in again, and only under a chrome that relays none", () => {
+      isProviderRelayDeclined.mockReturnValue(false);
+      prepareReauthTab();
+      expect(requestLanes).not.toHaveBeenCalled();
+
+      isProviderRelayDeclined.mockReturnValue(true);
+      prepareReauthTab();
+      expect(requestLanes).toHaveBeenCalledOnce();
     });
 
     it("closes the tab when the lane it was opened for is gone once the lanes have loaded", async () => {

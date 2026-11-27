@@ -47,10 +47,14 @@ const switching = vi.hoisted(() => {
     areAccountsLoaded: true,
     // The tab a click opens for the page of an account's sign-in, or null where the click opens none.
     reauthTab: null as { show: () => void; close: () => void } | null,
+    prepareReauthTab: vi.fn(),
   };
 });
 vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
-vi.mock("./ProviderChooserModal", () => ({ openReauthTab: () => switching.reauthTab }));
+vi.mock("./ProviderChooserModal", () => ({
+  openReauthTab: () => switching.reauthTab,
+  prepareReauthTab: switching.prepareReauthTab,
+}));
 vi.mock("../models/Providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Providers")>()),
   accountForAgent: (accountId?: string) =>
@@ -694,6 +698,13 @@ describe("the auth-error note's switch link", () => {
     switching.signedInAtById = new Map();
     switching.areAccountsLoaded = true;
     switching.reauthTab = null;
+    switching.prepareReauthTab.mockClear();
+  });
+
+  it('prepares the tab of its "Sign in again" when the note is drawn, ahead of the click', () => {
+    renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+    expect(switching.prepareReauthTab).toHaveBeenCalledOnce();
   });
 
   it("hands the chooser the tab its click opened for the page of the account's sign-in", () => {
