@@ -38,11 +38,10 @@ source datalib covers: its syncs are incremental, resumable and paced against
 the services' rate limits, and a script written against the raw API is none of
 those.
 
-The skill's folder, `data/.skills/datalib` (relative to the workspace root),
-is a **libraries folder** laid out like the desktop app's `~/Datalib`: one
-folder per library. The library this workspace uses is `Default`, so the
-**data root** is `data/.skills/datalib/Default`, and the store's config file
-is `config.toml` inside it. `data/` is the workspace's own data tree on the
+The store's **data root** is `data/.mirrored-data` (relative to the
+workspace root), and the store's config file is `config.toml` inside it.
+The folder holds only what datalib mirrors and processes; data that belongs
+to one app stays under `data/.apps/<app>/`. `data/` is the workspace's own data tree on the
 persistent volume, so the store survives restarts. The binaries live in
 `/home/user/.local/bin`, which is not on PATH for every shell. The paths
 below are spelled out from the workspace's home, `/home/user`, not from
@@ -52,7 +51,7 @@ top of your shell work:
 
 ```bash
 export PATH="/home/user/.local/bin:$PATH"
-DATA_ROOT="/home/user/workspace/data/.skills/datalib/Default"   # the data root holding the store
+DATA_ROOT="/home/user/workspace/data/.mirrored-data"   # the data root holding the store
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
@@ -164,7 +163,7 @@ mkdir -p "$DATA_ROOT"
 10. **The store rides the workspace backup.** `data/` is covered by the encrypted
     host backup. That is fine for a modest mirror, but the store is large and
     fully rebuildable by re-syncing, so if it grows enough to bloat snapshots,
-    add `**/data/.skills/datalib` to the `excludes` list in
+    add `**/data/.mirrored-data` to the `excludes` list in
     `data/system/backup.toml` -- copying the service's default patterns in
     alongside it, since a list in that file *replaces* the defaults rather than
     adding to them (see `system/services/host_backup/README.md`).
