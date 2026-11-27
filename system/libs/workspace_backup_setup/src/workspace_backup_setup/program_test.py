@@ -792,8 +792,8 @@ def test_backups_are_not_turned_off_under_someone_elses_backup_lease(
     assert not workspace.restic_env.exists()
 
 
-def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
-    workspace: _Workspace,
+def test_a_password_that_cannot_be_kept_fails_the_attempt_before_the_repository_is_touched(
+    workspace: _Workspace, fake_restic_control: Path
 ) -> None:
     pending_path = workspace.root / PENDING_ENV_RELATIVE_PATH
 
@@ -808,6 +808,37 @@ def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
         clock=workspace.clock,
         workspace_id=WORKSPACE_ID,
         make_password=_put_a_directory_in_the_pending_envs_place_then_make_a_password,
+    )
+    workspace.request(
+        own_storage_request("s3:b/r", {"AWS_SECRET_ACCESS_KEY": "typed-secret"})
+    )
+
+    program.run_pass()
+
+    setup = workspace.state().setup
+    assert setup.state is BackupSetupState.FAILED
+    assert setup.detail.startswith("The repository's password could not be kept: ")
+    assert "Is a directory" in setup.detail
+    assert "typed-secret" not in setup.detail
+    assert "made-password-1" not in setup.detail
+    assert setup.retry_at == _NOW + 60.0
+    assert fake_restic_calls(fake_restic_control) == []
+    assert read_lease(workspace.lease_path, _NOW) is None
+
+
+def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
+    workspace: _Workspace,
+) -> None:
+    def _make_a_password_then_fail() -> str:
+        password = workspace.passwords()
+        raise OSError(f"no room for a password of {len(password)} characters")
+
+    program = BackupSetupProgram(
+        workspace.root,
+        lease_path=workspace.lease_path,
+        clock=workspace.clock,
+        workspace_id=WORKSPACE_ID,
+        make_password=_make_a_password_then_fail,
     )
     # A traceback that shows the values on its frames cuts each one short, so these are short enough to be shown.
     workspace.request(
@@ -828,6 +859,6 @@ def test_a_pass_that_fails_is_logged_without_the_credentials_it_held(
     assert workspace.passwords.made == ["made-password-1"]
     assert len(logged) == 1
     assert "A pass of backup-setup failed" in logged[0]
-    assert "Is a directory" in logged[0]
+    assert "no room for a password" in logged[0]
     assert "frame-secret" not in logged[0]
     assert "made-password-1" not in logged[0]

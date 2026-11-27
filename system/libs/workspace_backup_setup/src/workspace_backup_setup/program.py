@@ -351,13 +351,22 @@ class BackupSetupProgram:
             }
             # Kept before it is used: a repository initialised with a password that was then lost cannot be read.
             # Another destination named since has its own storage in that file, which this attempt leaves alone.
-            with setup_lock(self._workspace_root):
-                if (
-                    read_setup_record(self._workspace_root).request_id
-                    != record.request_id
-                ):
-                    return
-                write_pending_env(self._workspace_root, record.request_id, pending)
+            try:
+                with setup_lock(self._workspace_root):
+                    if (
+                        read_setup_record(self._workspace_root).request_id
+                        != record.request_id
+                    ):
+                        return
+                    write_pending_env(self._workspace_root, record.request_id, pending)
+            except OSError as e:
+                self._record_failure(
+                    attempting,
+                    _ResticFailure(
+                        detail=f"The repository's password could not be kept: {e}"
+                    ),
+                )
+                return
         self._renew()
         failure = _initialize_repository(pending)
         if failure is not None:
