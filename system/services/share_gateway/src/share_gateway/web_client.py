@@ -7,8 +7,9 @@ three things a browser needs before a page of another origin may send a request 
 
 - caddy answers the browser's permission check (``OPTIONS``) itself, so it never reaches the app, whose request
   guard refuses every request of another origin;
-- caddy adds the web client's origin and the credentials allowance to every answer, a refusal included, so the page
-  can tell a lapsed session (401) from a workspace it cannot reach;
+- caddy adds the web client's origin and the credentials allowance to every answer of an app or of the auth step,
+  a refusal included, so the page can tell a lapsed session (401) from a workspace it cannot reach. The loading
+  page that stands in for an app whose port refuses the connection carries neither, and reads as the latter;
 - ``/_auth/verify`` marks the identity it stamps on a workspace route's request, which is the word the app's request
   guard admits the request on (``workspace_layout.identity``).
 

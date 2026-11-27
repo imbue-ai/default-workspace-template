@@ -2,4 +2,4 @@
 
 - `/_health` answers the owner the label of the gateway's auth address (`auth_label`) beside the service labels, so the owner's page can reach the `/_agent/...` routes, which answer only there. A visitor is answered neither.
 
-- The headers that let the web client's page read an answer are added whatever the answer is (an image, a 304, an answer with no body), and an image and its caching headers arrive as the app sent them.
+- The headers that let the web client's page read an answer are added whatever an app or the auth step answers (an image, a 304, an answer with no body), and an image and its caching headers arrive as the app sent them. The loading page for an app whose port refuses the connection carries none of them.
