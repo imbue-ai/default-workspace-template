@@ -765,6 +765,55 @@ describe("a sign-in finished in the browser", () => {
 
       expect(open).not.toHaveBeenCalled();
     });
+
+    it("opens the page in a tab for an account signed in again from its row", async () => {
+      const { tab, open } = browserOpensTabs();
+      state.accounts = [account("a1", "anthropic", "Anthropic (Claude Code)")];
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      const root = document.createElement("div");
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+      [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!.click();
+      await settled();
+
+      expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "subscription", "a1");
+      expect(open).toHaveBeenCalledExactlyOnceWith("", "_blank");
+      expect(tab.location.replace).toHaveBeenCalledExactlyOnceWith("https://claude.ai/manual");
+    });
+
+    it("opens no tab when the chooser opens on an account by itself, which is no click", async () => {
+      const { open } = browserOpensTabs();
+      state.accounts = [account("a1", "anthropic", "Anthropic (Claude Code)")];
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      openProviderChooser({ accountId: "a1" });
+      const root = document.createElement("div");
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      await settled();
+
+      expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "subscription", "a1");
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("opens the page in a tab for another way in asked for after a sign-in fails", async () => {
+      const { tab, open } = browserOpensTabs();
+      state.lanes = [anthropicWithApiKey()];
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      const root = await clickLane("anthropic");
+      state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      startFlow.mockImplementationOnce(async () => {
+        state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+        return true;
+      });
+
+      (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+      await settled();
+
+      expect(startFlow).toHaveBeenCalledTimes(2);
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(tab.location.replace).toHaveBeenCalledTimes(2);
+      expect(tab.close).not.toHaveBeenCalled();
+    });
   });
 
   it("opens no tab of its own under a chrome that relays, which opens the page itself", async () => {

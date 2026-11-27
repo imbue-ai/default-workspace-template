@@ -405,12 +405,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   }
 
   /** Offer this lane's ways in that need no relay: the code steps for the live Claude sign-in,
-   *  whose pasted code the CLI still takes, or a fresh sign-in that is not handed to the desktop app. */
-  function signInAnotherWay(current: Lane, why: string | null = null): void {
+   *  whose pasted code the CLI still takes, or a fresh sign-in that is not handed to the desktop app. `why` is
+   *  shown above them when the chooser moved the user there itself. */
+  function signInAnotherWay(current: Lane, options: { why?: string; isFromClick?: boolean } = {}): void {
     const flow = getFlow();
     if (flow !== null && flow.status.state === "pending" && flow.shape === "url_then_code") {
       mode = "menu";
-      notice = why;
+      notice = options.why ?? null;
       m.redraw();
       return;
     }
@@ -418,8 +419,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     void begin(current, manual, {
       fromChooser: true,
       accountId: reauthAccountId ?? undefined,
-      notice: why ?? undefined,
+      notice: options.why,
       isRelaySkipped: true,
+      isFromClick: options.isFromClick,
     });
   }
 
@@ -635,7 +637,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           sm: true,
           extra: css.ACCOUNT_ACTION,
           title: "Sign in again, keeping this account and every chat on it",
-          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method),
+          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method, true),
         },
         "Sign in again",
       ),
@@ -954,7 +956,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   live.flow_id === flow.flow_id &&
                   live.status.state === "pending";
                 if (answer !== "relaying" && isStillWaiting)
-                  signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
+                  signInAnotherWay(current, {
+                    why: "Imbue Studio couldn't open the sign-in page. Sign in here instead:",
+                  });
               });
             },
           },
@@ -963,7 +967,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         hasOtherWays(current)
           ? m(
               Button,
-              { variant: "secondary", "data-e2e": "sign-in-another-way", onclick: () => signInAnotherWay(current) },
+              {
+                variant: "secondary",
+                "data-e2e": "sign-in-another-way",
+                onclick: () => signInAnotherWay(current, { isFromClick: true }),
+              },
               "Try another way",
             )
           : null,
@@ -972,11 +980,16 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   }
 
   /** Sign in to this account again, into the folder it already has, the way it signed in before. */
-  async function reauthenticate(accountId: string, laneId: string, methodId: string): Promise<void> {
+  async function reauthenticate(
+    accountId: string,
+    laneId: string,
+    methodId: string,
+    isFromClick: boolean,
+  ): Promise<void> {
     const owner = getLanes().find((candidate) => candidate.id === laneId);
     if (owner === undefined) return;
     const reauthMethod = owner.methods.find((candidate) => candidate.id === methodId) ?? owner.methods[0];
-    await begin(owner, reauthMethod, { fromChooser: true, accountId });
+    await begin(owner, reauthMethod, { fromChooser: true, accountId, isFromClick });
   }
 
   return {
@@ -988,7 +1001,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       const laneId = takeChooserLaneId();
       if (accountId !== null) {
         const account = getAccounts().find((candidate) => candidate.id === accountId);
-        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
+        // The lanes have loaded since whatever opened the chooser, so this is no click a browser still counts.
+        if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method, false);
         return;
       }
       const requested = laneId === null ? undefined : getLanes().find((candidate) => candidate.id === laneId);
@@ -1055,7 +1069,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     variant: "secondary",
                     disabled: busy,
                     "data-e2e": "sign-in-another-way",
-                    onclick: () => signInAnotherWay(current),
+                    onclick: () => signInAnotherWay(current, { isFromClick: true }),
                   },
                   "Try another way",
                 )
