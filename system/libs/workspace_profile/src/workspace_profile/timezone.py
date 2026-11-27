@@ -1,9 +1,10 @@
 """The user's timezone as the workspace records it: one IANA name in ``data/.state/user_timezone``.
 
-The client that creates a workspace writes its user's zone once, and the bootstrap applies whatever
-the file names when the container boots (``bootstrap.manager``), so a write takes effect at the next
-boot. The file belongs to the user's first client: a later write replaces a recorded zone only when
-it says so.
+The client that creates a workspace names its user's zone once, in the workspace's initial data, which
+the boot's ``apply-initial-data`` step writes here, or through the shell's timezone route. The bootstrap
+applies whatever the file names when the container boots (``bootstrap.manager``), so a write takes
+effect at the next boot. The file belongs to the user's first client: a later write replaces a recorded
+zone only when it says so.
 """
 
 import os

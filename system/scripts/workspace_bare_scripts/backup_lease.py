@@ -19,15 +19,17 @@ Usage, from the repo root (the cwd ``mngr exec`` gives every command there)::
     python3 system/scripts/backup_lease.py read
     python3 system/scripts/backup_lease.py hold --holder restore [--keep] -- <command...>
 
-Every command prints one JSON line: the lease as it stands (``{"holder", "taken_at",
-"expires_at"}``, times in seconds since the epoch) or ``null`` when nobody holds it. ``take`` and
-``renew`` exit 0 when the caller holds the lease afterwards, and 75 when it does not: someone else
-holds it (the line printed names them), or, for ``renew``, the caller's own lease ran out.
-``release`` gives back only the caller's own lease and always exits 0. ``hold`` takes the lease (or
-renews the caller's own), runs the command, renews every minute for as long as it runs, gives the
-lease back when it ends however it ends (``--keep`` leaves it held, renewed, for a program with more
-to run), and exits with the command's exit code (128 plus the signal's number when a signal ended
-it, as a shell reports one), or 75 without running it when someone else holds the lease.
+``take``, ``renew``, ``release`` and ``read`` print one JSON line: the lease as it stands
+(``{"holder", "taken_at", "expires_at"}``, times in seconds since the epoch) or ``null`` when nobody
+holds it. ``take`` and ``renew`` exit 0 when the caller holds the lease afterwards, and 75 when it
+does not: someone else holds it (the line printed names them), or, for ``renew``, the caller's own
+lease ran out. ``release`` gives back only the caller's own lease and always exits 0. ``hold`` takes
+the lease (or renews the caller's own), runs the command, renews every minute for as long as it
+runs, gives the lease back when it ends however it ends (``--keep`` leaves it held, renewed, for a
+program with more to run), and exits with the command's exit code (128 plus the signal's number
+when a signal ended it, as a shell reports one), or 75 without running it when someone else holds
+the lease. ``hold`` prints that line only when it exits 75, naming who holds the lease: otherwise
+its output is the command's own, which the caller reads.
 
 Standard library only: the Imbue Studio desktop runs this by its path with no venv, and the shell
 and ``backup-setup`` import it.

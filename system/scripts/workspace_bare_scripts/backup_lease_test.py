@@ -395,6 +395,26 @@ def test_the_program_holds_the_lease_around_a_command_and_answers_its_exit_code(
     )
 
 
+def test_the_program_prints_the_lease_from_hold_only_when_someone_else_holds_it(
+    lease_path: Path,
+) -> None:
+    # A held command's output is its caller's to read, so hold adds no line of its own to it.
+    kept = _run_program(
+        lease_path, "hold", "--holder", "restore", "--keep", "--", "true"
+    )
+    assert (kept.returncode, kept.stdout) == (0, "")
+    held = json.loads(_run_program(lease_path, "read").stdout)
+    assert held["holder"] == "restore"
+
+    refused = _run_program(
+        lease_path, "hold", "--holder", "store-migration", "--keep", "--", "true"
+    )
+
+    assert refused.returncode == backup_lease.EXIT_NOT_HELD
+    assert json.loads(refused.stdout) == held
+    assert json.loads(_run_program(lease_path, "read").stdout) == held
+
+
 def test_the_lease_is_kept_where_the_environment_names(
     lease_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

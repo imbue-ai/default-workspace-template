@@ -42,7 +42,10 @@ the user's own storage is refused.
   or makes one (kept on disk before it is used), initialises the repository or
   checks that the password opens the one already there, writes `restic.env`, and
   gives the lease back. A step that fails leaves the setup `FAILED`; it is tried
-  again after a minute, then after twice as long each time, up to an hour. For
+  again after a minute, then after twice as long each time, up to an hour. The
+  exception is a storage that refuses the credentials it is shown: the setup
+  then reads `AWAITING_STORAGE`, the state a client supplies storage for, and
+  the storage that was offered is kept and tried again at the hourly check. For
   `NONE` it moves `restic.env` aside. Once an hour, and when it starts, it checks
   that the credentials in use still open the repository: a storage that refuses
   them leaves the setup `AWAITING_STORAGE` with `restic.env` where it is, and a
