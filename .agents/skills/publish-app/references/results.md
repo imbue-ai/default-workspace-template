@@ -84,7 +84,7 @@ merged.
   the worker as a message and wait for its next report. Otherwise tell the
   user plainly that nothing was published, and why.
 
-When the publish stops at one of the first two, remove the worker as "When
+When the publish stops at one of the first three, remove the worker as "When
 the user calls it off" below does. When it stops at anything else, stop the
 worker and leave it and its branch where they are, so that what went wrong
 can still be read; the next attempt removes them ("A worker an earlier
