@@ -216,20 +216,30 @@ def test_a_parent_toml_that_cannot_be_read_is_logged_and_the_upstream_remote_is_
     assert read_installed_ref(".") == _RELEASE
 
 
+@pytest.mark.parametrize(
+    "credentials", ["a-user:a-secret-token", "a-user:a-secret@token", "a-secret-token"]
+)
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        # Git's own refusal, and what a fetch that overran its time is answered with: the command as it was run.
+        "fatal: unable to access '{address}/': The requested URL returned error: 403\n",
+        "failed to run git: Command '['git', 'fetch', '--quiet', '{address}/', 'refs/tags/minds-v*']' timed out",
+    ],
+)
 def test_a_failed_fetch_is_logged_without_the_credentials_its_address_holds(
-    staged: StagedUpdateWorkspace,
+    staged: StagedUpdateWorkspace, credentials: str, error_text: str
 ) -> None:
     write_parent_file(staged.root, "https://example.com/template.git")
-    address = "https://a-user:a-secret-token@example.com/private/template.git"
-    # A checkout that is not shallow, whose ``upstream`` remote holds a token, and whose fetch git refuses.
+    address = f"https://{credentials}@example.com/private/template.git"
+    # A checkout that is not shallow, whose ``upstream`` remote holds a token, and whose fetch fails.
     staged.script_program_on_path(
         "git",
         [
             ScriptedToolAnswer(stdout="false\n"),
             ScriptedToolAnswer(stdout=address + "\n"),
             ScriptedToolAnswer(
-                exit_code=128,
-                stderr=f"fatal: unable to access '{address}/': The requested URL returned error: 403\n",
+                exit_code=128, stderr=error_text.format(address=address)
             ),
         ],
     )
@@ -245,5 +255,5 @@ def test_a_failed_fetch_is_logged_without_the_credentials_its_address_holds(
     ]
     assert len(failures) == 1
     assert "'https://example.com/private/template.git/'" in failures[0]
-    assert "a-secret-token" not in failures[0]
-    assert "a-user" not in failures[0]
+    for part in ("a-user", "a-secret", "token@"):
+        assert part not in failures[0]

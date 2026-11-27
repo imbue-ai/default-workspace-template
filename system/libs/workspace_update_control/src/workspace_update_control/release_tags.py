@@ -42,8 +42,9 @@ _GIT_TIMEOUT_SECONDS: Final[float] = 10.0
 # whole transfer. It runs inside the dispatcher's minute, which cron does not start again while one is running.
 _FETCH_TIMEOUT_SECONDS: Final[float] = 120.0
 _ERROR_MAX_CHARS: Final[int] = 300
-# The user and password an address may carry (``https://<token>@host/...``), as a private template's may.
-_URL_CREDENTIALS_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/\s@]+@")
+# The user and password an address may carry (``https://<token>@host/...``), as a private template's may: all
+# up to the last ``@`` before the path, since a password may hold one itself.
+_URL_CREDENTIALS_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<=://)[^/\s]*@")
 
 
 def _parent_url() -> str | None:
