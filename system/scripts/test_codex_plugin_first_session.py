@@ -1,7 +1,8 @@
 """Exercise native plugin discovery before the first turn, without model/API calls.
 
-Requires Codex 0.154.0+. The test installs the pinned plugins into a temporary root
-with install_agent_plugins.sh; for development, CODE_GUARDIAN_COMMIT can select an
+Requires the Codex version `[agent_types.codex]` pins (older releases ignore
+`plugins._default`). The test installs the pinned plugins into a temporary root with
+install_agent_plugins.sh; for development, CODE_GUARDIAN_COMMIT can select an
 unreleased code-guardian commit.
 """
 
@@ -22,6 +23,8 @@ from imbue.mngr_codex.codex_config import get_codex_home
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PLUGIN = "imbue-code-guardian@imbue-code-guardian"
+_ACCOUNT_MARKETPLACE = "account-marketplace"
+_ACCOUNT_PLUGIN = f"imbue-code-guardian@{_ACCOUNT_MARKETPLACE}"
 
 
 def _rpc(
@@ -40,9 +43,38 @@ def _rpc(
     pytest.fail(f"Codex exited before answering {method}")
 
 
+def _make_account_marketplace(plugins_root: Path, marketplace: Path) -> None:
+    """Stand in for a plugin on the user's ChatGPT account, which codex installs into
+    the agent's home itself: a copy of code-guardian under another name."""
+    shutil.copytree(plugins_root / "imbue-code-guardian", marketplace)
+    manifest_path = marketplace / ".agents/plugins/marketplace.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["name"] = _ACCOUNT_MARKETPLACE
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def _install_account_plugin(home: Path, marketplace: Path, env: dict[str, str]) -> None:
+    config = tomllib.loads((home / "config.toml").read_text())
+    config["marketplaces"][_ACCOUNT_MARKETPLACE] = {
+        "source_type": "local",
+        "source": str(marketplace),
+    }
+    (home / "config.toml").write_text(tomlkit.dumps(config))
+    subprocess.run(
+        ["codex", "plugin", "add", _ACCOUNT_PLUGIN],
+        env=env,
+        check=True,
+        timeout=45,
+    )
+    # An account plugin has no `enabled` in the agent's config, so `_default` decides.
+    config = tomllib.loads((home / "config.toml").read_text())
+    config["plugins"][_ACCOUNT_PLUGIN] = {}
+    (home / "config.toml").write_text(tomlkit.dumps(config))
+
+
 @pytest.mark.acceptance
 @pytest.mark.timeout(120)
-def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> None:
+def test_first_session_and_reprovision_load_only_native_reviews(tmp_path: Path) -> None:
     if shutil.which("codex") is None:
         pytest.skip("Codex CLI is not installed")
     state = tmp_path / "agent state"
@@ -66,6 +98,8 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
     installer = next(
         command for command in provision_commands if "codex_update_plugin.sh" in command
     )
+    account_marketplace = tmp_path / "account marketplace"
+    _make_account_marketplace(plugins_root, account_marketplace)
     for _ in range(2):
         # Model mngr's rewrite from the actual agent-type settings, retaining
         # caches. An inherited account home must never be modified.
@@ -88,6 +122,8 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
         assert result.returncode == 0, result.stdout + result.stderr
         assert (shared / "config.toml").read_text() == "# account config\n"
         assert not (shared / "plugins").exists()
+        agent_env = {**env, "CODEX_HOME": str(home)}
+        _install_account_plugin(home, account_marketplace, agent_env)
         with (
             (tmp_path / "server.log").open("w") as log,
             subprocess.Popen(
@@ -100,7 +136,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                     "app-server",
                 ],
                 cwd=tmp_path,
-                env={**env, "CODEX_HOME": str(home)},
+                env=agent_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,
@@ -127,7 +163,7 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                 guardian_skills = [
                     skill
                     for skill in skills["skills"]
-                    if "imbue-code-guardian" in skill["path"]
+                    if skill.get("pluginId") == _PLUGIN
                 ]
                 assert {
                     f"imbue-code-guardian:{name}"
@@ -137,6 +173,17 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
                         "verify-conversation",
                     )
                 } <= {skill["name"] for skill in guardian_skills}
+                # Codex's built-in skills and other plugins compete with ours.
+                foreign_skills = [
+                    skill["name"]
+                    for skill in skills["skills"]
+                    if skill["enabled"]
+                    and (
+                        skill["scope"] == "system"
+                        or skill.get("pluginId") not in (None, _PLUGIN)
+                    )
+                ]
+                assert foreign_skills == []
                 hooks = _rpc(process, 3, "hooks/list", {"cwds": [str(tmp_path)]})[
                     "data"
                 ][0]
