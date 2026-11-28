@@ -117,7 +117,7 @@ File exactly one permission request per tool call, with nothing else in that cal
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
+  -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-backups-export"],
                    "target_workspace_id": "<TARGET_WORKSPACE_AGENT_ID>"},
