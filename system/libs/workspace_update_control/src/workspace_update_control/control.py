@@ -753,8 +753,6 @@ def _finish_start(
         )
     finally:
         finished_at = clock()
-        if created["outcome"] == OUTCOME_NEEDS_SIGN_IN:
-            _record_sign_in_refusal(finished_at)
         with _start_lock():
             record = read_json_object(LAST_START_FILE_PATH)
             if record is not None and record.get("attempt_id") == attempt_id:
@@ -762,6 +760,8 @@ def _finish_start(
                     LAST_START_FILE_PATH,
                     {**record, **created, "finished_at": finished_at},
                 )
+        if created["outcome"] == OUTCOME_NEEDS_SIGN_IN:
+            _record_sign_in_refusal(finished_at)
 
 
 def start_update(

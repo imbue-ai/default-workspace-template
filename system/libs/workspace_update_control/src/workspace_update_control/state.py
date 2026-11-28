@@ -177,7 +177,7 @@ _LANDED_VERDICTS: Final[tuple[str, ...]] = (
     UpdateVerdict.UPDATED,
     UpdateVerdict.UPDATED_WITH_REBUILD_ITEMS,
 )
-_STARTED_BY: Final[Mapping[str, UpdateStartedBy]] = {
+_STARTER_BY_RECORDED_WORD: Final[Mapping[str, UpdateStartedBy]] = {
     STARTED_BY_SCHEDULED: UpdateStartedBy.SCHEDULED,
     STARTED_BY_IMMEDIATE: UpdateStartedBy.IMMEDIATE,
 }
@@ -450,7 +450,9 @@ def _unrecorded_dispatch_view(
             chat_agent_name=name,
             chat_id=chat_id,
             is_chat_gone=activity is UpdateActivity.STALLED and lead is None,
-            started_by=_STARTED_BY.get(_text(dispatch.get("started_by")).lower()),
+            started_by=_STARTER_BY_RECORDED_WORD.get(
+                _text(dispatch.get("started_by")).lower()
+            ),
             target_ref=target_ref,
             override_ref=override_ref,
             is_holding=False,
@@ -523,7 +525,7 @@ def _recorded_run_view(
             chat_agent_name=_text(run.get("chat_agent_name")),
             chat_id="" if is_chat_gone else chat_id,
             is_chat_gone=is_chat_gone,
-            started_by=_STARTED_BY.get(started_by.lower()),
+            started_by=_STARTER_BY_RECORDED_WORD.get(started_by.lower()),
             target_ref=target_ref,
             override_ref=override_ref,
             is_holding=is_holding,

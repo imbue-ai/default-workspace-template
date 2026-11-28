@@ -8,9 +8,10 @@ every later state and removal on top.
 
 The answer has the shape of the dispatcher's own listing (``dispatcher.list_agents``), so the
 functions the routes share with the tick take either. It carries one thing more, which only the
-observer's file holds: when each agent's last turn ended (``TURN_ENDED_AT_KEY``). Where the file cannot vouch for the agents (it
-is missing, holds no snapshot, went stale, or does not list the workspace's own services agent) the
-answer is None: every caller reads that as "the agents are unknown", never as "there are none".
+observer's file holds: when each agent's last turn ended (``TURN_ENDED_AT_KEY``). Where the file
+cannot vouch for the agents (it is missing, holds no snapshot, went stale, or does not list the
+workspace's own services agent) the answer is None: every caller reads that as "the agents are
+unknown", never as "there are none".
 """
 
 import json
