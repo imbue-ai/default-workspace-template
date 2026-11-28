@@ -169,7 +169,7 @@ wiki, projects, discussions and outside pull requests, and gave it the topic
 - `name_taken`: the account already has a repository of that name. Nothing
   was published. Go back to the scope gate for the name alone: agree another
   with the user, have the worker point the README's links at it, run step 5
-  again, show the README again, and push with the new `--repo-name`.
+  again, and push with the new `--repo-name`.
 - `push_refused`: the published repository holds changes this workspace did
   not make (someone edited it on GitHub, or another workspace publishes the
   same app). Nothing was pushed. Stop and tell the user; never try to
