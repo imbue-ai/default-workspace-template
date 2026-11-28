@@ -84,7 +84,7 @@ from workspace_update_control.settings import (
 )
 
 # A listing can catch a lead between two turns, so a lead reads as waiting on the user only once its last turn
-# ended this long ago: two of the twenty-second looks a client used to take before it said so.
+# ended this long ago.
 _IDLE_SECONDS_BEFORE_WAITING: Final[float] = 40.0
 _NOBODY_BUSY: Final[BusyAgents] = (frozenset(), frozenset(), frozenset())
 _IDLE_WATCHDOG_ACTIONS: Final[tuple[WatchdogAction, ...]] = (
