@@ -116,12 +116,10 @@ def _join_output_text(content: Any) -> str:
     )
 
 
-def _output_text(output: Any) -> str:
-    """A ``*_output.output`` is either a string or a list of content items; flatten to the
-    UNTRUNCATED text (truncation happens at the emit site, after the structured facts the
-    chat needs are lifted out whole -- see ``harnesses/tool_output``)."""
+def _output_item_texts(output: Any) -> list[str]:
+    """The text of each content item of a ``*_output.output``; a string output is one item."""
     if isinstance(output, str):
-        return output
+        return [output]
     if isinstance(output, list):
         parts: list[str] = []
         for item in output:
@@ -132,8 +130,15 @@ def _output_text(output: Any) -> str:
             else:
                 # other item shapes carry no text
                 continue
-        return "".join(parts)
-    return "" if output is None else str(output)
+        return parts
+    return [] if output is None else [str(output)]
+
+
+def _output_text(output: Any) -> str:
+    """A ``*_output.output`` is either a string or a list of content items; flatten to the
+    UNTRUNCATED text (truncation happens at the emit site, after the structured facts the
+    chat needs are lifted out whole -- see ``harnesses/tool_output``)."""
+    return "".join(_output_item_texts(output))
 
 
 def _tool_call_raw_input(payload: dict[str, Any]) -> str:
@@ -146,34 +151,72 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _unwrap_command_result_envelopes(output: str) -> str:
-    """Unwrap code-mode command results for the structured facts, keeping raw detail unchanged.
+_JSON_DECODER: Final[json.JSONDecoder] = json.JSONDecoder()
 
-    ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
-    Adjacent calls can concatenate envelopes on one line. Decode only complete command
-    result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
+
+def _printed_command_stdout(value: Any) -> str | None:
+    """The stdout a printed code-mode value carries, or None when it holds no command result.
+
+    ``text(result)`` prints the result envelope, a ``Promise.allSettled`` entry wraps it as
+    ``{"status": "fulfilled", "value": <envelope>}``, and ``text(await Promise.all([...]))``
+    prints an array of them. Other array members are re-serialized as JSON.
     """
-    if '"chunk_id"' not in output:
-        return output
-    decoder = json.JSONDecoder()
-    lines: list[str] = []
-    for line in output.splitlines():
-        remaining = line.strip()
-        outputs: list[str] = []
-        while remaining.startswith("{"):
-            try:
-                value, end = decoder.raw_decode(remaining)
-            except (json.JSONDecodeError, RecursionError) as exc:
+    if isinstance(value, dict):
+        stdout = value.get("output")
+        if isinstance(value.get("chunk_id"), str) and isinstance(stdout, str):
+            return stdout
+        if value.keys() == {"status", "value"} and value["status"] == "fulfilled":
+            return _printed_command_stdout(value["value"])
+        return None
+    if isinstance(value, list):
+        stdouts = [_printed_command_stdout(member) for member in value]
+        if all(stdout is None for stdout in stdouts):
+            return None
+        return "\n".join(
+            json.dumps(member) if stdout is None else stdout for member, stdout in zip(value, stdouts, strict=True)
+        )
+    return None
+
+
+def _unwrap_printed_line(line: str) -> str:
+    """A line of printed JSON values with each command result replaced by its stdout.
+
+    The line is left as it is unless it is nothing but JSON values and at least one of them
+    is a command result: JSON embedded in prose or in a command's stdout is never decoded.
+    """
+    remaining = line.strip()
+    if not remaining.startswith(("{", "[")):
+        return line
+    pieces: list[str] = []
+    is_command_result_found = False
+    while remaining:
+        try:
+            value, end = _JSON_DECODER.raw_decode(remaining)
+            stdout = _printed_command_stdout(value)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            if '"chunk_id"' in remaining:
                 logger.warning("Could not decode a code-mode command result envelope: {}", exc)
-                break
-            if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
-                break
-            stdout = value.get("output")
-            if not isinstance(stdout, str):
-                break
-            outputs.append(stdout)
-            remaining = remaining[end:].lstrip()
-        lines.append("\n".join(outputs) if outputs and not remaining else line)
+            return line
+        if stdout is None:
+            pieces.append(remaining[:end])
+        else:
+            pieces.append(stdout)
+            is_command_result_found = True
+        remaining = remaining[end:].lstrip()
+    return "\n".join(pieces) if is_command_result_found else line
+
+
+def _command_result_facts_text(output: Any) -> str:
+    """The output the structured facts are read from: code-mode command results unwrapped.
+
+    Code mode records each ``text(...)`` call as its own content item, so each item starts a
+    new line here (the raw output joins them with nothing, running a command result into
+    whatever was printed beside it). Raw detail keeps the output as recorded.
+    """
+    item_texts = _output_item_texts(output)
+    if not any('"chunk_id"' in text for text in item_texts):
+        return "\n".join(item_texts)
+    lines = [_unwrap_printed_line(line) for text in item_texts for line in text.splitlines()]
     return "\n".join(lines)
 
 
@@ -663,7 +706,7 @@ def parse_lines(
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the request objects the permission and
         # secret cards render from, the tk stamp the step view reads, and the error snippet.
-        unwrapped_output = _unwrap_command_result_envelopes(raw_output)
+        unwrapped_output = _command_result_facts_text(payload.get("output"))
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {

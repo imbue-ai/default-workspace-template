@@ -1,0 +1,234 @@
+[
+  {
+    "name": "a step started in the same program as an apply_patch",
+    "tk_command": "tk start wor-step-34jp",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 2.5 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"2ae08f\",\"wall_time_seconds\":0.440394224,\"exit_code\":0,\"original_token_count\":21,\"output\":\"Updated wor-step-34jp -> in_progress\\ntk-step wor-step-34jp title: Write the note\\n\"}"
+      },
+      {
+        "type": "input_text",
+        "text": "{}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-34jp -> in_progress\ntk-step wor-step-34jp title: Write the note",
+    "transitions": [
+      [
+        "wor-step-34jp",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change in the same program as an apply_patch and another command",
+    "tk_command": "tk close wor-step-34jp \"Wrote the note\"; tk start wor-step-19mi",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 6.9 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"16d278\",\"wall_time_seconds\":1.7130961679999999,\"exit_code\":0,\"original_token_count\":51,\"output\":\"Updated wor-step-34jp -> closed\\ntk-step wor-step-34jp title: Write the note\\ntk-step wor-step-34jp summary: Wrote the note\\nUpdated wor-step-19mi -> in_progress\\ntk-step wor-step-19mi title: Update the note\\n\"}"
+      },
+      {
+        "type": "input_text",
+        "text": "{}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"749a4b\",\"wall_time_seconds\":0.085230347,\"exit_code\":0,\"original_token_count\":10,\"output\":\"2 /var/tmp/stale-steps-repro/note.txt\\n\"}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-34jp -> closed\ntk-step wor-step-34jp title: Write the note\ntk-step wor-step-34jp summary: Wrote the note\nUpdated wor-step-19mi -> in_progress\ntk-step wor-step-19mi title: Update the note",
+    "transitions": [
+      [
+        "wor-step-34jp",
+        "closed"
+      ],
+      [
+        "wor-step-19mi",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step started before a settled-promise list",
+    "tk_command": "tk start wor-step-zd0d",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 5.0 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"ee3893\",\"wall_time_seconds\":0.932529485,\"exit_code\":0,\"original_token_count\":21,\"output\":\"Updated wor-step-zd0d -> in_progress\\ntk-step wor-step-zd0d title: Check the date\\n\"}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"bc4977\",\"wall_time_seconds\":0.000376513,\"exit_code\":0,\"original_token_count\":2,\"output\":\"2026\\n\"}}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"ecb08d\",\"wall_time_seconds\":0.000351026,\"exit_code\":0,\"original_token_count\":2,\"output\":\"checked\\n\"}}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-zd0d -> in_progress\ntk-step wor-step-zd0d title: Check the date",
+    "transitions": [
+      [
+        "wor-step-zd0d",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change before plain text and a settled-promise list",
+    "tk_command": "tk close wor-step-zd0d \"Checked the date\"; tk start wor-step-wj1c",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 5.7 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"80ac44\",\"wall_time_seconds\":1.415208469,\"exit_code\":0,\"original_token_count\":52,\"output\":\"Updated wor-step-zd0d -> closed\\ntk-step wor-step-zd0d title: Check the date\\ntk-step wor-step-zd0d summary: Checked the date\\nUpdated wor-step-wj1c -> in_progress\\ntk-step wor-step-wj1c title: Check the host\\n\"}"
+      },
+      {
+        "type": "input_text",
+        "text": "Host check follows"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"569169\",\"wall_time_seconds\":0.031064155,\"exit_code\":0,\"original_token_count\":2,\"output\":\"Linux\\n\"}}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"1cb844\",\"wall_time_seconds\":0.046724875,\"exit_code\":0,\"original_token_count\":2,\"output\":\"x86_64\\n\"}}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-zd0d -> closed\ntk-step wor-step-zd0d title: Check the date\ntk-step wor-step-zd0d summary: Checked the date\nUpdated wor-step-wj1c -> in_progress\ntk-step wor-step-wj1c title: Check the host",
+    "transitions": [
+      [
+        "wor-step-zd0d",
+        "closed"
+      ],
+      [
+        "wor-step-wj1c",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change inside a settled-promise list",
+    "tk_command": "tk close wor-step-wj1c \"Checked the host\"; tk start wor-step-jsg2",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 2.7 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"d90c71\",\"wall_time_seconds\":0.666262791,\"exit_code\":0,\"original_token_count\":52,\"output\":\"Updated wor-step-wj1c -> closed\\ntk-step wor-step-wj1c title: Check the host\\ntk-step wor-step-wj1c summary: Checked the host\\nUpdated wor-step-jsg2 -> in_progress\\ntk-step wor-step-jsg2 title: Check the disk\\n\"}}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"a6093d\",\"wall_time_seconds\":0.004210263,\"exit_code\":0,\"original_token_count\":1,\"output\":\"2\\n\"}}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-wj1c -> closed\ntk-step wor-step-wj1c title: Check the host\ntk-step wor-step-wj1c summary: Checked the host\nUpdated wor-step-jsg2 -> in_progress\ntk-step wor-step-jsg2 title: Check the disk",
+    "transitions": [
+      [
+        "wor-step-wj1c",
+        "closed"
+      ],
+      [
+        "wor-step-jsg2",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change inside a Promise.all array",
+    "tk_command": "tk close wor-step-jsg2 \"Checked the disk\"; tk start wor-step-lcqk",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 3.1 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "[{\"chunk_id\":\"8189be\",\"wall_time_seconds\":1.205573306,\"exit_code\":0,\"original_token_count\":53,\"output\":\"Updated wor-step-jsg2 -> closed\\ntk-step wor-step-jsg2 title: Check the disk\\ntk-step wor-step-jsg2 summary: Checked the disk\\nUpdated wor-step-lcqk -> in_progress\\ntk-step wor-step-lcqk title: Check the time zone\\n\"},{\"chunk_id\":\"600b94\",\"wall_time_seconds\":0.000148889,\"exit_code\":0,\"original_token_count\":1,\"output\":\"PST\\n\"}]"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-jsg2 -> closed\ntk-step wor-step-jsg2 title: Check the disk\ntk-step wor-step-jsg2 summary: Checked the disk\nUpdated wor-step-lcqk -> in_progress\ntk-step wor-step-lcqk title: Check the time zone",
+    "transitions": [
+      [
+        "wor-step-jsg2",
+        "closed"
+      ],
+      [
+        "wor-step-lcqk",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change after a command whose own output was truncated",
+    "tk_command": "tk close wor-step-p27n \"Printed numbers\"; tk start wor-step-kvyx",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 3.2 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"07f177\",\"wall_time_seconds\":0.000439529,\"exit_code\":0,\"original_token_count\":72224,\"output\":\"Warning: truncated output (original token count: 72224)\\nTotal output lines: 50000\\n\\n1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n10\\n11\\n12\\n13\\n14\\n15\\n16\\n17\\n18\\n19\\n20\\n21\\n22\\n23\\n24\\n25\\n26\\n27\\n28\\n29\\n30\\n31\\n32\\n33\\n34\\n35\\n36\\n37\\n38\\n39\\n40\\n41\\n42\\n43\\n44\\n45\\n46\\n47\\n48\\n49\\n50\\n51\\n52\\n53\\n54\\n55\\n56\\n57\\n58\\n59\\n60\\n61\\n62\\n63\\n64\\n65\\n66\\n67\\n68\\n69\\n70\\n71\\n72\\n73\\n74\\n75\\n76\\n77\\n78\\n79\\n80\\n81\\n82\\n83\\n84\\n85\\n86\\n87\\n88\\n89\\n90\\n91\\n92\\n93\\n94\\n95\\n96\\n97\\n98\\n99\\n100\\n101\\n102\\n103\\n104\\n105\\n106\\n107\\n108\\n109\\n110\\n111\\n112\\n113\\n114\\n115\\n116\\n117\\n118\\n119\\n120\\n121\\n122\\n123\\n124\\n125\\n126\\n127\\n…72024 tokens truncated…934\\n49935\\n49936\\n49937\\n49938\\n49939\\n49940\\n49941\\n49942\\n49943\\n49944\\n49945\\n49946\\n49947\\n49948\\n49949\\n49950\\n49951\\n49952\\n49953\\n49954\\n49955\\n49956\\n49957\\n49958\\n49959\\n49960\\n49961\\n49962\\n49963\\n49964\\n49965\\n49966\\n49967\\n49968\\n49969\\n49970\\n49971\\n49972\\n49973\\n49974\\n49975\\n49976\\n49977\\n49978\\n49979\\n49980\\n49981\\n49982\\n49983\\n49984\\n49985\\n49986\\n49987\\n49988\\n49989\\n49990\\n49991\\n49992\\n49993\\n49994\\n49995\\n49996\\n49997\\n49998\\n49999\\n50000\\n\"}"
+      },
+      {
+        "type": "input_text",
+        "text": "{\"chunk_id\":\"bde62e\",\"wall_time_seconds\":0.563845109,\"exit_code\":0,\"original_token_count\":51,\"output\":\"Updated wor-step-p27n -> closed\\ntk-step wor-step-p27n title: Print numbers\\ntk-step wor-step-p27n summary: Printed numbers\\nUpdated wor-step-kvyx -> in_progress\\ntk-step wor-step-kvyx title: Print letters\\n\"}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-p27n -> closed\ntk-step wor-step-p27n title: Print numbers\ntk-step wor-step-p27n summary: Printed numbers\nUpdated wor-step-kvyx -> in_progress\ntk-step wor-step-kvyx title: Print letters",
+    "transitions": [
+      [
+        "wor-step-p27n",
+        "closed"
+      ],
+      [
+        "wor-step-kvyx",
+        "in_progress"
+      ]
+    ]
+  },
+  {
+    "name": "a step change after the program's printed output was truncated",
+    "tk_command": "tk close wor-step-kvyx \"Printed letters\"; tk start wor-step-rbkv",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 1.7 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "Warning: truncated output (original token count: 50078)\nTotal output lines: 2\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…40078 tokens truncated…xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n{\"chunk_id\":\"9d14ad\",\"wall_time_seconds\":0.439436884,\"exit_code\":0,\"original_token_count\":50,\"output\":\"Updated wor-step-kvyx -> closed\\ntk-step wor-step-kvyx title: Print letters\\ntk-step wor-step-kvyx summary: Printed letters\\nUpdated wor-step-rbkv -> in_progress\\ntk-step wor-step-rbkv title: Finish up\\n\"}"
+      }
+    ],
+    "tk_stamp": "Updated wor-step-kvyx -> closed\ntk-step wor-step-kvyx title: Print letters\ntk-step wor-step-kvyx summary: Printed letters\nUpdated wor-step-rbkv -> in_progress\ntk-step wor-step-rbkv title: Finish up",
+    "transitions": [
+      [
+        "wor-step-kvyx",
+        "closed"
+      ],
+      [
+        "wor-step-rbkv",
+        "in_progress"
+      ]
+    ]
+  }
+]

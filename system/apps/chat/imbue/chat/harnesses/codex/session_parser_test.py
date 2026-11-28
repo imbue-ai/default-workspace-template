@@ -7,7 +7,9 @@ user-bubble / turn-abort sourcing, and the self-contained web-search expansion.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+from typing import Final
 from uuid import uuid4
 
 import pytest
@@ -49,7 +51,7 @@ def _item_line(item_type: str) -> dict:
     }
 
 
-def _code_mode_result_line(output: str) -> dict[str, Any]:
+def _code_mode_result_line(output: str | list[dict[str, str]]) -> dict[str, Any]:
     """A code-mode script's result line for call ``c1``."""
     return {
         "timestamp": "t",
@@ -375,6 +377,36 @@ def test_command_result_envelopes_preserve_the_filed_secret_request(wrapped: boo
     assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
 
+_CODE_MODE_STEP_TRANSITIONS: Final[list[dict[str, Any]]] = json.loads(
+    (Path(__file__).parent / "testdata" / "code_mode_step_transitions.json").read_text()
+)
+
+
+@pytest.mark.parametrize(
+    "case", _CODE_MODE_STEP_TRANSITIONS, ids=[case["name"] for case in _CODE_MODE_STEP_TRANSITIONS]
+)
+def test_step_changes_batched_with_other_printed_values_reach_the_tk_stamp(case: dict[str, Any]) -> None:
+    """Real Codex results of a program that ran a step change beside other work: each ``text(...)``
+    is its own content item, and none of the values printed beside the command result may hide it."""
+    line = _code_mode_result_line(case["output"])
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["tk_stamp"] == case["tk_stamp"]
+    raw = "".join(item["text"] for item in case["output"])
+    assert event["output_chars"] == len(raw)
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
+
+
+@pytest.mark.parametrize("printed_before", ["{}", "Closing the step"])
+def test_plain_step_change_stdout_printed_after_another_value_reaches_the_tk_stamp(printed_before: str) -> None:
+    """``text(result.output)`` prints no envelope, so its stdout must still start its own line."""
+    stdout = "Updated wor-step-abc -> closed\ntk-step wor-step-abc title: Write the note\n"
+    items = ["Script completed\nWall time 0.4 seconds\nOutput:\n", printed_before, stdout]
+    line = _code_mode_result_line([{"type": "input_text", "text": text} for text in items])
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["tk_stamp"] == stdout.rstrip()
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == "".join(items)
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -654,4 +686,3 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     assert len(events) == 1
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
-
