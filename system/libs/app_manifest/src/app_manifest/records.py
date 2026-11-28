@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from enum import auto
 from pathlib import Path
 from typing import Final
+from typing import Literal
 
 from pydantic import Field
 from pydantic import ValidationError
@@ -66,6 +67,10 @@ class AppRecord(FrozenModel):
     published_repo_url: str = Field(default="", description="The repository this workspace publishes the app to")
     published_commit: str = Field(default="", description="The commit last published from this workspace")
     published_version: str = Field(default="", description="The version last published from this workspace")
+    published_visibility: Literal["", "private", "public"] = Field(
+        default="",
+        description="Who can see the published repository, as this workspace last set it; empty when it never did",
+    )
     verified_template: str = Field(
         default="", description="The template version this workspace last ran the app's tests against successfully"
     )
@@ -122,6 +127,7 @@ def render_record(record: AppRecord) -> str:
         f"published_repo_url = {_toml_string(record.published_repo_url)}",
         f"published_commit = {_toml_string(record.published_commit)}",
         f"published_version = {_toml_string(record.published_version)}",
+        f"published_visibility = {_toml_string(record.published_visibility)}",
         f"verified_template = {_toml_string(record.verified_template)}",
     ]
     for reference in record.references:

@@ -51,6 +51,7 @@ dev_repo_url = ""
 published_repo_url = ""
 published_commit = ""
 published_version = ""
+published_visibility = ""
 verified_template = "minds-v0.11.0"
 
 [[references]]

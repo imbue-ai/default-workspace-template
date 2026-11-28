@@ -91,21 +91,6 @@ def _latchkey_answering_for_one_repository(tmp_path: Path, monkeypatch: pytest.M
     return bin_directory / "requests"
 
 
-def test_whether_a_published_repository_is_private_is_what_github_says(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    requests = _latchkey_answering_for_one_repository(tmp_path, monkeypatch, '{"name": "notes", "private": true}')
-    runtime = WorkspaceRuntime(repo_root=tmp_path)
-
-    assert runtime.is_published_repository_private("https://github.com/octo/notes") is True
-    # A read sends no body.
-    assert requests.read_text().splitlines() == ["curl -s -X GET https://api.github.com/repos/octo/notes"]
-
-    (tmp_path / "bin" / "repository.json").write_text('{"message": "Not Found"}')
-    with pytest.raises(PublishError, match="did not say whether octo/notes is private"):
-        runtime.is_published_repository_private("https://github.com/octo/notes")
-
-
 def test_a_published_repository_is_made_public_or_the_refusal_is_raised(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

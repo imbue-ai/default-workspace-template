@@ -3,3 +3,5 @@
 `app_manifest.scope.describe_record_reference_problem(repo_root, package, reference)` says why an app's record may not list a reference, by the rules the footprint code reads one by (a literal path that exists, outside every app's directory, reached through no symlink, not under `system/vendor/` or `data/`), so `app-install reference add` refuses a reference before it writes it.
 
 `app_manifest.user_apps.has_user_built_app` no longer counts an app the workspace installed from someone else's repository (a record whose `origin` is `installed`), so a workspace created with an app still offers "Build an app" in the chat's suggestions and the onboarding checklist.
+
+An app's record gains `published_visibility` (`private`, `public`, or empty), who can see the app's published repository as this workspace last set it, which `app-install publish` writes and reads.

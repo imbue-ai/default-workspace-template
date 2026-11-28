@@ -29,7 +29,6 @@ from github_sync.repositories import RepositoryNameTakenError
 from github_sync.repositories import create_repository
 from github_sync.repositories import lock_down_repository
 from github_sync.repositories import make_repository_public
-from github_sync.repositories import read_repository_is_private
 from github_sync.repositories import set_repository_topics
 from host_backup.cli import has_recent_backup
 
@@ -217,12 +216,6 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             lockdown_problem=lock_down_repository(repository) or "",
             topic_problem=topic_problem,
         )
-
-    def is_published_repository_private(self, repo_url: str) -> bool:
-        try:
-            return read_repository_is_private(repo_url.removeprefix(GITHUB_URL_PREFIX))
-        except GithubRequestError as e:
-            raise PublishError(str(e)) from e
 
     def make_published_repository_public(self, repo_url: str) -> None:
         try:

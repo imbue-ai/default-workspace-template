@@ -250,9 +250,8 @@ than keep copies:
   and when GitHub's answer does not confirm the visibility asked for),
   and `lock_down_repository(repository)` closes issues, wiki, projects,
   discussions and outside pull requests, returning the problem when that did
-  not take. `read_repository_is_private(repository)` asks GitHub whether a
-  repository is private, and `make_repository_public(repository)` makes it
-  public. `set_repository_topics(repository, names)` sets the topics a
+  not take. `make_repository_public(repository)` makes a repository public,
+  raising unless GitHub's answer says it is. `set_repository_topics(repository, names)` sets the topics a
   published template or app is found by, and `hint_for_push_failure(output)`
   says what a push git refused most likely means, when it is a refusal it
   knows.

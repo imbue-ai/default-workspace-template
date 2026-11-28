@@ -500,10 +500,24 @@ def test_a_first_publish_creates_a_public_repository_only_when_asked_and_a_later
 
     _versioned(workspace, runtime, "0.2.0")
     assemble_app(workspace, "notes", "HEAD", runtime)
+    # A later publish says who can see the repository as it was made, and asking again for public is no change.
+    later = push_app(workspace, "notes", None, True, runtime)
+    assert (later.is_private, later.is_repository_created) == (False, False)
+    assert load_record(workspace, "notes").published_visibility == "public"
+
+
+def test_a_later_publish_never_makes_a_private_repository_public(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path)
+    first = _publish(workspace, runtime, "0.1.0")
+    assert load_record(workspace, "notes").published_visibility == "private"
+    _versioned(workspace, runtime, "0.2.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+
     with pytest.raises(PublishError, match="publish visibility notes --make-public"):
         push_app(workspace, "notes", None, True, runtime)
-    # The repository was there already, so the push that follows has nothing to say of who can see it.
-    assert push_app(workspace, "notes", None, False, runtime).is_private is None
+
+    assert run_git(published, ["rev-parse", "main"]) == first.commit
+    assert push_app(workspace, "notes", None, False, runtime).is_private is True
 
 
 def test_a_first_publish_run_again_with_public_goes_on_only_when_its_repository_is_public(tmp_path: Path) -> None:
@@ -524,7 +538,7 @@ def test_a_first_publish_run_again_with_public_goes_on_only_when_its_repository_
     published_visibility(workspace, "notes", True, runtime)
     tagged = push_app(workspace, "notes", None, True, runtime)
 
-    assert (tagged.is_tag_pushed, tagged.commit, tagged.is_private) == (True, untagged.commit, None)
+    assert (tagged.is_tag_pushed, tagged.commit, tagged.is_private) == (True, untagged.commit, False)
     assert run_git(published, ["rev-parse", "v0.1.0^{commit}"]) == untagged.commit
     assert sum(call.startswith("create_published_repository") for call in runtime.calls) == 1
 
@@ -540,9 +554,56 @@ def test_a_published_repository_says_whether_it_is_private_and_is_made_public_on
     again = published_visibility(workspace, "notes", True, runtime)
 
     assert (asked.repo_url, asked.is_private, asked.is_changed) == (_PUBLISHED_URL, True, False)
-    assert (made_public.is_private, made_public.is_changed) == (False, True)
+    assert (made_public.is_private, made_public.is_changed, made_public.problems) == (False, True, ())
     assert (again.is_private, again.is_changed) == (False, False)
     assert runtime.calls.count(f"make_published_repository_public {_PUBLISHED_URL}") == 1
+    # The record is what says who can see it, and the change to it is committed.
+    assert load_record(workspace, "notes").published_visibility == "public"
+    assert run_git(workspace, ["status", "--porcelain"]) == ""
+    assert run_git(workspace, ["log", "-1", "--format=%s"]) == "app-install: record that notes is published publicly"
+
+
+def test_making_public_whose_record_was_not_committed_is_finished_by_running_it_again(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    _publish(workspace, runtime, "0.1.0")
+    failing = RecordingRuntime(repo_root=workspace, commit_failure="fatal: unable to write new index file")
+
+    uncommitted = published_visibility(workspace, "notes", True, failing)
+    again = published_visibility(workspace, "notes", True, runtime)
+
+    assert (uncommitted.is_private, uncommitted.is_changed) == (False, True)
+    assert "run this again" in uncommitted.problems[0]
+    assert (again.is_private, again.is_changed, again.problems) == (False, False, ())
+    assert not any(call.startswith("make_published_repository_public") for call in runtime.calls)
+    assert run_git(workspace, ["status", "--porcelain"]) == ""
+    assert run_git(workspace, ["log", "-1", "--format=%s"]) == "app-install: record that notes is published publicly"
+
+
+def test_a_repository_github_does_not_make_public_stays_recorded_as_it_was(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    _publish(workspace, runtime, "0.1.0")
+    runtime.make_public_failure = "octo/notes was not made public: request not permitted"
+
+    with pytest.raises(PublishError, match="was not made public"):
+        published_visibility(workspace, "notes", True, runtime)
+
+    assert load_record(workspace, "notes").published_visibility == "private"
+
+
+def test_a_repository_published_before_records_said_who_can_see_it_is_unknown_until_made_public(
+    tmp_path: Path,
+) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    _publish(workspace, runtime, "0.1.0")
+    record_file = workspace / "system" / "config" / "apps" / "notes.toml"
+    record_file.write_text(record_file.read_text().replace('published_visibility = "private"\n', ""))
+    commit_all(workspace, "A record from before it said who can see the repository")
+
+    asked = published_visibility(workspace, "notes", False, runtime)
+    made_public = published_visibility(workspace, "notes", True, runtime)
+
+    assert (asked.is_private, asked.is_changed) == (None, False)
+    assert (made_public.is_private, made_public.is_changed) == (False, True)
 
 
 def test_a_second_publish_follows_the_first_and_is_pushed_as_a_fast_forward(tmp_path: Path) -> None:
@@ -1081,7 +1142,7 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     assert pushed["published_repo_url"] == _PUBLISHED_URL
     assert pushed["tag"] == "v0.2.0"
     assert pushed["is_repository_created"] is False
-    assert pushed["is_private"] is None
+    assert pushed["is_private"] is True
     assert pushed["is_tag_pushed"] is True
     assert pushed["problems"] == []
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
@@ -1119,12 +1180,11 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
 
 # A stand-in for latchkey that logs each request and answers as GitHub does for a private repository: private
 # when it is read, public once it is changed.
-_LATCHKEY_ANSWERING_FOR_A_PRIVATE_REPOSITORY = """\
+# A stand-in for latchkey that logs each request and answers a change to a repository's settings as GitHub
+# does once the repository is public.
+_LATCHKEY_MAKING_A_REPOSITORY_PUBLIC = """\
 printf '%s\\n' "$*" >> "$(dirname "$0")/requests"
-case "$*" in
-    *"-X PATCH"*) echo '{"name": "notes", "private": false}' ;;
-    *) echo '{"name": "notes", "private": true}' ;;
-esac
+echo '{"name": "notes", "private": false}'
 """
 
 
@@ -1132,7 +1192,7 @@ def test_the_command_says_who_can_see_a_published_app_and_makes_it_public_when_a
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, _published, runtime = _publisher(tmp_path, is_python=False)
-    install_fake_latchkey(tmp_path / "bin", _LATCHKEY_ANSWERING_FOR_A_PRIVATE_REPOSITORY)
+    install_fake_latchkey(tmp_path / "bin", _LATCHKEY_MAKING_A_REPOSITORY_PUBLIC)
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
 
     def run(*options: str) -> tuple[int, dict[str, object]]:
@@ -1142,18 +1202,18 @@ def test_the_command_says_who_can_see_a_published_app_and_makes_it_public_when_a
     exit_code, refusal = run()
     assert (exit_code, refusal["result"], refusal["name"]) == (1, "refused", "notes")
     assert "has no published repository yet" in str(refusal["detail"])
-    # Nothing is asked of GitHub for an app that has no repository there.
-    assert not (tmp_path / "bin" / "requests").exists()
 
     _publish(workspace, runtime, "0.1.0")
-    visibility = {"result": "visibility", "name": "notes", "published_repo_url": _PUBLISHED_URL}
+    visibility = {"result": "visibility", "name": "notes", "published_repo_url": _PUBLISHED_URL, "problems": []}
 
     assert run() == (0, {**visibility, "is_private": True, "is_changed": False})
+    # Saying who can see it asks GitHub nothing: the access a publish holds does not read a repository.
+    assert not (tmp_path / "bin" / "requests").exists()
     assert run("--make-public") == (0, {**visibility, "is_private": False, "is_changed": True})
-    read = "curl -s -X GET https://api.github.com/repos/octo/notes"
-    asked, asked_again, changed = (tmp_path / "bin" / "requests").read_text().splitlines()
-    assert (asked, asked_again) == (read, read)
+    assert run() == (0, {**visibility, "is_private": False, "is_changed": False})
+    (changed,) = (tmp_path / "bin" / "requests").read_text().splitlines()
     assert "-X PATCH https://api.github.com/repos/octo/notes" in changed and '{"private": false}' in changed
+    assert load_record(workspace, "notes").published_visibility == "public"
 
 
 def test_the_installed_command_logs_only_what_needs_acting_on_unless_asked_for_more(tmp_path: Path) -> None:

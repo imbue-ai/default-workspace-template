@@ -5,6 +5,7 @@ from pydantic import Field
 
 from app_install.errors import DevRepositoryError
 from app_install.errors import PublishedNameTakenError
+from app_install.errors import PublishError
 from app_install.interfaces import CreatedRepository
 from app_install.interfaces import SecretScan
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -33,7 +34,7 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     lockdown_problem: str = Field(default="", description="Why closing a created repository did not take")
     topic_problem: str = Field(default="", description="Why a published repository was not given its topic")
     taken_repository_names: tuple[str, ...] = Field(default=(), description="The names the account already uses")
-    is_published_private: bool = Field(default=True, description="Whether the published repository is private")
+    make_public_failure: str | None = Field(default=None, description="Why making a repository public fails")
     secret_marker: str = Field(default="", description="Text the secret scan reports every file holding as a find")
     scan_failure: str = Field(default="", description="Why the secret scan cannot run, if it cannot")
     lock_failure: str | None = Field(default=None, description="Why a lock check fails, if it does")
@@ -101,7 +102,6 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     def create_published_repository(self, name: str, description: str, is_private: bool) -> CreatedRepository:
         visibility = "private" if is_private else "public"
         self.calls.append(f"create_published_repository {name} {description!r} {visibility}")
-        self.is_published_private = is_private
         if name in self.taken_repository_names:
             raise PublishedNameTakenError(f"the repo was not created: name already exists on this account ({name})")
         return CreatedRepository(
@@ -110,13 +110,10 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
             topic_problem=self.topic_problem,
         )
 
-    def is_published_repository_private(self, repo_url: str) -> bool:
-        self.calls.append(f"is_published_repository_private {repo_url}")
-        return self.is_published_private
-
     def make_published_repository_public(self, repo_url: str) -> None:
         self.calls.append(f"make_published_repository_public {repo_url}")
-        self.is_published_private = False
+        if self.make_public_failure is not None:
+            raise PublishError(self.make_public_failure)
 
     def scan_secrets(self, directory: Path) -> SecretScan:
         self.calls.append("scan_secrets")

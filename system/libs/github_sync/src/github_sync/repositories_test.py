@@ -12,7 +12,6 @@ from github_sync.repositories import (
     hint_for_push_failure,
     lock_down_repository,
     make_repository_public,
-    read_repository_is_private,
     set_repository_topics,
 )
 from github_sync.testing import install_fake_latchkey
@@ -142,22 +141,6 @@ def test_topics_are_set_and_a_refusal_is_raised(
     _answer(fake_latchkey_bin, {"message": "Not Found"}, log)
     with pytest.raises(GithubRequestError, match="the topic was not set"):
         set_repository_topics("octo/notes", ["imbue-studio-app"])
-
-
-def test_whether_a_repository_is_private_is_read_without_a_body_and_a_refusal_is_raised(
-    fake_latchkey_bin: Path, tmp_path: Path
-) -> None:
-    log = tmp_path / "latchkey-arguments"
-    _answer(fake_latchkey_bin, {"name": "notes", "private": True}, log)
-
-    assert read_repository_is_private("octo/notes") is True
-
-    assert log.read_text().splitlines() == ["curl", "-s", "-X", "GET", "https://api.github.com/repos/octo/notes"]
-    _answer(fake_latchkey_bin, {"name": "notes", "private": False}, log)
-    assert read_repository_is_private("octo/notes") is False
-    _answer(fake_latchkey_bin, {"message": "Not Found"}, log)
-    with pytest.raises(GithubRequestError, match="did not say whether octo/notes is private"):
-        read_repository_is_private("octo/notes")
 
 
 def test_a_repository_is_made_public_and_one_that_stays_private_is_raised(

@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from enum import auto
 from pathlib import Path
 from typing import Final
+from typing import Literal
 
 import pathspec
 import tomlkit
@@ -81,6 +82,7 @@ from app_manifest.records import AppRecord
 from app_manifest.records import app_directory_prefix
 from app_manifest.records import load_record
 from app_manifest.records import modifying_paths
+from app_manifest.records import record_path
 from app_manifest.records import write_record
 from github_sync.repositories import hint_for_push_failure
 
@@ -100,6 +102,8 @@ _NON_FAST_FORWARD_MARKERS: Final[tuple[str, ...]] = ("(non-fast-forward)", "(fet
 _ALREADY_EXISTS_MARKER: Final[str] = "already exists"
 # How many paths one git command is given, so that its arguments stay within what a command line can hold.
 _PATHS_PER_COMMAND: Final[int] = 200
+_PRIVATE: Final[Literal["private"]] = "private"
+_PUBLIC: Final[Literal["public"]] = "public"
 # The file at a published tree's root that says on what terms the app is shared.
 _LICENSE_FILENAME: Final[str] = "LICENSE"
 # A skill named by where it lives in a workspace, or by where it keeps its data there.
@@ -211,7 +215,7 @@ class PushOutcome(FrozenModel):
     tag: str = Field(description="The version's tag")
     is_repository_created: bool = Field(description="Whether this run created the repository")
     is_private: bool | None = Field(
-        description="Whether the repository this run created is private; None when it was there already"
+        description="Whether the repository is private, as this workspace last set it; None when it never did"
     )
     is_tag_pushed: bool = Field(description="Whether the tag reached the repository")
     derived_from: str = Field(description="What the commit says the app was derived from, empty when nothing")
@@ -219,12 +223,15 @@ class PushOutcome(FrozenModel):
 
 
 class VisibilityOutcome(FrozenModel):
-    """Who can see an app's published repository."""
+    """Who can see an app's published repository, as this workspace last set it."""
 
-    record: AppRecord = Field(description="The app's record")
+    record: AppRecord = Field(description="The app's record as it is now")
     repo_url: str = Field(description="The published repository")
-    is_private: bool = Field(description="Whether the repository is private now")
+    is_private: bool | None = Field(
+        description="Whether the repository is private, as this workspace last set it; None when it never did"
+    )
     is_changed: bool = Field(description="Whether this run made it public")
+    problems: tuple[str, ...] = Field(default=(), description="What this run tried and could not do")
 
 
 class RecordOutcome(FrozenModel):
@@ -669,6 +676,12 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
     )
 
 
+def _is_recorded_private(record: AppRecord) -> bool | None:
+    """Whether the published repository is private, as the record says this workspace last set it; None when
+    the record does not say (a repository published before records kept this)."""
+    return (record.published_visibility == _PRIVATE) if record.published_visibility else None
+
+
 def _derived_from(record: AppRecord) -> str:
     """What the first publish of an app that was installed and changed here says it came from."""
     if record.origin is not AppOrigin.INSTALLED or record.published_commit or not record.upstream_url:
@@ -746,15 +759,13 @@ def push_app(
     problems: list[str] = []
     is_repository_created = False
     repo_url = record.published_repo_url
-    if repo_url and is_public:
-        # A first publish that is run again finds the repository its earlier run made, and has what it asks for
-        # when that repository is public.
-        is_first_publish_run_again = not record.published_commit
-        if not is_first_publish_run_again or runtime.is_published_repository_private(repo_url):
-            raise PublishError(
-                f"{name} already has its repository, {repo_url}, and a push does not change who can see it: run "
-                f"`app-install publish visibility {name} --make-public` to make it public"
-            )
+    # A first publish that is run again finds the repository its earlier run made, and has what it asks for when
+    # that run made it public.
+    if repo_url and is_public and record.published_visibility != _PUBLIC:
+        raise PublishError(
+            f"{name} already has its repository, {repo_url}, and a push does not change who can see it: run "
+            f"`app-install publish visibility {name} --make-public` to make it public"
+        )
     if not repo_url:
         chosen_name = repository_name or name
         if not _REPOSITORY_NAME_PATTERN.fullmatch(chosen_name):
@@ -764,7 +775,10 @@ def push_app(
         created = runtime.create_published_repository(chosen_name, pending.description, is_private=not is_public)
         is_repository_created = True
         repo_url = created.url
-        record = record.model_copy_update(to_update(record.field_ref().published_repo_url, repo_url))
+        record = record.model_copy_update(
+            to_update(record.field_ref().published_repo_url, repo_url),
+            to_update(record.field_ref().published_visibility, _PUBLIC if is_public else _PRIVATE),
+        )
         record_file = write_record(repo_root, record)
         commit_failure = runtime.commit_paths(
             [record_file.relative_to(repo_root).as_posix()], f"app-install: record the published repository of {name}"
@@ -813,7 +827,7 @@ def push_app(
         version=pending.version,
         tag=tag,
         is_repository_created=is_repository_created,
-        is_private=(not is_public) if is_repository_created else None,
+        is_private=_is_recorded_private(record),
         is_tag_pushed=pending.is_tag_pushed,
         derived_from=derived_from,
         problems=tuple(problems),
@@ -823,23 +837,43 @@ def push_app(
 def published_visibility(
     repo_root: Path, name: str, is_made_public: bool, runtime: WorkspaceRuntimeInterface
 ) -> VisibilityOutcome:
-    """Whether the published repository of the app ``name`` is private, as GitHub says now; with
-    ``is_made_public`` a private one is made public first. Everything in the repository went through the secret
-    scan before it was pushed, so making it public publishes nothing that was not checked.
+    """Who can see the published repository of the app ``name``, as this workspace last set it; with
+    ``is_made_public`` a repository this workspace has not made public is made so first, and the record says so
+    and is committed. GitHub is not asked what the repository is now, since the access a publish holds does not
+    read a repository: one whose visibility was changed on GitHub by hand reads here as it was last set.
+    Everything in the repository went through the secret scan before it was pushed, so making it public
+    publishes nothing that was not checked. A run whose record was not committed is finished by running it again.
 
     Raises AppRecordNotFoundError for an app with no record, and PublishError for an app that has no published
-    repository yet and when GitHub does not answer.
+    repository yet and when GitHub does not confirm the repository is public.
     """
     record = load_record(repo_root, name)
     repo_url = record.published_repo_url
     if not repo_url:
         raise PublishError(f"{name} has no published repository yet: publish it first")
-    was_private = runtime.is_published_repository_private(repo_url)
-    is_changed = was_private and is_made_public
+    if not is_made_public:
+        return VisibilityOutcome(
+            record=record, repo_url=repo_url, is_private=_is_recorded_private(record), is_changed=False
+        )
+    is_changed = record.published_visibility != _PUBLIC
     if is_changed:
         runtime.make_published_repository_public(repo_url)
+        record = record.model_copy_update(to_update(record.field_ref().published_visibility, _PUBLIC))
+        write_record(repo_root, record)
+    commit_failure = runtime.commit_paths(
+        [record_path(repo_root, name).relative_to(repo_root).as_posix()],
+        f"app-install: record that {name} is published publicly",
+    )
+    problems = (
+        ()
+        if commit_failure is None
+        else (
+            "the repository is public and the app's record says so, but was not committed, "
+            f"so run this again: {commit_failure}",
+        )
+    )
     return VisibilityOutcome(
-        record=record, repo_url=repo_url, is_private=was_private and not is_changed, is_changed=is_changed
+        record=record, repo_url=repo_url, is_private=False, is_changed=is_changed, problems=problems
     )
 
 

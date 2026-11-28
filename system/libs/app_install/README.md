@@ -201,16 +201,16 @@ The result is `linked` (the first marker was made), `refreshed` (a new one was m
 
 An app's published repository is named after the app, is private unless the publish asks for a public one, and holds one commit per published version: the app's directory at one workspace commit, less the paths the manifest's `[publish] exclude` names.
 It is what another workspace installs from.
-A publish is driven by the `publish-app` skill, which asks the user twice before anything leaves the workspace; the steps that need no judgement are five subcommands, run in this order, and a sixth for who can see the repository.
+A publish is driven by the `publish-app` skill, which has the user agree to what will be published before anything is prepared, and asks again only when what was prepared differs; the steps that need no judgement are five subcommands, run in this order, and a sixth for who can see the repository.
 
 | Step | What it does | Result |
 | --- | --- | --- |
 | `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`), which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from, and each line that names a skill the app does not carry (`outside_skill_uses`). Writes nothing. | `compared` |
 | `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
 | `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
-| `publish push <name> [--repo-name <repository>] [--public]` | Creates the repository on the first publish, private unless `--public` is given, and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
+| `publish push <name> [--repo-name <repository>] [--public]` | Creates the repository on the first publish, private unless `--public` is given, and writes its URL and who can see it (`published_visibility`) to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
 | `publish record <name>` | Writes `published_commit`, `published_version` and `verified_template` to the app's record, beside the `published_repo_url` the push wrote, and commits that one file. | `recorded` |
-| `publish visibility <name> [--make-public]` | Asks GitHub whether the published repository is private (`is_private`), and with `--make-public` makes a private one public first (`is_changed`). Everything in the repository went through the secret scan before it was pushed, so this publishes nothing that was not checked. Refused for an app that has no published repository. | `visibility` |
+| `publish visibility <name> [--make-public]` | Says whether the published repository is private (`is_private`), as the app's record has it, and with `--make-public` makes one the record does not have as public so first (`is_changed`), then writes that to the record and commits that one file. Everything in the repository went through the secret scan before it was pushed, so this publishes nothing that was not checked. Refused for an app that has no published repository. | `visibility` |
 
 **The version.**
 A version is three numbers, with an optional pre-release after a hyphen, and each published version is newer than the last.
@@ -242,8 +242,9 @@ A file over 1 MB, a file that is not text, a link, and a repository nested in th
 **The push.**
 On the first publish the repository is created under the workspace's GitHub account through `latchkey curl`, private unless `--public` is given (`is_private` in the result says which), closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
 The push goes ahead only once GitHub's answer says the new repository has the visibility that was asked for: one that was to be private and is not confirmed so is left empty, and the result says to check and delete it on GitHub.
-A later publish never changes who can see the repository: its `is_private` is null, and `--public` is refused with the command that does.
-A first publish that is run again may carry `--public` as its first run did, and is refused only when the repository it finds is private.
+A later publish never changes who can see the repository, and `--public` is refused, with the command that does, unless the record already has it as public (a first publish run again as its first run was).
+Who can see the repository is read from the app's record (`published_visibility`: `private`, `public`, or empty for an app published before the record kept it, whose `is_private` is null) and never from GitHub, since the access a publish holds creates, changes and pushes to a repository but does not read one.
+A repository whose visibility the user changed on GitHub themselves therefore reads as this workspace last set it.
 Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.
 A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
 The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.

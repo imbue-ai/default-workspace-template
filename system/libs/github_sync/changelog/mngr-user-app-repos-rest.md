@@ -6,6 +6,6 @@ New for callers: `github_sync.repositories` (create and lock down a GitHub repos
 
 `github_sync.repositories` also gains `set_repository_topics` and `hint_for_push_failure` (what a refused push most likely means), which moved here from the publish-template scripts so that the app publish uses the same two.
 
-`github_sync.repositories` gains `read_repository_is_private(repository)` and `make_repository_public(repository)`, which `app-install publish visibility` uses, and `request_github` sends no body when given none, so a read is a plain GET.
+`github_sync.repositories` gains `make_repository_public(repository)`, which `app-install publish visibility --make-public` uses; it raises unless GitHub's answer says the repository is public.
 
 `create_repository` raises unless GitHub's answer says the new repository has the visibility that was asked for, so a repository that was to be private is never used unconfirmed. This holds for a published template's repository and an app's dev repository too.

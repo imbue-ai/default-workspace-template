@@ -575,18 +575,20 @@ def publish_push_command(repo_root: Path, name: str, repository_name: str | None
 )
 @click.pass_obj
 def publish_visibility_command(repo_root: Path, name: str, is_made_public: bool) -> None:
-    """Say whether the published repository of the app NAME is private, making it public first with
-    --make-public."""
-    try:
-        outcome = published_visibility(repo_root, name, is_made_public, WorkspaceRuntime(repo_root=repo_root))
-    except (AppInstallError, AppManifestError) as e:
-        _refuse("refused", name=name, detail=str(e))
+    """Say who can see the published repository of the app NAME, as this workspace last set it, making it
+    public first with --make-public."""
+    with install_lock(repo_root):
+        try:
+            outcome = published_visibility(repo_root, name, is_made_public, WorkspaceRuntime(repo_root=repo_root))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
     _emit(
         "visibility",
         name=str(outcome.record.name),
         published_repo_url=outcome.repo_url,
         is_private=outcome.is_private,
         is_changed=outcome.is_changed,
+        problems=list(outcome.problems),
     )
 
 
