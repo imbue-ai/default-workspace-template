@@ -735,14 +735,14 @@ def push_app(
     """Push the tree ``assemble_app`` left waiting as the next version of the app ``name``.
 
     On the first publish the repository ``repository_name`` (the app's name when None) is created, private
-    unless ``is_public``, and closed to outside contributions, and its URL is written to the app's record and
-    committed, so that it is never created a second time. A later publish leaves the repository's visibility
-    alone, and is refused when it asks for a public one: ``published_visibility`` is what makes a published
-    repository public. A first publish that is run again may ask for a public one as its first run did, and
-    is refused only when the repository it finds is private. The tree becomes one commit, whose parent is the
-    commit last published and
-    whose message names the version and, for the first publish of an app that was installed and changed here,
-    what it was derived from. The commit goes to the repository's ``main`` as a fast-forward and the tag
+    unless ``is_public``, and closed to outside contributions, and its URL and who can see it are written to
+    the app's record and committed, so that it is never created a second time. A publish that finds the
+    repository in the record leaves its visibility alone, and is refused when it asks for a public one that
+    the record does not have as public: the function ``published_visibility``, with ``is_made_public``, is
+    what makes a published repository public. A first publish that is run again may therefore ask for a
+    public one as its first run did. The tree becomes one commit, whose parent is the commit last published
+    and whose message names the version and, for the first publish of an app that was installed and changed
+    here, what it was derived from. The commit goes to the repository's ``main`` as a fast-forward and the tag
     ``v<version>`` after it, both through the latchkey gateway and neither forced.
 
     A run that was interrupted is finished by running it again: the commit is made once and kept, so a second
