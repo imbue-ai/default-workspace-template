@@ -988,7 +988,7 @@ def test_a_failed_start_is_no_longer_told_once_an_update_started_after_it(
     assert state.activity is UpdateActivity.RUNNING
 
 
-def test_a_failed_start_from_before_the_last_run_stands_beside_that_runs_outcome(
+def test_a_failed_start_after_the_last_run_stands_beside_that_runs_outcome(
     staged: StagedUpdateWorkspace,
 ) -> None:
     staged.write_state("run.json", {**_OPEN_RUN, "verdict": "STUCK"})
