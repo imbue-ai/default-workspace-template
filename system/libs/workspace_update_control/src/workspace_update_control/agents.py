@@ -7,7 +7,8 @@ is destroyed. The fold reads from the end of the file back to the most recent sn
 every later state and removal on top.
 
 The answer has the shape of the dispatcher's own listing (``dispatcher.list_agents``), so the
-functions the routes share with the tick take either. Where the file cannot vouch for the agents (it
+functions the routes share with the tick take either. It carries one thing more, which only the
+observer's file holds: when each agent's last turn ended (``TURN_ENDED_AT_KEY``). Where the file cannot vouch for the agents (it
 is missing, holds no snapshot, went stale, or does not list the workspace's own services agent) the
 answer is None: every caller reads that as "the agents are unknown", never as "there are none".
 """
@@ -36,6 +37,9 @@ _AGENT_REMOVED_EVENT_TYPE: Final[str] = "AGENT_REMOVED"
 # Twice the observer's snapshot interval: past it nothing is writing the file.
 _STALE_AFTER: Final[timedelta] = timedelta(minutes=10)
 _TAIL_BLOCK_BYTES: Final[int] = 256 * 1024
+# The key a listed agent's last turn end is under, as the text of seconds since the epoch: left out while a turn
+# is open, and for an agent whose harness records no turn end.
+TURN_ENDED_AT_KEY: Final[str] = "turn_ended_at"
 # The labels the dispatcher's listing carries, under the keys it gives them.
 _LISTED_LABELS: Final[tuple[str, ...]] = (
     "is_primary",
@@ -88,9 +92,8 @@ def _tail_lines_back_to_snapshot(path: str) -> list[str] | None:
     return None
 
 
-def _event_time(event: Mapping[str, object]) -> datetime | None:
-    """The envelope's timestamp: ISO 8601 with up to nine fractional digits, of which Python keeps six."""
-    raw = event.get("timestamp")
+def _instant(raw: object) -> datetime | None:
+    """A moment as mngr writes one: ISO 8601 with up to nine fractional digits, of which Python keeps six."""
     if not isinstance(raw, str):
         return None
     try:
@@ -113,6 +116,11 @@ def _listed_agent(details: Mapping[str, object]) -> dict[str, str] | None:
         "name": name.strip(),
         "state": state if isinstance(state, str) else "",
     }
+    turn_ended_at = _instant(
+        (as_json_object(details.get("turn_end")) or {}).get("ended_at")
+    )
+    if turn_ended_at is not None:
+        listed[TURN_ENDED_AT_KEY] = repr(turn_ended_at.timestamp())
     for label in _LISTED_LABELS:
         value = labels.get(label)
         listed["labels." + label] = (
@@ -138,7 +146,7 @@ def fold_agent_events(lines: list[str], now: float) -> list[dict[str, str]] | No
         event = as_json_object(parsed)
         if event is None:
             continue
-        stamped = _event_time(event)
+        stamped = _instant(event.get("timestamp"))
         if stamped is not None and (newest is None or stamped > newest):
             newest = stamped
         event_type = event.get("type")

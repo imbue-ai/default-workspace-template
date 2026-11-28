@@ -1,6 +1,7 @@
-"""What a client asks of a workspace's updates: start one, schedule one, skip a version, dismiss a notice, read it all.
+"""What a client asks of a workspace's updates: start one, schedule one, skip a version, dismiss a notice.
 
-Each function is one operation of the workspace's update routes (the shell's ``/api/workspace/update``).
+Each function is one operation of the workspace's update routes (the shell's ``/api/workspace/update``); the read
+of what an update is doing is ``state``'s.
 Nothing here reads anything a client keeps. A client may name the values an update runs with: the newest version
 it knows (the ceiling), the update window already converted to UTC, and whether it holds backup credentials. A
 value it leaves out is the workspace's own: the version its release channel is on (``channel``), the window of
@@ -65,7 +66,6 @@ from workspace_update_control.protocol import (
     DISMISSALS_FILE_PATH,
     DISPATCHER_CRON_NAME,
     DURABLE_CRON_PATH,
-    LAST_DISPATCH_FILE_PATH,
     LAST_START_FILE_PATH,
     OUTCOME_ALREADY_ARMED,
     OUTCOME_ALREADY_RUNNING,
@@ -80,7 +80,7 @@ from workspace_update_control.protocol import (
     RUN_RECORD_PATH,
     SCHEDULE_FILE_PATH,
     SCHEDULE_ORIGIN_FILE_PATH,
-    SKIP_NEEDS_SIGN_IN,
+    SIGN_IN_REFUSAL_FILE_PATH,
     SKIPPED_TARGET_FILE_PATH,
     STARTED_BY_IMMEDIATE,
 )
@@ -122,6 +122,11 @@ _FOLLOWED_BACKUP: Final[str] = "is_backup_configured_followed"
 _FAILED_CREATE_DETAIL: Final[str] = (
     "The update's chat could not be created: the create ended with an error."
 )
+# The keys the dismissals file names a run's dismissed note and outcome under, each by the run's start.
+DISMISSED_NOTE_KEY: Final[str] = "note_run_started_at"
+DISMISSED_OUTCOME_KEY: Final[str] = "outcome_run_started_at"
+# The key a start attempt's record says under that the user put its failure away.
+START_FAILURE_DISMISSED_KEY: Final[str] = "is_failure_dismissed"
 
 
 def cron_line(workspace_root: str) -> str:
@@ -154,11 +159,34 @@ def install_cron_entry(live_cron_dir: str) -> bool:
     return True
 
 
+def _record_sign_in_refusal(now: float) -> None:
+    """Keep that a start or an arm found no AI account signed in; the first of a row of refusals stands."""
+    if read_json_object(SIGN_IN_REFUSAL_FILE_PATH) is None:
+        write_json_atomically(
+            SIGN_IN_REFUSAL_FILE_PATH,
+            {"schema": UPDATE_PROGRAM_SCHEMA, "refused_at": now},
+        )
+
+
+def _clear_sign_in_refusal() -> None:
+    try:
+        os.remove(SIGN_IN_REFUSAL_FILE_PATH)
+    except FileNotFoundError:
+        pass
+
+
 def _readiness_refusal(
-    live_cron_dir: str, agent_environment: AgentEnvironment, is_cron_needed: bool
+    live_cron_dir: str,
+    agent_environment: AgentEnvironment,
+    is_cron_needed: bool,
+    now: float,
 ) -> tuple[CreateResult | None, tuple[bool, list[str]] | None]:
     """``(refusal, account)``: the outcome that stops an arm or a start before it does anything (None to go
-    ahead), and what ``resolve_account`` answered once the checks got that far (None before)."""
+    ahead), and what ``resolve_account`` answered once the checks got that far (None before).
+
+    A check that finds no account signed in is put on record, and one that finds an account takes that record
+    away.
+    """
     if is_cron_needed and not is_cron_available(live_cron_dir):
         detail = "This workspace has no cron program, so nothing in it could start a scheduled update."
         return create_result(OUTCOME_NO_CRON, detail), None
@@ -168,9 +196,11 @@ def _readiness_refusal(
         ), None
     account = resolve_account(agent_environment)
     if not account[0]:
+        _record_sign_in_refusal(now)
         return create_result(
             OUTCOME_NEEDS_SIGN_IN, "No AI account is signed in to this workspace."
         ), account
+    _clear_sign_in_refusal()
     return None, account
 
 
@@ -267,7 +297,7 @@ def arm_schedule(
     if ceiling is not None:
         record_client_ceiling(ceiling, now)
     refusal, _ = _readiness_refusal(
-        live_cron_dir, agent_environment, is_cron_needed=True
+        live_cron_dir, agent_environment, is_cron_needed=True, now=now
     )
     if refusal is not None:
         return {**refusal, "schedule": read_json_object(SCHEDULE_FILE_PATH)}
@@ -599,8 +629,8 @@ def record_dismissals(
     existing = read_json_object(DISMISSALS_FILE_PATH) or {}
     merged = dict(existing)
     for key, dismissed_at in (
-        ("note_run_started_at", note_run_started_at),
-        ("outcome_run_started_at", outcome_run_started_at),
+        (DISMISSED_NOTE_KEY, note_run_started_at),
+        (DISMISSED_OUTCOME_KEY, outcome_run_started_at),
     ):
         if dismissed_at is None:
             continue
@@ -676,6 +706,23 @@ def _start_lock() -> Generator[None, None, None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def dismiss_start_failure(attempt_id: str) -> bool:
+    """Record the failure of the start attempt ``attempt_id`` as dismissed; whether that attempt is the last one.
+
+    The dismissal is kept in the attempt's own record, so the next attempt starts with none.
+    """
+    with _start_lock():
+        record = read_json_object(LAST_START_FILE_PATH)
+        if record is None or record.get("attempt_id") != attempt_id:
+            return False
+        if record.get(START_FAILURE_DISMISSED_KEY) is not True:
+            write_json_atomically(
+                LAST_START_FILE_PATH, {**record, START_FAILURE_DISMISSED_KEY: True}
+            )
+            write_log_line("recorded the dismissal of a failed start")
+        return True
+
+
 def _finish_start(
     attempt_id: str,
     fields: Mapping[str, object],
@@ -705,12 +752,15 @@ def _finish_start(
             OUTCOME_CREATE_FAILED, "The update's chat could not be created: %s" % exc
         )
     finally:
+        finished_at = clock()
+        if created["outcome"] == OUTCOME_NEEDS_SIGN_IN:
+            _record_sign_in_refusal(finished_at)
         with _start_lock():
             record = read_json_object(LAST_START_FILE_PATH)
             if record is not None and record.get("attempt_id") == attempt_id:
                 write_json_atomically(
                     LAST_START_FILE_PATH,
-                    {**record, **created, "finished_at": clock()},
+                    {**record, **created, "finished_at": finished_at},
                 )
 
 
@@ -743,7 +793,7 @@ def start_update(
     # Only where cron runs the watchdog is a stopped lead brought back.
     is_watchdog_installed = install_cron_entry(live_cron_dir)
     refusal, account = _readiness_refusal(
-        live_cron_dir, agent_environment, is_cron_needed=False
+        live_cron_dir, agent_environment, is_cron_needed=False, now=now
     )
     if refusal is not None:
         return {**refusal}
@@ -825,6 +875,8 @@ def start_update(
                 "chat_agent_name": "",
                 "chat_id": "",
                 "finished_at": None,
+                "target_ref": override_ref or started_ceiling,
+                "override_ref": override_ref,
             },
         )
     run_in_background(
@@ -835,7 +887,7 @@ def start_update(
     return {**create_result(OUTCOME_STARTING), "attempt_id": attempt_id}
 
 
-def _run_chat_id(
+def run_chat_id(
     run: Mapping[str, object] | None,
     last_dispatch: Mapping[str, object] | None,
     read_agents: AgentsReader,
@@ -855,45 +907,6 @@ def _run_chat_id(
         return None
     lead = find_run_lead(agents, run)
     return chat_id_of(lead) if lead is not None else ""
-
-
-def read_update_state(
-    *,
-    is_sign_in_checked: bool,
-    proc_root: str,
-    agent_environment: AgentEnvironment,
-    read_agents: AgentsReader,
-) -> dict[str, object]:
-    """The schedule, the run record, the last dispatch, the last start, the skipped version, the dismissals, the
-    update settings, and the version the settings' channel was last read at.
-
-    Whether an account is signed in rides along when asked, or when the schedule's skip says none was, and the id
-    of the chat the run record names, when the last dispatch does not name it. Nothing is written, and the feed
-    is not read.
-    """
-    schedule = read_json_object(SCHEDULE_FILE_PATH)
-    is_skipped_for_sign_in = schedule is not None and SKIP_NEEDS_SIGN_IN in (
-        schedule.get("pending_skip_reason"),
-        schedule.get("last_skip_reason"),
-    )
-    is_sign_in_asked = is_sign_in_checked or is_skipped_for_sign_in
-    run = read_json_object(RUN_RECORD_PATH)
-    last_dispatch = read_json_object(LAST_DISPATCH_FILE_PATH)
-    settings = read_update_settings()
-    return {
-        "settings": settings.document() if settings is not None else None,
-        "channel_version": read_channel_version(settings),
-        "schedule": schedule,
-        "run": run,
-        "last_dispatch": last_dispatch,
-        "run_chat_id": _run_chat_id(run, last_dispatch, read_agents),
-        "is_signed_in": resolve_account(agent_environment)[0]
-        if is_sign_in_asked
-        else None,
-        "skipped_target": read_json_object(SKIPPED_TARGET_FILE_PATH),
-        "dismissals": read_json_object(DISMISSALS_FILE_PATH),
-        "last_start": read_last_start(proc_root),
-    }
 
 
 def read_liveness(
