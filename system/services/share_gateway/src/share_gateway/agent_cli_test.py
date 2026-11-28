@@ -69,6 +69,18 @@ def test_a_malformed_grants_file_is_reported_as_misconfigured(
     assert json.loads(capsys.readouterr().err)["kind"] == "misconfigured"
 
 
+def test_an_unreadable_app_registry_is_reported_as_misconfigured_rather_than_as_no_apps(
+    workspace_cwd: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apps_toml_path = workspace_cwd / "data" / ".state" / "apps.toml"
+    apps_toml_path.parent.mkdir(parents=True, exist_ok=True)
+    apps_toml_path.write_text("[[apps]\nname = ")
+
+    assert run(["invite", "--granter", "user:owner", "--scope", "web", "--json"]) == 3
+    assert json.loads(capsys.readouterr().err)["kind"] == "misconfigured"
+    assert len(load_agent_invites(AGENT_INVITES_FILE)) == 0
+
+
 def test_changes_refuses_a_naive_since(workspace_cwd: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert run(["changes", "--since", "2026-10-15T18:00:00", "--json"]) == 2
     assert "timezone" in json.loads(capsys.readouterr().err)["error"]

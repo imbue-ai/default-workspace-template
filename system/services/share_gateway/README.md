@@ -32,8 +32,39 @@ three things running:
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
    registered service's local backend (from `data/.state/apps.toml`; the
-   Caddyfile re-renders and hot-reloads when the registry changes), and
-   unknown-but-plausible service origins to an auto-retrying loading page.
+   Caddyfile re-renders and hot-reloads when the registry changes), and a
+   registered service whose route caddy has not loaded yet (a registration
+   not picked up yet, or a reload caddy refused) to a "Starting up..." page.
+   The gateway, caddy and the relays share one read of the registry: a
+   registry that cannot be read or parsed keeps the last good read, and until
+   there has been one every address gets "This page isn't available right
+   now. Try again in a moment." (503) with a "Try again" button.
+   A registered service whose backend caddy cannot reach (crashed, stopped
+   and not yet parked by the shell, released by the shell and not yet bound
+   by the app, or timing out: any 5xx caddy raises) gets a separate
+   not-responding page instead. Both pages take every method, so a page's
+   POST to such an app gets the page too. Each reloads every 3 seconds with
+   a spinner while the address has gone unanswered for less than a minute,
+   then stops with a "Try again" button: the route-not-loaded page says
+   "This page still isn't available", the not-responding one that the page
+   is not responding. For an app the shell never starts on demand (a critical
+   app, a row inside a critical app's program, a row with no program, a
+   non-loopback address) the not-responding page says it may need a restart.
+   The owner and anyone whose grant covers the whole workspace are told to
+   ask an agent in the workspace to restart the app (or, for the
+   route-not-loaded page, to look into it) rather than a visitor's "Let the
+   person who shared it know": caddy keeps the identity the gateway verified
+   on the request it hands to its error route. They also get an "Open the
+   workspace" button, when the page fills the browser tab
+   (`Sec-Fetch-Dest: document`; inside one of the workspace's windows they are
+   there already) and the app that is down is not the shell itself. When it
+   is the shell, the workspace's agents are out of reach too, so either page
+   says the workspace isn't responding: the owner is told to open it in the
+   Imbue Studio app, which restarts a workspace it finds down, and everyone
+   else that the owner may need to restart it (Studio restarts only a
+   workspace its account owns). The minute is counted per address across all
+   visitors and both pages, and starts over after 30 seconds with no such
+   request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
@@ -127,9 +158,34 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403). So is
-  one whose only grants are per-service grants on internal apps (see
-  "Grants") or on apps not registered, since those admit it nowhere.
+- A verified account with no grant is **"Not shared with you"** (403: "This
+  page hasn't been shared with your account (name@example.com). Ask the
+  person who shared it to give you access, then reload this page.", naming the
+  signed-in account's email). So is one whose only grants are
+  per-service grants on internal apps (see "Grants") or on apps not
+  registered, since those admit it nowhere, and, on any later request, a
+  session with no grant for the app it is opening. The page has a Reload
+  button and a "Sign in with a different account" button, a form that POSTs
+  to `/_auth/switch-account` on the auth origin; that expires both session
+  cookies and sends the visitor through the broker without `confirmed=1` and
+  with `prompt=select_account`, so the broker asks which account to continue
+  as and offers a different one, even where it would otherwise sign the same
+  account straight back in (its `share_confirmed` cookie, or the share's
+  owner). A broker that predates the parameter ignores it.
+  The route takes only a POST whose Origin is one of this workspace's, so no
+  link from another site can sign a visitor out (a GET is a 405; a POST from
+  anywhere else gets the page below and keeps the session). The page sets its
+  own `strict-origin` referrer policy: under the `same-origin` one caddy sends,
+  a browser posts the form from an app's origin with `Origin: null`.
+- A request from another site that the Origin policy refuses (a cross-site
+  form post, say) is **"This page can't be opened from another site"** (403:
+  "For your security, this workspace doesn't accept requests sent from other
+  websites. Open the page directly instead."), with an "Open this page" button
+  that loads the same address with a plain GET.
+- An address that is not one of this workspace's origins (an old or mistyped
+  link, an app whose registration was removed) is **"Nothing shared here"**
+  (403: "Nothing is shared at this address right now. Check the link with the
+  person who sent it."), before any session check.
 
 ## When the stack cannot come up
 
@@ -230,10 +286,9 @@ routed as soon as the app registers.
 Every request that reaches a backend carries one gateway-set header, and a
 service can trust it because caddy strips any inbound copy before
 `forward_auth` and re-injects only the verified value from `/_auth/verify`.
-(The strip is a `request_header` directive in the same `handle` block as
-`forward_auth`; caddy's built-in directive order would run it *after*
-`forward_auth` and delete the injected value, so the rendered Caddyfile's
-global options carry `order request_header before forward_auth`.)
+(The strip is a site-level `request_header` directive, which runs ahead of
+every route: the one with `forward_auth`, the auth label's, and the error
+route that hands the gateway a request caddy could not serve.)
 
 ```
 X-Imbue-Identity: {"owner":true,"user_id":"…","email":"…"}
@@ -306,15 +361,18 @@ event envelope (`type` `gateway_request_count`, `source` `gateway_requests`):
   or `websocket` (an upgrade, whatever the method).
 - `outcome` is `allowed` or `denied:<reason>`, the reason one of
   `foreign_host`, `origin`, `agent_access_unconfigured`, `agent_token`,
-  `no_session`, `grants_misconfigured` and `no_grant`. A redirect to the
+  `no_session`, `grants_misconfigured`, `no_grant` and
+  `registry_unavailable`. A redirect to the
   broker counts as `denied:no_session`; the hosted chrome's CORS preflight
   counts as allowed by nobody.
 - `timestamp` is the window's end, when the count became final; a replay of
   the stream is deduplicated by `event_id` downstream.
 
 Never a path, a query string, an address or a header. The auth label's
-`/_auth/*` and `/_agent/*` surfaces, `/_health` and the loading page are
-routed without the auth step and are not counted (the access log has them).
+`/_auth/*` and `/_agent/*` surfaces and `/_health` are routed without the
+auth step and are not counted (the access log has them). A request answered
+with the "Starting up..." or not-responding page is counted once, by the
+auth step it passed before caddy found no app to hand it to.
 A window keeps at most 256 distinct keys; every further key folds into one
 `overflow` record, so a flood bounds itself. The stream archives itself at
 32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`

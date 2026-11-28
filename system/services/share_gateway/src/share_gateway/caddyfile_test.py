@@ -12,9 +12,12 @@ from pathlib import Path
 import pytest
 
 from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import RegisteredAppsReader
+from share_gateway.caddyfile import RegistryReadError
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
+from share_gateway.caddyfile import is_started_on_demand
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.caddyfile import render_compression
@@ -96,7 +99,52 @@ label = "orphan-99999999"
     assert [(a.name, a.label, a.backend_host, a.backend_port) for a in apps] == [
         ("good", "good-12345678", "localhost", 5001)
     ]
-    assert parse_registered_apps("not toml [[") == []
+
+
+@pytest.mark.parametrize(
+    "apps_toml", ["not toml [[", 'apps = "web"', "apps = 3"], ids=["not-toml", "string", "number"]
+)
+def test_a_registry_that_is_not_a_list_of_rows_is_unreadable_rather_than_empty(apps_toml: str) -> None:
+    with pytest.raises(RegistryReadError):
+        parse_registered_apps(apps_toml)
+
+
+def test_the_registry_reader_keeps_its_last_good_read_while_the_file_is_unreadable(tmp_path: Path) -> None:
+    apps_toml_path = tmp_path / "apps.toml"
+    reader = RegisteredAppsReader(apps_toml_path)
+
+    before_any_write = reader.read()
+    apps_toml_path.write_text(_APPS_TOML)
+    first_good = reader.read()
+    apps_toml_path.write_text("[[apps]\nname = ")
+    while_broken = reader.read()
+    apps_toml_path.unlink()
+    while_missing = reader.read()
+    apps_toml_path.write_text(_APPS_TOML.split('[[apps]]\nname = "my-app"', 1)[0])
+    after_repair = reader.read()
+
+    assert before_any_write is None
+    assert first_good is not None and [app.name for app in first_good] == ["system_interface", "terminal", "my-app"]
+    assert while_broken is not None and [app.name for app in while_broken] == [
+        "system_interface",
+        "terminal",
+        "my-app",
+    ]
+    assert while_missing is not None and [app.name for app in while_missing] == [
+        "system_interface",
+        "terminal",
+        "my-app",
+    ]
+    assert after_repair is not None and [app.name for app in after_repair] == ["system_interface", "terminal"]
+
+
+def test_the_registry_reader_has_nothing_before_a_first_good_read(tmp_path: Path) -> None:
+    apps_toml_path = tmp_path / "apps.toml"
+    apps_toml_path.write_text("apps = 3")
+    reader = RegisteredAppsReader(apps_toml_path)
+
+    assert reader.read() is None
+    assert reader.apps() == []
 
 
 def test_parse_registered_apps_carries_the_description_and_the_api_schema_path() -> None:
@@ -234,11 +282,6 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     assert "request_header -X-Imbue-Identity" in rendered
     assert "X-Share-Owner" not in rendered
     assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Imbue-Identity" in rendered
-    # Textual position inside a handle block does NOT decide when the strip
-    # runs: caddy sorts directives by its own order, which puts forward_auth
-    # before request_header. Only the global order override makes the strip
-    # run first.
-    assert "order request_header before forward_auth" in rendered
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
@@ -246,11 +289,75 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     assert "protocols h1 h2" in rendered
 
 
-def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> None:
+def test_caddyfile_sends_a_backend_it_cannot_reach_to_the_not_responding_page() -> None:
     rendered = _render()
 
-    assert "handle_errors 502 {" in rendered
-    assert rendered.count("rewrite * /_auth/loading") == 2
+    # Every failure status caddy raises (a refused connection's 502, a timeout's 504), not one of them alone.
+    error_route = rendered.split("handle_errors 5xx {", 1)[1].split("reverse_proxy", 1)[0]
+    assert "rewrite * /_auth/unresponsive" in error_route
+    # The route-not-loaded fallback keeps its own path, so the gateway can tell the two apart.
+    assert rendered.count("rewrite * /_auth/loading") == 1
+    assert "rewrite * /_auth/unresponsive" not in rendered.split("handle_errors 5xx {", 1)[0]
+
+
+def test_caddyfile_strips_a_client_identity_before_any_route_can_pass_it_on() -> None:
+    """The error route and the auth label's routes reach the gateway too, so the strip sits at the site level ahead
+    of every route rather than inside the one that runs forward_auth."""
+    rendered = _render()
+
+    site = rendered.split(f"https://*.{_DOMAIN}:", 1)[1]
+    strip = site.index("request_header -X-Imbue-Identity")
+    assert rendered.count("request_header -X-Imbue-Identity") == 1
+    assert strip < site.index("handle /_health")
+    assert strip < site.index("handle_errors 5xx")
+    assert strip < site.index("@auth host")
+
+
+_ON_DEMAND_APPS_TOML = """
+[[apps]]
+name = "system_interface"
+url = "http://localhost:8000"
+label = "system_interface-aaaa1111"
+program = "system_interface"
+critical = true
+
+[[apps]]
+name = "files"
+url = "http://127.0.0.1:8300"
+label = "files-dddd4444"
+program = "files"
+
+[[apps]]
+name = "shell-sidecar"
+url = "http://127.0.0.1:8001"
+label = "shell-sidecar-eeee5555"
+program = "system_interface"
+
+[[apps]]
+name = "agent-preview"
+url = "http://127.0.0.1:3000"
+label = "agent-preview-ffff6666"
+
+[[apps]]
+name = "remote-tool"
+url = "http://10.0.0.7:9000"
+label = "remote-tool-gggg7777"
+program = "remote-tool"
+"""
+
+
+def test_only_a_stoppable_program_on_a_loopback_address_is_started_on_demand() -> None:
+    apps = parse_registered_apps(_ON_DEMAND_APPS_TOML)
+
+    started_on_demand = {app.name: is_started_on_demand(app, apps) for app in apps}
+
+    assert started_on_demand == {
+        "system_interface": False,
+        "files": True,
+        "shell-sidecar": False,
+        "agent-preview": False,
+        "remote-tool": False,
+    }
 
 
 def test_render_caddyfile_routes_the_agent_surface_and_strips_the_admission_token() -> None:
@@ -289,10 +396,10 @@ def test_caddyfile_hardens_every_response_including_the_error_path() -> None:
     rendered = _render()
 
     assert _hardening_block("    ") in rendered
-    # handle_errors runs a handler chain of its own, so the 502 loading page
-    # needs the block of its own.
-    error_block_start = rendered.index("handle_errors 502 {")
-    error_block_end = rendered.index("rewrite * /_auth/loading", error_block_start)
+    # handle_errors runs a handler chain of its own, so the not-responding
+    # page needs the block of its own.
+    error_block_start = rendered.index("handle_errors 5xx {")
+    error_block_end = rendered.index("rewrite * /_auth/unresponsive", error_block_start)
     assert _hardening_block("        ") in rendered[error_block_start:error_block_end]
     # The appended frame-ancestors policy stays a plain (non-deferred) add: a
     # deferred set would overwrite a service's own CSP instead of composing.

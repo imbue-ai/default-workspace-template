@@ -34,6 +34,22 @@ class RequesterIdentity:
         return f"RequesterIdentity({vars(self)!r})"
 
 
+def parse_requester_identity_header(header_value: str) -> RequesterIdentity | None:
+    """The person a ``X-Imbue-Identity`` value names; None for a visiting agent, an absent or malformed value."""
+    try:
+        document = json.loads(header_value)
+    except ValueError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    user_id = document.get("user_id")
+    email = document.get("email")
+    is_owner = document.get("owner")
+    if not isinstance(user_id, str) or not isinstance(email, str) or not isinstance(is_owner, bool):
+        return None
+    return RequesterIdentity(user_id=user_id, email=email, is_owner=is_owner)
+
+
 def render_identity_header(identity: RequesterIdentity) -> str:
     """The compact JSON value of ``X-Imbue-Identity`` for a verified requester."""
     document: dict[str, object] = {
