@@ -17,8 +17,10 @@ rather than as archives with no ``chats/`` member or with every line's speaker r
 from __future__ import annotations
 
 import json
+import os
 import shutil
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -36,7 +38,13 @@ from workspace_bare_scripts.collect_bug_report_diagnostics import Collector
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _atif_stream_records() -> list[dict[str, object]]:
+def _iso(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")
+
+
+def _atif_stream_records(
+    timestamp: datetime = datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+) -> list[dict[str, object]]:
     """A stream as a harness writes one: the header, then who said what.
 
     Built through mngr's own record models, so a change to the shape the
@@ -57,7 +65,7 @@ def _atif_stream_records() -> list[dict[str, object]]:
         type="step",
         event_id="u1-user",
         emitter="claude/common_transcript",
-        timestamp="2026-09-14T12:00:00Z",
+        timestamp=_iso(timestamp),
         source=StepSource.USER,
         message="what did the update change",
     )
@@ -65,7 +73,7 @@ def _atif_stream_records() -> list[dict[str, object]]:
         type="step",
         event_id="a1-agent",
         emitter="claude/common_transcript",
-        timestamp="2026-09-14T12:00:01Z",
+        timestamp=_iso(timestamp + timedelta(seconds=1)),
         source=StepSource.AGENT,
         message="the launch path",
     )
@@ -158,3 +166,60 @@ def test_transcripts_are_fetched_through_the_installed_mngr(
         "user",
         "agent",
     ]
+
+
+class _FetchRecordingCollector(Collector):
+    """The collector, recording which agents it asked the installed mngr for a transcript of."""
+
+    def __init__(self, *, mngr_binary: str, agents_dir: str) -> None:
+        super().__init__(mngr_binary=mngr_binary, agents_dir=agents_dir)
+        self.fetched_agent_ids: set[str] = set()
+
+    def fetch_transcript(self, target: str, timeout: float) -> str | None:
+        self.fetched_agent_ids.add(target.split("@", 1)[0])
+        return super().fetch_transcript(target, timeout)
+
+
+@pytest.mark.timeout(180)
+def test_only_the_chats_a_report_keeps_are_fetched_through_the_installed_mngr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The collector picks which chats to ask mngr for by when each stream was last
+    written, read from where the streams sit; the installed mngr then has to answer
+    for exactly those from the same place. A layout mngr no longer reads would fail
+    the content assertion here rather than leave archives with the wrong chats."""
+    host_dir = _workspace_shaped_host_dir(tmp_path)
+    now = datetime.now(timezone.utc)
+    ids_by_name: dict[str, str] = {}
+    for index in range(7):
+        name = "fresh" if index == 0 else f"stale-{index}"
+        written = now - timedelta(minutes=1 if index == 0 else 300 + 10 * index)
+        events_dir = _agent_with_events_dir(host_dir, name, "claude/common_transcript")
+        stream = events_dir / "events.jsonl"
+        stream.write_text(
+            "\n".join(json.dumps(record) for record in _atif_stream_records(written))
+            + "\n"
+        )
+        os.utime(stream, (written.timestamp(), written.timestamp()))
+        ids_by_name[name] = events_dir.parents[2].name
+    mngr_binary = shutil.which("mngr")
+    assert (
+        mngr_binary is not None
+        and Path(mngr_binary).parent.resolve()
+        == (_REPO_ROOT / ".venv" / "bin").resolve()
+    ), f"the mngr on PATH is not this checkout's pinned install: {mngr_binary}"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    monkeypatch.chdir(tmp_path)
+    collector = _FetchRecordingCollector(
+        mngr_binary=mngr_binary, agents_dir=str(host_dir / "agents")
+    )
+
+    started = time.monotonic()
+    members = collector.collect_transcript_members(60.0)
+
+    kept = ["fresh", "stale-1", "stale-2", "stale-3", "stale-4"]
+    assert [name for name, _content, _written_at in members] == [
+        f"chats/{name}-claude.jsonl" for name in kept
+    ], f"collected in {time.monotonic() - started:.1f}s"
+    assert all("what did the update change" in content for _, content, _ in members)
+    assert collector.fetched_agent_ids == {ids_by_name[name] for name in kept}

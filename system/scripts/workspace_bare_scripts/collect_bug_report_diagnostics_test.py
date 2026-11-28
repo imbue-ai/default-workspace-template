@@ -12,8 +12,11 @@ import base64
 import io
 import json
 import os
+import random
 import shlex
+import shutil
 import sqlite3
+import string
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -205,6 +208,7 @@ def _write_mngr_stub(
     stopped_agents: Sequence[str] = (),
     transcript_rendezvous_dir: Path | None = None,
     exit_code: int = 0,
+    is_hanging_per_agent: bool = False,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
@@ -227,6 +231,10 @@ def _write_mngr_stub(
     there and waits (up to five seconds) for a second call to be in flight before
     answering, then records how many calls it saw: one call at a time sees only
     itself.
+
+    With ``is_hanging_per_agent``, every ``transcript`` and ``capture`` call hangs
+    instead of answering, as a wedged or badly overloaded mngr does; ``list`` still
+    answers.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
@@ -250,11 +258,17 @@ def _write_mngr_stub(
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
+    hang = (
+        'case "$1" in transcript|capture) exec sleep 600 ;; esac\n'
+        if is_hanging_per_agent
+        else ""
+    )
     script = tmp_path / "mngr-stub"
     script.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" >> "{argv_log}"\n'
         f"if [ {exit_code} -ne 0 ]; then exit {exit_code}; fi\n"
+        f"{hang}"
         'if [ "$1" = "list" ]; then\n'
         f'  cat "{listing_path}"\n'
         "  exit 0\n"
@@ -354,6 +368,34 @@ def _write_content_matching_stub_scan_gate(scan_gate_dir: Path, *, secret: str) 
     )
 
 
+def _write_line_reporting_stub_scan_gate(
+    scan_gate_dir: Path, *, secret: str, is_line_given: bool = True
+) -> None:
+    """A stub gate that flags every line of every target containing ``secret``, by number.
+
+    The real gate's finding lines carry the 1-based line after the path, which is
+    what lets a chat lose only its flagged records. Without ``is_line_given`` each
+    finding names the file alone, as a path-only rule's does.
+    """
+    scan_gate_dir.mkdir(parents=True, exist_ok=True)
+    (scan_gate_dir / "betterleaks.toml").write_text("", encoding="utf-8")
+    (scan_gate_dir / "scan_secrets.sh").write_text(
+        "#!/bin/sh\n"
+        "status=0\n"
+        'for target in "$@"; do\n'
+        '  case "$target" in --config|*.toml) continue ;; esac\n'
+        f'  for n in $(grep -nF {shlex.quote(secret)} "$target" | cut -d: -f1); do\n'
+        '    echo "scan_secrets.sh: SECRET SCAN FINDING [betterleaks] generic-api-key: '
+        + ("$target:$n" if is_line_given else "$target")
+        + ' (value redacted)" >&2\n'
+        "    status=1\n"
+        "  done\n"
+        "done\n"
+        "exit $status\n",
+        encoding="utf-8",
+    )
+
+
 def _write_sleeping_stub_scan_gate(
     scan_gate_dir: Path, *, sleep_seconds: float
 ) -> None:
@@ -389,13 +431,82 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     kept pointing at the old path, so every CI collection reported
     scanner_unavailable.
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    gate_dir = repo_root / Path(diagnostics.SCAN_GATE_DIR).relative_to(
-        diagnostics.WORKSPACE_DIR
-    )
+    gate_dir = _repo_scan_gate_dir()
 
     assert (gate_dir / "scan_secrets.sh").is_file(), f"no scan gate at {gate_dir}"
     assert (gate_dir / "betterleaks.toml").is_file(), f"no scanner config at {gate_dir}"
+
+
+def _repo_scan_gate_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / Path(diagnostics.SCAN_GATE_DIR).relative_to(
+        diagnostics.WORKSPACE_DIR
+    )
+
+
+def _kingfisher_only_credential() -> str:
+    """A value kingfisher's ZeroTier rule flags and betterleaks has no rule for.
+
+    Built at run time, so the test file carries nothing a scanner of this repo
+    would flag. The rule wants 32 alphanumerics with at least three digits,
+    three upper- and three lower-case letters, after ``zerotier`` or ``zt``.
+    """
+    rng = random.SystemRandom()
+    characters = [rng.choice(string.digits) for _ in range(4)]
+    characters += [rng.choice(string.ascii_uppercase) for _ in range(4)]
+    characters += [rng.choice(string.ascii_lowercase) for _ in range(4)]
+    characters += [rng.choice(string.ascii_letters + string.digits) for _ in range(20)]
+    rng.shuffle(characters)
+    return "".join(characters)
+
+
+@pytest.mark.skipif(
+    any(shutil.which(tool) is None for tool in ("betterleaks", "kingfisher")),
+    reason="needs the workspace image's secret scanners (betterleaks, kingfisher)",
+)
+@pytest.mark.timeout(120)
+def test_a_credential_in_two_chats_is_left_out_of_both_through_the_real_scan_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each file is released unless a finding line names it, so the gate has to
+    name every file a credential is in. kingfisher reports a value once across
+    all its targets by default; the same credential pasted into two chats would
+    have been cut from one and shipped in the other. With the gate naming both,
+    each chat ships without the record that carried it."""
+    credential = _kingfisher_only_credential()
+    chats = {
+        "first": _transcript_events(f"our zerotier network {credential} is down"),
+        "second": _transcript_events(
+            "earlier today", f"zerotier member {credential}", "thanks"
+        ),
+        "clean": _transcript_events("nothing to see"),
+    }
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
+        scan_gate_dir=_repo_scan_gate_dir(),
+        workspace_dir=tmp_path / "workspace",
+    )
+
+    collector.run(["--transcript", "--scan-timeout=100"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        shipped = {
+            name: archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.startswith("chats/")
+        }
+        notes = sorted(_notes_lines(archive))
+    assert sorted(shipped) == [
+        "chats/clean-claude.jsonl",
+        "chats/first-claude.jsonl",
+        "chats/second-claude.jsonl",
+    ]
+    assert not any(credential in content for content in shipped.values())
+    assert "thanks" in shipped["chats/second-claude.jsonl"]
+    assert notes == [
+        "recent chats: chats/first-claude.jsonl: 1 record(s) left out: the secret scan reported findings in them",
+        "recent chats: chats/second-claude.jsonl: 1 record(s) left out: the secret scan reported findings in them",
+    ]
 
 
 def test_collector_caps_match_the_documented_limits() -> None:
@@ -748,6 +859,283 @@ def test_an_idle_workspace_still_carries_its_most_recent_chats(
     ]
 
 
+def _write_transcript_stream(
+    agents_dir: Path,
+    agent_name: str,
+    *,
+    mtime: float,
+    relative_source: str = "claude/common_transcript",
+) -> Path:
+    """An agent's conversation stream file at the layout mngr reads it from, last written at ``mtime``.
+
+    Its content is not what the collector reads -- that comes from ``mngr
+    transcript`` -- so only its place and its mtime matter here.
+    """
+    path = (
+        agents_dir
+        / _agent_id_for(agent_name)
+        / "events"
+        / relative_source
+        / "events.jsonl"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _fetched_transcripts(tmp_path: Path) -> set[str]:
+    """The agent names the stub was asked for a transcript of."""
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    return {
+        line.split()[1].split("@", 1)[0].removeprefix("agent-")
+        for line in invocations.splitlines()
+        if line.startswith("transcript ")
+    }
+
+
+def test_only_the_chats_a_report_can_keep_are_fetched(tmp_path: Path) -> None:
+    """Every fetch is a whole mngr CLI start, so a busy workspace's chats past the
+    window and the floor are never asked for."""
+    now = time.time()
+    agents_dir = tmp_path / "agents"
+    events_by_agent = {
+        "fresh": _transcript_events("fresh", timestamp=_stamp_seconds_ago(60))
+    }
+    _write_transcript_stream(agents_dir, "fresh", mtime=now - 60)
+    for index in range(6):
+        name = f"stale-{index}"
+        age = 10_000 + 100 * index
+        events_by_agent[name] = _transcript_events(
+            name, timestamp=_stamp_seconds_ago(age)
+        )
+        _write_transcript_stream(agents_dir, name, mtime=now - age)
+    # The converter's own output under events/logs/ is written as the harness
+    # runs, and says nothing about when the conversation was: it must not make
+    # the oldest chat look like the newest.
+    _write_transcript_stream(
+        agents_dir, "stale-5", mtime=now, relative_source="logs/common_transcript"
+    )
+    stub = _write_mngr_stub(
+        tmp_path, agents=tuple(events_by_agent), events_by_agent=events_by_agent
+    )
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "chats/fresh-claude.jsonl",
+        *(f"chats/stale-{index}-claude.jsonl" for index in range(4)),
+    ]
+    assert _fetched_transcripts(tmp_path) == {
+        "fresh",
+        "stale-0",
+        "stale-1",
+        "stale-2",
+        "stale-3",
+    }
+
+
+def test_a_chat_with_a_segment_whose_stream_cannot_be_found_is_still_fetched(
+    tmp_path: Path,
+) -> None:
+    """Recency read off the files is only a shortcut: a segment whose stream is not
+    where the collector looks (a harness that writes elsewhere) leaves its chat's
+    recency unknown, and an unknown chat is asked for rather than lost. Here the
+    chat's archived segment is the oldest stream in the workspace, so ranking the
+    chat by the segments that were found would drop the conversation the user is
+    holding right now."""
+    now = time.time()
+    agents_dir = tmp_path / "agents"
+    events_by_agent = {}
+    for index in range(5):
+        name = f"stale-{index}"
+        age = 10_000 + 100 * index
+        events_by_agent[name] = _transcript_events(
+            name, timestamp=_stamp_seconds_ago(age)
+        )
+        _write_transcript_stream(agents_dir, name, mtime=now - age)
+    events_by_agent["handed-off-archived"] = _transcript_events(
+        "before the handoff", timestamp=_stamp_seconds_ago(90_000)
+    )
+    _write_transcript_stream(agents_dir, "handed-off-archived", mtime=now - 90_000)
+    events_by_agent["handed-off-live"] = _transcript_events(
+        "after the handoff", timestamp=_stamp_seconds_ago(30), source="codex"
+    )
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(events_by_agent),
+        events_by_agent=events_by_agent,
+        chat_of_agent={
+            "handed-off-archived": ("chat-h", 1),
+            "handed-off-live": ("chat-h", 2),
+        },
+    )
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members][0] == "chats/handed-off-live-codex.jsonl"
+    assert "before the handoff" in members[0][1]
+    assert {"handed-off-archived", "handed-off-live"} <= _fetched_transcripts(tmp_path)
+
+
+def _png_data_url(payload_bytes: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(payload_bytes).decode("ascii")
+
+
+def test_an_image_inlined_into_a_chat_rides_as_a_stub_and_cannot_cost_the_chat(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A codex chat carries the images its tools returned as data URLs: most of its
+    bytes, and long random runs the scanners' short random-token rules match by
+    chance, withholding the whole chat. Stubbed before
+    staging, a match inside an image can no longer cost the chat, and the reader
+    still sees that an image was there, its type and its size."""
+    image = os.urandom(1000)
+    data_url = _png_data_url(image)
+    # The run the stub gate flags sits inside the image, where the scanners'
+    # random-token rules match by chance.
+    flagged_run = data_url[200:240]
+    events = (
+        json.dumps(
+            {
+                "timestamp": _stamp_seconds_ago(60),
+                "type": "observation",
+                "emitter": "codex/common_transcript",
+                "results": [{"content": data_url}],
+            }
+        )
+        + "\n"
+        + _transcript_events("look at this screenshot", source="codex")
+    )
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=flagged_run)
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, {"viewer": events}),
+        scan_gate_dir=gate,
+        workspace_dir=tmp_path / "workspace",
+    )
+
+    collector.run(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert _notes_lines(archive) == []
+        shipped = archive.read("chats/viewer-codex.jsonl").decode("utf-8")
+    records = [json.loads(line) for line in shipped.splitlines()]
+    assert records[0]["results"][0]["content"] == (
+        "[image/png image, 1000 bytes, left out of the bug report]"
+    )
+    assert records[1]["message"] == "look at this screenshot"
+    assert base64.b64encode(image).decode("ascii")[:40] not in shipped
+
+
+def test_a_chat_ships_without_the_records_the_scan_flagged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A chat is one record per line, so a finding costs the record it is in rather
+    than the whole conversation. Nothing
+    flagged ships either way -- the record is gone and the rest is scanned again."""
+    secret = "flagged-value-" + "q" * 24
+    gate = tmp_path / "gate"
+    _write_line_reporting_stub_scan_gate(gate, secret=secret)
+    chats = {
+        "leaky": _transcript_events("before", f"the key is {secret}", "after"),
+        "clean": _chat_events("clean"),
+    }
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
+    )
+
+    collector.run(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        shipped = archive.read("chats/leaky-claude.jsonl").decode("utf-8")
+        assert _notes_lines(archive) == [
+            "recent chats: chats/leaky-claude.jsonl: 1 record(s) left out: the secret scan reported findings in them"
+        ]
+    records = [json.loads(line) for line in shipped.splitlines()]
+    assert [record.get("message") for record in records] == ["before", None, "after"]
+    assert records[1] == json.loads(diagnostics.WITHHELD_RECORD)
+    assert secret not in shipped
+
+
+def test_a_finding_that_names_no_line_still_withholds_the_whole_chat(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A rule that matches a file rather than a line gives nothing to cut out, so
+    the chat it names stays home whole."""
+    secret = "flagged-value-" + "q" * 24
+    gate = tmp_path / "gate"
+    _write_line_reporting_stub_scan_gate(gate, secret=secret, is_line_given=False)
+    chats = {"leaky": _transcript_events("before", f"the key is {secret}", "after")}
+    collector = _collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
+    )
+
+    collector.run(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == [
+            "recent chats: withheld: the secret scan reported findings"
+        ]
+
+
+@pytest.mark.timeout(30)
+def test_a_collection_that_runs_out_of_its_budget_still_ships_what_it_gathered(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The host's exec is all-or-nothing: a collector still working when it times
+    out sends nothing. Under --budget-seconds the collector stops gathering in
+    time to scan and ship what it has, and says what it could not get to, instead
+    of letting one wedged mngr call cost the report every log it had already read."""
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    log_dir = tmp_path / "supervisor"
+    _write_log(
+        log_dir, "system_interface-stdout.log", mtime=time.time(), content="up\n"
+    )
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    names = ("first", "second")
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=names,
+        events_by_agent={name: _chat_events(name) for name in names},
+        panes_by_agent={name: "on screen\n" for name in names},
+        is_hanging_per_agent=True,
+    )
+    collector = _collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=stub,
+        supervisord_conf=conf,
+        workspace_dir=tmp_path / "workspace",
+        scan_gate_dir=gate,
+    )
+
+    started = time.monotonic()
+    collector.run(
+        ["--logs", "--transcript", "--scan-timeout=300", "--budget-seconds=4"]
+    )
+    elapsed = time.monotonic() - started
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert "metadata.json" in archive.namelist()
+        assert "logs/system_interface.log" in archive.namelist()
+        notes = _notes_lines(archive)
+    assert (
+        "recent chats: 2 chat(s) could not be read before the collection's time ran out"
+        in notes
+    )
+    assert (
+        "agent logs: 2 agent pane(s) could not be captured before the collection's time ran out"
+        in notes
+    )
+    assert not any(diagnostics.NOTE_NO_CHAT_TRANSCRIPT in note for note in notes)
+    assert elapsed < 4
+
+
 def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
     tmp_path: Path,
 ) -> None:
@@ -828,7 +1216,9 @@ def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> Non
     _write_stub_scan_gate(gate, exit_code=0)
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 10
+    ).verdicts
 
     assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": None}
 
@@ -842,7 +1232,9 @@ def test_scan_targets_drops_only_the_file_a_finding_names(tmp_path: Path) -> Non
     )
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 10
+    ).verdicts
 
     assert verdicts == {
         "/tmp/logs.txt": None,
@@ -876,7 +1268,9 @@ def test_scan_targets_disqualifies_every_file_when_a_scanner_did_not_complete(
     )
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 10
+    ).verdicts
 
     assert verdicts == {
         "/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,
@@ -895,7 +1289,9 @@ def test_scan_targets_drops_every_file_when_a_report_could_not_be_parsed(
     )
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 10
+    ).verdicts
 
     assert verdicts == {
         "/tmp/logs.txt": diagnostics.NOTE_SECRETS_FOUND,
@@ -914,7 +1310,9 @@ def test_scan_targets_drops_every_file_when_a_finding_names_none_of_them(
     )
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 10
+    ).verdicts
 
     assert verdicts == {
         "/tmp/logs.txt": diagnostics.NOTE_SECRETS_FOUND,
@@ -929,7 +1327,7 @@ def test_scan_targets_drops_every_file_when_a_failed_scan_said_nothing(
     _write_stub_scan_gate(gate, exit_code=1)
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10).verdicts
 
     assert verdicts == {"/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE}
 
@@ -938,7 +1336,7 @@ def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) 
     """A workspace missing the template's gate must never release anything."""
     collector = _collector(scan_gate_dir=tmp_path / "no-such-gate")
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10).verdicts
 
     assert verdicts == {"/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE}
 
@@ -948,7 +1346,9 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
     _write_sleeping_stub_scan_gate(gate, sleep_seconds=5)
     collector = _collector(scan_gate_dir=gate)
 
-    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5)
+    verdicts = collector.scan_targets(
+        ["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5
+    ).verdicts
 
     assert verdicts == {
         "/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,

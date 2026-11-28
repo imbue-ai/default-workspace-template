@@ -197,13 +197,17 @@ run_betterleaks() {
 # Exit codes: 0 = clean; 200 = findings; 205 = validated findings (cannot
 # happen with --no-validate, but treated as findings for safety); anything
 # else = error. --no-validate is REQUIRED (see the header); --redact replaces
-# secret values with hashes in the JSONL report.
+# secret values with hashes in the JSONL report. --no-dedup is REQUIRED too:
+# by default kingfisher reports a value once across all targets, even targets
+# that differ, so a credential in two files would name only one of them -- and
+# the bug-report collector releases every file no finding line names.
 run_kingfisher() {
     local report errlog rc=0
     report="$(mktemp)"
     errlog="$(mktemp)"
     kingfisher scan "${TARGETS[@]}" \
         --no-validate \
+        --no-dedup \
         --no-update-check \
         --redact \
         --format jsonl \
