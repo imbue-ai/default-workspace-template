@@ -1,0 +1,1 @@
+The desktop contract's chat presence report gains `is_input`: true on the report a chat page sends when a person presses a key or the pointer in it (at most once every 20 seconds), which is what the memory prioritizer now counts as use of the chat.

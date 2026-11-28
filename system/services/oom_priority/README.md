@@ -304,19 +304,22 @@ of Claude's, say) counts as mid-turn too, since a shed would end that task
 unreported. One waiting only on `run_in_background.py` commands does not: the
 runner outlives a shed, and its report revives the chat.
 
-Idle time is measured from the most recent of: a message sent through the UI, the
-moment its tab was switched to, either edge of a turn, or -- as a floor -- its own
+Idle time is measured from the most recent of: a message sent through the UI, a
+key or pointer press in its page, either edge of a turn, or -- as a floor -- its own
 `claude_process_started` mtime, so a freshly revived chat is never stale. A chat
 with no evidence at all counts as fresh: it is demoted only on positive evidence
-of abandonment. The lifecycle signal is what covers a chat messaged *outside* the
-UI (by `mngr message` or another agent), which the frontend never reports.
+of abandonment. A page merely being shown never counts: a page shows again with
+nobody there (a heartbeat returning after its report expired on a sleeping laptop,
+a reload, a desktop switch). The lifecycle signal is what covers a chat messaged
+*outside* the UI (by `mngr message` or another agent), which the frontend never
+reports.
 
 Re-tagging is event-driven plus a slow sweep (`SWEEP_INTERVAL_SECONDS`, 60s), and
 every pass runs on the prioritizer's one background thread. The events -- a presence
 report (`POST /api/chats/<chat_id>/presence`) that changes whether any page has the
-chat open or showing (a heartbeat that changes neither asks for nothing), each
-message sent through the chat app, and each lifecycle change from the observe
-stream -- cover everything that changes a chat's engagement. Each only asks that
+chat open or showing or carries input (a heartbeat that does none of these asks for
+nothing), each message sent through the chat app, and each lifecycle change from the
+observe stream -- cover everything that changes a chat's engagement. Each only asks that
 thread for a pass, so no request waits on one; passes run one at a time, at most one
 every `MIN_PASS_INTERVAL_SECONDS` (2s), and each reads the pid registry once for
 every chat (`live_pids_by_agent_id`) and `/proc` once per registered process. The

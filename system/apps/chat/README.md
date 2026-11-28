@@ -322,6 +322,8 @@ creates the successor under a pre-minted id with the chat's name, the account's
 binding and `chat_id`/`chat_seq` labels, carrying no message of its own, and
 records the retiring segment's length once the stop is done (switching); the prompt filled in from
 `.agents/shared/references/continue-chat.md` follows through the send path. The
+switch stops the retiring agent whatever its tracked state reads, and the app stops
+any member whose entry has ended that the observe stream reports running. The
 prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
 told to read before anything else. Every step is recorded on the chat record's `handoff` entry and
@@ -1596,10 +1598,10 @@ refuses the update when it cannot come up.
 `--secondary` is a second chat beside the live one, the preview of a proposed
 change: it follows the same observer, reads the live accounts, and tracks every
 agent the live chat tracks, but reconciles no accounts, writes no memory scores,
-runs no automatic compaction, resumes no unfinished switch, opens no windows,
-reports no client activity to the shell, marks no chat read in the Imbue Studio
-app, and registers nothing. Sends from it are
-real, but a switch to another account is refused, since it would write the chat's
+runs no automatic compaction, resumes no unfinished switch, stops no archived
+agent it finds running, opens no windows, reports no client activity to the
+shell, marks no chat read in the Imbue Studio app, and registers nothing. Sends
+from it are real, but a switch to another account is refused, since it would write the chat's
 record into the scratch copy only, and so is an answer to a secret card, since the
 answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
 `data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
@@ -1614,6 +1616,7 @@ workspace every frontend belongs to.
 Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`
 (`presence.py`; the contract is `docs/system/blueprint/desktop-interface/contracts.md`
 section 7, "Chat presence"): whether it is shown, whether its document has focus,
+and, at most every 20 seconds, that a person pressed a key or the pointer in it,
 keyed by an instance id the page mints once per load, so two pages of one chat never
 overwrite each other, and numbered in the order the page sent them, so a report that
 arrives after a later one from its page is dropped. A page is *watching* its chat

@@ -1098,6 +1098,46 @@ def test_the_successor_is_created_while_the_retiring_agent_stops_and_measured_on
     assert record.agents[0].final_event_count == 3
 
 
+def _read_as_stopped(workspace: _FakeWorkspace, agent_id: str) -> None:
+    """What the observe stream does after the drain restarts a claude agent: it reports the restart's stop once the
+    new process is already up, so the agent reads STOPPED while it runs."""
+    state = workspace.agents[agent_id]
+    workspace.agents[agent_id] = state.model_copy_update(to_update(state.field_ref().state, "STOPPED"))
+
+
+def test_the_retiring_agent_is_stopped_even_while_it_reads_as_stopped(tmp_path: Path) -> None:
+    workspace, first, successor = _workspace(tmp_path)
+
+    def drain_by_restarting(agent_info: AgentInfo) -> str:
+        _read_as_stopped(workspace, agent_info.id)
+        return ""
+
+    _runner(workspace, drain_to_composer=drain_by_restarting).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is None
+    assert [entry.agent_id for entry in record.agents] == [first, successor]
+    assert workspace.stopped == [first]
+
+
+def test_a_summary_written_while_the_agent_reads_as_stopped_is_waited_for(tmp_path: Path) -> None:
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.is_summary_written_on_request = False
+    _read_as_stopped(workspace, first)
+
+    def write_the_summary_after_a_poll(seconds: float) -> None:
+        workspace.sleep(seconds)
+        if workspace.clock >= 2.0:
+            for _agent, text, _message_id in workspace.delivered:
+                write_summary_for_request(text)
+
+    _runner(workspace, sleep=write_the_summary_after_a_poll).run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    assert workspace.clock == pytest.approx(2.0)
+    assert "The user wants the tests green." in workspace.delivered_prompt()
+
+
 def test_a_refused_stop_fails_the_switch_once_the_create_is_over(tmp_path: Path) -> None:
     """The stop's refusal is not lost on its thread: it fails the switch, after the create it overlapped."""
     workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
@@ -1222,7 +1262,8 @@ def _track_archived_retiring_and_running_successor(workspace: _FakeWorkspace, fi
 
 def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(tmp_path: Path) -> None:
     """A restart mid-switch: the retiring agent is already archived and the successor's create
-    landed without this process seeing it, so the resume renames and creates nothing."""
+    landed without this process seeing it, so the resume renames and creates nothing. It stops the
+    retiring agent again, since its tracked state cannot say whether the stop landed."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
     archival = _track_archived_retiring_and_running_successor(workspace, first, successor)
     record = workspace.record()
@@ -1247,7 +1288,7 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
     assert finished.handoff is None
     assert [entry.agent_id for entry in finished.agents] == [first, successor]
     assert finished.agents[0].archived_name == archival and finished.agents[0].final_event_count == 3
-    assert workspace.argv_lines() == [] and workspace.stopped == []
+    assert workspace.argv_lines() == [] and workspace.stopped == [first]
     # The adopted agent had not been prompted yet, so the resume hands it the stored prompt.
     assert workspace.delivered == [(successor, "the stored prompt", prompt_message_id("h-1"))]
 

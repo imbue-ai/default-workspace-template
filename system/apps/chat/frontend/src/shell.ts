@@ -27,7 +27,13 @@ import {
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellChromeAnchor, ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ShareSettingsCoachMark } from "@imbue/workspace-ui/src/embed";
-import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
+import {
+  currentPresenceState,
+  reportFocusChange,
+  reportInput,
+  reportPresence,
+  startPresenceReporting,
+} from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
@@ -156,7 +162,7 @@ export interface ChatShellOptions {
  * Connect the page for `chatId`: adopt the client identity the shell hands over, follow the
  * window's visibility for the panel and (when this page reports it) for presence, forward
  * focus so the shell raises the window, and (when this page reports presence) report the
- * document's focus as it comes and goes, framed or visited directly.
+ * document's focus as it comes and goes and a person's input in the page, framed or visited directly.
  */
 export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;
@@ -244,6 +250,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     });
     window.addEventListener("focus", reportFocusChange);
     window.addEventListener("blur", reportFocusChange);
+    for (const type of ["pointerdown", "keydown"]) {
+      window.addEventListener(type, reportInput, { capture: true, passive: true });
+    }
   }
   window.addEventListener("focus", () => {
     connection?.focused();

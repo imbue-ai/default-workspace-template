@@ -1,0 +1,3 @@
+- Moving a chat to another model no longer leaves its previous agent running. The switch stops the retiring agent even when its state reads stopped, which it can just after the switch restarts the agent to empty its queue. The summary request no longer gives up on such a stale reading. And the chat app stops any archived agent of a chat it finds still running, including one left running before a restart.
+
+- A chat counts as in use for memory shedding when someone sends it a message, presses a key or the pointer in its page, or it runs a turn. Its page merely being shown no longer counts. A chat left on screen on a sleeping laptop was marked in use each time its page reconnected, so it never aged.

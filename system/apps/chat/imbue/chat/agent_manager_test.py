@@ -6379,11 +6379,15 @@ def _recorded_chat(
     mngr_binary: str | None = None,
     store: InMemoryChatRecordStore | None = None,
     archived_state: str = "STOPPED",
+    is_secondary: bool = False,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
     """A manager tracking a chat that moved from ``first`` (archived, ``archived_state``) to ``second`` (running)."""
     store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
-        broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary if mngr_binary is not None else "mngr",
+        is_secondary=is_secondary,
     )
     first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
     seed_agent_state(
@@ -7510,11 +7514,14 @@ def test_letting_go_a_chats_never_reported_active_agent_drops_the_whole_chat(
         state.shutdown()
 
 
-def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
+def test_an_archived_member_stopping_evicts_only_its_own_transcript(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
     """A retiring agent that is still running when it is archived stops a moment later; that
     death is the member's, not the chat's, so the active agent's watcher (which a user may be
     viewing) stays resident."""
-    manager, _store, first, second = _recorded_chat(broadcaster)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
     evicted: list[str] = []
     manager.set_watcher_eviction_callback(evicted.append)
     try:
@@ -7535,6 +7542,101 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
         assert evicted == [first]
     finally:
         manager.stop()
+    # Reported running after its chat moved on, the member is stopped by the manager too.
+    assert _stop_lines(argv_log) == [f"stop archived-1-Chat-1-{first}"]
+
+
+def _stop_lines(argv_log: Path) -> list[str]:
+    return (
+        [line for line in argv_log.read_text().splitlines() if line.startswith("stop ")] if argv_log.exists() else []
+    )
+
+
+def test_a_retired_member_reported_running_is_stopped_and_the_active_agent_is_not(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The handoff's stop of the retiring agent never landed (its tracked state read stopped while a restarted
+    process ran): when the observe stream reports that member running, the manager stops it."""
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    try:
+        # Every mngr call waits on the gate, so a stop one of these readings started would still be in flight.
+        manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
+        stopped = _agent_details(archived_name, agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED)
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert manager._retired_stops_in_flight == set()
+
+        running = stopped.model_copy_update(to_update(stopped.field_ref().state, AgentLifecycleState.RUNNING))
+        manager._handle_observe_event(make_agent_state_event(running))
+        assert manager._retired_stops_in_flight == {first}
+    finally:
+        gate.touch()
+        manager.stop()
+    assert _stop_lines(argv_log) == [f"stop {archived_name}"]
+
+
+@pytest.mark.parametrize("stop_exit_code", [0, 1], ids=["stop-succeeds", "stop-refused"])
+def test_a_retired_member_still_reported_running_after_its_stop_is_stopped_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, stop_exit_code: int
+) -> None:
+    """A stop that did not take, or that mngr refused, leaves the member's reading unchanged, so the next report of
+    it running, with no change of state, tries again."""
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path, exit_code=stop_exit_code)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    running = _agent_details(archived_name, agent_id=MngrAgentId(first))
+    try:
+        manager._handle_observe_event(
+            make_full_agent_state_event([_agent_details("Chat-1", agent_id=MngrAgentId(second)), running])
+        )
+        assert manager._retired_stops_in_flight == {first}
+        gate.touch()
+        wait_for(lambda: manager._retired_stops_in_flight == set(), timeout=15.0)
+
+        relabeled = running.model_copy_update(
+            to_update(running.field_ref().labels, {**running.labels, "display_name": "Chat 1 (archived 1)"})
+        )
+        manager._handle_observe_event(make_agent_state_event(relabeled))
+    finally:
+        gate.touch()
+        manager.stop()
+    assert _stop_lines(argv_log) == [f"stop {archived_name}", f"stop {archived_name}"]
+
+
+@pytest.mark.parametrize(
+    ("state", "is_secondary", "is_stopped"),
+    [
+        (AgentLifecycleState.WAITING, False, True),
+        (AgentLifecycleState.UNKNOWN, False, False),
+        (AgentLifecycleState.WAITING, True, False),
+    ],
+)
+def test_the_first_snapshot_stops_a_retired_member_reading_running_from_the_live_chat_alone(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    state: AgentLifecycleState,
+    is_secondary: bool,
+    is_stopped: bool,
+) -> None:
+    """A member that reads UNKNOWN could not be observed, which says nothing of it running, so it is left alone; a
+    preview leaves the stop to the live chat."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary=mngr_binary, is_secondary=is_secondary)
+    archived_name = f"archived-1-Chat-1-{first}"
+    try:
+        manager._handle_observe_event(
+            make_full_agent_state_event(
+                [
+                    _agent_details("Chat-1", agent_id=MngrAgentId(second)),
+                    _agent_details(archived_name, agent_id=MngrAgentId(first), state=state),
+                ]
+            )
+        )
+    finally:
+        manager.stop()
+    # The stop joins every thread the snapshot started, so nothing else is still on its way.
+    assert _stop_lines(argv_log) == ([f"stop {archived_name}"] if is_stopped else [])
 
 
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
@@ -7544,7 +7646,9 @@ def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
     try:
         manager.record_presence(ChatId(first), _visible_report())
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
-        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        first_details = _agent_details(
+            f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+        )
         manager._handle_observe_event(make_agent_state_event(first_details))
         manager._handle_observe_event(
             make_agent_removed_event(first_details.id, first_details.name, first_details.host.id)
@@ -7762,6 +7866,12 @@ def test_a_handoff_moves_the_workspaces_create_defaults_to_the_target_account(
         manager.stop()
 
 
+def _verbs_besides_stops(verbs: list[str]) -> list[str]:
+    """The mngr verbs in order without the retiring agent's stops, which run on a thread of their own beside the
+    create and so land anywhere among the rest."""
+    return [verb for verb in verbs if verb != "stop"]
+
+
 def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_step_and_a_retry_adopts_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -7796,22 +7906,23 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create"] and verbs.count("stop") == 1
         # Only the summary request went out: the prompt waits for the pick.
         assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
 
-        # A retry on the same account adopts the successor: no create, the pick fails again the same way.
+        # A retry on the same account adopts the successor: no create, the pick fails again the same way. Each
+        # attempt stops the retiring agent again.
         assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create"] and verbs.count("stop") == 2
 
         # A retry on another account of the same harness keeps the pick, destroys the successor, and
         # creates afresh under the same pre-minted id.
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs[0] == "rename" and sorted(verbs[1:3]) == ["create", "stop"] and verbs[3:] == ["destroy", "create"]
+        assert _verbs_besides_stops(verbs) == ["rename", "create", "destroy", "create"] and verbs.count("stop") == 3
         assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
@@ -8194,7 +8305,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         record = _wait_until_settled(store, chat_id)
         assert [entry.agent_id for entry in record.agents] == [first, successor]
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["create"]
+        assert sorted(verbs) == ["create", "stop"]
         assert f"--id {successor}" in argv_log.read_text()
         assert manager.get_chat_snapshot(first) is not None
         with pytest.raises(HandoffError):
@@ -8233,7 +8344,7 @@ def test_an_unfinished_handoff_resumes_when_the_manager_starts(
         manager._resume_handoffs()
         record = _wait_until_settled(store, ChatId(first))
         assert [entry.agent_id for entry in record.agents] == [first, successor]
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["create"]
+        assert sorted(line.split(" ")[0] for line in argv_log.read_text().splitlines()) == ["create", "stop"]
     finally:
         manager.stop()
 

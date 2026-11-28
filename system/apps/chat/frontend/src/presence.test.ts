@@ -15,6 +15,7 @@ interface PresenceBody {
   client_id: string;
   state: string;
   is_focused: boolean;
+  is_input: boolean;
   sequence: number;
 }
 
@@ -70,7 +71,7 @@ describe("presence reporting", () => {
     expect(url).toBe("/api/chats/agent-1/presence");
     expect(keepalive).toBe(true);
     const { instance_id: instanceId, ...rest } = body;
-    expect(rest).toEqual({ client_id: "client-1", state: "hidden", is_focused: false, sequence: 1 });
+    expect(rest).toEqual({ client_id: "client-1", state: "hidden", is_focused: false, is_input: false, sequence: 1 });
     expect(instanceId).toMatch(/^[0-9a-f-]{36}$/);
     expect(presence.currentPresenceState()).toBe("hidden");
   });
@@ -128,6 +129,36 @@ describe("presence reporting", () => {
     presence.reportPresence("closed");
 
     expect(requests().map((request) => request.body.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("reports a person's input in the current state, at most once per input interval, and never in a heartbeat", async () => {
+    const presence = await loadPresence();
+    presence.reportInput();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    presence.startPresenceReporting("agent-1", "client-1", "visible");
+    presence.reportInput();
+    presence.reportInput();
+    vi.advanceTimersByTime(19_999);
+    presence.reportInput();
+    vi.advanceTimersByTime(1);
+    presence.reportInput();
+    vi.advanceTimersByTime(30_000);
+
+    expect(requests().map((request) => [request.body.state, request.body.is_input])).toEqual([
+      ["visible", false],
+      ["visible", true],
+      ["visible", true],
+      ["visible", false],
+    ]);
+  });
+
+  it("reports no input once the page reported closed", async () => {
+    const presence = await loadPresence();
+    presence.startPresenceReporting("agent-1", "client-1", "visible");
+    presence.reportPresence("closed");
+    presence.reportInput();
+    expect(reportedStates()).toEqual(["visible", "closed"]);
   });
 
   it("stops reporting once the page reported closed", async () => {

@@ -46,6 +46,7 @@ from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import UNKNOWN_LIFECYCLE_STATE
 from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
@@ -1669,6 +1670,8 @@ class AgentManager:
     _letting_go_counts_by_agent: dict[str, int]
     # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
     _stops_begun_by_agent: dict[str, int]
+    # Retired chat members found running whose stop is under way, so a burst of observe events starts one stop each.
+    _retired_stops_in_flight: set[str]
     _resent_sends_by_chat: dict[ChatId, tuple[ResentSendSnapshot, ...]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
@@ -1743,8 +1746,9 @@ class AgentManager:
         document the successor's first message is filled in from. ``chat_settings`` holds the
         workspace's fast-mode turn limit; the default keeps it in memory only.
         ``is_secondary`` marks a second chat instance beside the live one (a preview): it
-        withholds the chat memory scores, the automatic context compaction, and the
-        resumption of unfinished switches, all of which belong to the live chat alone, and
+        withholds the chat memory scores, the automatic context compaction, the
+        resumption of unfinished switches, and the stop of a retired member found running,
+        all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``imbue_studio_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
         starts watching it; the default reaches nobody. ``background_tasks`` reads each chat's
@@ -1861,6 +1865,7 @@ class AgentManager:
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
         manager._stops_begun_by_agent = {}
+        manager._retired_stops_in_flight = set()
         manager._resent_sends_by_chat = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
@@ -2339,6 +2344,14 @@ class AgentManager:
 
     def _is_recorded_member_locked(self, agent_id: str) -> bool:
         return self._record_naming_locked(agent_id) is not None
+
+    def _is_retired_member_locked(self, agent_id: str) -> bool:
+        """Whether an agent is a member its chat has moved on from: its record's entry for it has ended. Unlike
+        ``_is_archived_member_locked``, never the successor a handoff is still making, nor a retiring agent whose
+        handoff has yet to stop it."""
+        record = self._record_naming_locked(agent_id)
+        entry = record.entry_for(agent_id) if record is not None else None
+        return entry is not None and entry.ended_at is not None
 
     def _is_archived_member_locked(self, agent_id: str) -> bool:
         """Whether an agent is a record's other than the one its chat is read from: an archived member,
@@ -2934,8 +2947,8 @@ class AgentManager:
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
-        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
-        watch it."""
+        open or showing or carried a person's input, and marks the chat read in the Imbue Studio app when the report
+        is what made someone watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
@@ -6164,6 +6177,8 @@ class AgentManager:
             ]
         for agent_id in dead_archived_member_ids:
             self._evict_watcher(agent_id)
+
+        self._stop_running_retired_members(event, details_by_id)
         if self._unviewed_transcript_release is not None:
             self._unviewed_transcript_release()
 
@@ -6181,6 +6196,62 @@ class AgentManager:
                 if agent.state in RUNNING_LIFECYCLE_STATES and agent_id in chat_id_by_agent_id
             )
         self._report_mid_turn_chats()
+
+    def _stop_running_retired_members(
+        self,
+        event: AgentStateEvent | FullAgentStateEvent | AgentRemovedEvent,
+        details_by_id: Mapping[str, AgentDetails],
+    ) -> None:
+        """Start a stop of each retired member the event reports running, which holds memory for a chat that has
+        moved on (a handoff's stop that never landed, or one revived since).
+
+        Every agent a full snapshot lists is checked, so a leak from before a restart is found, and otherwise the
+        agent the event reports, so a stop that failed is tried again. UNKNOWN is no evidence of running. A secondary
+        leaves it to the live chat.
+        """
+        if self._is_secondary:
+            return
+        match event:
+            case FullAgentStateEvent():
+                checked_ids = set(details_by_id)
+            case AgentStateEvent():
+                checked_ids = {str(event.agent.id)}
+            case AgentRemovedEvent():
+                return
+        with self._lock:
+            running_retired_ids = [
+                agent_id
+                for agent_id in sorted(checked_ids)
+                if not is_lifecycle_dead(details_by_id[agent_id].state.value)
+                and details_by_id[agent_id].state.value != UNKNOWN_LIFECYCLE_STATE
+                and self._is_retired_member_locked(agent_id)
+                and agent_id not in self._retired_stops_in_flight
+            ]
+            self._retired_stops_in_flight.update(running_retired_ids)
+        for agent_id in running_retired_ids:
+            self._creation_cg.start_new_thread(
+                target=self._stop_running_retired_member,
+                args=(agent_id,),
+                name=f"stop-retired-{agent_id[:14]}",
+                is_checked=False,
+            )
+
+    def _stop_running_retired_member(self, agent_id: str) -> None:
+        """Stop a retired chat member the observe stream reports running; a failure is logged, and the next report
+        of it running tries again."""
+        try:
+            agent_info = self.get_agent_info_by_id(agent_id)
+            if agent_info is None:
+                return
+            _loguru_logger.info(
+                "Stopping agent {}: its chat has moved on from it, but it is still running", agent_info.name
+            )
+            self.stop_agent_process(agent_info)
+        except (AgentStopError, OSError) as e:
+            _loguru_logger.warning("Could not stop retired agent {}: {}", agent_id, e)
+        finally:
+            with self._lock:
+                self._retired_stops_in_flight.discard(agent_id)
 
     def _report_mid_turn_chats(self) -> None:
         """Tell the OOM prioritizer which chats are mid-turn: those running a turn, and those waiting on one of the
