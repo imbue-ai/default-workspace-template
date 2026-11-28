@@ -1,6 +1,6 @@
 ---
 name: publish-template
-description: Publish a clean, bootable snapshot of what this agent built -- an app or feature, a skill, a chat behavior, a workflow, a service, config or seed data -- to a new GitHub repo on the user's account, as a template another agent can be created from. Use when the user asks to publish, share, or export something they built as a reusable template. For a new version of a template already published, use update-published-template.
+description: Publish a whole workspace as a template -- a clean, bootable snapshot of what this agent built (several apps that work together, skills, chat behavior, workflows, services, config, seed data) on a new GitHub repo on the user's account, which another workspace can be created from. Use when the user asks to publish, share, or export their workspace or a whole setup as a reusable template. To share one app, use publish-app instead (most sharing is of a single app). For a new version of a template already published, use update-published-template.
 metadata:
   author: imbue
   exempt-checks: size reachability contents
@@ -19,6 +19,21 @@ and no TOML), but nothing writes them.
 
 A background worker assembles the snapshot in its own worktree; you run the
 conversation, the GitHub side and the push.
+
+## A template shares a whole workspace; an app is shared on its own
+
+Most of what people share is one app, and one app is not shared this way.
+The `publish-app` skill publishes a single app to a small repository of its
+own, and the `install-app` skill adds it to any workspace, leaving the rest
+of that workspace as it is. A template is for handing over the workspace
+itself: several apps that work together, skills and routines that belong to
+no app, services, chat behavior, config. Whoever takes it gets a new
+workspace made from it, or merges its whole tree into theirs.
+
+So before the scope conversation, settle which this is. When the user asks to
+share one app, follow `publish-app` instead. When it is unclear ("can you
+share my tracker?" in a workspace that holds other things too), ask: just
+that app, or the whole setup.
 
 ## Three rules the whole flow rests on
 
@@ -113,6 +128,30 @@ Ask in plain language, never listing files at the user:
   and the skills, scripts and docs it claims; propose those plus anything else the
   user named. Include a program's own `system/supervisord.conf.d/<name>.conf`,
   never `system/supervisord.conf`.
+- **Apps built or installed here go in as ordinary files, with their
+  records.** For an app that has a record (`system/config/apps/<name>.toml`),
+  the footprint is its directory, the record, its generated program files and
+  the link to each skill it carries: include all of them, as they are. Do not
+  regenerate or hand-edit the generated files for the template; they match
+  the manifest and the record they travel with, and
+  `uv run --no-sync app-install check` in the adopter's workspace holds them
+  to it. Three things follow:
+  - An app this workspace built arrives as an app the adopter's workspace
+    built: theirs to change, link and publish.
+  - Its record names this workspace's own repositories for the app when it
+    has them (`dev_repo_url`, `published_repo_url`, `published_commit`,
+    `published_version`). Those are the user's, not the adopter's: list
+    emptying those four values in the record among the published-copy
+    changes, so the adopter's workspace does not try to keep the user's
+    repositories current.
+  - An app this workspace **installed** from someone else's repository
+    cannot be updated in the adopter's workspace when it travels this way:
+    what connects it to its publisher's repository is in this workspace's
+    history, which a template does not carry. Prefer leaving it out and
+    naming it in the manifest's adaptation notes as something to add with
+    `install-app <its upstream_url>`; include it only when the template does
+    not work without it, and say in the notes that it is fixed at that
+    version until it is removed and installed again.
 - **What data** -- personal data (anything about the user or real people: names,
   emails, accounts, messages, contacts, private notes) is left out by default.
   Non-personal data (seed, sample or reference data, fixtures, defaults, public or

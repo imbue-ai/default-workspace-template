@@ -52,6 +52,7 @@ from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import describe_validation_error
 from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import DefinitionCommitError
 from routines.errors import DefinitionValidationError
 from routines.errors import DuplicateRoutineError
@@ -64,9 +65,11 @@ from routines.fix_brief import build_fix_brief
 from routines.fix_brief import fix_chat_name
 from routines.paths import RoutinesPaths
 from routines.paths import paths_from_environment
+from routines.presentation import is_schedule_only
 from routines.primitives import RoutineId
 from routines.primitives import RunId
 from routines.registry import CHAT_APP_NAME
+from routines.schedule import schedule_of
 from routines.service import RoutinesService
 from routines.service import build_service
 from routines_app.data_types import EnabledRequest
@@ -124,6 +127,7 @@ ROUTE_TABLE: RouteTable = {
     ("PUT", "/api/routines/{routine_id}/schedule"): RouteModels(
         request_model=ScheduleChange, response_model=RoutineRow
     ),
+    ("DELETE", "/api/routines/{routine_id}/schedule"): RouteModels(response_model=RoutineRow),
     ("POST", "/api/routines/{routine_id}/fix"): RouteModels(response_model=FixChatResponse),
     ("DELETE", "/api/routines/{routine_id}"): RouteModels(response_model=None, success_status=HTTP_NO_CONTENT),
 }
@@ -200,14 +204,14 @@ def create_app(
 
     @app.get("/api/routines")
     def listing() -> ResponseReturnValue:
-        """Every routine with its health, schedule, next run and last run, problems first."""
+        """Every routine with its health, schedule, next run, last run and owning app, problems first."""
         response = model_response(service.listing())
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/api/routines/<routine_id>")
     def detail(routine_id: str) -> ResponseReturnValue:
-        """One routine with its definition and recent runs."""
+        """One routine with its owning app, its definition and recent runs."""
         wanted = _routine_id(routine_id)
         if wanted is None:
             return not_found(routine_id)
@@ -305,6 +309,32 @@ def create_app(
             return error_response(str(e), HTTP_BAD_REQUEST)
         except DefinitionCommitError as e:
             return error_response(str(e), HTTP_CONFLICT)
+
+    @app.delete("/api/routines/<routine_id>/schedule")
+    def clear_schedule(routine_id: str) -> ResponseReturnValue:
+        """Go back to the schedule the routine's app gives it, dropping the one the user gave it; answers the
+        routine as the list shows it, the same when there was none to drop. 409 for a routine no app owns, whose
+        file's schedule is the only one it has, and 400 for one whose definition does not load."""
+        wanted = _routine_id(routine_id)
+        if wanted is None:
+            return not_found(routine_id)
+        if is_preview:
+            return error_response(PREVIEW_REFUSAL, HTTP_FORBIDDEN)
+        try:
+            loaded = service.definitions.load(wanted)
+            if not is_schedule_only(loaded):
+                return error_response(
+                    f"{wanted} belongs to no app, so the schedule in its file is the only one it has.", HTTP_CONFLICT
+                )
+            if loaded.definition is None:
+                return error_response(str(BrokenDefinitionError(wanted, loaded.error)), HTTP_BAD_REQUEST)
+            # Rescheduling to exactly the file's schedule is how the service drops the user's.
+            service.change_schedule(wanted, schedule_of(loaded.definition))
+            return model_response(service.row(wanted))
+        except RoutineNotFoundError:
+            return not_found(routine_id)
+        except DefinitionValidationError as e:
+            return error_response(str(e), HTTP_BAD_REQUEST)
 
     @app.post("/api/routines/<routine_id>/fix")
     def fix(routine_id: str) -> ResponseReturnValue:

@@ -1,13 +1,18 @@
 ---
 name: update-installed-template
-description: Pull a newer version of a template this agent already adopted from its remote repo and merge it in, reconciling it with this agent's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template.
+description: Pull a newer version of a template (a published snapshot of a whole workspace) this agent already adopted from its remote repo and merge it in, reconciling it with this agent's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template. For one app installed on its own, use update-installed-app.
 metadata:
   author: imbue
 ---
 
 # Update an installed template
 
-Version: v2 (templates flow). This is the ADOPTER's update path -- the
+Version: v2 (templates flow). A template shares a whole workspace. One app
+added on its own with `install-app` (`state` `installed` or `modified` in
+`uv run --no-sync app-install list`) is not a template: its newer version is
+the `update-installed-app` skill's.
+
+This is the ADOPTER's update path -- the
 companion to `use-template` (first adopt someone else's), `publish-template`
 (a template's first publish), and `update-published-template` (the
 PUBLISHER cuts each later version).
@@ -114,9 +119,10 @@ or slug is probably wrong, and forcing the merge would splice in a whole foreign
 tree.
 
 ```bash
+FETCHED="$(git rev-parse FETCH_HEAD)"
 WT="$(mktemp -d)"
 git worktree add -q "$WT" HEAD
-( cd "$WT" && git merge --no-edit FETCH_HEAD )
+( cd "$WT" && git merge --no-edit "$FETCHED" )
 ```
 
 **Check the merge went well, in the worktree:**
@@ -131,13 +137,10 @@ git worktree add -q "$WT" HEAD
   what conflicts in plain language (§3), and only then redo the merge in `/home/user/workspace`
   and resolve it interactively WITH the user, keeping their adaptations wherever
   they and the update collide.
-- **An app from an older template** (one that is a root workspace member in the template's
-  layout, with no `uv.lock` of its own) needs converting to a standalone project with
-  `uv run --no-sync user-package-migration migrate`, once the root venv is synced
-  (`.agents/shared/references/python-packaging-migration.md`, "A user app, service or
-  lib"); until then it fails to start. When resolving a conflict in the root
-  `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
-  globs.
+- **Apps the merge brought.** Run the checks in
+  `references/apps-in-the-merge.md`: an older template's app (see
+  `.agents/shared/references/python-packaging-migration.md`), an app with a
+  record.
 - **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 

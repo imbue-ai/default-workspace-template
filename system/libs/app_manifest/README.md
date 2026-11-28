@@ -115,7 +115,16 @@ what this workspace records about an app its agent built or installed, which
   `AppRecordNotFoundError` for an app with none), `load_all_records`,
   `parse_record` (a record that does not parse, or whose file is not named
   after its app, raises `RecordLoadError`), `render_record` (the file's
-  text, the same text for the same record), and `write_record`.
+  text, the same text for the same record), and `write_record`. Three rules
+  about an app's own repository that the installer and GitHub sync both
+  read are here too, as plain functions that run no command:
+  `REGENERABLE_FILENAMES` (the files in an app's directory that are made
+  from other files there, today `uv.lock`) and `modifying_paths(paths)`,
+  which keeps the paths that make an installed app modified;
+  `app_directory_prefix(record)`, the directory `git subtree` knows the
+  app by; and `join_marker_pattern(record)`, the `git log --grep` pattern
+  of the commits that join that directory to a history of its own, which
+  is how a linked app is told.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
   an app from an older reader), `read_registry(path)` (a row that fails
@@ -166,6 +175,9 @@ what this workspace records about an app its agent built or installed, which
   pairs a manifest with that record, the references read from it, and the
   links to the skills the app carries, and `list_user_app_files` lists what a
   user app owns beside its directory ("Built-in apps and user apps" below).
+  `describe_record_reference_problem(repo_root, package, reference)` says why
+  a record may not list a reference, by the rules one is read by, which is
+  what `app-install reference add` asks before it writes one.
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
   pathspec that matches nothing and a mistyped path would read as "unchanged",
   and refuses the link to a skill an app carries for the same reason.
@@ -189,9 +201,10 @@ what this workspace records about an app its agent built or installed, which
   the registry holds an app the workspace's user built: a row that is neither
   `system` nor `internal`, registered by a package under `system/apps/` that
   the root `pyproject.toml` does not list as a workspace member, under its
-  manifest's name. The template's own apps never count, and neither does a
-  new app's mock frame or a preview: a frame's row belongs to no package, and
-  the app behind one is `internal` while the frame is up.
+  manifest's name. The template's own apps never count, and neither does an
+  app installed from someone else's repository (its record's `origin` is
+  `installed`), a new app's mock frame or a preview: a frame's row belongs to
+  no package, and the app behind one is `internal` while the frame is up.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
   `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,

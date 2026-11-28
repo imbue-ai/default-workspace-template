@@ -54,7 +54,7 @@ def test_the_brief_names_the_routine_its_failure_and_each_run_with_an_unambiguou
     )
     loaded = loaded_routine(SYNC, definition)
     state = RoutineState(consecutive_failures=2, last_started_at=TEST_NOW - timedelta(hours=2))
-    row = build_row(loaded, state, TEST_NOW, TEST_ZONE)
+    row = build_row(loaded, state, TEST_NOW, TEST_ZONE, {})
     detail = RoutineDetail(
         row=row,
         definition=definition,
@@ -80,7 +80,7 @@ def test_the_brief_names_the_routine_its_failure_and_each_run_with_an_unambiguou
 def test_a_run_started_in_another_zone_is_still_printed_in_utc() -> None:
     local = _run(datetime(2026, 10, 20, 5, 0, tzinfo=timezone(timedelta(hours=-8))))
     definition = RoutineDefinition.model_validate({"title": "T", "what": "W", "every": "1d", "skill": "digest"})
-    row = build_row(loaded_routine(SYNC, definition), RoutineState(), TEST_NOW, TEST_ZONE)
+    row = build_row(loaded_routine(SYNC, definition), RoutineState(), TEST_NOW, TEST_ZONE, {})
     detail = RoutineDetail(row=row, definition=definition, definition_path="x", runs=(local,))
 
     assert "(2026-10-20 13:00 UTC)" in build_fix_brief(detail, "/news-sync", "")
@@ -88,7 +88,7 @@ def test_a_run_started_in_another_zone_is_still_printed_in_utc() -> None:
 
 def test_a_long_log_is_quoted_by_its_final_lines_and_an_empty_one_not_at_all() -> None:
     definition = RoutineDefinition.model_validate({"title": "T", "what": "W", "every": "1d", "skill": "digest"})
-    row = build_row(loaded_routine(SYNC, definition), RoutineState(), TEST_NOW, TEST_ZONE)
+    row = build_row(loaded_routine(SYNC, definition), RoutineState(), TEST_NOW, TEST_ZONE, {})
     detail = RoutineDetail(row=row, definition=definition, definition_path="x", runs=())
 
     long_log = "\n".join(f"line {number}" for number in range(100)) + "\n"

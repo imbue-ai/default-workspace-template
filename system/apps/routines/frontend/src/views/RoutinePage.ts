@@ -4,7 +4,7 @@ import m from "mithril";
 
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 
-import type { Outcome, RoutineDetail, RunRecord } from "../models/api";
+import { appOf, type Outcome, type RoutineDetail, type RunRecord } from "../models/api";
 import { chatUrlOf } from "../models/chatLink";
 import { runPathOf } from "../models/routing";
 import { healthPill } from "./healthPill";
@@ -18,6 +18,8 @@ export interface RoutinePageAttrs {
   onRunNow: () => void;
   onToggleEnabled: () => void;
   onChangeSchedule: () => void;
+  /** Drop the user's schedule for a routine an app owns, so it runs on the app's again. */
+  onUseAppSchedule: () => void;
   onFix: () => void;
   onRemove: () => void;
 }
@@ -57,9 +59,10 @@ function runRow(run: RunRecord): m.Vnode {
 }
 
 export const RoutinePage: m.Component<RoutinePageAttrs> = {
-  view({ attrs: { detail, isBusy, onRunNow, onToggleEnabled, onChangeSchedule, onFix, onRemove } }) {
+  view({ attrs: { detail, isBusy, onRunNow, onToggleEnabled, onChangeSchedule, onUseAppSchedule, onFix, onRemove } }) {
     const { row, definition } = detail;
     const chatId = row.chat_id;
+    const app = appOf(row);
     const isBroken = definition === null;
     const needsFixing =
       row.health === "FAILING" || row.health === "OVERDUE" || row.health === "BROKEN" || row.health === "NEEDS_USER";
@@ -84,6 +87,13 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
         m("dd", { class: "text-primary" }, [
           row.schedule_text,
           row.next_run_text === "" ? "" : ` (next: ${row.next_run_text})`,
+          row.has_schedule_override
+            ? m(
+                "div",
+                { class: "text-secondary", "data-schedule-override": "" },
+                `You changed this. The app's own schedule: ${row.app_schedule_text}.`,
+              )
+            : null,
         ]),
         m("dt", { class: "text-faint" }, "Last run"),
         m("dd", { class: "text-primary" }, row.last_run_text),
@@ -93,11 +103,19 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
           { class: "font-mono text-primary" },
           isBroken ? row.error : row.kind === "SKILL" ? `/${row.skill}` : row.command.join(" "),
         ),
-        row.app === null ? null : m("dt", { class: "text-faint" }, "App"),
-        row.app === null ? null : m("dd", { class: "text-primary" }, row.app),
+        app === null ? null : m("dt", { class: "text-faint" }, "App"),
+        app === null ? null : m("dd", { class: "text-primary" }, app),
         m("dt", { class: "text-faint" }, "Definition"),
         m("dd", { class: "font-mono text-primary" }, detail.definition_path),
       ]),
+      row.is_schedule_only
+        ? m(
+            "p",
+            { class: "type-helper text-secondary", "data-app-owned": "" },
+            `This routine is part of the app ${row.owning_app}. You can change its schedule and turn it on or ` +
+              "off here; anything else about it, removing it included, is a change to the app.",
+          )
+        : null,
       m("div", { class: "flex flex-wrap gap-2", "data-controls": "" }, [
         needsFixing
           ? m(Button, { variant: "primary", disabled: isBusy, onclick: onFix, "data-fix": "" }, "Fix it")
@@ -117,10 +135,23 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
           { disabled: isBusy || isBroken, onclick: onChangeSchedule, "data-change-schedule": "" },
           "Change schedule",
         ),
+        row.has_schedule_override
+          ? m(
+              Button,
+              { disabled: isBusy, onclick: onUseAppSchedule, "data-use-app-schedule": "" },
+              "Back to the app's schedule",
+            )
+          : null,
         chatId === null
           ? null
           : m("a", { href: chatUrlOf(chatId), class: buttonClass(), "data-open-chat": "" }, "Open its chat"),
-        m(Button, { variant: "ghost-destructive", disabled: isBusy, onclick: onRemove, "data-remove": "" }, "Remove"),
+        row.is_schedule_only
+          ? null
+          : m(
+              Button,
+              { variant: "ghost-destructive", disabled: isBusy, onclick: onRemove, "data-remove": "" },
+              "Remove",
+            ),
       ]),
       m("section", [
         m("h2", { class: "type-section mb-1 text-faint" }, "Runs"),

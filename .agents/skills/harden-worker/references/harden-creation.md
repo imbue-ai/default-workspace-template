@@ -87,8 +87,10 @@ does), and `others` (the rest: other work in the window, which is not yours
 to explain or test). `system/libs/app_manifest/README.md` describes both. The freshness check
 the lead runs before merging reads the same footprints
 (`.agents/shared/references/harden-contention.md`). Regenerate the file
-whenever a footprint moves under you -- when you register a `[[references]]`
-entry, or when you add a supervisord section -- and once more immediately
+whenever a footprint moves under you -- when you register a reference (a
+`[[references]]` entry in a built-in app's manifest, or
+`app-install reference add` for an app with a record), or when you add a
+supervisord section -- and once more immediately
 before your final report, after committing everything, so the `diff` it carries
 includes every commit you made (the diff reads commits only; an uncommitted
 edit is invisible to it).
@@ -100,10 +102,15 @@ app is built in -- or name it in your final report under `Outside footprint:`,
 one line each on why it changed on this branch. An app the workspace built or
 installed keeps its references in its record
 (`system/config/apps/<name>.toml`), and its manifest is refused with
-`[[references]]` in it: write neither, and name the file in the report, saying
-which app it belongs to (`type-app.md`). A skill run's one sanctioned edit
-inside a built-in app's directory, the `[[references]]` entry it adds to that
-app's manifest, sits under the skill's `context` and is counted as inside the
+`[[references]]` in it: write neither by hand, and record the path with
+`uv run --no-sync app-install reference add <name> <path> --note "<the
+surface it uses>"`, which writes the record and commits it (`type-app.md`).
+A skill such an app carries needs none of this: it lives in the app's
+directory, so it is in the app's footprint by where it is, and `skill:<name>`
+for it resolves through its `.agents/skills/` link to the app. A skill run's
+one sanctioned edit outside its own directory, the reference the app it
+drives gains (in a built-in app's manifest, or in the record of an app that
+has one), sits under the skill's `context` and is counted as inside the
 footprint.
 
 ## Carried work from a superseded pass

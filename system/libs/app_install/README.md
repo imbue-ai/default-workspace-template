@@ -3,8 +3,10 @@
 The `app-install` command: what registers an app a workspace's agent builds, and what keeps the files the workspace needs for it in step with its manifest.
 
 A user app is one self-contained directory, `system/apps/<package>/`.
-Everything the app owns is inside it: its code, its skills (`skills/<name>/`), its routines (`routines/<id>.toml`), and its environment units (`env.d/<NNNN>-<name>.sh`).
+Everything the app owns is inside it: its code, its routines (`routines/<id>.toml`), its environment units (`env.d/<NNNN>-<name>.sh`), and the skills it carries (`skills/<name>/`).
+A skill built for an app is made under `.agents/skills/` like any other and listed in the app's record as a reference; the app comes to carry it when it is published (the `publish-app` skill), which is also how an installed app arrives with skills.
 The command is deterministic and asks nothing; every run ends in one JSON line on stdout.
+It logs to stderr, and only warnings unless `APP_INSTALL_LOG_LEVEL` asks for more (`DEBUG`), so a caller that reads both streams together still gets the one line.
 
 ```bash
 uv run --no-sync app-install add <package> [--port <n>]
@@ -13,15 +15,39 @@ uv run --no-sync app-install update <name> [--branch <ref>] [--continue]
 uv run --no-sync app-install regenerate [<name>]
 uv run --no-sync app-install uninstall <name>
 uv run --no-sync app-install migrate <package> [--dry-run]
+uv run --no-sync app-install link <name> [--refresh] [--create-dev-repo]
+uv run --no-sync app-install reference add <name> <path> [--note <text>]
+uv run --no-sync app-install reference remove <name> <path>
+uv run --no-sync app-install publish compare <name> [--commit <rev>]
+uv run --no-sync app-install publish set-version <name> <version>
+uv run --no-sync app-install publish assemble <name> [--commit <rev>]
+uv run --no-sync app-install publish push <name> [--repo-name <repository>]
+uv run --no-sync app-install publish record <name>
+uv run --no-sync app-install verify <name> [--template <version>]
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
+
+Installing, updating, and linking an app go through `git subtree`, which some distributions package apart from git.
+Each of the three checks for it first and is refused with a message naming the missing command (`refused`, with `git-subtree` in `detail`) rather than with git's usage text.
 
 ## The app record
 
 Each user app has one tracked file, `system/config/apps/<name>.toml`: the app's name, its directory, the loopback port of its main program, whether this workspace built it (`origin = "local"`) or installed it, and the repositories it is kept in step with.
 It is one file per app so that two branches that each add an app never edit the same file.
 An app under `system/apps/` without a record is a built-in app.
+
+What else in the workspace uses the app is listed in its record too, under `[[references]]`: a skill that calls the app's API, a script that reads its data.
+A change to the app then reaches them, since the footprint of the app includes them.
+`app-install reference add <name> <path> [--note <text>]` lists a path and `app-install reference remove <name> <path>` takes one out; each writes the record and commits that one file under the installer's own author (`reference_added`, `reference_removed`, with the record's `references` as they are now).
+A reference is a literal path that exists, outside every app's directory, reached through no symlink, and not under `system/vendor/` or `data/`; one that breaks a rule, and one the record already lists, is `refused` with the reason in `detail`.
+
+`app-install list` prints every record with two more facts about the app:
+
+- `state`: `owned` for an app this workspace built, `installed` for one added from someone else's repository, and `modified` for an installed app whose committed directory differs from the tree it was installed from (the record's `upstream_tree`) in any path outside the regenerable set.
+  The regenerable set is the files in an app's directory that are made from other files there, which today is `uv.lock`: an app whose lock was only made again here is still `installed`.
+  An edit that is not committed yet changes nothing.
+- `is_linked`: whether the workspace history holds a join marker for the app's directory (see "Linking an app" below).
 
 ## Derived files
 
@@ -49,14 +75,25 @@ The result names every collision.
 ## Removing an app
 
 `app-install uninstall <name>` removes the app's directory, its record, and its derived files, has supervisord drop its programs, removes its registry row, and commits the removal under the installer's own author.
-It keeps the app's stored data (`data/.apps/<name>/`) and its secret files, and names them in its result.
+What the installer and the sync service kept about the app on this machine goes with it (`removed_state_paths`): an update that was waiting for a person, with its worktree, a publish that was waiting between two of its steps, and what was last pushed to the app's dev repository.
+
+Everything else is left, and the result names it, because a later app of the same name takes it over:
+
+| Field | What is left |
+| --- | --- |
+| `kept_paths` | The app's stored data (`data/.apps/<name>/`), the newest copy of it an update made, and its secret files. |
+| `kept_share_grants` | The people the app was shared with: the file, the app's table in it (`services.<name>`), and how many people, addresses and domains it names. `null` when the app was shared with nobody. |
+| `kept_routine_state` | The state directory (`data/.state/routines/<id>`) of each routine the app owned: its on/off choice, the schedule the user gave it, and its runs. |
+| `kept_repositories` | The app's repositories on GitHub, its dev repository and its published one. Nothing on GitHub is deleted or changed. |
+| `dependents` | The apps still in the workspace whose manifests list this one under `[[dependencies]]`. Dependencies are advisory, so the uninstall goes ahead. |
+
 What it could not do outside the tree, such as reaching a supervisord that is not running, is listed under `problems`; the app is removed from the tree all the same.
 
 ## Converting an app built before this layout
 
-`app-install migrate <package>` turns an app that has a manifest and a hand-written program file, and keeps its skills and routines elsewhere in the workspace, into a user app.
+`app-install migrate <package>` turns an app that has a manifest and a hand-written program file, and keeps its routines elsewhere in the workspace, into a user app.
 
-- A skill the manifest's `[[references]]` names moves into the app's `skills/`, with a link left where it was, unless another app names it too or it has a Python project of its own; those, and every other reference, are listed in the record's `references`.
+- Every path the manifest's `[[references]]` names is listed in the record's `references`. A skill among them stays where it is: an app comes to carry a skill only when it is published.
 - A routine whose `app` is this app moves into the app's `routines/`.
 - The manifest loses `[[references]]` and `[wiring]`, and its `[scope] exclude` globs become relative to the app's directory.
 - The record keeps the port the app already runs on, and the program file is replaced by the generated one.
@@ -95,3 +132,130 @@ That is also the way out when the merge was taken back in the worktree (`git mer
 
 `up_to_date` means the app is already at the version asked for.
 An app this workspace built has nothing to update from.
+
+## Recording that an app's checks pass
+
+`app-install verify <name>` runs the app's own checks (its environment syncs from its lock and its tests pass) and, when they pass, writes the template version they passed on to the record's `verified_template` and commits that one file (`verified`).
+The version is the nearest `minds-v` release tag in the checkout's history, or the one `--template` gives: the update pass names the version it is bringing in, which its worktree's history holds no tag for yet.
+Checks that fail write nothing (`tests_failed`).
+An adopter's agent compares an app's `verified_template` with its own workspace's version when the app misbehaves there.
+
+## Linking an app
+
+An app can have a private repository of its own on GitHub, `<name>-dev`: the app's directory at its root, with the app's own commit history.
+The `github-sync` service fills it and keeps it current with `git subtree split`, which turns the workspace commits that touched the app into commits of the app's own history (`system/libs/github_sync/README.md`, "App dev repositories").
+`app-install link <name>` does the two things the service never does: it commits to the workspace repository, and it creates a repository.
+Run it from the workspace root on the primary checkout; in a linked worktree it is refused, since it moves the primary branch.
+
+**The join marker.**
+Without one, a split walks the whole workspace history, which takes minutes.
+For an app this workspace built, `link` makes the app's first split with `git subtree split --rejoin`, which leaves a marker: a merge commit whose message carries `git-subtree-dir: system/apps/<package>`, whose first parent is the commit it was made on and whose second is the split.
+A later split reads only the commits made since the newest marker: the sync service makes each one in a scratch clone cut there (`system/libs/github_sync/README.md`, "Where a split starts").
+
+- The marker is made in a clone under `/var/tmp`, never in the checkout, with hooks off, and the primary branch is then moved to it.
+  Its tree is its first parent's tree, so no file changes and uncommitted work is left exactly as it is.
+  The branch is moved only if it is still where the marker was made; when something else committed meanwhile, the marker is made again.
+- The clone is shallow, cut one second before the oldest commit that touches the app (`git clone --shallow-since`), so the first split walks the app's lifetime rather than the workspace's.
+  That is used only when the app's history reads the same in the clone as in the workspace: the same commits touching the app's directory, each following the same ones (`git rev-list --parents <commit> -- system/apps/<package>`).
+  It does not when a commit is dated earlier than one of its ancestors, and when a merge made after the app's first commit brings in a commit dated before it: git cuts every parent of such a merge, so the merge reads as the commit that added the app.
+  The marker is then made in a clone of the whole history, which is correct and slow, and the result says so (`is_full_clone_used`).
+- **An app is linked** when the history of the checked-out commit holds such a marker: `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD` names a commit.
+  This is the search `git subtree` itself makes, and `link`, `list`, and the sync service all ask it through one function, `github_sync.app_history.is_app_linked`.
+  Linking an app that is linked makes nothing.
+- `--refresh` makes a new marker at the current commit when a commit has touched the app since its newest marker, which keeps later splits short as workspace commits accumulate: a split reads every commit made since the newest marker.
+  When the app has not changed since, there is no newer split to join and none is made: `git subtree` cannot read a history that holds two markers for one split.
+  Nothing depends on a refresh being run: the sync service pushes an app's changes from whichever marker is its newest.
+- A refresh makes its split in a clone of the whole history cut at the marker before it, with the function the sync service cuts its own clone with (`github_sync.app_history.cut_history_at_bound`).
+  A merge made since that marker that also follows older commits, as every update of the workspace does with the template's history and a worker's branch that left before the marker does, is read as following only the commits made since the marker.
+  A change to the app that came in through such a branch is in the app's history as part of the merge.
+  The split a refresh joins is therefore the history the service has been pushing, and a split of the uncut history would not be: it lists that branch's commits apart, which the dev repository would refuse as a continuation.
+- An installed app gets no marker.
+  The squash commits `install` and `update` leave carry the same trailer, so the app counts as linked and its split builds on the publisher's commits, and `git subtree` refuses to make a `--rejoin` marker for an app that came in as a squash.
+  `link` therefore only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
+  Its splits start at the merge that installed it.
+- An app this workspace built whose directory was removed and made again (uninstalled, then built again under the same name) gets no marker, and nothing of it is pushed.
+  `git subtree split` keeps the commit that removed the directory as it is, and everything the workspace held before it comes along, so the split would carry the workspace's own history, with every file of it, into the app's.
+  `link` and the sync service both check that a split's history does not hold the workspace's first commit (`github_sync.app_history.require_split_holds_only_the_app`), and neither joins nor pushes one that does.
+  `link` makes that check when it makes a marker, so it refuses such an app, with no dev repository created, when the history holds no join for the directory, and with `--refresh`.
+  When the directory's earlier life left a join (the app was linked, or an installed app of that name was there), a `link` without `--refresh` finds the app linked, makes no split, and creates its dev repository like any other; the sync service pushes nothing to it and reports the app as `failed` with the reason.
+  An app that was uninstalled and installed again is not refused: its history starts at its newest install.
+
+**The dev repository.**
+When GitHub sync is enabled for the workspace (`data/system/github_sync.toml` exists) and the app's record has no `dev_repo_url`, `link` creates the private repository `<name>-dev` under the workspace's GitHub account through `latchkey curl`, closes it to outside contributions as a published template's repository is closed, writes its URL to the record, and commits that one file under the installer's own author.
+`--create-dev-repo` does the same in a workspace where sync is not enabled, for one app on request; `uv run --no-sync github-sync sync-app <name>` then pushes the app once, and again whenever it is run.
+A repository that cannot be created (the name is taken on the account, or the GitHub permission is missing) does not undo the marker: it is listed under `problems`, and the next `link` tries again.
+
+The result is `linked` (the first marker was made), `refreshed` (a new one was made), or `already_linked` (none was made), with:
+
+| Field | Meaning |
+| --- | --- |
+| `marker_commit` | The marker that was made, else empty. |
+| `split_commit` | The commit of the app's own history the marker joins, else empty. |
+| `is_full_clone_used` | Whether the marker was made in a clone of the whole workspace history, as every refresh's is. |
+| `dev_repo_url` | The record's dev repository, empty when the app has none. |
+| `is_dev_repository_created` | Whether this run created it. |
+| `remaining` | What is left before the app is synced, in sentences: for example "GitHub sync is not enabled, so no dev repository was created; pass --create-dev-repo to make one for this app alone". |
+| `problems` | What this run tried and could not do. |
+
+## Publishing an app
+
+An app's published repository is named after the app, is private unless the publish asks for a public one, and holds one commit per published version: the app's directory at one workspace commit, less the paths the manifest's `[publish] exclude` names.
+It is what another workspace installs from.
+A publish is driven by the `publish-app` skill, which has the user agree to what will be published before anything is prepared, and asks again only when what was prepared differs; the steps that need no judgement are five subcommands, run in this order, and a sixth for who can see the repository.
+
+| Step | What it does | Result |
+| --- | --- | --- |
+| `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`), which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from, and each line that names a skill the app does not carry (`outside_skill_uses`). Writes nothing. | `compared` |
+| `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
+| `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
+| `publish push <name> [--repo-name <repository>] [--public]` | Creates the repository on the first publish, private unless `--public` is given, and writes its URL and who can see it (`published_visibility`) to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
+| `publish record <name>` | Writes `published_commit`, `published_version` and `verified_template` to the app's record, beside the `published_repo_url` the push wrote, and commits that one file. | `recorded` |
+| `publish visibility <name> [--make-public]` | Says whether the published repository is private (`is_private`), as the app's record has it, and with `--make-public` makes one the record does not have as public so first (`is_changed`), then writes that to the record and commits that one file; `problems` names a record that was written and not committed, which running the command again finishes. Everything in the repository went through the secret scan before it was pushed, so this publishes nothing that was not checked. Refused for an app that has no published repository. | `visibility` |
+
+**The version.**
+A version is three numbers, with an optional pre-release after a hyphen, and each published version is newer than the last.
+The template release the workspace is on is the nearest `minds-v` tag in its history (`git describe --tags --match 'minds-v*'`), which is how the update pass names a workspace's version too; when the history holds none, `verified_template` is left as it was and `problems` says so.
+
+**The assembled tree.**
+`assemble` reads the app's directory at the commit it is given (`HEAD`, or the commit of the branch a publish's worker worked on), in an index of its own, so the checkout and whatever is uncommitted in it are not touched.
+`[publish] exclude` is gitignore syntax, relative to the app's directory.
+The tree is refused, with nothing left waiting, when:
+
+- it has no `LICENSE` file at its root (`refused`): a published app says on what terms it is shared, whoever can see it for now. The `publish-app` skill's worker writes an MIT one for an app built here that has none, and none for an app that was installed from someone else's repository, which keeps the license it came with and cannot be published without one;
+- its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
+- the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
+- a file in it names, by its path under `.agents/skills/` or `data/.skills/`, a skill the app does not carry (`outside_skills_found`, with each line under `uses`). See "Skills the app does not carry" below;
+- it holds a `pyproject.toml` whose lock is not what the project calls for (`lock_check_failed`). `uv lock --check` runs in the assembled directory, so an app that resolves only inside a workspace does not pass. An app built in a workspace is one until it is published: it gets the app SDK through a path dependency on `app-schema`, which the `publish-app` skill's worker replaces with the released `imbue-app-sdk`;
+- the app was installed and nobody has changed it, so it is its publisher's to publish (`refused`).
+
+The result names what an adopter will be asked for under `needs` (`permissions`, `secrets`, `llm`, `environment`, `dependencies`, `adaptation`).
+
+**Skills the app does not carry.**
+A published app has to work where the publisher's workspace is not, so it may not run or read a skill that stays behind.
+`compare` and `assemble` read every text file of the tree for a path under `.agents/skills/<skill>` or `data/.skills/<skill>`, and count a skill as left behind when the workspace holds it at the published commit, the tree has no `skills/<skill>/SKILL.md`, and the template release the workspace is on does not ship it.
+Each such line is one `{skill, path, line}` entry of `compare`'s `outside_skill_uses`, and stops `assemble`.
+The way on is for the app to carry the skill, which the `publish-app` skill's worker does, or to stop naming it.
+Telling a workspace's own skill from one every workspace starts with takes a template release tag in the history; with none the tree is not read, and `is_outside_skills_checked` is false in both results.
+The check reads paths only: a Python import of a skill's package is caught by the lock check instead, and a path built up at run time is not caught at all.
+A file over 1 MB, a file that is not text, a link, and a repository nested in the app are not read.
+
+**The push.**
+On the first publish the repository is created under the workspace's GitHub account through `latchkey curl`, private unless `--public` is given (`is_private` in the result says which), closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+The push goes ahead only once GitHub's answer says the new repository has the visibility that was asked for: one that was to be private and is not confirmed so is left empty, and the result says to check and delete it on GitHub.
+A later publish never changes who can see the repository, and `--public` is refused, with the command that does, unless the record already has it as public (a first publish run again as its first run was).
+Who can see the repository is read from the app's record (`published_visibility`: `private`, `public`, or empty for an app published before the record kept it, whose `is_private` is null) and never from GitHub, since the access a publish holds creates, changes and pushes to a repository but does not read one.
+A repository whose visibility the user changed on GitHub themselves therefore reads as this workspace last set it.
+Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.
+A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
+The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.
+The first publish of an app that was installed and then changed here adds the trailer `Derived-From: <upstream_url>@<upstream_commit>`.
+It is pushed to `main` as a fast-forward and the tag `v<version>` after it, both through the latchkey gateway and neither forced: a repository that holds commits the publish does not continue ends the run with `push_refused`.
+A tag that does not reach the repository is listed under `problems`; the version is published all the same.
+The ref `refs/app-published/<name>` keeps the published commit in the workspace repository for the next publish to follow; a workspace that lost it fetches it from the published repository.
+
+**Between the steps.**
+What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the commit it made and whether that commit and its tag have arrived.
+So a step that was interrupted is finished by running it again: `push` makes the commit once and pushes the same one again, which changes nothing in a repository that already has it, and `record`, run alone, finishes a publish whose record was not written.
+`push` and `record` without a waiting tree are `not_assembled`, and `record` before a push is `not_pushed`.
+`assemble` is `refused` while a version that was pushed still waits to be recorded, since assembling the next one would forget which commit that was.
+`record` lists under `problems` a published version made from a commit that is not in the checkout's history yet, which means the branch that holds it still has to be merged.

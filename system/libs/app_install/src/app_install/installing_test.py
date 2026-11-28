@@ -12,11 +12,16 @@ from app_install.errors import RepositoryUnreachableError
 from app_install.git import run_git
 from app_install.installing import install_app
 from app_install.mock_runtime_test import RecordingRuntime
+from app_install.operations import AppState
+from app_install.operations import add_app
 from app_install.operations import check
+from app_install.operations import list_apps
 from app_install.testing import commit_all
 from app_install.testing import make_published_app_repository
 from app_install.testing import make_workspace_repository
 from app_install.testing import never_bound
+from app_install.testing import write_app_file
+from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
 from app_manifest.records import AppOrigin
 from app_manifest.records import load_all_records
@@ -274,3 +279,35 @@ def test_the_command_reports_what_was_installed_and_what_the_app_still_needs(tmp
     assert report["problems"][0].startswith("supervisord did not start the app's programs")
     assert (again.exit_code, json.loads(again.output)["result"]) == (1, "collision")
     assert (not_an_app.exit_code, json.loads(not_an_app.output)["result"]) == (1, "not_an_app")
+
+
+def test_list_says_modified_only_for_a_committed_difference_outside_the_regenerable_set(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    published = make_published_app_repository(tmp_path / "published-notes", "notes")
+    (published / "uv.lock").write_text("the publisher's lock\n")
+    (published / "notes.py").write_text("GREETING = 'hello'\n")
+    commit_all(published, "notes: a greeting")
+    install_app(workspace, f"file://{published}", None, RecordingRuntime(repo_root=workspace), never_bound)
+    add_app(workspace, write_user_app(workspace, "shelf"), None, never_bound)
+    commit_all(workspace, "Add the shelf app")
+    runner = CliRunner()
+
+    def listed() -> list[tuple[str, str, bool]]:
+        report = json.loads(runner.invoke(main, ["--repo-root", str(workspace), "list"]).output)
+        return [(app["name"], app["state"], app["is_linked"]) for app in report["apps"]]
+
+    # An installed app is linked by the commit its install left; an app built here is not until it is linked.
+    assert listed() == [("notes", "installed", True), ("shelf", "owned", False)]
+
+    # A lock made again in this workspace is a function of the app's other files.
+    write_app_file(workspace, "notes", "uv.lock", "relocked in this workspace\n")
+    commit_all(workspace, "Upgrade the SDK in the app's lock")
+    assert listed()[0] == ("notes", "installed", True)
+
+    # An edit that is not committed is not yet part of the app's history.
+    write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
+    assert listed()[0] == ("notes", "installed", True)
+
+    commit_all(workspace, "Change the greeting")
+    assert listed() == [("notes", "modified", True), ("shelf", "owned", False)]
+    assert [app.state for app in list_apps(workspace)] == [AppState.MODIFIED, AppState.OWNED]

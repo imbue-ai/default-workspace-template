@@ -733,9 +733,15 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
     assert "4242" in capsys.readouterr().err
 
 
+_EXIT_GATE = "exit-gate"
+
+
 @pytest.mark.parametrize(
     "launch, has_exited_before_teardown",
-    [(["sleep", "30"], False), (["sh", "-c", "exit 1"], True)],
+    [
+        (["sleep", "30"], False),
+        (["sh", "-c", f"read _line <{_EXIT_GATE}; exit 1"], True),
+    ],
     ids=["still-running", "crashed-during-boot"],
 )
 def test_a_server_this_process_spawned_reads_as_gone_once_killed(
@@ -748,6 +754,8 @@ def test_a_server_this_process_spawned_reads_as_gone_once_killed(
     for a server still running and for one that already crashed, the usual reason ``up``
     fails.
     """
+    exit_gate = tmp_path / _EXIT_GATE
+    os.mkfifo(exit_gate)
     pid = mod.Spawner().spawn_detached(
         launch,
         cwd=str(tmp_path),
@@ -755,6 +763,10 @@ def test_a_server_this_process_spawned_reads_as_gone_once_killed(
         log_path=str(tmp_path / "server.log"),
     )
     if has_exited_before_teardown:
+        # The child waits on the gate until here: the Popen the spawner drops reaps, in
+        # its finalizer, a child that has already exited, which would leave no zombie.
+        with exit_gate.open("w"):
+            pass
         # WNOWAIT observes the exit without reaping it, so the child stays a zombie.
         os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
     runner = _SignalRecordingRealRunner()

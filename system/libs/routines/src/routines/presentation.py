@@ -1,5 +1,6 @@
 """Turning definitions, state and events into what the list, the detail page and the command show."""
 
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import tzinfo
@@ -181,8 +182,17 @@ def last_run_record(state: RoutineState, routine_id: RoutineId, now: datetime) -
 
 
 @pure
-def build_row(loaded: LoadedRoutine, state: RoutineState, now: datetime, zone: tzinfo) -> RoutineRow:
-    loaded = effective_routine(loaded, state)
+def build_row(
+    loaded: LoadedRoutine,
+    state: RoutineState,
+    now: datetime,
+    zone: tzinfo,
+    app_names_by_package: Mapping[str, str],
+) -> RoutineRow:
+    """The routine as the list shows it. ``app_names_by_package`` names each user app by its directory under
+    system/apps; an owning app it does not name goes by its directory."""
+    as_written = loaded
+    loaded = effective_routine(as_written, state)
     definition = loaded.definition
     due = next_due(definition, state, now, zone) if definition is not None else None
     health = health_of(loaded, state, due, now)
@@ -212,6 +222,14 @@ def build_row(loaded: LoadedRoutine, state: RoutineState, now: datetime, zone: t
         is_enabled=is_enabled,
         kind=definition.kind if definition is not None else None,
         app=str(definition.app) if definition is not None and definition.app is not None else None,
+        owning_app=(
+            app_names_by_package.get(as_written.app_package, as_written.app_package)
+            if as_written.app_package is not None
+            else None
+        ),
+        is_schedule_only=is_schedule_only(as_written),
+        has_schedule_override=has_schedule_override(as_written, state),
+        app_schedule_text=app_schedule_text(as_written, state, zone),
         schedule_text=describe_schedule(definition, zone) if definition is not None else "",
         next_due_at=due,
         next_run_text=next_run_text,
@@ -222,6 +240,28 @@ def build_row(loaded: LoadedRoutine, state: RoutineState, now: datetime, zone: t
         command=definition.command if definition is not None and definition.command is not None else (),
         chat_id=state.chat_id,
     )
+
+
+@pure
+def is_schedule_only(loaded: LoadedRoutine) -> bool:
+    """Whether the routine's schedule and its on/off switch are all that can be changed here: its definition file
+    is in an app's directory, so anything else, removing it included, is a change to that app."""
+    return loaded.app_package is not None
+
+
+@pure
+def has_schedule_override(loaded: LoadedRoutine, state: RoutineState) -> bool:
+    """Whether the routine runs on a schedule its user gave it in place of the one its app gives it."""
+    return loaded.app_package is not None and loaded.definition is not None and state.schedule_override is not None
+
+
+@pure
+def app_schedule_text(loaded: LoadedRoutine, state: RoutineState, zone: tzinfo) -> str | None:
+    """The schedule the routine's app gives it, in the words the rows show, while the user's own is in its place;
+    None for a routine that runs on its definition's schedule."""
+    if loaded.definition is None or not has_schedule_override(loaded, state):
+        return None
+    return describe_schedule(loaded.definition, zone)
 
 
 @pure

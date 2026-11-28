@@ -125,6 +125,14 @@ The library never rewrites or deletes a file inside an app's directory, since th
   The override applies only to a routine an app owns; a routine under `system/routines` runs on its file whatever its state holds.
 - **Any other change is a change to the app.** `routines edit` of a field that is not part of the schedule, and `routines remove`, are refused with `AppOwnedRoutineError`, which names the app's directory and the file to change there.
 - **The switch is state for every routine** (decision 8), so turning an app's routine off needs nothing more.
+- **A row says whose the routine is.** `RoutineRow` carries four fields, built in `build_row` from the routine as its file has it and its state, so the command's JSON and the app's API both have them:
+
+  | Field | Meaning |
+  |---|---|
+  | `owning_app` | The app whose directory holds the definition file: the name the workspace's record of the app (`system/config/apps/<name>.toml`) gives that directory, else the directory's own name; null for a routine under `system/routines`. Read from where the file is, not from the definition's `app` field, which the row still carries as `app`. |
+  | `is_schedule_only` | True for a routine an app owns: its schedule and its switch are all that can be changed. |
+  | `has_schedule_override` | True while the state holds a `schedule_override` for a readable routine an app owns. |
+  | `app_schedule_text` | The definition's own schedule in words while the override is in place; null otherwise. |
 - **`routines add --app <name>`** writes the new definition into `system/apps/<package>/routines/` and commits it there, when `<name>` is a user app: the workspace has a record of it, `system/config/apps/<name>.toml`, and the directory that record names as its `package` exists.
   For any other name (a built-in app, or no app) the definition goes under `system/routines`, with `app` kept for grouping.
 
@@ -332,6 +340,7 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 
 `routines`, a `click` group, the agent-facing surface and what the app calls.
 `list`, `show` and `runs` answer `--format json` for scripts; `run` prints its receipt as JSON.
+The rows `list` and `show` answer in JSON carry the four fields of section 4.1 that say which app owns a routine.
 
 | Command | Does |
 |---|---|
@@ -365,10 +374,11 @@ One document serves every page; the page routes on its path and reports it throu
 
 - **`/`, the list.** A summary strip (how many routines, how many need attention, the next run), then one row per routine: title and sentence, the schedule and "Next: tomorrow 7:30 am", a health pill, "Last run 3 hours ago, automatic", and the run's summary.
   Rows sort by health, the ones needing attention first (waiting on the user, failing, overdue, broken), then the rest (not run yet, working, done, off), and by title within a health.
-  Routines with an `app` group under that app's display name (the listing carries `app_names`, read from the registry), the rest under "Workspace".
+  Routines group under the display name of the app they belong to (the listing carries `app_names`, read from the registry): the row's `owning_app` when an app owns the routine, else its `app`; the rest go under "Workspace".
   A text field at the top, "Describe a routine to add", hands "Add a routine: <the text>" to the shell through `startWithText`, so a chat opens on it and the agent, following the `manage-routines` skill, writes the definition.
 - **`/<id>`, the routine.** The definition in plain words, the controls (Run now, On/Off, Change schedule, Fix it, Remove), and the run history: one row per run with when, trigger, outcome, duration and summary, the whole row a link to the run's page as a routine's row on the list is to the routine's (the chat is linked from the run's page).
   Change schedule opens a dialog with the same fields as the CLI (a number and a unit, a time, weekdays, a day of the month) and previews the sentence it will read as.
+  A routine an app owns (`is_schedule_only`) names that app and says that only its schedule and its switch can be changed here, and has no Remove; while the user's schedule is in place of the app's (`has_schedule_override`) the page shows the app's (`app_schedule_text`) and offers "Back to the app's schedule".
 - **`/<id>/runs/<run_id>`, the run.** The finished event's fields and the log, rendered as is and scrolled to its end.
 - **`/<id>/runs/<run_id>/log`, the whole log.** The run's entire log under the same navigation header, where the run page shows only the end of a long one.
 - The phone layout stacks the row's cells; the controls wrap into as many rows as the width takes.
@@ -387,6 +397,7 @@ Typed routes in the app SDK's route table (`imbue.app_sdk.api_schema`), every mo
 | `POST /api/routines/<id>/run` | Starts a manual run; 409 while one is in flight, 400 for a broken definition. |
 | `PUT /api/routines/<id>/enabled` | `{"is_enabled": bool}`. |
 | `PUT /api/routines/<id>/schedule` | The schedule fields; 400 with the validation message. For a routine an app owns the schedule is kept in its state (section 4.1). |
+| `DELETE /api/routines/<id>/schedule` | No body. Goes back to the schedule the routine's app gives it, by rescheduling it to its definition's own schedule, which clears the override (section 4.1); answers the `RoutineRow`, the same when there was no override to drop. 409 for a routine no app owns, 400 for one whose definition does not load, 404 for an id there is no routine of. |
 | `POST /api/routines/<id>/fix` | Opens the fix chat; answers its id. |
 | `DELETE /api/routines/<id>` | Removes the routine; 409 while a run of it is in flight, and for a routine an app owns. |
 | `GET /api/health`, `GET /api/schema` | As every app. |

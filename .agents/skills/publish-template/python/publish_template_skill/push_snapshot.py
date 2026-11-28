@@ -40,41 +40,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from github_sync.repositories import hint_for_push_failure
+
 from publish_template_skill.validate_template import main as validate_template
-
-# What a refused push most likely means, matched against git's stderr. Ordered so
-# the specific causes win: GitHub's workflow-scope refusal is also printed as a
-# "[remote rejected]" line. The stderr also carries the remote URL, so no needle
-# may be something a repo name can contain.
-_PUSH_FAILURE_HINTS = (
-    (
-        ("create or update workflow", "`workflow` scope"),
-        "the stored GitHub credential cannot push .github/workflows/ files; tell the "
-        "user and stop -- never strip files to get the push through",
-    ),
-    (
-        ("not permitted",),
-        "the github-git-write permission is missing; request it again",
-    ),
-    (
-        ("http 413", "too large"),
-        "the user's Imbue Studio app is older than the gateway's raised body cap and "
-        "cannot proxy a push this size; tell the user and stop",
-    ),
-    (
-        ("(non-fast-forward)", "fetch first"),
-        "the published main moved since its tip was read; someone else pushed there. "
-        "Stop and tell the user -- never force-push over it",
-    ),
-)
-
-
-def hint_for_push_failure(output: str) -> str | None:
-    lowered = output.lower()
-    for needles, hint in _PUSH_FAILURE_HINTS:
-        if any(needle in lowered for needle in needles):
-            return hint
-    return None
 
 
 class PushSnapshotError(Exception):

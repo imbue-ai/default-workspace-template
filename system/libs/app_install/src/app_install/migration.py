@@ -1,10 +1,11 @@
 """Converting an app built before the self-contained layout into a user app with a record.
 
-Such an app sits under ``system/apps/`` with a manifest and a hand-written program file, and
-keeps what it owns elsewhere in the workspace: skills under ``.agents/skills/`` and routines
-under ``system/routines/``, named by the manifest's ``[[references]]`` and the routines' ``app``
-field. Converting it moves those into the app's directory, writes its record, and replaces its
-program file with the generated one.
+Such an app sits under ``system/apps/`` with a manifest and a hand-written program file. Its
+routines are under ``system/routines/``, each naming the app in its ``app`` field, and its
+manifest's ``[[references]]`` names what else in the workspace was built for it. Converting it
+moves the routines into the app's directory, moves the references into its record, and replaces
+its program file with the generated one. A skill a reference names stays where it is: a skill
+joins an app only when the app is published.
 
 A conversion either completes or changes nothing. It is planned in full before anything is
 written, every step it then takes is undone if a later one fails, and an app whose existing
@@ -34,13 +35,8 @@ from app_install.derived import write_derived_files
 from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.paths import APP_ROUTINES_DIRNAME
-from app_install.paths import APP_SKILLS_DIRNAME
 from app_install.paths import APPS_DIRECTORY
-from app_install.paths import MANIFEST_FILENAME
-from app_install.paths import PYPROJECT_FILENAME
 from app_install.paths import ROUTINES_DIRECTORY
-from app_install.paths import SKILL_FILENAME
-from app_install.paths import SKILLS_DIRECTORY
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
 from app_install.paths import program_conf_path
@@ -61,7 +57,6 @@ from app_manifest.records import write_record
 
 _REGISTERED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"--url\s+http://(?:localhost|127\.0\.0\.1):(\d+)")
 _COMMENT_PREFIXES: Final[tuple[str, ...]] = ("#", ";")
-_SKILL_PYTHON_PROJECT: Final[Path] = Path("python") / PYPROJECT_FILENAME
 
 
 class _UndoKind(UpperCaseStrEnum):
@@ -87,7 +82,7 @@ class MigrationPlan(FrozenModel):
     package: str = Field(description="The app's directory under system/apps/")
     port: int = Field(description="The port the app keeps")
     moves: tuple[tuple[str, str], ...] = Field(
-        description="Each skill directory and routine file that moves into the app, as (from, to), repo-relative"
+        description="Each routine file that moves into the app, as (from, to), repo-relative"
     )
     references: tuple[RecordReference, ...] = Field(description="What the app's record lists as using the app")
     scope_exclude: tuple[str, ...] = Field(description="The manifest's scope exclusions, relative to the app")
@@ -115,35 +110,6 @@ def _own_port(repo_root: Path, manifest: AppManifest) -> int | None:
         if port is not None:
             return port
     return None
-
-
-def _paths_other_apps_reference(repo_root: Path, package: str) -> set[str]:
-    referenced: set[str] = set()
-    for other in sorted((repo_root / APPS_DIRECTORY).glob(f"*/{MANIFEST_FILENAME}")):
-        if other.parent.name == package:
-            continue
-        try:
-            references = tomllib.loads(other.read_text(encoding="utf-8")).get("references", [])
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-            logger.debug("Reading no references from {}, which cannot be read: {}", other, e)
-            continue
-        referenced.update(str(entry.get("path")) for entry in references if isinstance(entry, dict))
-    return referenced
-
-
-def _is_movable_skill(repo_root: Path, reference_path: str) -> bool:
-    """Whether a reference is a skill the app can carry: a real directory directly under the skills directory,
-    with a SKILL.md and no Python project of its own, which the workspace's lock would otherwise have to follow
-    into the app."""
-    path = Path(reference_path)
-    directory = repo_root / path
-    return (
-        path.parent == SKILLS_DIRECTORY
-        and directory.is_dir()
-        and not directory.is_symlink()
-        and (directory / SKILL_FILENAME).is_file()
-        and not (directory / _SKILL_PYTHON_PROJECT).is_file()
-    )
 
 
 def _routine_files_of(repo_root: Path, name: str) -> list[Path]:
@@ -234,22 +200,10 @@ def plan_migration(repo_root: Path, package: str, is_bound: Callable[[int], bool
         )
     problems.extend(_program_file_problems(repo_root, record, manifest))
 
+    references = tuple(
+        RecordReference(path=str(reference.path), note=str(reference.note or "")) for reference in manifest.references
+    )
     moves: list[tuple[str, str]] = []
-    references: list[RecordReference] = []
-    moved_skill_prefixes: dict[str, str] = {}
-    shared = _paths_other_apps_reference(repo_root, package)
-    for reference in manifest.references:
-        reference_path = str(reference.path)
-        skill_name = Path(reference_path).name
-        target = f"{app_relative}/{APP_SKILLS_DIRNAME}/{skill_name}"
-        if reference_path not in shared and _is_movable_skill(repo_root, reference_path):
-            if (repo_root / target).exists():
-                problems.append(f"{target} already exists, so {reference_path} cannot move into the app")
-                continue
-            moves.append((reference_path, target))
-            moved_skill_prefixes[f"{reference_path}/"] = f"{APP_SKILLS_DIRNAME}/{skill_name}/"
-        else:
-            references.append(RecordReference(path=reference_path, note=str(reference.note or "")))
     for routine in _routine_files_of(repo_root, name):
         target = f"{app_relative}/{APP_ROUTINES_DIRNAME}/{routine.name}"
         if (repo_root / target).exists():
@@ -261,10 +215,6 @@ def plan_migration(repo_root: Path, package: str, is_bound: Callable[[int], bool
     for glob in (str(glob) for glob in manifest.scope.exclude):
         if glob.startswith(f"{app_relative}/"):
             scope_exclude.append(glob.removeprefix(f"{app_relative}/"))
-            continue
-        moved_prefix = next((prefix for prefix in moved_skill_prefixes if glob.startswith(prefix)), None)
-        if moved_prefix is not None:
-            scope_exclude.append(moved_skill_prefixes[moved_prefix] + glob.removeprefix(moved_prefix))
         else:
             notes.append(f"the scope exclusion {glob!r} names nothing inside the app and is dropped")
     return MigrationPlan(
@@ -272,7 +222,7 @@ def plan_migration(repo_root: Path, package: str, is_bound: Callable[[int], bool
         package=package,
         port=port,
         moves=tuple(moves),
-        references=tuple(references),
+        references=references,
         scope_exclude=tuple(scope_exclude),
         notes=tuple(notes),
         problems=tuple(problems),

@@ -110,6 +110,9 @@ change the command, change `[run]` and run
 The full program schema and the logging knobs are in
 `.agents/shared/references/service-processes.md`.
 
+Commit the app once it is registered; with GitHub sync on, then follow
+`link-new-app.md`.
+
 ## Confirm it is what the user wanted
 
 There is no markup you author on this path, so there is no mock to build: the

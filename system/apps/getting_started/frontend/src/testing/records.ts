@@ -1,9 +1,9 @@
 /**
- * Record factories for the Getting Started tests: a published template as the catalog lists it. Takes
- * overrides so a test spells only what it is about.
+ * Record factories for the Getting Started tests: a published template and a published app as the
+ * catalog lists them. Each takes overrides so a test spells only what it is about.
  */
 
-import type { CatalogTemplate } from "../models/TemplateCatalog";
+import type { CatalogApp, CatalogTemplate } from "../models/TemplateCatalog";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -26,6 +26,24 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
     needs_ai: false,
     apt_packages: [],
     choices: [],
+    ...overrides,
+  };
+}
+
+/** An app titled after its name, published by "someone" from a repository named after it, with an icon and no requirements. */
+export function catalogAppRecord(name: string, overrides: Partial<CatalogApp> = {}): CatalogApp {
+  return {
+    name,
+    title: capitalized(name),
+    description: `What ${name} does.`,
+    author: "someone",
+    repository_url: `https://github.com/someone/${name}`,
+    icon_url: `https://example.test/app-icons/${name}.svg`,
+    version: "1.0.0",
+    required_accounts: [],
+    required_secrets: [],
+    needs_ai: false,
+    apt_packages: [],
     ...overrides,
   };
 }

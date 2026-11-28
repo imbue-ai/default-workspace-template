@@ -42,6 +42,11 @@ mirror -- ship it as an `env.d` unit instead, or drop it.
   too narrow (repo creation needs `github-write-all`; `github-write-repos` does
   not cover `POST /user/repos`). Request it again.
 - `name already exists`: ask the user for another name and re-run `create`.
+- `was created, but GitHub did not confirm it is private` (or `public`): the
+  repo exists, with nothing in it, and may not have the visibility the user
+  chose. Stop, give the user its address (`https://github.com/` and the
+  `<owner>/<repo>` the line starts with), and ask them to check it and delete
+  it on GitHub. Never re-run `create` or push before they have.
 - A `follow-up:` line about the lockdown: the repo exists and stays private unless
   the user chose public; carry on and mention it at the end.
 - A `follow-up:` line saying README.md is missing or carries no

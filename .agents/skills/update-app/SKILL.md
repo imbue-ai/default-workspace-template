@@ -45,6 +45,9 @@ window keeps showing the old page until it is refreshed. The live change loop
   worker, and `.agents/shared/references/harden-contention.md` when its step 4
   finds the pass stale.
 - **A new app**: the `build-app` skill.
+- **A newer version of an app installed from someone else's repository**: the
+  `update-installed-app` skill. Changing such an app yourself is this skill,
+  as for any app; the next version is then merged over your change.
 - **Arranging windows** (open, place, focus, minimize, close): the
   `manage-desktop` skill.
 - **Removing an app or service**: for a service, follow "Removing a service"
@@ -178,9 +181,9 @@ policy, a "view raw" control on derived data.
 Then edit the code under `system/apps/<package>/`, or wherever the program's
 command points. Three more things the change may owe:
 
-- **The manifest.** What the change creates for the app (a skill, a routine,
-  an environment unit) goes inside the app's directory, or, for a built-in
-  app, is registered under `[[references]]`. If the change gives the app
+- **The manifest.** A routine or an environment unit the change creates for
+  the app goes inside the app's directory; a skill, or anything else built
+  for it elsewhere, is recorded as a reference. If the change gives the app
   work between requests, or takes it away, `stop_when_no_windows` changes
   with it. Both rules are in
   `.agents/shared/references/apps/manifest.md`; the restart in step 4

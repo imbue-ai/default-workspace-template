@@ -1,6 +1,6 @@
 ---
 name: install-app
-description: Install one app someone published (its own git repository, with an app.toml at its root) into this workspace, then set it up with the user -- permissions, secrets, and adaptation. Use when the user gives an app's repository URL or asks to add an app someone shared, or when a message is `/install-app <url>`. For a whole published workspace (a template), use use-template instead.
+description: Install one app someone published or shared (its own git repository, with an app.toml at its root) into this workspace, then set it up with the user -- permissions, secrets, and adaptation. Use when the user gives an app's repository URL or asks to add an app someone shared, or when a message is `/install-app <url>`. For a whole published workspace (a template), use use-template instead; for a newer version of an app already installed, update-installed-app.
 metadata:
   author: imbue
 ---
@@ -30,10 +30,28 @@ skill.
 - **Done means the user can open the app and see their own data.** A program
   that starts or a route that answers 200 is not done.
 
+## What the URL can be
+
+- **A published app**: a repository that holds one clean copy of the app
+  per version, public or private to the people its owner invited. The latest
+  version is installed unless you name one.
+- **Someone's dev repository** (usually named `<name>-dev`): the private
+  repository a person's own workspace keeps its working copy of an app in,
+  which they have given the user access to. It installs the same way, from
+  its `main` branch, since it has no versions. Two things differ, and the
+  user should hear them: what arrives is the app as it stands in that
+  person's workspace today, not a version they chose to release, and an
+  update later takes whatever they have changed since. It is private, so the
+  first result is usually `needs_github_access` (step 3), and the GitHub
+  account the user approves must be one that person gave access to.
+
 ## Other tasks
 
 - **Removing an app**: `uv run --no-sync app-install uninstall <name>`. The
-  app's stored data and secret files are kept; say so.
+  app's stored data and secret files are kept, and the result names them and
+  what else is left; say so. The `update-app` skill has the whole teardown.
+- **A newer version of an app already installed**: the `update-installed-app`
+  skill.
 - **Checking what is generated**: `uv run --no-sync app-install check` says
   whether everything generated for the workspace's apps is as it should be.
 
@@ -48,13 +66,25 @@ skill.
 
 ## Step 1: Find which case this is
 
-Run `uv run --no-sync app-install list` and look for the app.
+Run `uv run --no-sync app-install list` and look for an app whose
+`upstream_url` is the URL you were given.
 
-- **The app is not listed.** Go on to step 2.
-- **The app is already listed** (the Imbue Studio app installed it while it
-  created this workspace, or an earlier turn did). The user already agreed to
-  trust it. Skip to step 4 and set it up; read what it needs from its manifest
-  at `system/apps/<package>/app.toml`.
+- **The app is not listed.** Go on to step 2. This is also where a
+  `/install-app <url>` message from the Imbue Studio app lands when its own
+  install did not go through: it could not read the repository, or the
+  install failed and this message is the second try.
+- **The app is already listed.** The Imbue Studio app installs an app itself,
+  before any chat exists, when the user creates a workspace from an app or
+  adds one to a workspace they have, and then sends `/install-app <url>` so
+  the setup continues here; or an earlier turn installed it. The user already
+  agreed to trust it. Skip to step 4 and set it up. There is no installer
+  result to work from in this case, so read what the app needs from its
+  manifest at `system/apps/<package>/app.toml`: `[[permissions]]`,
+  `[[secrets]]` (a file is missing when `data/.secrets/<file>.env` does not
+  exist), `[llm]`, `[[dependencies]]` (missing when no app of that name is
+  here), `[environment]`, and `[[adaptation]]`. Check each of its programs
+  with `supervisorctl status`: one that runs under a secret file that does
+  not exist yet is not running.
 
 ## Step 2: Confirm the user trusts the source
 
@@ -123,10 +153,19 @@ app was already installed).
    A `Secret declined:` message leaves the app unstarted; say so, and why.
 3. **A model.** When `needs.llm` is present, the app calls a model. Follow the
    `use-ai-integration` skill to give it what its `method` needs.
-4. **Other apps.** `needs.missing_dependencies` names apps this one expects to
-   find here. Nothing installs them for you. Tell the user which are missing;
-   when the app's manifest gives one a `repo_url` under `[[dependencies]]`,
-   offer to install it the same way.
+4. **Other apps, and the data they collect.** `needs.missing_dependencies`
+   names apps this one expects to find here, usually because they collect or
+   process the data it shows. Nothing installs them for you, and getting the
+   data to flow, so that every app here works, is yours to work out:
+   - offer to install a missing one that has a `repo_url` under
+     `[[dependencies]]`, the same way, and set it up before this app;
+   - one with no `repo_url` is built in or was never published: the app's
+     `[[adaptation]]` notes and its README say what it needs from it;
+   - when an app already here collects the same data, have one of them
+     collect it and the other ask that one (an ordinary change, the
+     `update-app` skill) rather than run the same collection twice.
+
+   Tell the user what you set up and what is still missing.
 5. **System packages.** `needs.unresolved_environment` lists what could not be
    installed, with the reason. An apt package that does not exist at this
    workspace's pinned snapshot can be reached with
@@ -148,4 +187,13 @@ or change). Take them one at a time, in the user's terms. Changes you make
 are ordinary changes to the app: use the `update-app` skill.
 
 The app is yours to change. It stays connected to where it came from, so a
-later version can be brought in on top of your changes.
+later version can be brought in on top of your changes: that is the
+`update-installed-app` skill.
+
+Once this workspace has changed the app and the change is saved, the app
+counts as modified (`state` in `app-install list`). When GitHub sync is
+enabled (`test -f data/system/github_sync.toml`), give it a private
+repository of its own, which the sync service then keeps current, by running
+`uv run --no-sync app-install link <name>` from the repo root of the live
+workspace (the `github-sync` skill describes dev repositories). An app nobody
+has changed has none, and `link` refuses it.

@@ -12,6 +12,7 @@ run and test a web frontend in isolation, see
 - Where the source lives
 - Running and testing
 - Working in isolation
+- Stored data that changes shape
 - Phone and sharing checks
 - Critical apps
 
@@ -36,14 +37,22 @@ record.
   `test_<package>_ratchets.py`. This is the first entry of the scope file's
   `primary`; an app with a record also lists its record and its skill links
   there.
-- A skill the app owns lives at `system/apps/<package>/skills/<skill>/` and is
-  part of the app: harden it in the app's pass, never as a creation of its
-  own. `.agents/skills/<skill>` is a link to it that `app-install` generates.
+- A skill the app carries (one it took in when it was published, or was
+  installed with) lives at `system/apps/<package>/skills/<skill>/` and is
+  part of the app by where it is: it is in the app's footprint because it is
+  in the app's directory, with nothing to declare. Harden it in the app's
+  pass, never as a creation of its own. `.agents/skills/<skill>` is a link to
+  it that `app-install` generates, and the scope file lists that link under
+  the app's `primary` beside the app's directory.
   Edit the files under the app's directory: git reports a change there, and
   reports the link as one path, never a change through it. `skill:<skill>`
-  names the app, so a pass names the app once, as `app:<name>`. The app's
+  resolves through the link to the app, so a pass names the app once, as
+  `app:<name>`, and one that names both is refused as one creation named
+  twice. Never add a skill there yourself: a skill you build for the app is
+  made under `.agents/skills/` and registered as a reference (below), and
+  publishing the app is what moves it in. The app's
   routines (`routines/`) and environment units (`env.d/`) live in its
-  directory the same way.
+  directory.
 - The app's program entry at `system/supervisord.conf.d/<name>.conf` -- you
   do not touch it. For an app with a record it is generated from `app.toml`
   and the record: change the manifest and run `uv run --no-sync app-install
@@ -63,9 +72,22 @@ record.
   For a built-in app they are the `[[references]]` entries of its `app.toml`.
   A change that lands outside the footprint -- `diff.outside_footprint` in
   the scope file names it -- is registered there when the file belongs to the
-  app, rather than left unclaimed. When the app has a record, do not write the
-  entry into the record yourself: name the file in your report under `Outside
-  footprint:`, saying it belongs to the app.
+  app, rather than left unclaimed. When the app has a record, register it
+  with the installer, never by editing the record:
+
+  ```bash
+  uv run --no-sync app-install reference add <name> <path> --note "<the surface it uses>"
+  uv run --no-sync app-install reference remove <name> <path>   # an entry whose path no longer uses the app
+  ```
+
+  `add` writes the entry into the app's record and commits that one file on
+  your branch (`reference_added`); it works in your worktree. It is `refused`,
+  with the reason in `detail`, for a path the record already lists and for
+  one a reference may not name: a reference is a literal path that exists,
+  outside every app's directory, reached through no symlink, and not under
+  `system/vendor/` or `data/`. A skill the app carries is therefore never a
+  reference: it is inside the app. Regenerate the scope file afterwards, and
+  list the path in your report under `References registered:`.
 - `[scope] exclude` in the `app.toml` of an app with a record is relative to
   the app's directory (`seed/**`, not `system/apps/<package>/seed/**`), so the
   manifest means the same in every workspace the app is installed into. A
@@ -116,6 +138,16 @@ App specifics:
 
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout
 open` / `refresh` / `list` against the served tree.
+
+## Stored data that changes shape
+
+When the pass changes the shape of what the app stores under
+`data/.apps/<name>/` (a renamed field, a file split in two, a new required
+key), the app brings older data forward itself when it starts, before it
+serves a request, and a test covers the conversion. Never convert the data by
+hand and leave the app unable to read the old shape: a published app is
+updated in workspaces where its data outlives its code, and nobody there
+knows what the old shape was.
 
 ## Phone and sharing checks
 

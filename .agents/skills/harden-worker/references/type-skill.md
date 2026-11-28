@@ -63,14 +63,17 @@ SKILL.md.
 
 ## Skills an app owns
 
-A skill that exists only as part of one app lives in that app's directory, at
+A skill an app carries lives in that app's directory, at
 `system/apps/<package>/skills/<name>/`, and `.agents/skills/<name>` is a link
-to it that `app-install` generates. Such a skill is part of the app, not a
-creation of its own:
+to it that `app-install` generates. An app comes to carry a skill when it is
+published, which gathers in the skills it needs, or by being installed with
+one; a skill you write is never put there. Such a skill is part of the app,
+not a creation of its own:
 
-- `skill:<name>` names the app: the scope file carries the app's footprint,
-  and the pass follows `type-app.md`. A pass that names both the app and the
-  skill is refused, since they are one creation.
+- It is in the app's footprint by where it is, with no reference to declare.
+  `skill:<name>` resolves through the link to the app: the scope file carries
+  the app's footprint, and the pass follows `type-app.md`. A pass that names
+  both the app and the skill is refused, since they are one creation.
 - Edit its files under the app's directory. Git reports a change there, and
   reports the link as one path, never a change through it.
 - It has no `python/` project of its own. Code it needs lives in the app's
@@ -101,9 +104,21 @@ uv run --no-sync app-manifest references --for-path .agents/skills/<name>
 
 One JSON line per app that claims the skill; no output means none does. When
 the entry is missing, add it to a built-in app's `app.toml` as part of this
-change. For an app with a record, do not write it into the record or the
-manifest yourself: name the skill in your report under `Outside footprint:`,
-saying which app it drives.
+change. For an app with a record, record it with the installer, never by
+editing the record or the manifest:
+
+```bash
+uv run --no-sync app-install reference add <app> .agents/skills/<name> --note "<the surface the skill uses>"
+```
+
+It writes the entry into the app's record and commits that one file on your
+branch (`reference_added`; `refused` with the reason in `detail` when the
+record already lists the path). Regenerate the scope file afterwards: the
+record then sits under the skill's `context`, so the commit counts as inside
+the footprint. When the skill stops using an app,
+`uv run --no-sync app-install reference remove <app> .agents/skills/<name>`
+takes the entry out. List what you registered in your report under
+`References registered:`.
 
 The skill's `context` in the scope file lists the primary directory of every app
 that claims this skill, and the record of each one that has a record. Read

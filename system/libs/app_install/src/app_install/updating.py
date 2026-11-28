@@ -31,6 +31,7 @@ from app_install.errors import NotInstalledAppError
 from app_install.errors import UpdateInProgressError
 from app_install.git import fetch_commit
 from app_install.git import land_commit
+from app_install.git import require_git_subtree
 from app_install.git import resolve_ref
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -42,14 +43,12 @@ from app_install.paths import manifest_path
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
+from app_manifest.records import REGENERABLE_FILENAMES
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
 from app_manifest.records import write_record
 
-# The files in an app's directory that are a function of other files there: on a conflict the upstream side is
-# taken and the file is made again, and a difference in one alone does not make an installed app modified.
-REGENERABLE_FILENAMES: Final[frozenset[str]] = frozenset({"uv.lock"})
 _WORKTREES_DIRNAME: Final[str] = "worktrees"
 _SNAPSHOTS_DIRNAME: Final[str] = "snapshots"
 _NOBACKUP_MARKER: Final[str] = ".nobackup"
@@ -101,6 +100,11 @@ def update_worktree_path(repo_root: Path, name: str) -> Path:
     return repo_root / STATE_DIRECTORY / _WORKTREES_DIRNAME / name
 
 
+def data_snapshots_path(repo_root: Path, name: str) -> Path:
+    """Where the copies of the app's stored data that its updates make are kept."""
+    return repo_root / STATE_DIRECTORY / _SNAPSHOTS_DIRNAME / name
+
+
 def _pending_path(repo_root: Path, name: str) -> Path:
     return repo_root / STATE_DIRECTORY / _WORKTREES_DIRNAME / f"{name}.json"
 
@@ -120,7 +124,7 @@ def snapshot_app_data(repo_root: Path, record: AppRecord, runtime: WorkspaceRunt
     data_directory = repo_root / APP_DATA_DIRECTORY / str(record.name)
     if not data_directory.is_dir():
         return ""
-    snapshots_directory = repo_root / STATE_DIRECTORY / _SNAPSHOTS_DIRNAME / str(record.name)
+    snapshots_directory = data_snapshots_path(repo_root, str(record.name))
     snapshots_directory.mkdir(parents=True, exist_ok=True)
     needed = _directory_size(data_directory) * _SNAPSHOT_HEADROOM_FACTOR
     if needed > runtime.free_disk_bytes(snapshots_directory):
@@ -154,6 +158,19 @@ def snapshot_app_data(repo_root: Path, record: AppRecord, runtime: WorkspaceRunt
 
 def _conflicted_paths(worktree: Path) -> tuple[str, ...]:
     return tuple(line for line in run_git(worktree, ["diff", "--name-only", "--diff-filter=U"]).splitlines() if line)
+
+
+def pending_update_paths(repo_root: Path, name: str) -> tuple[Path, ...]:
+    """What an update of the app ``name`` that waits for a person keeps: its worktree and what it was bringing
+    in; only the ones that exist."""
+    candidates = (update_worktree_path(repo_root, name), _pending_path(repo_root, name))
+    return tuple(path for path in candidates if path.exists())
+
+
+def discard_pending_update(repo_root: Path, name: str) -> None:
+    """Give up an update of the app ``name`` that waits for a person; nothing when none does. The live app was
+    never touched by it."""
+    _remove_worktree(repo_root, name)
 
 
 def _remove_worktree(repo_root: Path, name: str) -> None:
@@ -323,12 +340,14 @@ def update_app(
     """Bring the installed app ``name`` to ``requested_ref`` of the repository it came from, or to its latest
     version; with ``is_continuing``, finish an update that stopped for a person.
 
-    Raises AppRecordNotFoundError for an app with no record, NotInstalledAppError for an app this workspace
+    Raises MissingCommandError when git has no ``git subtree``, AppRecordNotFoundError for an app with no
+    record, NotInstalledAppError for an app this workspace
     built, UpdateInProgressError when an update of the app is already waiting (or, when continuing, none is),
     where a waiting update whose worktree has been removed was given up and no longer waits,
     NoSnapshotError when the app's data cannot be kept safe, and CollisionError when the new version would take a
     name something in the workspace holds. The primary checkout is unchanged unless the result is UPDATED.
     """
+    require_git_subtree(repo_root)
     record = load_record(repo_root, name)
     if record.origin is not AppOrigin.INSTALLED or not record.upstream_url:
         raise NotInstalledAppError(f"{name} was built in this workspace, so there is nothing to update it from")

@@ -594,13 +594,48 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+The seed body takes one more, optional, field: `first_message`, a message the
+chat sends as the user's own when its first agent launches (a workspace created
+from an app is seeded with `/install-app <url>`, so the agent's first turn sets
+the app up). It is kept in a file of its own beside the seed
+(`data/.apps/chat/chats/<chat-id>/seed_first_message.txt`), so it survives a
+restart of this app between the seed and the launch, and the chat's record
+stays the one a seed without it writes, which a chat app from before the field
+still reads. With an
+account signed in, the seed route launches the chat itself, at once (a first-run
+seed's waits for the provider page, below), and the
+create carries the message; with nothing signed in the chat waits like any
+seeded chat, and the launch the sign-in makes sends it. Whoever launches the
+chat first sends it: when the user signed in elsewhere and typed before
+anything had launched the chat, the seed's message rides the create and the
+user's words follow it through the send path once the agent is up. It is
+sent once. It is read only by the launch of a chat whose record names no agent
+yet, and that launch names one before its create starts, so no later launch,
+restart, or handoff sends it again; a create that fails takes its agent back
+off the record, which leaves the message for the page's "Try again" or for the
+launch after a restart. It reaches the agent as the user's
+first words would, the seeded conversation ahead of it, except that a slash
+command goes as it is and leaves the conversation pending for the first send
+after it: the words the launch itself brought, when it brought any, and
+otherwise the next message, one that waited while the agent was being created
+included. A chat launched as a room is not sent it: a room has no agent to act
+on one. A blank or absent `first_message` is a seed as it always was, and
+launches nothing.
+
 A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
-app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
+app's: a seed request with `is_first_run` opens the chat on `FIRST_RUN_WELCOME`
 (the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the
 workspace's owner the provider page (`first_run.py`), and writes the chat's start suggestions
 (below), "Describe what you want to make", "Get ideas for what to make" and "See what Studio can
-do", under the welcome's last turn, with the step its first conversation stands at (the tree,
-below). The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
+do", under the last seeded turn, with the step its first conversation stands at (the tree,
+below). Such a request needs no turns. The ones it does bring follow the welcome, so the
+suggestions sit under the last of them: a workspace created with an app from the Imbue Studio app
+is seeded with `is_first_run`, one assistant turn saying what installing the app came to, and
+`/install-app <url>` as its `first_message`. A first-run chat with a first message is not launched
+by the seed route while the provider page is owed, whatever is signed in: the launch the owner's
+leaving that page makes (below) sends it, or the sign-in's when they left with nothing connected.
+The message moves the chat's tree as one the user sent would, so a slash command leaves it at its
+start. The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
 under its lanes; the first account connected there is pinned as the workspace's default (see
 "Provider accounts"), and with two or more connected the page marks the default's row "Default"
 and gives every other row a button that pins that account instead. Every row ends in Remove, which
@@ -610,7 +645,8 @@ the provider chooser a tile opens, wear the page's cream and brown ink whatever 
 workspace wears, where the chooser opened from anywhere else wears the workspace's look. Leaving
 the provider page with a provider connected starts the chat's agent at once, on the default account and with no
 message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
-types, and that first send carries the welcome. For this chat the context block also says that
+types, and that first send carries the welcome (a seed's `first_message` is the one thing this
+launch sends, as above). For this chat the context block also says that
 this is the user's first conversation in a new workspace and that the agent reads
 `.agents/skills/first-run-onboarding/SKILL.md` before replying; the skill holds the reply to each
 start suggestion word for word, the questions and idea lists that follow "Get ideas for what to
@@ -619,7 +655,8 @@ Imbue Studio app that still asks what type of studio the user wants sends the an
 it is kept beside the seed in `first_run_context.txt` (the file that marks the chat as the first
 run's, empty when nothing was said), rides the same block without being shown, and is taken again
 from a first-run seed posted before the chat's first agent is launched, which answers the same
-chat rather than opening a second. Earlier versions started this chat's agent with a note of the
+chat rather than opening a second, with the turns and first message it was first seeded with.
+Earlier versions started this chat's agent with a note of the
 chat app's own (`<first-run-kickoff>`); the page still hides it in the transcripts that hold one.
 
 The workspace has one **main chat**, where a text with no chat of its own goes

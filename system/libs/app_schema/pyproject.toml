@@ -7,11 +7,13 @@ requires-python = ">=3.12"
 dependencies = [
     # Everything this package offers is the SDK's.
     "imbue-app-sdk",
-    # CLEANUP: drop the three below with this package. An app written before the SDK reaches them through this
-    # package: it imports workspace_layout.identity, and its own imbue-common and app-manifest requirements
-    # resolve to the workspace's pin through this package's sources.
-    "app-manifest",
+    # An app built in the workspace resolves its own imbue-common requirement to the workspace's pin through
+    # this package's sources.
     "imbue-common",
+    # CLEANUP: drop the two below once no supported workspace holds an app written before the SDK that has
+    # not been published since: such an app imports workspace_layout.identity and reaches app-manifest
+    # through this package, and publishing it is what moves it to the SDK's names.
+    "app-manifest",
     "workspace-layout",
 ]
 

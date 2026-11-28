@@ -369,7 +369,8 @@ in your report.
     tree: `git cat-file -e "$TARGET_REF:system/apps/<package>/app.toml"` fails)
     is converted with `uv run --no-sync app-install migrate <package>`, after
     its `--dry-run`, whose output goes in your report. `migrated` moved the
-    skills and routines the app owns into its directory and wrote its record;
+    app's routines into its directory and wrote its record, which lists what
+    the app's manifest named under `[[references]]`, skills included;
     commit what it changed (`update-self: convert the <name> app`).
     `unconverted` changed nothing and lists why under `problems`; the app keeps
     running as it was, so report it under the update's follow-ups with those
@@ -378,13 +379,30 @@ in your report.
   - Then `uv run --no-sync app-install regenerate`, so a change this template
     made to what is generated reaches every app; commit any file it lists under
     `changed_paths` (`update-self: regenerate the apps' program files`).
+    `reassigned_ports` names each app that was given a new port because two
+    shared one; say so under **Impact analysis**. `collision` wrote nothing
+    and names, under `problems`, a skill an app carries that would take the
+    place of one the workspace or another app holds: that app's follow-up,
+    reported the same way.
   - Then `uv run --no-sync app-install check`. `inconsistent` names each
     problem; one in an app's own files is that app's follow-up, reported the
+    same way.
+  - Then, for each app `migrate` converted or `regenerate` listed a file of
+    (and for no other), `uv run --no-sync app-install verify <name> --template <target>`,
+    with the version this update brings in (`minds-v<major>.<minor>.<patch>`).
+    It runs the app's own checks and, on `verified`, writes that version to
+    the app's record and commits it (part of this gate, like the commits
+    above). `tests_failed` wrote nothing: the app's follow-up, reported the
     same way.
   These commits are part of the environment gate, like a relock: they are
   mechanical, they are not edits of your own for the review gates of 4c, and
   an app they changed gets this step's suites and its isolated boot as any
-  converted package does.
+  converted package does. A failure in any of these steps, or in the suites
+  of an app they changed, is that app's follow-up and never a reason to hold
+  the update: report it with the command's JSON line, and the lead dispatches
+  a repair worker for the app once the update has landed. Do not run
+  `app-install link` here. It moves the workspace's own branch and is
+  refused in a worktree; the lead runs it after the apply (SKILL.md, 5c).
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a
   `pyproject.toml` or `uv.lock` at all, merged or pulled in

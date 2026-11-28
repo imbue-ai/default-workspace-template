@@ -313,6 +313,20 @@ class RoutineRow(FrozenModel):
     is_enabled: bool = Field(description="Whether the switch is on")
     kind: RunKind | None = Field(description="A command routine or a skill routine; None when broken")
     app: str | None = Field(description="The app it belongs to")
+    owning_app: str | None = Field(
+        description="The app whose directory holds the definition file, by the name the workspace's record of the "
+        "app gives it, else by the directory's own name; None for a routine under system/routines"
+    )
+    is_schedule_only: bool = Field(
+        description="Whether the schedule and the on/off switch are all that can be changed here: the definition "
+        "belongs to an app, so editing anything else or removing it is a change to that app"
+    )
+    has_schedule_override: bool = Field(
+        description="Whether the routine runs on a schedule the user gave it in place of the one its app gives it"
+    )
+    app_schedule_text: str | None = Field(
+        description="The app's own schedule in words while the user's is in its place; None otherwise"
+    )
     schedule_text: str = Field(description="The schedule in words")
     next_due_at: datetime | None = Field(description="When the next scheduled run is due")
     next_run_text: str = Field(description="The next run in words")

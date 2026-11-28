@@ -268,7 +268,9 @@ dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
     { name = "loguru" },
+    { name = "pathspec" },
     { name = "pydantic" },
+    { name = "share-grants" },
     { name = "tomlkit" },
 ]
 
@@ -286,7 +288,9 @@ requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=530fdf5eb4160b4c2aaae7ae3461334b97d414aa" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "share-grants", editable = "system/libs/share_grants" },
     { name = "tomlkit", specifier = ">=0.12" },
 ]
 
@@ -1576,8 +1580,11 @@ name = "github-sync"
 version = "0.1.0"
 source = { editable = "system/libs/github_sync" }
 dependencies = [
+    { name = "app-manifest" },
     { name = "click" },
+    { name = "imbue-common" },
     { name = "loguru" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -1587,8 +1594,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "click", specifier = ">=8.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=530fdf5eb4160b4c2aaae7ae3461334b97d414aa" },
     { name = "loguru", specifier = ">=0.7.0" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -3105,12 +3115,14 @@ name = "publish-template-skill"
 version = "0.1.0"
 source = { editable = ".agents/skills/publish-template/python" }
 dependencies = [
+    { name = "github-sync" },
     { name = "pydantic" },
     { name = "update-self-skill" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "pydantic", specifier = ">=2" },
     { name = "update-self-skill", editable = ".agents/skills/update-self/python" },
 ]

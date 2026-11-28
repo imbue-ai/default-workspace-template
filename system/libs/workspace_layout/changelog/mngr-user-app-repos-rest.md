@@ -1,0 +1,1 @@
+The `CLEANUP` note on `workspace_layout.identity` says when the module can go: once no supported workspace holds an app written before the app SDK that has not been published since, because publishing such an app is what moves its imports to the SDK's names. Nothing the module exports changed.

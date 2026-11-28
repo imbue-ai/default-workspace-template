@@ -106,6 +106,10 @@ def test_a_post_that_fails_for_a_reason_the_client_does_not_handle_is_logged(log
 
     future = feed.post_bubble(_BOB, _CHAT, "Lounge", "hi", "m-1", (), BubbleKind.MESSAGE)
     assert isinstance(future.exception(timeout=10), RuntimeError)
+    # A future wakes whoever waits on it before it runs its callbacks, and the log is written by one.
+    wait_until_true(
+        lambda: any(record.startswith("WARNING") for record in loguru_records), 10, "the failed post to be logged"
+    )
     feed.shutdown()
 
     assert [record for record in loguru_records if record.startswith("WARNING")] == [

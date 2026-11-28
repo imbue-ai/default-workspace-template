@@ -167,7 +167,22 @@ terminal". With no matches at all the page says so under the field.
         "choices": [{"summary": "...", "resolution": "..."}]
       }
     ],
-    "shelves": [{"key": "popular", "title": "Most popular", "slugs": ["..."]}]
+    "apps": [
+      {
+        "name": "weather-desk",
+        "title": "Weather Desk",
+        "description": "one or two sentences",
+        "author": "someone",
+        "repository_url": "https://github.com/someone/weather-desk",
+        "icon": "app-icons/someone--weather-desk.svg",
+        "version": "1.2.0",
+        "required_accounts": [{"scope": "slack-api", "permission": "slack-read-all"}],
+        "required_secrets": ["OPENWEATHER_API_KEY"],
+        "needs_ai": true,
+        "apt_packages": ["ffmpeg"]
+      }
+    ],
+    "shelves": [{"key": "popular", "title": "Most popular", "slugs": ["...", "app:weather-desk"]}]
   }
   ```
 
@@ -176,6 +191,26 @@ terminal". With no matches at all the page says so under the field.
   unique. Every field but `slug`, `title`, `description`, and `repository_url` has
   a default, and unknown fields are ignored, so a newer catalog never breaks an
   older workspace. A `format` other than 1 is refused.
+- `apps` lists the published apps (user apps as shareable repositories,
+  `catalog/README.md`), added after this plan was built and read by the Getting
+  Started app, which took the catalog over from the shell. An entry carries what
+  a template's does, read from the `app.toml` at the root of the app's published
+  repository (`name`, `title`, `description`, `version`, the permissions and
+  secrets it asks for, whether it calls a model, its apt packages), with
+  `repository_url`, the repository it is installed from, and `icon`, the app's
+  `icon.svg` copied beside the catalog under `catalog/app-icons/` and resolved
+  the way `thumbnail` is. `name`, `title` and `repository_url` are required and
+  names are unique. A shelf names an app among its `slugs` as `app:<name>`; a
+  template's slug never holds a colon. An app's card offers "Add to this
+  workspace" (a chat started on `/install-app <repository_url>`) and "Create a
+  new workspace with this". The array is optional: a catalog without it lists
+  no apps, and a page from before it never reads `apps` and drops an `app:`
+  entry as a slug no template carries, so an older workspace never offers an
+  app it cannot install.
+- An app appears on the page only once its entry and its icon are committed on
+  the branch the catalog is fetched from, `mngr/new-tab-page`, whatever `main`
+  holds: the fetch URL names that branch until it moves (see the follow-ups).
+  The shipped catalog lists no app yet (`"apps": []`).
 - The shell serves `GET /api/templates-catalog`. It answers `200 {"catalog": {...
   templates with "thumbnail_url" resolved to absolute URLs ..., "shelves"},
   "is_stale": false}` from a fetch made on demand and reused for six hours; when
@@ -220,7 +255,10 @@ terminal". With no matches at all the page says so under the field.
 - `catalog/thumbnails/<owner>--<slug>.svg`: the drawings, copied from each
   template repo (the prototype already pulled them).
 - `catalog/build_catalog_from_export.py`: converts the prototype's
-  `inspirations.json` export into the catalog document; stdlib only.
+  `inspirations.json` export into the catalog document; stdlib only. It also
+  lists an app from a checkout of its published repository
+  (`--app <repository url>=<checkout>`, `--drop-app <name>`), copying its icon
+  to `catalog/app-icons/<owner>--<name>.svg`.
 - `catalog/README.md`: what the file is, how it is fetched, how to refresh it.
 
 ### `system/apps/system_interface` (backend)

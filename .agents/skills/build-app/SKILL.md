@@ -123,11 +123,12 @@ does what it needs. Pass `--display-name` (at most 64 characters) when the
 description is too long to be the app's name. The scaffolder registers the
 app through `app-install`, which picks its port and generates its program
 file: never do either by hand. `--start` waits until the app answers healthy.
+Then commit; with GitHub sync on, follow `references/link-new-app.md`.
 
-`references/scaffold-output.md` has the other flags, what each generated file
-is for, the program file, how the app starts, adding a dependency, and an app
-that needs a credential. Read it when you change something the scaffold wrote
-other than routes, or when the scaffolder or a start fails.
+`references/scaffold-output.md` has the other flags, the generated files, how
+the app starts, adding a dependency and a credential. Read it when you change
+something the scaffold wrote other than routes, or when the scaffolder or a
+start fails.
 
 ## Step 4: Confirm a mock
 
@@ -191,10 +192,10 @@ one.
   document.
 - `.agents/shared/references/apps/code.md` has the other rules: state under
   `DATA_DIR`, the content-security policy, a "view raw" control on derived
-  data, finding another app by name, data migrations, calling Claude.
+  data, using another app, calling Claude.
 - `.agents/shared/references/apps/manifest.md` says when an app that works
-  between requests needs `stop_when_no_windows = false`, where the app's
-  skills, routines and environment units go, and how to change how it runs.
+  between requests needs `stop_when_no_windows = false`, what goes in the
+  app's directory, what is recorded as a reference, and how it runs.
 
 **The mock frame stays until the app is really hooked up.** Confirming the mock
 does not take it down. The app stays framed while any of it is not real, above

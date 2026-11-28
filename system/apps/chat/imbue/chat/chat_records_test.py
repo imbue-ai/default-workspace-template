@@ -1,12 +1,15 @@
 """The chat record store: round trips, the version guard, and the per-record skip on a bad file."""
 
 import json
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
@@ -198,6 +201,65 @@ def test_a_record_carries_whether_its_seed_is_pending_and_an_older_file_reads_it
     (tmp_path / "chats" / first / "record.json").write_text(json.dumps(older))
     read_older = store.read(ChatId(first))
     assert read_older is not None and read_older.is_seed_pending is False
+
+
+# A seeded chat's record exactly as the chat app of minds-v0.10 wrote it. Earlier chat apps refuse a record that
+# carries a key they do not know, so a change to this text makes every chat written after it unreadable to them.
+_SEEDED_RECORD_AS_EARLIER_CHAT_APPS_WROTE_IT = """{
+  "agents": [
+    {
+      "account_id": "",
+      "agent_id": "agent-seeded",
+      "archived_name": null,
+      "ended_at": "2026-11-21T12:00:00Z",
+      "final_event_count": 2,
+      "harness": "seed",
+      "is_fresh_start": false,
+      "lane": "",
+      "opening_message": null,
+      "opening_message_id": null,
+      "seq": 1,
+      "started_at": "2026-11-21T12:00:00Z"
+    }
+  ],
+  "chat_id": "agent-seeded",
+  "chosen_name": null,
+  "handoff": null,
+  "is_seed_pending": false,
+  "rebind": null,
+  "seed_title": "Main",
+  "version": 2
+}
+"""
+
+
+def test_a_record_is_written_byte_for_byte_as_earlier_chat_apps_wrote_it(tmp_path: Path) -> None:
+    """A workspace can be rolled back to the chat app it ran before an update, and that app refuses any record
+    with a key it does not know: the file this build writes is the file that one wrote, and it reads it back."""
+    store = FileChatRecordStore(root=tmp_path / "chats")
+    seeded_at = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
+    record = ChatRecord(
+        chat_id=ChatId("agent-seeded"),
+        agents=(
+            ChatAgentEntry(
+                seq=1,
+                agent_id="agent-seeded",
+                lane="",
+                account_id="",
+                harness=HarnessType.SEED,
+                started_at=seeded_at,
+                ended_at=seeded_at,
+                final_event_count=2,
+            ),
+        ),
+        seed_title="Main",
+    )
+
+    store.write(record)
+
+    record_path = tmp_path / "chats" / "agent-seeded" / "record.json"
+    assert record_path.read_text() == _SEEDED_RECORD_AS_EARLIER_CHAT_APPS_WROTE_IT
+    assert store.read(ChatId("agent-seeded")) == record
 
 
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:

@@ -8,8 +8,12 @@
  * fetch is retried the next time the page mounts). An app with no catalog URL configured answers a
  * null catalog, and the page omits the section.
  *
- * The pure helpers below (shelf resolution, the "All templates" row, the template search, the
- * write-up's paragraphs) are exported so they can be tested without a DOM or a socket.
+ * A catalog lists published apps beside its templates, and a shelf names one as ``app:<name>``
+ * among its template slugs. A card, a rail, and the detail page show either, so the page works in
+ * listings: a template or an app, tagged with which it is.
+ *
+ * The pure helpers below (shelf resolution, the "All apps" and "All templates" rows, the search,
+ * the write-up's paragraphs) are exported so they can be tested without a DOM or a socket.
  */
 
 import m from "mithril";
@@ -45,7 +49,23 @@ export interface CatalogTemplate {
   choices: CatalogTemplateChoice[];
 }
 
-/** A browsing row as the catalog spells it: slugs, not templates. */
+/** One published app as the catalog lists it, its icon already resolved to a URL. */
+export interface CatalogApp {
+  name: string;
+  title: string;
+  description: string;
+  author: string;
+  repository_url: string;
+  /** Absolute URL of the app's icon, or "" when the catalog has none for it. */
+  icon_url: string;
+  version: string;
+  required_accounts: CatalogRequiredAccount[];
+  required_secrets: string[];
+  needs_ai: boolean;
+  apt_packages: string[];
+}
+
+/** A browsing row as the catalog spells it: a template's slug, or an app's name behind ``app:``. */
 export interface CatalogShelf {
   key: string;
   title: string;
@@ -55,14 +75,18 @@ export interface CatalogShelf {
 export interface TemplateCatalog {
   generated_at: string;
   templates: CatalogTemplate[];
+  apps: CatalogApp[];
   shelves: CatalogShelf[];
 }
 
-/** A row with its templates resolved, ready to render. */
+/** What a card, a rail, and the detail page show: a template or an app. */
+export type CatalogListing = { kind: "template"; template: CatalogTemplate } | { kind: "app"; app: CatalogApp };
+
+/** A row with its entries resolved, ready to render. */
 export interface ResolvedShelf {
   key: string;
   title: string;
-  templates: CatalogTemplate[];
+  listings: CatalogListing[];
 }
 
 export type TemplateCatalogState =
@@ -77,33 +101,78 @@ export const TEMPLATES_CATALOG_PATH = "/api/templates-catalog";
 export const ALL_TEMPLATES_SHELF_KEY = "all";
 const ALL_TEMPLATES_SHELF_TITLE = "All templates";
 
+/** The synthesized row before it, when the catalog lists any app: every app it carries. */
+export const ALL_APPS_SHELF_KEY = "all-apps";
+const ALL_APPS_SHELF_TITLE = "All apps";
+
+/** What a shelf entry naming an app starts with; the app's name follows. A template's slug holds no colon. */
+export const APP_SHELF_ENTRY_PREFIX = "app:";
+
+/** The catalog as the route answers it; a server older than this page answers no ``apps``. */
+export interface CatalogWire extends Omit<TemplateCatalog, "apps"> {
+  apps?: CatalogApp[];
+}
+
 interface CatalogResponse {
-  catalog: TemplateCatalog | null;
+  catalog: CatalogWire | null;
   is_stale?: boolean;
 }
 
 // pure helpers
+export function templateListing(template: CatalogTemplate): CatalogListing {
+  return { kind: "template", template };
+}
+
+export function appListing(app: CatalogApp): CatalogListing {
+  return { kind: "app", app };
+}
+
+/** A listing's identity within the catalog, spelled as a shelf names it: a template's slug, or ``app:<name>``. */
+export function listingKey(listing: CatalogListing): string {
+  return listing.kind === "template" ? listing.template.slug : `${APP_SHELF_ENTRY_PREFIX}${listing.app.name}`;
+}
+
 /**
- * The catalog's shelves with their slugs resolved (a slug no template carries is dropped, and a
- * row left empty by that is dropped with it), followed by the "All templates" row.
+ * The catalog's shelves with their entries resolved (an entry that names no template and no app
+ * the catalog carries is dropped, and a row left empty by that is dropped with it), followed by
+ * the "All apps" row when there are apps and the "All templates" row.
  */
 export function resolveShelves(catalog: TemplateCatalog): ResolvedShelf[] {
-  const templateBySlug = new Map(catalog.templates.map((template) => [template.slug, template]));
+  const allListings = [...catalog.apps.map(appListing), ...catalog.templates.map(templateListing)];
+  const listingByKey = new Map(allListings.map((listing) => [listingKey(listing), listing]));
   const shelves: ResolvedShelf[] = [];
   for (const shelf of catalog.shelves) {
-    const templates = shelf.slugs.flatMap((slug) => {
-      const template = templateBySlug.get(slug);
-      return template === undefined ? [] : [template];
+    const listings = shelf.slugs.flatMap((entry) => {
+      const listing = listingByKey.get(entry);
+      return listing === undefined ? [] : [listing];
     });
-    if (templates.length > 0) shelves.push({ key: shelf.key, title: shelf.title, templates });
+    if (listings.length > 0) shelves.push({ key: shelf.key, title: shelf.title, listings });
   }
-  shelves.push({ key: ALL_TEMPLATES_SHELF_KEY, title: ALL_TEMPLATES_SHELF_TITLE, templates: [...catalog.templates] });
+  if (catalog.apps.length > 0) {
+    shelves.push({ key: ALL_APPS_SHELF_KEY, title: ALL_APPS_SHELF_TITLE, listings: catalog.apps.map(appListing) });
+  }
+  shelves.push({
+    key: ALL_TEMPLATES_SHELF_KEY,
+    title: ALL_TEMPLATES_SHELF_TITLE,
+    listings: catalog.templates.map(templateListing),
+  });
   return shelves;
 }
 
 /** The templates a query finds: by title, description, or author. */
 export function searchTemplates(templates: readonly CatalogTemplate[], query: string): CatalogTemplate[] {
   return templates.filter((template) => matchesQuery(query, template.title, template.description, template.author));
+}
+
+/** Everything in the catalog a query finds, by title, description, or author: apps first, as on the shelves. */
+export function searchListings(catalog: TemplateCatalog, query: string): CatalogListing[] {
+  const apps = catalog.apps.filter((app) => matchesQuery(query, app.title, app.description, app.author));
+  return [...apps.map(appListing), ...searchTemplates(catalog.templates, query).map(templateListing)];
+}
+
+/** The catalog a response carries, with the ``apps`` a server older than this page leaves out filled in. */
+export function catalogFromWire(wire: CatalogWire): TemplateCatalog {
+  return { ...wire, apps: wire.apps ?? [] };
 }
 
 /**
@@ -145,7 +214,7 @@ async function fetchTemplateCatalog(): Promise<TemplateCatalogState> {
     }
     const data = (await response.json()) as CatalogResponse;
     if (data.catalog === null) return { kind: "disabled" };
-    return { kind: "loaded", catalog: data.catalog, isStale: data.is_stale === true };
+    return { kind: "loaded", catalog: catalogFromWire(data.catalog), isStale: data.is_stale === true };
   } catch (e) {
     console.warn("[getting-started] could not load the template catalog", e);
     return { kind: "failed" };

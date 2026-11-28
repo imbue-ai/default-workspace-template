@@ -86,9 +86,11 @@ from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
+from imbue.chat.chat_seed import SEED_FIRST_MESSAGE_FILENAME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_context_message
+from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
@@ -4127,6 +4129,284 @@ def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
     client = create_application(build_test_state()).test_client()
     response = client.post("/api/chats/seed", json=_seed_body())
     assert response.status_code == 503
+
+
+_SEED_FIRST_MESSAGE = "/install-app https://github.com/example/pantry"
+
+
+def _seeding_manager(tmp_path: Path) -> tuple[AgentManager, Path]:
+    """A manager whose ``mngr`` records its argv, for the seed route's launches; and the log it writes."""
+    mngr_binary, log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    # The launch's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    return manager, log_path
+
+
+def _logged_creates(log_path: Path) -> list[str]:
+    if not log_path.exists():
+        return []
+    return [line for line in log_path.read_text().splitlines() if line.startswith("create ")]
+
+
+def test_seeding_a_chat_with_a_first_message_launches_it_at_once_with_that_message(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """A workspace created from an app: the seed carries the command that sets the app up, and with an account
+    signed in the chat's first agent is launched by the seed itself, the command as its first message."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        response = client.post("/api/chats/seed", json={**_seed_body(), "first_message": _SEED_FIRST_MESSAGE})
+
+        assert response.status_code == 201
+        created = response.get_json()
+        assert created["display_name"] == MAIN_CHAT_NAME
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created["chat_id"]) is None, 10, "the provisional chat's completion"
+        )
+        (create_line,) = _logged_creates(log_path)
+        assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
+        record = manager._chat_record_store.read(ChatId(created["chat_id"]))
+        assert record is not None and [entry.harness for entry in record.agents] == [
+            HarnessType.SEED,
+            HarnessType.CLAUDE,
+        ]
+    finally:
+        manager.stop()
+
+
+def test_a_seeds_first_message_waits_for_the_sign_in_and_is_sent_by_the_launch_it_makes(tmp_path: Path) -> None:
+    """With nothing signed in the seed is taken and nothing is launched; the launch the chat's page posts once the
+    user has signed in (a create naming the chat, with no message) sends the seed's message, and a second such
+    launch is refused rather than sending it again."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        response = client.post("/api/chats/seed", json={**_seed_body(), "first_message": _SEED_FIRST_MESSAGE})
+
+        assert response.status_code == 201
+        chat_id = response.get_json()["chat_id"]
+        awaiting = manager.get_provisional_chat(chat_id)
+        assert awaiting is not None and awaiting.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        assert _logged_creates(log_path) == []
+
+        account_id, _ = mint_account_dir()
+        commit_account(account_id, "anthropic", "Anthropic")
+        launched = client.post("/api/chats/create", json={"chat_id": chat_id, "account_id": account_id})
+
+        assert launched.status_code == 201
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+        (create_line,) = _logged_creates(log_path)
+        assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
+        again = client.post("/api/chats/create", json={"chat_id": chat_id, "account_id": account_id})
+        assert again.status_code == 400
+        assert len(_logged_creates(log_path)) == 1
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize("body_extra", [{}, {"first_message": ""}, {"first_message": "  \n"}])
+def test_seeding_a_chat_without_a_first_message_launches_nothing(
+    tmp_path: Path, signed_in_account: str, body_extra: dict[str, str]
+) -> None:
+    """A seed that names no first message is the welcome chat as it always was: it waits for the user's first
+    send, account or no account."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        response = client.post("/api/chats/seed", json={**_seed_body(), **body_extra})
+
+        assert response.status_code == 201
+        chat_id = response.get_json()["chat_id"]
+        awaiting = manager.get_provisional_chat(chat_id)
+        assert awaiting is not None and awaiting.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        record = manager._chat_record_store.read(ChatId(chat_id))
+        assert record is not None and record.is_seed_only
+        assert not (tmp_path / "chats" / chat_id / SEED_FIRST_MESSAGE_FILENAME).exists()
+        assert _logged_creates(log_path) == []
+    finally:
+        manager.stop()
+
+
+_APP_TURN = {"role": "assistant", "text": "**Pantry** is installed in this workspace. Setting it up continues here."}
+# What the Imbue Studio app seeds a workspace it created with an app from its own pages with: the first-run
+# arrival every creation page asks for, the app's turn, and the message that hands the app to its skill.
+_APP_FIRST_RUN_SEED_BODY: dict[str, Any] = {
+    "title": "Welcome",
+    "turns": [_APP_TURN],
+    "is_first_run": True,
+    "first_message": _SEED_FIRST_MESSAGE,
+}
+# The same for a workspace created with an app through the API, whose creation page never asked for the arrival.
+_APP_SEED_BODY: dict[str, Any] = {"title": "Welcome", "turns": [_APP_TURN], "first_message": _SEED_FIRST_MESSAGE}
+
+
+def _seeded_texts(client: FlaskClient, chat_id: str) -> list[str]:
+    events = client.get(f"/api/chats/{chat_id}/events").get_json()["events"]
+    return [event["text"] for event in events if event["type"] == "assistant_message"]
+
+
+def test_a_first_run_seed_with_an_apps_turn_and_first_message_plays_the_arrival_and_holds_the_message(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """A workspace created with an app from the Imbue Studio app: the chat opens on the welcome with the app's turn
+    after it and the start suggestions under that turn, the provider page is owed, and the first message waits for
+    the launch the owner's leaving that page makes, account or no account, which sends it once. A slash command
+    leaves the first conversation's tree at its start."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        response = client.post("/api/chats/seed", json=_APP_FIRST_RUN_SEED_BODY)
+
+        assert response.status_code == 201
+        chat_id = response.get_json()["chat_id"]
+        assert _seeded_texts(client, chat_id) == [*(turn.text for turn in FIRST_RUN_WELCOME), _APP_TURN["text"]]
+        suggestions = manager.get_chat_suggestions(ChatId(chat_id))
+        assert suggestions is not None
+        assert suggestions.after_event_id == seed_event_id(ChatId(chat_id), len(FIRST_RUN_WELCOME))
+        assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is True
+        chat_dir = tmp_path / "chats" / chat_id
+        assert (chat_dir / SEED_FIRST_MESSAGE_FILENAME).read_text() == _SEED_FIRST_MESSAGE
+        awaiting = manager.get_provisional_chat(chat_id)
+        assert awaiting is not None and awaiting.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        assert _logged_creates(log_path) == []
+
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+
+        (create_line,) = _logged_creates(log_path)
+        assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
+        assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.START
+        again = client.post("/api/chats/create", json={"chat_id": chat_id, "account_id": signed_in_account})
+        assert again.status_code == 400
+        assert len(_logged_creates(log_path)) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_seeds_first_message_is_sent_by_the_sign_in_when_the_provider_page_was_skipped(
+    tmp_path: Path,
+) -> None:
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        chat_id = client.post("/api/chats/seed", json=_APP_FIRST_RUN_SEED_BODY).get_json()["chat_id"]
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+        assert _logged_creates(log_path) == []
+
+        account_id, _ = mint_account_dir()
+        commit_account(account_id, "anthropic", "Anthropic")
+        launched = client.post("/api/chats/create", json={"chat_id": chat_id, "account_id": account_id})
+
+        assert launched.status_code == 201
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+        (create_line,) = _logged_creates(log_path)
+        assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_seed_posted_again_answers_the_same_chat_with_its_turns_and_first_message(tmp_path: Path) -> None:
+    manager, _log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        first = client.post("/api/chats/seed", json=_APP_FIRST_RUN_SEED_BODY)
+        again = client.post("/api/chats/seed", json=_APP_FIRST_RUN_SEED_BODY)
+
+        assert first.status_code == 201 and again.status_code == 201
+        chat_id = first.get_json()["chat_id"]
+        assert again.get_json()["chat_id"] == chat_id
+        assert len(manager.get_provisional_chats()) == 1
+        assert _seeded_texts(client, chat_id) == [*(turn.text for turn in FIRST_RUN_WELCOME), _APP_TURN["text"]]
+        assert (tmp_path / "chats" / chat_id / SEED_FIRST_MESSAGE_FILENAME).read_text() == _SEED_FIRST_MESSAGE
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_seed_with_a_turn_and_no_first_message_launches_its_agent_with_nothing_to_say(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The app's turn alone (an app that could not be handed to a skill): the arrival plays with the turn after
+    the welcome, and the launch the owner's leaving the provider page makes brings no message, as for any first run."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        body = {"title": "Welcome", "turns": [_APP_TURN], "is_first_run": True}
+        chat_id = client.post("/api/chats/seed", json=body).get_json()["chat_id"]
+
+        assert _seeded_texts(client, chat_id) == [*(turn.text for turn in FIRST_RUN_WELCOME), _APP_TURN["text"]]
+        assert not (tmp_path / "chats" / chat_id / SEED_FIRST_MESSAGE_FILENAME).exists()
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+        (create_line,) = _logged_creates(log_path)
+        assert "--message" not in create_line
+        assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.START
+    finally:
+        manager.stop()
+
+
+def test_a_first_run_seeds_first_message_in_words_moves_the_first_conversations_tree(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The message is sent as the user's own, so it answers the welcome as a message they sent would: anything
+    but the ideas suggestion ends the tree, and the first-run skill's note rides it with the seeded conversation."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        body = {"turns": [], "is_first_run": True, "first_message": "Set up the pantry app"}
+        chat_id = client.post("/api/chats/seed", json=body).get_json()["chat_id"]
+        assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.START
+
+        assert client.post("/api/first-run/provider-step/done").status_code == 200
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+
+        assert manager.get_first_run_tree_step(ChatId(chat_id)) is FirstRunTreeStep.DONE
+        (create_line,) = _logged_creates(log_path)
+        assert "first-run-onboarding" in create_line
+        assert create_line.endswith("Set up the pantry app")
+    finally:
+        manager.stop()
+
+
+def test_an_apps_seed_that_is_no_first_run_is_launched_at_once_and_plays_no_arrival(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """A workspace created with an app through the API: the app's turn is the whole seeded conversation, no
+    provider page is owed and the chat has no first-run tree, and the first message goes out with the seed's launch."""
+    manager, log_path = _seeding_manager(tmp_path)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        response = client.post("/api/chats/seed", json=_APP_SEED_BODY)
+
+        assert response.status_code == 201
+        chat_id = response.get_json()["chat_id"]
+        assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+        assert manager.get_first_run_tree_step(ChatId(chat_id)) is None
+        assert manager.get_chat_suggestions(ChatId(chat_id)) is None
+        wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
+        (create_line,) = _logged_creates(log_path)
+        assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
+        assert _seeded_texts(client, chat_id) == [_APP_TURN["text"]]
+    finally:
+        manager.stop()
+
+
+def test_a_seed_with_a_first_message_and_no_turns_is_refused_unless_it_is_a_first_run(client: FlaskClient) -> None:
+    response = client.post("/api/chats/seed", json={"turns": [], "first_message": _SEED_FIRST_MESSAGE})
+    assert response.status_code == 400
+
+
+def test_the_api_schema_lists_the_seeds_first_message_as_an_optional_field(client: FlaskClient) -> None:
+    document = client.get("/api/schema").get_json()
+
+    body = document["paths"]["/api/chats/seed"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    assert body == {"$ref": "#/components/schemas/SeedChatRequest"}
+    seed_request = document["components"]["schemas"]["SeedChatRequest"]
+    assert seed_request["properties"]["first_message"]["type"] == "string"
+    assert seed_request["properties"]["first_message"]["default"] == ""
+    assert "required" not in seed_request
 
 
 def test_an_empty_chat_list_gets_one_chat_awaiting_its_first_send(tmp_path: Path) -> None:

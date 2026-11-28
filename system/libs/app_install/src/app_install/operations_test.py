@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from imbue.imbue_common.model_update import to_update
 
 from app_install.cli import main
 from app_install.errors import AppAlreadyRegisteredError
@@ -439,8 +440,15 @@ def test_uninstalling_removes_the_app_and_what_was_generated_for_it_and_keeps_it
         "reload_programs",
         "remove_registry_row notes",
         "delete_ref refs/app-upstream/notes",
+        "delete_ref refs/app-published/notes",
         f"commit_paths {sorted(outcome.removed_paths)} 'app-install: uninstall notes'",
     ]
+    # Nothing else of the app was on this machine or on GitHub, and nothing else in the workspace names it.
+    assert outcome.removed_state_paths == ()
+    assert outcome.kept_share_grants is None
+    assert outcome.kept_routine_state == ()
+    assert outcome.kept_repositories == ()
+    assert outcome.dependents == ()
     # The neighbour is untouched and the tree is still consistent.
     assert (tmp_path / "system" / "supervisord.conf.d" / "digest.conf").is_file()
     assert check(tmp_path) == ()
@@ -466,8 +474,107 @@ def test_an_uninstall_that_cannot_reach_the_running_workspace_still_removes_the_
         "supervisord did not drop the app's programs: unix:///var/run/supervisor.sock no such file",
         "the app's registry row was not removed: no row named notes",
         "the app's upstream ref was not deleted: fatal: not a git repository",
+        "the app's published ref was not deleted: fatal: not a git repository",
         "the removal was not committed: fatal: not a git repository",
     )
+
+
+def test_an_uninstall_names_the_grants_and_routine_state_a_later_app_of_the_name_inherits(tmp_path: Path) -> None:
+    package = write_user_app(tmp_path, "notes")
+    write_app_file(tmp_path, package, "routines/notes-digest.toml", 'id = "notes-digest"\n')
+    write_app_file(tmp_path, package, "routines/notes-cleanup.toml", 'id = "notes-cleanup"\n')
+    add_app(tmp_path, package, None, never_bound)
+    write_workspace_file(
+        tmp_path,
+        "data/.secrets/share_grants.toml",
+        "[workspace]\nusers = []\nemails = []\nemail_domains = []\n"
+        '\n[services.notes]\nusers = ["3f1c"]\nemails = ["carol@example.com"]\nemail_domains = ["example.org"]\n'
+        '\n[services.digest]\nusers = ["9a2b"]\nemails = []\nemail_domains = []\n',
+    )
+    # Only the digest routine has run on this machine.
+    write_workspace_file(tmp_path, "data/.state/routines/notes-digest/state.json", '{"is_enabled": false}')
+    write_workspace_file(tmp_path, "data/.state/routines/other-routine/state.json", "{}")
+
+    outcome = uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
+
+    assert outcome.kept_share_grants is not None
+    assert outcome.kept_share_grants.model_dump() == {
+        "path": "data/.secrets/share_grants.toml",
+        "table": "services.notes",
+        "grant_count": 3,
+    }
+    assert outcome.kept_routine_state == ("data/.state/routines/notes-digest",)
+    assert outcome.problems == ()
+    # Named, never deleted: the next app called notes takes both over.
+    assert "[services.notes]" in (tmp_path / "data" / ".secrets" / "share_grants.toml").read_text()
+    assert (tmp_path / "data" / ".state" / "routines" / "notes-digest" / "state.json").is_file()
+
+
+def test_an_uninstall_reports_a_grants_file_it_cannot_read_and_an_app_shared_with_nobody(tmp_path: Path) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "notes"), None, never_bound)
+    add_app(tmp_path, write_user_app(tmp_path, "digest"), None, never_bound)
+    grants_file = write_workspace_file(tmp_path, "data/.secrets/share_grants.toml", "[services.notes\n")
+
+    unreadable = uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
+
+    assert unreadable.kept_share_grants is None
+    assert len(unreadable.problems) == 1
+    assert unreadable.problems[0].startswith("whether notes was shared with anyone could not be read:")
+
+    grants_file.write_text("[workspace]\n\n[services.digest]\nusers = []\nemails = []\nemail_domains = []\n")
+    unshared = uninstall_app(tmp_path, "digest", RecordingRuntime(repo_root=tmp_path))
+
+    assert unshared.kept_share_grants is None
+    assert unshared.problems == ()
+
+
+def test_an_uninstall_names_the_apps_that_depend_on_the_app_and_the_repositories_it_leaves(tmp_path: Path) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "datalib"), None, never_bound)
+    add_app(
+        tmp_path,
+        write_user_app(tmp_path, "notes", '\n[[dependencies]]\nname = "datalib"\n'),
+        None,
+        never_bound,
+    )
+    add_app(tmp_path, write_user_app(tmp_path, "digest", '\n[[dependencies]]\nname = "notes"\n'), None, never_bound)
+    # A built-in app, which has no record, can depend on the app too.
+    write_user_app(tmp_path, "reports", '\n[[dependencies]]\nname = "datalib"\n')
+    record = load_record(tmp_path, "datalib")
+    write_record(
+        tmp_path,
+        record.model_copy_update(
+            to_update(record.field_ref().dev_repo_url, "https://github.com/octo/datalib-dev"),
+            to_update(record.field_ref().published_repo_url, "https://github.com/octo/datalib"),
+        ),
+    )
+
+    outcome = uninstall_app(tmp_path, "datalib", RecordingRuntime(repo_root=tmp_path))
+
+    assert outcome.dependents == ("notes", "reports")
+    assert outcome.kept_repositories == ("https://github.com/octo/datalib-dev", "https://github.com/octo/datalib")
+    # Dependencies are advisory: the apps that named it are still there.
+    assert (tmp_path / "system" / "apps" / "notes" / "app.toml").is_file()
+
+
+def test_an_uninstall_removes_what_this_machine_kept_about_the_app(tmp_path: Path) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "notes"), None, never_bound)
+    add_app(tmp_path, write_user_app(tmp_path, "digest"), None, never_bound)
+    write_workspace_file(tmp_path, "data/.state/app_sync/notes.json", "{}")
+    write_workspace_file(tmp_path, "data/.state/app_sync/digest.json", "{}")
+    write_workspace_file(tmp_path, "data/.state/app_install/publish/notes.json", "{}")
+    write_workspace_file(tmp_path, "data/.state/app_install/snapshots/notes/abc123/notes.json", "[]")
+
+    outcome = uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
+
+    assert sorted(outcome.removed_state_paths) == [
+        "data/.state/app_install/publish/notes.json",
+        "data/.state/app_sync/notes.json",
+    ]
+    assert all(not (tmp_path / path).exists() for path in outcome.removed_state_paths)
+    # The copy of the app's data an update made is the user's data, and another app's state is not this app's.
+    assert outcome.kept_paths == ("data/.state/app_install/snapshots/notes",)
+    assert (tmp_path / "data" / ".state" / "app_sync" / "digest.json").is_file()
+    assert outcome.problems == ()
 
 
 def test_an_app_that_is_not_registered_cannot_be_uninstalled(tmp_path: Path) -> None:
@@ -475,11 +582,18 @@ def test_an_app_that_is_not_registered_cannot_be_uninstalled(tmp_path: Path) -> 
         uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
 
 
-def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(tmp_path: Path) -> None:
+def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = make_workspace_repository(tmp_path / "workspace")
     package = write_user_app(workspace, "notes")
     add_app(workspace, package, None, never_bound)
     commit_all(workspace, "a workspace with notes")
+    # An agent's shell exports its own identity, which git reads ahead of any configuration.
+    for variable in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(variable, "an agent")
+    for variable in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(variable, "agent@workspace.invalid")
     # Someone else's uncommitted work, which the removal must not sweep into its commit.
     write_workspace_file(workspace, "README.md", "the workspace, edited\n")
 
@@ -498,6 +612,52 @@ def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_a
     # No supervisord runs beside a bare repository, which is reported and does not stop the removal; an app
     # with no registry row has none to remove.
     assert [problem.split(":")[0] for problem in outcome.problems] == ["supervisord did not drop the app's programs"]
+
+
+def test_the_command_says_what_an_uninstall_removed_and_what_it_left(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    add_app(workspace, write_user_app(workspace, "notes"), None, never_bound)
+    record = load_record(workspace, "notes")
+    write_record(
+        workspace,
+        record.model_copy_update(to_update(record.field_ref().dev_repo_url, "https://github.com/octo/notes-dev")),
+    )
+    commit_all(workspace, "a workspace with notes")
+    write_workspace_file(workspace, "data/.apps/notes/notes.json", "[]")
+    root = ["--repo-root", str(workspace)]
+
+    uninstalled = CliRunner().invoke(main, [*root, "uninstall", "notes"])
+    again = CliRunner().invoke(main, [*root, "uninstall", "notes"])
+
+    report = json.loads(uninstalled.output)
+    (problem,) = report.pop("problems")
+    assert problem.startswith("supervisord did not drop the app's programs")
+    assert (uninstalled.exit_code, report) == (
+        0,
+        {
+            "result": "uninstalled",
+            "name": "notes",
+            "removed_paths": [
+                "system/supervisord.conf.d/notes.conf",
+                "system/apps/notes",
+                "system/config/apps/notes.toml",
+            ],
+            "removed_state_paths": [],
+            "kept_paths": ["data/.apps/notes"],
+            "kept_share_grants": None,
+            "kept_routine_state": [],
+            "kept_repositories": ["https://github.com/octo/notes-dev"],
+            "dependents": [],
+        },
+    )
+    assert (again.exit_code, json.loads(again.output)) == (
+        1,
+        {
+            "result": "refused",
+            "name": "notes",
+            "detail": "no app record for 'notes' (expected system/config/apps/notes.toml)",
+        },
+    )
 
 
 def test_the_real_runtime_commits_a_removal_that_holds_a_file_no_commit_had(tmp_path: Path) -> None:

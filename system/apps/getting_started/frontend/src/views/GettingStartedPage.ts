@@ -1,10 +1,11 @@
 /**
  * The Getting Started page (launcher-and-getting-started plan section 3.6), top to bottom: a
  * search field over its own content; "Start something", the intent tiles two to a row (four at
- * first, the rest behind "See more"); "Start from a template", the catalog's shelves. The page is
- * its own scroller, since the shared base styles pin the body to the viewport. Picking a template
- * shows its detail as a page inside this one, with a way back. Typing swaps the sections for
- * results: the matching intents and the matching templates, laid out as a grid of cards. Every
+ * first, the rest behind "See more"); "Start from a template", the catalog's shelves of templates
+ * and published apps. The page is its own scroller, since the shared base styles pin the body to
+ * the viewport. Picking a card shows its detail as a page inside this one, with a way back. Typing
+ * swaps the sections for results: the matching intents and the matching templates and apps, laid
+ * out as a grid of cards. Every
  * tile and both detail actions start a chat with a seeded text through the one callback the page
  * is given (``shell:start-with-text``); the page names no app.
  */
@@ -13,8 +14,8 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
-import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
+import type { CatalogListing, TemplateCatalogState } from "../models/TemplateCatalog";
+import { listingKey, resolveShelves, searchListings } from "../models/TemplateCatalog";
 import { TemplateDetail } from "./TemplateDetail";
 import { TemplateCard, TemplateShelves } from "./TemplateShelves";
 import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
@@ -33,7 +34,9 @@ import { FIELD_PART, TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 const SEARCH_PLACEHOLDER = "Search things to start and templates";
 const START_SOMETHING_TITLE = "Start something";
 const TEMPLATES_TITLE = "Start from a template";
+const TEMPLATES_AND_APPS_TITLE = "Start from a template or an app";
 const SEARCH_TEMPLATES_TITLE = "Templates";
+const SEARCH_TEMPLATES_AND_APPS_TITLE = "Templates and apps";
 const SEE_MORE_LABEL = "See more";
 const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
 const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
@@ -51,7 +54,7 @@ export interface GettingStartedPageAttrs {
 export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   let query = "";
   let startShownCount = START_PAGE_SIZE;
-  let detailTemplate: CatalogTemplate | null = null;
+  let detailListing: CatalogListing | null = null;
   let isScrollToTemplatesPending = false;
 
   function startTile(option: StartOption, attrs: GettingStartedPageAttrs): m.Vnode {
@@ -163,11 +166,13 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       case "loaded":
         body = m(TemplateShelves, {
           shelves: resolveShelves(catalog.catalog),
-          onPick: (template) => (detailTemplate = template),
+          onPick: (listing) => (detailListing = listing),
         });
         break;
     }
-    return templatesSectionShell("mt-10", m("h2", { class: SECTION_HEADING_CLASS }, TEMPLATES_TITLE), body);
+    const title =
+      catalog.kind === "loaded" && catalog.catalog.apps.length > 0 ? TEMPLATES_AND_APPS_TITLE : TEMPLATES_TITLE;
+    return templatesSectionShell("mt-10", m("h2", { class: SECTION_HEADING_CLASS }, title), body);
   }
 
   /** The templates section as both the resting page and the search results draw it: the marker the template tile
@@ -188,9 +193,9 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   function searchResults(attrs: GettingStartedPageAttrs): m.Children {
     const trimmed = query.trim();
     const starts = searchStartOptions(START_OPTIONS, trimmed);
-    const templates = attrs.catalog.kind === "loaded" ? searchTemplates(attrs.catalog.catalog.templates, trimmed) : [];
-    if (templates.length === 0) isScrollToTemplatesPending = false;
-    if (starts.length === 0 && templates.length === 0) {
+    const listings = attrs.catalog.kind === "loaded" ? searchListings(attrs.catalog.catalog, trimmed) : [];
+    if (listings.length === 0) isScrollToTemplatesPending = false;
+    if (starts.length === 0 && listings.length === 0) {
       return m("p", { class: "getting-started-no-matches mt-6 type-body text-secondary" }, [
         "Nothing matches “",
         m("span", { class: "text-primary" }, trimmed),
@@ -199,20 +204,26 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     }
     return [
       starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
-      templates.length === 0
+      listings.length === 0
         ? null
         : templatesSectionShell(
             "mt-6 first:mt-0",
-            m("h2", { class: `${SECTION_HEADING_CLASS} mb-2` }, SEARCH_TEMPLATES_TITLE),
+            m(
+              "h2",
+              { class: `${SECTION_HEADING_CLASS} mb-2` },
+              listings.some((listing) => listing.kind === "app")
+                ? SEARCH_TEMPLATES_AND_APPS_TITLE
+                : SEARCH_TEMPLATES_TITLE,
+            ),
             m(
               "div",
               { class: "grid gap-6 @max-[620px]:grid-cols-2 grid-cols-4" },
-              templates.map((template) =>
+              listings.map((listing) =>
                 m(TemplateCard, {
-                  key: template.slug,
-                  template,
+                  key: listingKey(listing),
+                  listing,
                   isFill: true,
-                  onPick: (picked) => (detailTemplate = picked),
+                  onPick: (picked) => (detailListing = picked),
                 }),
               ),
             ),
@@ -251,11 +262,11 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     view(vnode) {
       const attrs = vnode.attrs;
       const body: m.Children =
-        detailTemplate !== null
+        detailListing !== null
           ? m(TemplateDetail, {
-              template: detailTemplate,
+              listing: detailListing,
               onBack: () => {
-                detailTemplate = null;
+                detailListing = null;
               },
               onStartWithText: attrs.onStartWithText,
             })

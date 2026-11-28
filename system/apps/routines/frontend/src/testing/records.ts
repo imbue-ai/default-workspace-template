@@ -31,8 +31,17 @@ export function rowOf(patch: Partial<RoutineRow> = {}): RoutineRow {
     skill: null,
     command: ["python3", "sync.py"],
     chat_id: null,
+    owning_app: null,
+    is_schedule_only: false,
+    has_schedule_override: false,
+    app_schedule_text: null,
     ...patch,
   };
+}
+
+/** A routine an app owns, as its row reads: named for the app, with only its schedule the user's to change. */
+export function appOwnedRowOf(patch: Partial<RoutineRow> = {}): RoutineRow {
+  return rowOf({ owning_app: "inbox-status", is_schedule_only: true, ...patch });
 }
 
 export function listingOf(rows: RoutineRow[], appNames: Record<string, string> = {}): RoutineListing {

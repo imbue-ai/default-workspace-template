@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { detailOf, listingOf, rowOf, runDetailOf, runOf, scheduleFormOf } from "../testing/records";
+import { appOwnedRowOf, detailOf, listingOf, rowOf, runDetailOf, runOf, scheduleFormOf } from "../testing/records";
 import { App, AppModel, IDLE_REFRESH_MS, RUNNING_REFRESH_MS, type AppHost } from "./App";
 
 const requests: string[] = [];
@@ -286,6 +286,46 @@ describe("AppModel", () => {
     expect(model.toasts.current().map((toast) => toast.message)).toEqual([
       "Couldn't change the schedule: a time of day needs a cadence of a day or longer",
     ]);
+    model.dispose();
+  });
+
+  it("goes back to the app's schedule and reads the page again, or says why it could not", async () => {
+    const rescheduled = appOwnedRowOf({ has_schedule_override: true, app_schedule_text: "Every hour" });
+    const model = await loadedRoutinePage(detailOf({ row: rescheduled }));
+
+    model.useAppSchedule();
+    expect(model.isBusy).toBe(true);
+    await settle();
+
+    expect(requests).toEqual([
+      "GET /api/routines/news-sync",
+      "DELETE /api/routines/news-sync/schedule",
+      "GET /api/routines/news-sync",
+    ]);
+    expect(bodies[1]).toBeUndefined();
+    expect(model.isBusy).toBe(false);
+    expect(model.toasts.current()).toEqual([]);
+
+    refusal = { method: "DELETE", status: 409, detail: "news-sync belongs to no app." };
+    model.useAppSchedule();
+    await settle();
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      "Couldn't go back to the app's schedule: news-sync belongs to no app.",
+    ]);
+    expect(requests[4]).toBe("GET /api/routines/news-sync");
+    model.dispose();
+  });
+
+  it("draws the button that goes back to the app's schedule and wires it to the request", async () => {
+    const rescheduled = appOwnedRowOf({ has_schedule_override: true, app_schedule_text: "Every hour" });
+    const model = await loadedRoutinePage(detailOf({ row: rescheduled }));
+    const root = mountView(() => m(App, { model }));
+
+    root.querySelector<HTMLButtonElement>("[data-use-app-schedule]")!.click();
+    await settle();
+
+    expect(requests[1]).toBe("DELETE /api/routines/news-sync/schedule");
     model.dispose();
   });
 

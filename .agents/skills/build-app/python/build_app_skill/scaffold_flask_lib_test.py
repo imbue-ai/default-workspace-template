@@ -283,6 +283,118 @@ def test_scaffold_authors_only_its_own_files(
     assert "app-install regenerate news" in result.stdout
 
 
+# What an app's directory collects as the app is run, tested and given a frontend.
+_LEFT_BEHIND = (
+    ".venv/bin/python",
+    ".venv-preview/bin/python",
+    "src/news/__pycache__/runner.cpython-312.pyc",
+    "src/news.egg-info/PKG-INFO",
+    ".pytest_cache/v/cache/lastfailed",
+    ".ruff_cache/content",
+    ".test_output/slow.txt",
+    ".coverage",
+    ".coverage.host.123",
+    "htmlcov/index.html",
+    "cov.xml",
+    "frontend/node_modules/vite/index.js",
+    "frontend-dist/app.js",
+    "build/lib/news/runner.py",
+    "dist/news-0.1.0.tar.gz",
+    ".env",
+)
+# What the app's repository must keep on holding.
+_PART_OF_THE_APP = (
+    "uv.lock",
+    "src/news/store.py",
+    "skills/news-digest/SKILL.md",
+    "routines/news-refresh.toml",
+    "env.d/2000-news.sh",
+    "seed/sources.json",
+    "docs/guide.md",
+    "frontend/src/main.ts",
+)
+
+
+def _untracked(repository: Path) -> tuple[set[str], set[str]]:
+    """The untracked files of ``repository`` that git would add, and the ones it ignores."""
+
+    def listed(*flags: str) -> set[str]:
+        completed = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", *flags],
+            cwd=repository,
+            # The machine's own ignore file is no part of either repository's rules.
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return set(completed.stdout.splitlines())
+
+    return listed(), listed("--ignored")
+
+
+def _fill(directory: Path, relative_paths: tuple[str, ...]) -> None:
+    for relative_path in relative_paths:
+        path = directory / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n")
+
+
+def test_the_apps_own_repository_ignores_what_running_and_testing_it_leaves_behind(
+    tmp_path: Path,
+) -> None:
+    """The app's repository has the app's directory at its root, with no workspace's rules above it."""
+    lib_dir = _write_lib(tmp_path / "workspace", "news")
+    scaffolded = {
+        path.relative_to(lib_dir).as_posix()
+        for path in lib_dir.rglob("*")
+        if path.is_file()
+    }
+    assert ".gitignore" in scaffolded
+    repository = tmp_path / "news-repository"
+    shutil.copytree(lib_dir, repository)
+    init_git_repository(repository)
+    _fill(repository, _LEFT_BEHIND)
+    _fill(repository, _PART_OF_THE_APP)
+
+    added, ignored = _untracked(repository)
+
+    assert added == scaffolded | set(_PART_OF_THE_APP)
+    assert ignored == set(_LEFT_BEHIND)
+
+
+def test_the_apps_gitignore_changes_nothing_the_workspace_tracks_or_ignores(
+    tmp_path: Path,
+) -> None:
+    """A nested ignore file applies in the workspace repository too, where the app is developed."""
+    root = _make_workspace(tmp_path / "workspace", {})
+    shutil.copyfile(_REPO_ROOT / ".gitignore", root / ".gitignore")
+    init_git_repository(root)
+    lib_dir = _write_lib(root, "news")
+    _fill(lib_dir, _LEFT_BEHIND)
+    _fill(lib_dir, _PART_OF_THE_APP)
+    app_gitignore = lib_dir / ".gitignore"
+    with_the_apps_rules = _untracked(root)
+
+    rules = app_gitignore.read_text()
+    app_gitignore.unlink()
+    added, ignored = _untracked(root)
+
+    assert with_the_apps_rules == (added | {"system/apps/news/.gitignore"}, ignored)
+    # Everything left behind was already ignored by the workspace, and nothing of the app was.
+    assert {f"system/apps/news/{path}" for path in _LEFT_BEHIND} <= ignored
+    assert {f"system/apps/news/{path}" for path in _PART_OF_THE_APP} <= added
+    # Pattern by pattern: each one is a rule the workspace has at every depth, so no file the
+    # workspace tracks today can be hidden by an app's own rules.
+    workspace_patterns = set((_REPO_ROOT / ".gitignore").read_text().splitlines())
+    patterns = [
+        line for line in rules.splitlines() if line and not line.startswith("#")
+    ]
+    assert [
+        pattern for pattern in patterns if f"**/{pattern}" not in workspace_patterns
+    ] == []
+
+
 def test_every_scaffold_run_sets_the_app_build_started_marker_and_refreshes_its_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

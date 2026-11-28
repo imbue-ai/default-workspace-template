@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -10,8 +11,11 @@ from typing import Final
 from loguru import logger
 
 from app_install.errors import GitCommandError
+from app_install.errors import MissingCommandError
 from app_install.errors import RepositoryUnreachableError
-from github_sync.wiring import gateway_git_config
+from app_manifest.records import AppRecord
+from github_sync import app_history
+from github_sync.wiring import git_environment_through_gateway
 
 # The installer's own committer: its commits come from a command, not from any one chat's agent, and the
 # analytics feed tells them from the user's own work by this name.
@@ -20,6 +24,7 @@ COMMITTER_EMAIL: Final[str] = "app-install@workspace.invalid"
 GIT_TIMEOUT_SECONDS: Final[float] = 300.0
 _VERSION_TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"refs/tags/(v(\d+)\.(\d+)\.(\d+))$")
 DEFAULT_BRANCH: Final[str] = "main"
+_TEMPLATE_VERSION_TAG_GLOB: Final[str] = "minds-v*"
 # What git says when a repository needs a credential the workspace does not hold. GitHub answers a private
 # repository as "not found" to a caller it does not know.
 _ACCESS_FAILURE_MARKERS: Final[tuple[str, ...]] = (
@@ -32,52 +37,58 @@ _ACCESS_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 )
 
 
-def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str, str]:
+def installer_identity_environment() -> dict[str, str]:
+    """The process environment with the installer named as git's author and committer. git reads these
+    variables ahead of any configuration, and an agent's shell exports its own identity in them."""
     environment = dict(os.environ)
-    # Never wait on a prompt: the installer asks nothing.
-    environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["GIT_AUTHOR_NAME"] = COMMITTER_NAME
     environment["GIT_AUTHOR_EMAIL"] = COMMITTER_EMAIL
     environment["GIT_COMMITTER_NAME"] = COMMITTER_NAME
     environment["GIT_COMMITTER_EMAIL"] = COMMITTER_EMAIL
-    gateway_entries = (gateway_git_config() or []) if is_gateway_used else []
-    if not is_global_config_read or gateway_entries:
+    return environment
+
+
+def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str, str]:
+    environment = installer_identity_environment()
+    # Never wait on a prompt: the installer asks nothing.
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    if is_gateway_used:
+        # A workspace with no gateway has only its global configuration to read the repository with.
+        environment = git_environment_through_gateway(environment) or environment
+    if not is_global_config_read:
         # With GitHub sync enabled the container's global configuration routes every github.com URL through the
-        # latchkey gateway; leaving it out is what makes a fetch anonymous. It is left out of a read through the
-        # gateway too: git sends every extraHeader it reads, so the gateway's headers would go out twice, once
-        # from each place, and the gateway refuses a password it is sent twice.
+        # latchkey gateway; leaving it out is what makes a fetch anonymous.
         environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    if gateway_entries:
-        # In the environment and not in the arguments, so the gateway's password is in no process listing.
-        first_index = int(environment.get("GIT_CONFIG_COUNT", "0"))
-        for index, (key, value) in enumerate(gateway_entries, start=first_index):
-            environment[f"GIT_CONFIG_KEY_{index}"] = key
-            environment[f"GIT_CONFIG_VALUE_{index}"] = value
-        environment["GIT_CONFIG_COUNT"] = str(first_index + len(gateway_entries))
     return environment
 
 
 def run_git(
-    cwd: Path, arguments: Sequence[str], is_global_config_read: bool = True, is_gateway_used: bool = False
+    cwd: Path,
+    arguments: Sequence[str],
+    is_global_config_read: bool = True,
+    is_gateway_used: bool = False,
+    extra_environment: Mapping[str, str] | None = None,
+    timeout_seconds: float = GIT_TIMEOUT_SECONDS,
 ) -> str:
     """Run one git command in ``cwd`` with hooks off and the installer's identity; its stdout, stripped.
 
     Hooks are off because GitHub sync's post-commit hook would push the branch of every repository the
     installer commits in, its scratch worktrees included. With ``is_gateway_used`` every github.com URL the
     command names goes through the latchkey gateway, when the workspace has one, and the command then reads the
-    gateway's wiring from here alone, not from the global configuration. Raises GitCommandError when the command
-    fails.
+    gateway's wiring from here alone, not from the global configuration. ``extra_environment`` is added to the
+    command's environment (an index file of the command's own, say). Raises GitCommandError when the command
+    fails or runs longer than ``timeout_seconds``.
     """
     argv = ["git", "-c", f"core.hooksPath={os.devnull}", *arguments]
     try:
         completed = subprocess.run(
             argv,
             cwd=cwd,
-            env=_environment(is_global_config_read, is_gateway_used),
+            env={**_environment(is_global_config_read, is_gateway_used), **(extra_environment or {})},
             capture_output=True,
             text=True,
             check=False,
-            timeout=GIT_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GitCommandError(f"could not run `git {' '.join(arguments)}`: {e}") from e
@@ -134,6 +145,36 @@ def fetch_commit(cwd: Path, url: str, ref: str) -> str:
     return run_git(cwd, ["rev-parse", "FETCH_HEAD^{commit}"])
 
 
+def is_commit_present(repo_root: Path, commit: str) -> bool:
+    """Whether the repository holds the commit's objects."""
+    try:
+        run_git(repo_root, ["cat-file", "-e", f"{commit}^{{commit}}"])
+    except GitCommandError as e:
+        logger.debug("{} is not in the repository at {}: {}", commit, repo_root, e)
+        return False
+    return True
+
+
+def is_path_in_commit(repo_root: Path, commit: str, path: str) -> bool:
+    """Whether the tree of ``commit`` holds anything at ``path``."""
+    try:
+        run_git(repo_root, ["cat-file", "-e", f"{commit}:{path}"])
+    except GitCommandError as e:
+        logger.debug("{} holds nothing at {}: {}", commit, path, e)
+        return False
+    return True
+
+
+def workspace_template_version(repo_root: Path) -> str:
+    """The template version the workspace is on: the nearest ``minds-v`` release tag its history holds, which is
+    how the update pass names a workspace's version too. Empty when the history holds no such tag."""
+    try:
+        return run_git(repo_root, ["describe", "--tags", "--abbrev=0", "--match", _TEMPLATE_VERSION_TAG_GLOB, "HEAD"])
+    except GitCommandError as e:
+        logger.debug("No template release tag is reachable from the checkout at {}: {}", repo_root, e)
+        return ""
+
+
 def _has_unconcluded_merge(repo_root: Path) -> bool:
     try:
         run_git(repo_root, ["rev-parse", "--quiet", "--verify", "MERGE_HEAD"])
@@ -171,3 +212,49 @@ def land_commit(repo_root: Path, commit: str) -> None:
         raise GitCommandError(
             f"{commit} does not merge into the primary checkout, which is left as it was: {merge_failure}"
         ) from merge_failure
+
+
+def require_git_subtree(cwd: Path) -> None:
+    """Raise MissingCommandError, naming the command, when this git has no ``git subtree``: installing, updating,
+    and linking an app all go through it, and without it git answers with its own usage text."""
+    try:
+        app_history.require_git_subtree(cwd)
+    except app_history.GitSubtreeMissingError as e:
+        raise MissingCommandError(str(e)) from e
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_primary_checkout(repo_root: Path) -> bool:
+    """Whether ``repo_root`` is the root of the repository's primary checkout, not a linked worktree."""
+    try:
+        return app_history.is_primary_checkout(repo_root)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_app_linked(repo_root: Path, record: AppRecord) -> bool:
+    """Whether the checked-out history holds a join marker for the app's directory, the answer the sync pass
+    reads too."""
+    try:
+        return app_history.is_app_linked(repo_root, record)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_app_modified(repo_root: Path, record: AppRecord) -> bool:
+    """Whether an installed app's committed directory differs from what was installed in a path outside the
+    regenerable set, the answer the sync pass reads too."""
+    try:
+        return app_history.is_app_modified(repo_root, record)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def require_split_holds_only_the_app(repo_root: Path, record: AppRecord, split_commit: str) -> None:
+    """Raise GitCommandError when the history of ``split_commit`` holds the workspace's own commits, which the
+    sync pass refuses to push for the same reason."""
+    try:
+        app_history.require_split_holds_only_the_app(repo_root, record, split_commit)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e

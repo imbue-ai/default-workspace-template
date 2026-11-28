@@ -9,6 +9,7 @@ from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
+from imbue.chat.chat_seed import SEED_FIRST_MESSAGE_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -16,12 +17,14 @@ from imbue.chat.chat_seed import first_run_start_suggestions
 from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
+from imbue.chat.chat_seed import read_seed_first_message
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.chat_seed import write_seed_first_message
 from imbue.chat.first_run_tree import MORE_IDEAS_LABEL
 from imbue.chat.first_run_tree import SHOW_IDEAS_LABEL
 from imbue.chat.first_run_tree import SOMETHING_ELSE_LABEL
@@ -182,6 +185,22 @@ def test_the_seed_pseudo_agent_is_the_chat_itself_on_the_seed_harness(tmp_path: 
     assert info.harness is HarnessType.SEED
     assert info.agent_state_dir == tmp_path and info.claude_config_dir == tmp_path
     assert info.state == "STOPPED"
+
+
+def test_a_seeds_first_message_is_kept_in_a_file_of_its_own_beside_the_seed(tmp_path: Path) -> None:
+    """The message reads back as written, newlines and all, replaces an earlier one whole, and leaves the seed's
+    events alone; a chat seeded with none has no such file and reads as an empty message."""
+    chat_dir = tmp_path / "agent-seeded"
+    assert read_seed_first_message(chat_dir) == ""
+
+    path = write_seed_first_message(chat_dir, "/install-app https://github.com/example/pantry")
+    assert path == chat_dir / SEED_FIRST_MESSAGE_FILENAME
+    assert read_seed_first_message(chat_dir) == "/install-app https://github.com/example/pantry"
+    write_seed_first_message(chat_dir, "Set the app up.\nThen show me \u00e7a.")
+
+    assert read_seed_first_message(chat_dir) == "Set the app up.\nThen show me \u00e7a."
+    assert sorted(entry.name for entry in chat_dir.iterdir()) == [SEED_FIRST_MESSAGE_FILENAME]
+    assert read_seed_events(chat_dir) == []
 
 
 def test_the_first_runs_words_ride_the_launch_message_and_nothing_else(tmp_path: Path) -> None:

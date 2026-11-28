@@ -1,7 +1,11 @@
 """Test helpers: a throwaway workspace tree with user apps in it."""
 
+import os
+import subprocess
 from pathlib import Path
 
+from app_install.git import COMMITTER_EMAIL
+from app_install.git import COMMITTER_NAME
 from app_install.git import run_git
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import write_app_manifest
@@ -60,6 +64,28 @@ def commit_all(repository: Path, message: str) -> str:
     return run_git(repository, ["rev-parse", "HEAD"])
 
 
+def commit_all_dated(repository: Path, message: str, date: str) -> str:
+    """Commit everything in ``repository`` as if on ``date`` (an ISO 8601 time) and return the commit."""
+    run_git(repository, ["add", "--all"])
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": COMMITTER_NAME,
+        "GIT_AUTHOR_EMAIL": COMMITTER_EMAIL,
+        "GIT_COMMITTER_NAME": COMMITTER_NAME,
+        "GIT_COMMITTER_EMAIL": COMMITTER_EMAIL,
+        "GIT_AUTHOR_DATE": date,
+        "GIT_COMMITTER_DATE": date,
+    }
+    subprocess.run(
+        ["git", "-c", f"core.hooksPath={os.devnull}", "commit", "--quiet", "--allow-empty", "-m", message],
+        cwd=repository,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    return run_git(repository, ["rev-parse", "HEAD"])
+
+
 def make_workspace_repository(directory: Path) -> Path:
     """A git repository standing in for a workspace: one commit, nothing installed."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -78,5 +104,19 @@ def make_published_app_repository(directory: Path, name: str, extra_manifest: st
     (directory / "app.toml").write_text(manifest_body(name, extra_manifest))
     (directory / "icon.svg").write_text(APP_ICON_MARKUP)
     (directory / "README.md").write_text(f"# {name}\n")
+    (directory / "LICENSE").write_text("MIT License\n")
     commit_all(directory, f"{name}: first version")
     return directory
+
+
+def make_bare_repository(directory: Path) -> Path:
+    """An empty bare repository, standing in for one on GitHub."""
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    run_git(directory.parent, ["init", "--quiet", "--bare", "--initial-branch=main", str(directory)])
+    return directory
+
+
+def point_url_at(workspace: Path, url: str, repository: Path) -> None:
+    """Have every git command run in ``workspace`` reach ``repository`` when it names ``url``, so no test reaches
+    GitHub for a repository the installer's stand-in runtime says it created there."""
+    run_git(workspace, ["config", f"url.{repository}.insteadOf", url])

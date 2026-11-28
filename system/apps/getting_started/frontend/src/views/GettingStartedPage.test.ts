@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
-import { catalogTemplateRecord } from "../testing/records";
+import { catalogAppRecord, catalogTemplateRecord } from "../testing/records";
 import { GettingStartedPage } from "./GettingStartedPage";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
 
@@ -25,7 +25,19 @@ const LOADED: TemplateCatalogState = {
       catalogTemplateRecord("inbox", { title: "Inbox Digest", description: "Triage your mail.", author: "kanjun" }),
       catalogTemplateRecord("orchard", { title: "Orchard", description: "A work tracker template.", author: "mango" }),
     ],
+    apps: [],
     shelves: [{ key: "popular", title: "Most popular", slugs: ["inbox"] }],
+  },
+};
+
+// The same catalog once it lists a published app, named on the shelf beside the template.
+const LOADED_WITH_APPS: TemplateCatalogState = {
+  kind: "loaded",
+  isStale: false,
+  catalog: {
+    ...LOADED.catalog,
+    apps: [catalogAppRecord("weather-desk", { title: "Weather Desk", description: "Forecasts.", author: "sky" })],
+    shelves: [{ key: "popular", title: "Most popular", slugs: ["app:weather-desk", "inbox", "app:not-listed"] }],
   },
 };
 
@@ -128,5 +140,51 @@ describe("the Getting Started page", () => {
     const disabled = render({ kind: "disabled" });
     expect(disabled.root.querySelector('[data-section="templates"]')).toBeNull();
     expect(disabled.root.querySelector('[data-start="template"]')!.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("shows a published app on its shelf and in All apps, and its detail page starts the install chat", () => {
+    const { root, started } = render(LOADED_WITH_APPS);
+    expect(root.querySelector('[data-section="templates"] h2')!.textContent).toBe("Start from a template or an app");
+    const popular = root.querySelector<HTMLElement>('[data-shelf="popular"]')!;
+    expect(
+      Array.from(popular.querySelectorAll(".new-tab-template-card")).map(
+        (card) => card.getAttribute("data-app") ?? card.getAttribute("data-template"),
+      ),
+    ).toEqual(["weather-desk", "inbox"]);
+    expect(root.querySelector('[data-shelf="all-apps"] [data-app="weather-desk"]')).not.toBeNull();
+    expect(root.querySelector('[data-shelf="all"] [data-app]')).toBeNull();
+
+    popular.querySelector<HTMLElement>('[data-app="weather-desk"]')!.click();
+    m.redraw.sync();
+    expect(root.querySelector('.new-tab-template-detail[data-app="weather-desk"]')).not.toBeNull();
+    root.querySelector<HTMLElement>(".new-tab-app-install")!.click();
+    root.querySelector<HTMLElement>(".new-tab-app-create-workspace")!.click();
+    expect(started).toEqual([
+      "/install-app https://github.com/someone/weather-desk",
+      "Please create a new Imbue Studio workspace for me with the app at https://github.com/someone/weather-desk " +
+        "installed in it (the imbue-studio skill can create one). Walk me through anything it needs from me, like " +
+        "permissions or accounts, and tell me when it is ready.",
+    ]);
+    root.querySelector<HTMLElement>(".new-tab-template-back")!.click();
+    m.redraw.sync();
+    expect(root.querySelector(".new-tab-template-detail")).toBeNull();
+  });
+
+  it("a catalog with no apps shows no apps row and keeps the templates heading", () => {
+    const { root } = render();
+    expect(root.querySelector('[data-section="templates"] h2')!.textContent).toBe("Start from a template");
+    expect(root.querySelector('[data-shelf="all-apps"]')).toBeNull();
+    expect(root.querySelector("[data-app]")).toBeNull();
+  });
+
+  it("searching finds a published app beside the templates", () => {
+    const { root } = render(LOADED_WITH_APPS);
+    typeQuery(root, "forecasts");
+    expect(root.querySelector('[data-section="templates"] h2')!.textContent).toBe("Templates and apps");
+    expect(root.querySelector('[data-section="templates"] [data-app="weather-desk"]')).not.toBeNull();
+    expect(root.querySelector("[data-template]")).toBeNull();
+    typeQuery(root, "kanjun");
+    expect(root.querySelector('[data-section="templates"] h2')!.textContent).toBe("Templates");
+    expect(root.querySelector("[data-app]")).toBeNull();
   });
 });

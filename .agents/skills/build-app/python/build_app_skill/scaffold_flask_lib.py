@@ -234,14 +234,13 @@ markers = [
 [tool.uv]
 exclude-newer = "14 days"
 
-# CLEANUP: once imbue-app-sdk 0.1.0 is published to PyPI, depend on it directly: replace
-# "app-schema" with "imbue-app-sdk>=0.1,<1" and "app-schema[testing]" with
-# "imbue-app-sdk[testing]", drop this source entry, and add
-# `exclude-newer-package = {{ imbue-app-sdk = false }}` under [tool.uv].
-# Until then the app SDK (imbue.app_sdk) reaches this app through app-schema, which
-# depends on it. app-schema's own workspace sources apply in this lock, so the SDK and
-# imbue-common come from the commit the workspace pins mngr to; a source for either
-# here as well would be a second URL for one package, which uv refuses to lock.
+# An app built in a workspace runs on the workspace's own app SDK (imbue.app_sdk), which
+# reaches it through app-schema: that package depends on the SDK, and its workspace
+# sources apply in this lock, so the SDK and imbue-common come from the commit the
+# workspace pins mngr to and move with every update of the workspace. A source for
+# either here as well would be a second URL for one package, which uv refuses to lock.
+# Publishing the app replaces this with a dependency on the released imbue-app-sdk,
+# since a path into a workspace resolves nowhere else (the publish-app skill).
 [tool.uv.sources]
 app-schema = {{ path = "../../libs/app_schema", editable = true }}
 
@@ -665,6 +664,7 @@ def _write_lib(
         )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
+    (lib_dir / ".gitignore").write_text(_APP_GITIGNORE)
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
@@ -673,6 +673,47 @@ def _write_lib(
     )
     (src_dir / "runner_test.py").write_text(_lib_runner_test(package))
     return lib_dir
+
+
+# The app's own repository has the app's directory at its root and inherits nothing from
+# the workspace's ignore rules, so the app carries what it needs of them. Every pattern
+# here is one the workspace already ignores at any depth: the file applies inside the
+# workspace too, and a pattern the workspace does not have would hide a file from it.
+_APP_GITIGNORE = """\
+# What running and testing the app leaves in its directory. None of it belongs in
+# the app's repository, which never holds a virtual environment, a build output,
+# the app's stored data or a secret value.
+
+# The app's own environment
+.venv
+.venv-*
+
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+build/
+dist/
+
+# Tests and coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.test_output/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+cov.xml
+
+# A frontend's packages and its build
+node_modules/
+frontend-dist/
+
+# Secret values and machine files
+.env
+.DS_Store
+"""
 
 
 def _lib_runner_test(package: str) -> str:

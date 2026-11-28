@@ -1,6 +1,6 @@
 ---
 name: github-sync
-description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, and auto-pushes every commit from every checkout. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
+description: Enable, check, or disable GitHub sync for this workspace, and the private dev repository (<name>-dev) each app can have. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, auto-pushes every commit from every checkout, and keeps each app's dev repository current. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, asks about GitHub sync status, or wants one app in a private repository of its own or to give someone access to an app without publishing it.
 compatibility: Requires latchkey (see the connect-external-service skill) and the user approving GitHub permissions in the Imbue Studio app.
 metadata:
   author: imbue
@@ -20,7 +20,8 @@ enabled, three pieces work together (see `system/libs/github_sync/README.md`):
    checkout -- main repo and worker worktrees -- auto-pushes its branch.
 3. The `[program:github-sync]` service is a watchdog: every 60s it re-applies
    the git wiring (self-healing gateway port changes) and re-verifies the repo
-   stays private, halting the hook's pushes if it ever isn't.
+   stays private, halting the hook's pushes if it ever isn't. The same pass
+   keeps each app's dev repository current.
 
 What is synced is exactly what is committed to git. Workspace data under
 `data/` (memories, tickets, uploads, per-app data) is gitignored and is
@@ -30,6 +31,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 - Hard rules
 - Enable
+- App dev repositories
 - Status
 - Repair (workspace recreated from a synced repo)
 - Disable
@@ -44,6 +46,8 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
   token and never embed credentials in URLs or git config.
 - `origin` is reserved for the sync repo. Upstream-template operations keep
   using `system/config/parent.toml` (see the update-self skill) and are unaffected.
+- **A dev repository is private, never a way to publish.** Publishing an
+  app is the `publish-app` skill, which scans and filters what it shares.
 
 ## Enable
 
@@ -200,13 +204,27 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     config file is gitignored under `data/system/`). The now-active hook pushes
     the commit.
 
-11. **Report**, in plain language (`.agents/shared/references/user-facing-language.md`):
+11. **Give each app its dev repository**: follow "When sync is enabled" in
+    `references/app-dev-repositories.md`.
+
+12. **Report**, in plain language (`.agents/shared/references/user-facing-language.md`):
     where the copy lives (the repo URL, since they may want to open it), that
-    from now on every change you save is copied there automatically, that the
-    files in their workspace folders (uploads, notes, app data) are protected by
-    a separate backup rather than this one, and that if the connection drops
-    the copy catches up on its own. No commits, pushes, hooks, or gateways in
-    the message.
+    from now on every change you save is copied there automatically, that each
+    app they built also has a private copy of its own (name them, with their
+    URLs) and what one holds if they ever share it ("Giving someone access to
+    a dev repository" in `references/app-dev-repositories.md`), that the files
+    in their workspace folders (uploads, notes, app data) are protected by a
+    separate backup rather than this one, and that if the connection drops the
+    copy catches up on its own. No commits, pushes, hooks, or gateways in the
+    message.
+
+## App dev repositories
+
+An app can have a private repository of its own, `<name>-dev`, which
+`uv run --no-sync app-install link <name>` creates and the service keeps
+current. Before you link an app, give one app a repository without syncing
+the workspace, let the user add someone to one, or act on an app's `state` in
+the status, read `references/app-dev-repositories.md`.
 
 ## Status
 
@@ -216,7 +234,9 @@ process; logs are at `/var/log/supervisor/github-sync-*.log` and
 `/tmp/github-sync.log`, hook output at `/tmp/post-commit-push.log`. Explain
 findings in plain language. If `is_push_allowed` is false, the repo is public
 or unverifiable -- tell the user to make it private again; sync resumes
-automatically.
+automatically. Each app's repository is reported under `service.apps` (each
+`state` is in `references/app-dev-repositories.md`); one app's trouble never
+stops the workspace's sync or another app's.
 
 ## Repair (workspace recreated from a synced repo)
 
@@ -246,3 +266,6 @@ repo (recommend keeping it -- it costs nothing and preserves history).
    the repo's GitHub settings page to delete it themselves.
 5. Commit the removal. Note that this commit is NOT auto-pushed (the hook is
    inert again).
+
+The apps' dev repositories stay on GitHub: see "When sync is disabled" in
+`references/app-dev-repositories.md`.

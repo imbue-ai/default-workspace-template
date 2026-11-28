@@ -1,8 +1,9 @@
 """An app's OpenAPI document, which lives in the app SDK (``imbue.app_sdk.api_schema``).
 
-# CLEANUP: delete this package once every supported workspace has run the update that converts its apps to the SDK
-# (``app-install migrate``) and the build-app scaffold depends on ``imbue-app-sdk`` itself; nothing built in imports
-# it, and it is kept for user apps written before the SDK and as what brings the SDK to a scaffolded app.
+# CLEANUP: delete this package's modules once no supported workspace holds an app written before the SDK that has
+# not been published since: nothing built in imports them, a scaffolded app imports the SDK alone, and publishing
+# such an app is what moves it to the SDK's names. The package itself stays, as what brings the workspace's SDK to
+# an app built in the workspace.
 """
 
 from imbue.app_sdk.api_schema import ANSWERED_MODEL_FLAG as ANSWERED_MODEL_FLAG

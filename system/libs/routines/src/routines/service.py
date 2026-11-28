@@ -1,5 +1,6 @@
 """What the command and the app both do: the one place a routine is listed, changed, run, or removed."""
 
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 from typing import Final
@@ -22,6 +23,7 @@ from routines.data_types import RunResult
 from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import FileDefinitionStore
+from routines.definitions import user_app_names_by_package
 from routines.errors import AppOwnedRoutineError
 from routines.errors import BrokenDefinitionError
 from routines.errors import ChatAppError
@@ -81,9 +83,11 @@ class RoutinesService(MutableModel):
     def listing(self) -> RoutineListing:
         now = self.clock.now()
         zone = self.clock.local_zone()
+        routines = self.definitions.list_routines()
+        app_names_by_package = self._app_names_by_package(routines)
         rows = [
-            build_row(loaded, self.states.read(loaded.routine_id), now, zone)
-            for loaded in self.definitions.list_routines()
+            build_row(loaded, self.states.read(loaded.routine_id), now, zone, app_names_by_package)
+            for loaded in routines
         ]
         return build_listing(rows, app_display_names(self.registry_path), now, zone)
 
@@ -94,7 +98,15 @@ class RoutinesService(MutableModel):
             self.states.read(routine_id),
             self.clock.now(),
             self.clock.local_zone(),
+            self._app_names_by_package((loaded,)),
         )
+
+    def _app_names_by_package(self, routines: Sequence[LoadedRoutine]) -> dict[str, str]:
+        """The names of the apps that own any of ``routines``, by directory; the records are read only when one
+        of them is an app's."""
+        if all(loaded.app_package is None for loaded in routines):
+            return {}
+        return user_app_names_by_package(self.paths)
 
     def effective(self, routine_id: RoutineId) -> LoadedRoutine:
         """The routine as it runs: its definition, with the schedule the user gave it when an app owns it."""
@@ -104,7 +116,7 @@ class RoutinesService(MutableModel):
         loaded = self.definitions.load(routine_id)
         state = self.states.read(routine_id)
         now = self.clock.now()
-        row = build_row(loaded, state, now, self.clock.local_zone())
+        row = build_row(loaded, state, now, self.clock.local_zone(), self._app_names_by_package((loaded,)))
         runs = fold_run_events(self.ledger.recent_events(routine_id, run_limit), now)
         return RoutineDetail(
             row=row,

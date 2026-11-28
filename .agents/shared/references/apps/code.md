@@ -11,8 +11,7 @@ What a scaffolded app's starter sets up, and the rules the app's code keeps.
 - Markup an element reference can name
 - The content-security policy
 - Raw data and its source
-- Finding another app
-- Data migrations
+- Using another app
 - Calling Claude
 
 ## The starter
@@ -150,45 +149,28 @@ not. Keep it unobtrusive (a
 small per-record control, not clutter) and do not call it out in chat: always
 present, never announced.
 
-## Finding another app
+## Using another app
 
-Nothing outside an app may hold that app's port. The workspace allocates the
-port, so it differs from one workspace to the next and can change in this one.
-Never write another app's `http://localhost:<port>` into code, a script, a
-skill or a doc. Find the app by its name:
+Find another app by its name, never by its port: the workspace allocates the
+port, so it differs between workspaces and can change in this one.
 
-- **Python code** uses the SDK:
+```python
+from imbue.app_sdk.apps import resolve_app_url
 
-  ```python
-  from imbue.app_sdk.apps import resolve_app_url
+url = resolve_app_url("<name>")
+```
 
-  url = resolve_app_url("<name>")
-  ```
+It raises `AppNotRegisteredError` (in `imbue.app_sdk.errors`) when the
+workspace has no such app.
 
-  It returns the app's URL inside the workspace, read from the shell at the
-  time of the call. It raises `AppNotRegisteredError` when the workspace has no
-  such app and `ShellUnreachableError` when the shell does not answer (both in
-  `imbue.app_sdk.errors`).
-- **A script or a skill** calls the same function, from the repo root:
-
-  ```bash
-  uv run --no-sync python -c 'from imbue.app_sdk.apps import resolve_app_url; print(resolve_app_url("<name>"))'
-  ```
-
+- **Call the other app's HTTP API, from this app's own backend.** Its
+  `/api/schema` lists what it offers. Never call it from this app's pages (a
+  page of one app is refused by another), and never read its files under
+  `data/.apps/<other>/`: their shape is that app's to change.
+- **A script or a skill** makes the same call from the repo root:
+  `uv run --no-sync python -c 'from imbue.app_sdk.apps import resolve_app_url; print(resolve_app_url("<name>"))'`.
 - **For a person** (a chat reply, a doc), write the `link` that
-  `uv run --no-sync workspace-layout list` prints for the app. It opens the
-  app's window; a program cannot request it.
-
-## Data migrations
-
-When a change to the app changes the shape of what it stores under
-`data/.apps/<name>/` (a renamed field, a file split in two, a new required
-key), the app brings older data forward itself when it starts: it looks at
-what is on disk and converts anything still in the old shape before it serves
-a request. Do not convert the data by hand and leave the app unable to read
-the old shape. The app may later be installed and updated in another
-workspace, whose data is still in the old shape and where nobody else knows
-what that shape was. Keep the conversion, and a test of it, in the app.
+  `uv run --no-sync workspace-layout list` prints for the app.
 
 ## Calling Claude
 

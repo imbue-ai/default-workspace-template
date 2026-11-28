@@ -147,22 +147,14 @@ run yet, Done (a one-off that ran), or Off.
 ## Routines that belong to an app
 
 A routine whose file is inside an app (`system/apps/<package>/routines/`) is
-part of that app. It is listed, run, paused and watched like any other, with
-the same commands. Two things differ, because the file is the app's and the
-`routines` command never rewrites or deletes a file inside an app:
-
-- **Changing its schedule** works as usual
-  (`uv run --no-sync routines edit <id> --every 2h`, or Change schedule in the
-  Routines app), but the new schedule is kept as the user's own choice in the
-  routine's state (`data/.state/routines/<id>/state.json`), not in the file,
-  and nothing is committed. `list` and `show` print the schedule the routine
-  actually runs on, so it can differ from what the file says. To go back to
-  the app's own schedule, edit the routine to exactly the schedule in its file.
-- **Changing anything else, or removing it**, is refused with a message naming
-  the app's folder. Those are changes to the app: edit or delete the routine's
-  file inside the app's folder as part of changing that app (the `update-app`
-  skill), and commit it with the app's other changes. To stop it running
-  without changing the app, use `routines disable <id>`.
+part of that app: it goes wherever the app goes, and an app someone else
+published brings its routines with it. It is listed, run, paused and watched
+like any other, with the same commands. The user can change when it runs and
+whether it runs, and the schedule they choose is kept in the routine's state,
+not in the app's file. Everything else (another field, removing it) is a
+change to the app, which the `routines` command refuses. Before you change or
+remove such a routine, or explain one to the user, read
+`references/app-routines.md`.
 
 If two files give the same id (one under `system/routines/` and one inside an
 app, or in two apps), the routine shows as Broken with both paths and does not

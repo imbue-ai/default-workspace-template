@@ -3,15 +3,35 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from pathlib import Path
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
 from app_manifest.manifest import EnvironmentNote
 
 
+class CreatedRepository(FrozenModel):
+    """A GitHub repository the runtime created."""
+
+    url: str = Field(description="The repository's https://github.com/<owner>/<repo> URL")
+    lockdown_problem: str = Field(
+        default="", description="Why closing the repository to outside contributions did not take, if it did not"
+    )
+    topic_problem: str = Field(default="", description="Why the repository's topic was not set, if it was not")
+
+
+class SecretScan(FrozenModel):
+    """What the secret scan made of a directory."""
+
+    findings: tuple[str, ...] = Field(
+        default=(), description="Each finding, with the scanner, the rule, and the file; never the value"
+    )
+    failure: str = Field(default="", description="Why the scan could not be run to the end, if it could not")
+
+
 class WorkspaceRuntimeInterface(MutableModel, ABC):
     """The running workspace around the repository, as far as the installer touches it: supervisord, the app
-    registry, and the repository's history."""
+    registry, the repository's history, and the workspace's GitHub account."""
 
     repo_root: Path = Field(frozen=True, description="The workspace repo's root")
 
@@ -64,3 +84,29 @@ class WorkspaceRuntimeInterface(MutableModel, ABC):
     def delete_ref(self, ref: str) -> str | None:
         """Delete a local ref of the repository if it exists; the reason when it could not, None when the ref is
         gone."""
+
+    @abstractmethod
+    def create_private_repository(self, name: str, description: str) -> CreatedRepository:
+        """Create the private repository ``name`` under the workspace's GitHub account and close it to outside
+        contributions. Raises DevRepositoryError when it is not created; a name the account already uses is one
+        such case, and the message says so."""
+
+    @abstractmethod
+    def create_published_repository(self, name: str, description: str, is_private: bool) -> CreatedRepository:
+        """Create the repository ``name`` under the workspace's GitHub account, private or public as asked,
+        close it to outside contributions, and give it the topic published apps are found by. Raises
+        PublishedNameTakenError when the account already has a repository of that name, and PublishError when it
+        is not created for any other reason."""
+
+    @abstractmethod
+    def make_published_repository_public(self, repo_url: str) -> None:
+        """Make the repository at ``repo_url`` public. Raises PublishError when it is not public afterwards."""
+
+    @abstractmethod
+    def scan_secrets(self, directory: Path) -> SecretScan:
+        """Run the workspace's secret scan, the one a template publish runs, over ``directory``."""
+
+    @abstractmethod
+    def check_lock(self, directory: Path) -> str | None:
+        """Whether the lock of the Python project at ``directory`` is what its project calls for, checked there
+        and nowhere else; why it is not, None when it is."""

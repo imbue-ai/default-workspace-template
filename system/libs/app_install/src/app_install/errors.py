@@ -31,6 +31,22 @@ class GitCommandError(AppInstallError):
     """A git command the installer ran failed."""
 
 
+class MissingCommandError(GitCommandError):
+    """A command the installer needs is not installed; the message names it."""
+
+
+class NotPrimaryCheckoutError(AppInstallError):
+    """The command was run in a linked worktree, and it moves the workspace's primary branch."""
+
+
+class NotModifiedAppError(AppInstallError, ValueError):
+    """The app was installed and nobody has changed it, so it has no repository of this workspace's own."""
+
+
+class DevRepositoryError(AppInstallError):
+    """An app's dev repository could not be created."""
+
+
 class RepositoryUnreachableError(AppInstallError):
     """An app's repository could not be read, anonymously or with the workspace's GitHub access."""
 
@@ -54,3 +70,57 @@ class UpdateInProgressError(AppInstallError):
 class NoSnapshotError(AppInstallError):
     """The app's stored data could not be kept safe before an update: it does not fit beside itself and the
     workspace has no recent backup, or copying it aside failed."""
+
+
+class AppChecksFailedError(AppInstallError):
+    """An app's own checks do not pass: its environment does not sync from its lock, or its tests fail."""
+
+
+class InvalidTemplateVersionError(AppInstallError, ValueError):
+    """A value given as a template version is not written as one."""
+
+
+class RecordReferenceError(AppInstallError, ValueError):
+    """A reference cannot be added to an app's record, or is not there to remove."""
+
+
+class PublishError(AppInstallError):
+    """A step of a publish could not be done; nothing after it ran."""
+
+
+class SecretsFoundError(PublishError):
+    """The secret scan found something in the tree about to be published; ``findings`` names each, with its
+    file and never its value."""
+
+    def __init__(self, findings: tuple[str, ...]) -> None:
+        self.findings = findings
+        super().__init__("; ".join(findings))
+
+
+class OutsideSkillsError(PublishError):
+    """The tree about to be published names, by path, skills of this workspace that the app does not carry;
+    ``uses`` names each line."""
+
+    def __init__(self, uses: tuple[str, ...]) -> None:
+        self.uses = uses
+        super().__init__("; ".join(uses))
+
+
+class LockCheckError(PublishError):
+    """The app's lock does not match its project when the app stands alone, outside any workspace."""
+
+
+class NotAssembledError(PublishError):
+    """No assembled and scanned tree of the app is waiting to be pushed or recorded."""
+
+
+class NotPushedError(PublishError):
+    """The assembled tree has not been pushed, so there is no published commit to record."""
+
+
+class PublishedNameTakenError(PublishError):
+    """The account already has a repository of the name the app was to be published under."""
+
+
+class PushRefusedError(PublishError):
+    """The published repository holds commits this workspace's publish does not continue."""

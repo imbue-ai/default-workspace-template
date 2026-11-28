@@ -8,8 +8,11 @@ from app_manifest.errors import RecordLoadError
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import RecordReference
+from app_manifest.records import app_directory_prefix
+from app_manifest.records import join_marker_pattern
 from app_manifest.records import load_all_records
 from app_manifest.records import load_record
+from app_manifest.records import modifying_paths
 from app_manifest.records import parse_record
 from app_manifest.records import render_record
 from app_manifest.records import write_record
@@ -48,6 +51,7 @@ dev_repo_url = ""
 published_repo_url = ""
 published_commit = ""
 published_version = ""
+published_visibility = ""
 verified_template = "minds-v0.11.0"
 
 [[references]]
@@ -109,3 +113,19 @@ def test_a_record_in_a_file_named_after_another_app_is_refused() -> None:
 
     with pytest.raises(RecordLoadError, match="named after"):
         parse_record(text, Path("system/config/apps/digest.toml"))
+
+
+def test_only_a_path_outside_the_regenerable_set_makes_an_app_modified() -> None:
+    assert modifying_paths(["uv.lock"]) == ()
+    assert modifying_paths(["uv.lock", "src/notes/runner.py", "docs/uv.lock.md"]) == (
+        "src/notes/runner.py",
+        "docs/uv.lock.md",
+    )
+    assert modifying_paths([]) == ()
+
+
+def test_an_app_is_known_to_git_subtree_by_its_directory() -> None:
+    record = AppRecord(name="daily-notes", package="daily_notes", port=8084, origin=AppOrigin.LOCAL)
+
+    assert app_directory_prefix(record) == "system/apps/daily_notes"
+    assert join_marker_pattern(record) == "^git-subtree-dir: system/apps/daily_notes/*$"

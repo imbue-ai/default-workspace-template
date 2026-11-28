@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { detailOf, rowOf, runOf } from "../testing/records";
+import { appOwnedRowOf, detailOf, rowOf, runOf } from "../testing/records";
 import { RoutinePage, type RoutinePageAttrs } from "./RoutinePage";
 
 afterEach(() => unmountViews());
@@ -17,6 +17,7 @@ function mount(attrs: Partial<RoutinePageAttrs>): HTMLElement {
       onRunNow: () => undefined,
       onToggleEnabled: () => undefined,
       onChangeSchedule: () => undefined,
+      onUseAppSchedule: () => undefined,
       onFix: () => undefined,
       onRemove: () => undefined,
       ...attrs,
@@ -37,6 +38,8 @@ describe("RoutinePage", () => {
     expect(root.textContent).toContain("python3 sync.py");
     expect(root.textContent).toContain("system/routines/news-sync.toml");
     expect(root.querySelector("[data-fix]")).toBeNull();
+    expect(root.querySelector("[data-app-owned]")).toBeNull();
+    expect(root.querySelector("[data-use-app-schedule]")).toBeNull();
     expect(root.querySelector("[data-toggle]")?.textContent).toBe("Turn off");
     for (const control of ["[data-run-now]", "[data-toggle]", "[data-change-schedule]", "[data-remove]"]) {
       expect(isDisabled(root, control), control).toBe(false);
@@ -108,6 +111,52 @@ describe("RoutinePage", () => {
     expect(rows[1].querySelector("a")).toBeNull();
     // The routine's own chat is a plain link too: the app contract opens it where the workspace opens chats.
     expect(root.querySelector("[data-open-chat]")?.getAttribute("href")).toContain("?chat=agent-1");
+  });
+
+  it("names the app a routine is part of and offers it no removal, only its schedule and its switch", () => {
+    const root = mount({
+      detail: detailOf({
+        row: appOwnedRowOf(),
+        definition_path: "system/apps/inbox_status/routines/news-sync.toml",
+      }),
+    });
+    expect(root.querySelector("[data-app-owned]")?.textContent).toContain("part of the app inbox-status");
+    expect(root.querySelector("[data-remove]")).toBeNull();
+    for (const control of ["[data-run-now]", "[data-toggle]", "[data-change-schedule]"]) {
+      expect(isDisabled(root, control), control).toBe(false);
+    }
+    // Its own schedule is in force, so there is none to go back to.
+    expect(root.querySelector("[data-use-app-schedule]")).toBeNull();
+    expect(root.querySelector("[data-schedule-override]")).toBeNull();
+  });
+
+  it("offers the way back to the app's schedule while the user's is in its place", () => {
+    const onUseAppSchedule = vi.fn();
+    const rescheduled = appOwnedRowOf({
+      schedule_text: "Every day at 7:30 am",
+      has_schedule_override: true,
+      app_schedule_text: "Every hour",
+    });
+    const root = mount({ detail: detailOf({ row: rescheduled }), onUseAppSchedule });
+    expect(root.textContent).toContain("Every day at 7:30 am");
+    expect(root.querySelector("[data-schedule-override]")?.textContent).toBe(
+      "You changed this. The app's own schedule: Every hour.",
+    );
+    const back = root.querySelector<HTMLButtonElement>("[data-use-app-schedule]")!;
+    expect(back.textContent).toBe("Back to the app's schedule");
+    back.click();
+    expect(onUseAppSchedule).toHaveBeenCalledTimes(1);
+    expect(root.querySelector("[data-remove]")).toBeNull();
+
+    const busy = mount({ detail: detailOf({ row: rescheduled }), isBusy: true });
+    expect(isDisabled(busy, "[data-use-app-schedule]")).toBe(true);
+  });
+
+  it("names the owning app over the one the definition names for grouping", () => {
+    const root = mount({ detail: detailOf({ row: appOwnedRowOf({ app: "mail" }) }) });
+    const terms = [...root.querySelectorAll("dt")].map((term) => term.textContent);
+    const app = root.querySelectorAll("dd")[terms.indexOf("App")];
+    expect(app.textContent).toBe("inbox-status");
   });
 
   it("says when nothing has run", () => {

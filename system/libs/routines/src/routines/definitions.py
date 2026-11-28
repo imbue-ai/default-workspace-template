@@ -22,6 +22,7 @@ from tomlkit.exceptions import ParseError
 from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import RecordLoadError
 from app_manifest.primitives import AppName
+from app_manifest.records import load_all_records
 from app_manifest.records import load_record
 from app_manifest.records import record_path
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -168,6 +169,17 @@ def user_app_package_of(paths: RoutinesPaths, app_name: str) -> str | None:
         )
         return None
     return app_package
+
+
+def user_app_names_by_package(paths: RoutinesPaths) -> dict[str, str]:
+    """The name of each user app by its directory under system/apps, as the workspace's records of the apps have
+    them; empty when a record cannot be read, which leaves every app that owns a routine named by its directory."""
+    try:
+        records = load_all_records(paths.repo_root)
+    except RecordLoadError as e:
+        logger.warning("Naming the apps that own routines by their directories alone: {}", e)
+        return {}
+    return {record.package: str(record.name) for record in records}
 
 
 @pure

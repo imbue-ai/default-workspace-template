@@ -80,11 +80,13 @@ workspace built or installed (`system/config/apps/<name>.toml`). A coupling
 none of those shows is invisible to it. When you have a concrete reason to
 think a suite it left out can observe your change (it runs your script as a
 subprocess, calls your service over HTTP, reads a file your change writes),
-run that suite too. When that suite is an app the workspace built and the path
-lies outside the app, the coupling belongs in the app's record, which you do
-not write: name the path in your report, saying which app it belongs to (a
-harden pass has an `Outside footprint:` line for it), so it is registered and
-the next change to it selects the app without anyone having to notice. When
+run that suite too. When that suite is an app the workspace built or installed
+and the path lies outside the app, the coupling belongs in the app's record.
+Never edit the record: write the entry with `uv run --no-sync app-install
+reference add <name> <path> --note "<the surface it uses>"`, which commits
+that one file on your branch, and name the path in your report (a harden pass
+has a `References registered:` line for it), so the next change to it selects
+the app without anyone having to notice. When
 the suite is built-in, leave its declarations alone: a local edit to a built-in file only makes divergence for the next
 update, and a reference would widen a built-in app's footprint into other
 units' files. Such a coupling is a built-in defect (AGENTS.md, "Updates"):

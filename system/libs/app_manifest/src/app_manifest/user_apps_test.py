@@ -2,9 +2,15 @@ from pathlib import Path
 
 import pytest
 
+from app_manifest.errors import RecordLoadError
 from app_manifest.errors import RegistryReadError
 from app_manifest.errors import SuiteSelectionError
+from app_manifest.primitives import AppName
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import write_record
 from app_manifest.testing import write_app_manifest
+from app_manifest.testing import write_app_record
 from app_manifest.testing import write_repo_file
 from app_manifest.user_apps import has_user_built_app
 
@@ -115,6 +121,35 @@ def test_an_app_counts_under_its_manifests_name_not_its_directorys(repo_root: Pa
 
     assert has_user_built_app(repo_root, _registry(repo_root, _TEMPLATE_ROWS + _row("notes")))
     assert not has_user_built_app(repo_root, _registry(repo_root, _TEMPLATE_ROWS + _row("notes-pkg")))
+
+
+def test_an_app_installed_from_someone_elses_repository_is_not_one_the_user_built(repo_root: Path) -> None:
+    _package(repo_root, "system/apps/notes", "notes")
+    _app(repo_root, "notes", "notes")
+    write_record(
+        repo_root,
+        AppRecord(
+            name=AppName("notes"),
+            package="notes",
+            port=8090,
+            origin=AppOrigin.INSTALLED,
+            upstream_url="https://github.com/someone/notes",
+        ),
+    )
+
+    assert not has_user_built_app(repo_root, _registry(repo_root, _TEMPLATE_ROWS + _row("notes")))
+
+    # An app the workspace built has a record too, and still counts beside an installed one.
+    write_app_record(repo_root, "todo-list", "todo_list", {})
+
+    assert has_user_built_app(repo_root, _registry(repo_root, _TEMPLATE_ROWS + _row("notes") + _row("todo-list")))
+
+
+def test_an_app_record_that_cannot_be_read_raises(repo_root: Path) -> None:
+    write_repo_file(repo_root, "system/config/apps/notes.toml", "name = \n")
+
+    with pytest.raises(RecordLoadError):
+        has_user_built_app(repo_root, _registry(repo_root, _row("todo-list")))
 
 
 def test_a_registry_or_a_root_project_that_cannot_be_read_raises(repo_root: Path) -> None:

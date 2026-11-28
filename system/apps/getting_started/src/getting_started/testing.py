@@ -35,10 +35,24 @@ def catalog_template_document(slug: str, **overrides: Any) -> dict[str, Any]:
     return document
 
 
+def catalog_app_document(name: str, **overrides: Any) -> dict[str, Any]:
+    """One published app as a catalog lists it: the three required fields and a relative icon, derived
+    from the name, with ``overrides`` laid over them."""
+    document: dict[str, Any] = {
+        "name": name,
+        "title": name.title(),
+        "repository_url": f"https://github.com/someone/{name}",
+        "icon": f"app-icons/someone--{name}.svg",
+    }
+    document.update(overrides)
+    return document
+
+
 def catalog_document(
     *templates: Mapping[str, Any], shelves: Sequence[Mapping[str, Any]] = (), **overrides: Any
 ) -> bytes:
-    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``."""
+    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``; a catalog
+    that lists apps passes them as an ``apps`` override, so one without has no ``apps`` key at all."""
     document: dict[str, Any] = {
         "format": 1,
         "generated_at": "2026-09-07T00:00:00Z",

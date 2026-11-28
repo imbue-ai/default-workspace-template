@@ -17,7 +17,12 @@ _README = (
     '<a href="https://studio.imbue.com/open?git_url=https://github.com/MINDS_TEMPLATE_REPO_URL">Open</a>\n'
     "` /use-template https://github.com/MINDS_TEMPLATE_REPO_URL`\n"
 )
-_CREATED = {_CREATE: json.dumps({"name": "demo", "owner": {"login": "octo"}})}
+_CREATED = {
+    _CREATE: json.dumps({"name": "demo", "owner": {"login": "octo"}, "private": True})
+}
+_CREATED_PUBLIC = {
+    _CREATE: json.dumps({"name": "demo", "owner": {"login": "octo"}, "private": False})
+}
 _CREATED_AND_LOCKED_DOWN = {**_CREATED, _LOCKDOWN: json.dumps({"name": "demo"})}
 
 
@@ -90,12 +95,28 @@ def test_create_makes_a_locked_down_repo_and_points_the_readme_at_it(
 def test_a_public_repo_is_created_public(
     fake_latchkey: FakeLatchkey, tmp_path: Path
 ) -> None:
-    fake_latchkey.set_state(responses=_CREATED_AND_LOCKED_DOWN)
+    fake_latchkey.set_state(
+        responses={**_CREATED_PUBLIC, _LOCKDOWN: json.dumps({"name": "demo"})}
+    )
 
     assert (
         _create(fake_latchkey, _worktree(tmp_path), visibility="public").returncode == 0
     )
     assert _body_of(fake_latchkey, _CREATE)["private"] is False
+
+
+def test_a_repo_github_does_not_confirm_as_private_is_not_used(
+    fake_latchkey: FakeLatchkey, tmp_path: Path
+) -> None:
+    fake_latchkey.set_state(
+        responses={**_CREATED_PUBLIC, _LOCKDOWN: json.dumps({"name": "demo"})}
+    )
+
+    completed = _create(fake_latchkey, _worktree(tmp_path))
+
+    assert completed.returncode != 0
+    assert "did not confirm it is private" in completed.stdout + completed.stderr
+    assert not any("PATCH" in call for call in fake_latchkey.calls())
 
 
 def test_a_refused_create_leaves_the_worktree_alone(

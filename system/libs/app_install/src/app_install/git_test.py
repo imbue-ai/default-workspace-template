@@ -7,6 +7,7 @@ from app_install.errors import GitCommandError
 from app_install.errors import RepositoryUnreachableError
 from app_install.git import fetch_commit
 from app_install.git import land_commit
+from app_install.git import require_git_subtree
 from app_install.git import run_git
 from app_install.testing import commit_all
 from app_install.testing import make_published_app_repository
@@ -148,3 +149,19 @@ def test_a_ref_that_is_spelled_like_an_option_is_read_as_a_ref_and_runs_nothing(
         fetch_commit(workspace, str(published), "--upload-pack=touch injected")
 
     assert not (workspace / "injected").exists()
+
+
+def test_the_environment_the_installer_runs_in_has_git_subtree(tmp_path: Path) -> None:
+    """Installing, updating, and linking an app all run ``git subtree``, which some distributions package apart
+    from git: run inside the workspace image, this is what says the image carries it."""
+    workspace = make_workspace_repository(tmp_path / "workspace")
+
+    require_git_subtree(workspace)
+
+
+def test_a_command_that_outlasts_the_time_it_is_given_is_a_failure_that_names_it(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    run_git(workspace, ["config", "alias.wait", "!sleep 2"])
+
+    with pytest.raises(GitCommandError, match="could not run `git wait`.*timed out"):
+        run_git(workspace, ["wait"], timeout_seconds=0.2)
