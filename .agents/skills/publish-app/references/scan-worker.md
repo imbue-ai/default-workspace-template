@@ -40,7 +40,7 @@ Three limits:
   or repoints. The app's record (`system/config/apps/<name>.toml`) and its
   generated files are not yours to edit by hand.
 - Never run `app-install publish assemble`, `push` or `record`: those are the
-  lead's, after the user has looked at what you prepared.
+  lead's, once it has checked what you prepared.
 - Never write a secret's value anywhere. A manifest names the variables a
   secret file sets, never what they are set to.
 
@@ -295,7 +295,8 @@ a person, in this order:
 8. **License.** One line: MIT.
 
 Mock data only: no real names, addresses, messages or screenshots of the
-user's own data. Do not show the README to the user; the lead does that.
+user's own data. Do not show the README to the user: it is published as you
+leave it, and they first read it on the app's page.
 
 Then the license file the README's last line names. A published app carries
 `system/apps/<package>/LICENSE`, whoever can see it for now, and a publish
