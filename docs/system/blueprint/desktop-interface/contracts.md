@@ -458,7 +458,7 @@ A request that names `ceiling` is from a desktop app built before the workspace 
 |---|---|
 | `activity` | `IDLE`, `STARTING`, `RUNNING`, `WAITING`, `APPLYING`, `FINISHING` or `STALLED` (below) |
 | `run` | The run under way, or the last one while its outcome or its note is not dismissed; null when there is nothing of a run to show |
-| `start_failure` | `{"attempt_id", "code", "detail"}` for the last accepted start that made no chat (`CREATE_FAILED` or `CHAT_APP_UNREACHABLE`); null once it is dismissed, a chat is made or a run begins |
+| `start_failure` | `{"attempt_id", "code", "detail"}` for the last accepted start that made no chat (`CREATE_FAILED` or `CHAT_APP_UNREACHABLE`); null once it is dismissed, a chat is made or a run begins. A create refused for want of an account is told by `needs_sign_in`, and as `CREATE_FAILED` where the workspace's own check finds an account signed in |
 | `schedule` | The armed schedule: `target_ref`, `override_ref`, `is_auto_armed`, `window_opens_at` and `window_closes_at` (the window open now, else the next to open, in seconds since the epoch) and `last_skip_reason` (`UPDATE_IN_FLIGHT`, `LEASE_HELD`, `NEEDS_SIGN_IN`, `DISPATCH_FAILED`, `WINDOW_CLOSED`, or null); null when none is armed |
 | `needs_sign_in` | Whether a start, an arm or a scheduled start found no AI account signed in, and none is signed in now |
 | `is_update_skipped` | Whether the user skipped the version the channel is on |

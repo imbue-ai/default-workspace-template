@@ -1758,7 +1758,7 @@
                 "type": "null"
               }
             ],
-            "description": "The last accepted start when it made no chat; null once it is dismissed, a chat is made or a run begins, and for a start refused for want of a signed-in account, which needs_sign_in tells"
+            "description": "The last accepted start when it made no chat; null once it is dismissed, a chat is made or a run begins, and for a start refused for want of a signed-in account while needs_sign_in tells it"
           },
           "will_self_arm": {
             "description": "Whether the workspace's dispatcher arms the update to the channel's version by itself within its next minute, so a client need not offer it",

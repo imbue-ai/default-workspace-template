@@ -579,7 +579,7 @@ class UpdateStateResponse(FrozenModel):
     )
     start_failure: UpdateStartFailureModel | None = Field(
         description="The last accepted start when it made no chat; null once it is dismissed, a chat is made or a "
-        "run begins, and for a start refused for want of a signed-in account, which needs_sign_in tells"
+        "run begins, and for a start refused for want of a signed-in account while needs_sign_in tells it"
     )
     schedule: UpdateScheduleModel | None = Field(description="The armed schedule; null when none is armed")
     needs_sign_in: bool = Field(

@@ -6,7 +6,7 @@ The workspace says what its update is doing, so a client no longer works that ou
 
 - The chats waiting on background tasks are read only for a lead idle long enough to read as waiting, and whether an account is signed in only while a refusal for want of one is on record.
 
-- A start or an arm that finds no AI account signed in leaves `sign-in-refusal.json`, which the next one that finds an account takes away. A start records the version the user named for it in `last-start.json`, and `dismiss_start_failure` records there that the user put a failed start away.
+- A start or an arm that finds no AI account signed in leaves `sign-in-refusal.json`, which the next one that finds an account takes away. A start whose create is refused for want of an account, where the workspace's own check finds one signed in, is told as a failed start. A start records the version the user named for it in `last-start.json`, and `dismiss_start_failure` records there that the user put a failed start away.
 
 - `control.read_liveness` is removed with the route it answered (`GET /api/workspace/update/liveness`): the state answers what it was read for.
 

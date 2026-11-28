@@ -1073,6 +1073,26 @@ def test_a_create_refused_for_want_of_an_account_needs_a_sign_in_and_is_no_faile
     assert state.needs_sign_in is True
 
 
+def test_a_create_refused_for_an_account_the_workspace_finds_signed_in_is_told_as_a_failed_start(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    _fail_the_create(staged, "Connect an AI provider to start a chat")
+
+    attempt_id = _start(staged)["attempt_id"]
+    last_start = staged.read_state("last-start.json")
+    state = _read(staged)
+
+    assert last_start is not None
+    assert last_start["outcome"] == "NEEDS_SIGN_IN"
+    assert state.needs_sign_in is False
+    assert state.start_failure == UpdateStartFailure(
+        attempt_id=attempt_id,
+        code=UpdateStartFailureCode.CREATE_FAILED,
+        detail="Connect an AI provider to start a chat",
+    )
+    assert UpdateAction.DISMISS_OUTCOME in state.allowed_actions
+
+
 @pytest.mark.parametrize("skip_field", ["pending_skip_reason", "last_skip_reason"])
 def test_a_window_skipped_for_want_of_an_account_needs_a_sign_in_until_one_is_there(
     staged: StagedUpdateWorkspace, skip_field: str

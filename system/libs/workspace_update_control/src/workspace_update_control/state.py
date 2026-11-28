@@ -66,6 +66,7 @@ from workspace_update_control.protocol import (
     LAST_DISPATCH_FILE_PATH,
     OUTCOME_CHAT_APP_UNREACHABLE,
     OUTCOME_CREATE_FAILED,
+    OUTCOME_NEEDS_SIGN_IN,
     RUN_RECORD_PATH,
     SCHEDULE_FILE_PATH,
     SIGN_IN_REFUSAL_FILE_PATH,
@@ -589,15 +590,21 @@ def _start_failure(
     last_start: Mapping[str, object] | None,
     run: Mapping[str, object] | None,
     dispatch: Mapping[str, object] | None,
+    needs_sign_in: bool,
 ) -> UpdateStartFailure | None:
     """The last start attempt when it made no chat, the user has not put that away, and no chat has been made
     and no run begun since.
 
-    A start that found no account signed in is told as the workspace needing a sign-in, not as a failure.
+    A start that found no account signed in is told as the workspace needing a sign-in, not as a failure. Where
+    the workspace does not read as needing one, the create was refused for an account the workspace's own check
+    finds signed in, and is told as a create that failed, in the create's own words.
     """
     if last_start is None or last_start.get(START_FAILURE_DISMISSED_KEY) is True:
         return None
-    code = _member(UpdateStartFailureCode, last_start.get("outcome"))
+    outcome = last_start.get("outcome")
+    code = _member(UpdateStartFailureCode, outcome)
+    if outcome == OUTCOME_NEEDS_SIGN_IN and not needs_sign_in:
+        code = UpdateStartFailureCode.CREATE_FAILED
     if code is None:
         return None
     attempted_at = epoch_or_none(last_start.get("started_at"))
@@ -714,7 +721,8 @@ def read_update_state(
         read_busy_agents,
         now,
     )
-    start_failure = _start_failure(last_start, run, dispatch)
+    needs_sign_in = _needs_sign_in(schedule, agent_environment)
+    start_failure = _start_failure(last_start, run, dispatch, needs_sign_in)
     channel_ref = channel_template_ref(channel_version)
     skipped = read_json_object(SKIPPED_TARGET_FILE_PATH) or {}
     is_update_skipped = bool(channel_ref) and skipped.get("target_ref") == channel_ref
@@ -738,7 +746,7 @@ def read_update_state(
         run=view.run,
         start_failure=start_failure,
         schedule=_schedule_state(schedule, now),
-        needs_sign_in=_needs_sign_in(schedule, agent_environment),
+        needs_sign_in=needs_sign_in,
         is_update_skipped=is_update_skipped,
         will_self_arm=will_self_arm,
         is_backup_configured=is_backup_configured(),
