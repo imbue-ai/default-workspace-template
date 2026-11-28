@@ -1,1 +1,3 @@
 `docs/system/blueprint/desktop-interface/contracts.md` describes what `GET /api/workspace/update` now answers: what the workspace's update is doing, as the workspace works it out when asked, with each activity and when it is read, the run with what the user dismissed left out, and the same document under `state` in the answer of every write of the update routes.
+
+The state docs (`data/.state/README.md` and section 17 of `docs/system/blueprint/workspace-app-model/contracts.md`) name the file the update routes now keep under `data/.state/update-apply/`: `sign-in-refusal.json`, that a start or an arm found no AI account signed in.
