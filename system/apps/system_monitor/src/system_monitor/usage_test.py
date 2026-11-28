@@ -1,10 +1,9 @@
 """Tests for the rows of the breakdown: the grouping, the exact split, the scaled fallback, the scratch
 space, the CPU column adding up, and the stop targets the items carry."""
 
-from pathlib import Path
+from oom_priority.processes import Process
 
 from system_monitor import usage
-from system_monitor.programs import Process
 
 _MIB = 1024 * 1024
 _CHAT_STOP = {"kind": "chat", "id": "agent-abc"}
@@ -211,24 +210,6 @@ def test_scaling_shrinks_every_figure_to_the_memory_in_use_and_never_grows_them(
     ]
 
 
-def test_scratch_space_counts_as_memory_only_when_tmp_is_a_tmpfs(
-    tmp_path: Path,
-) -> None:
-    mounts = tmp_path / "mounts"
-    mounts.write_text(
-        "/dev/vda1 / ext4 rw 0 0\ntmpfs /tmp tmpfs rw,nosuid,nodev,size=2009212k 0 0\n"
-    )
-    assert usage.scratch_in_memory(mounts)
-
-    mounts.write_text("/dev/vda1 / ext4 rw 0 0\n/dev/vdb1 /tmp ext4 rw 0 0\n")
-    assert not usage.scratch_in_memory(mounts)
-
-    # The last mount on /tmp is the one in effect.
-    mounts.write_text("/dev/vdb1 /tmp ext4 rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n")
-    assert usage.scratch_in_memory(mounts)
-    assert not usage.scratch_in_memory(tmp_path / "missing")
-
-
 def test_scratch_space_gets_its_own_row_taken_out_of_system() -> None:
     procs = {
         10: Process(
@@ -433,3 +414,27 @@ def test_processes_no_program_started_are_named_by_their_command() -> None:
         ("SSH access", 35),
         ("Other", 30),
     ]
+
+
+def test_the_screens_browsers_are_one_browser_item_apart_from_the_screens_service() -> (
+    None
+):
+    profile = "--user-data-dir=/home/user/.mngr/browser-profiles/browser-use-user-data-dir-browser-1"
+    procs = {
+        10: Process(10, 1, 100 * _MIB, ["python3", "/usr/bin/supervisord"]),
+        20: Process(20, 10, 30 * _MIB, ["screen-service"]),
+        # The Screen's service starts the browser, whose renderer carries no profile of its own.
+        21: Process(21, 20, 400 * _MIB, ["/opt/fortress/chrome", profile]),
+        22: Process(22, 21, 200 * _MIB, ["/opt/fortress/chrome", "--type=renderer"]),
+    }
+
+    groups = usage.group_usage(
+        procs, {}, {}, {"screen": 20}, program_names={"screen": "Screen"}
+    )
+
+    workspace = next(group for group in groups if group["id"] == "workspace")
+    assert {item["name"]: item["bytes"] for item in workspace["items"]} == {
+        "Browser": 600 * _MIB,
+        "Internal system": 100 * _MIB,
+        "Screen": 30 * _MIB,
+    }

@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from system_monitor.programs import chat_agent_id, is_code_checker
+from oom_priority.processes import chat_agent_id, is_code_checker
+
 from system_monitor.tail import read_tail
 
 # The guard's own log: the ledger keeps only a thread name ("MainThread"), but this names the

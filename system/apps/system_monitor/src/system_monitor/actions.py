@@ -14,6 +14,7 @@ from typing import Final
 from urllib.parse import quote
 
 import httpx
+from oom_priority.processes import Process, read_processes
 from oom_priority.supervisor_rpc import SUPERVISOR_SOCKET, stop_program
 
 from system_monitor import programs, usage
@@ -72,14 +73,14 @@ def _detail_of(response: httpx.Response) -> str:
 
 def stop_checkers(
     agent_id: str,
-    procs: Mapping[int, programs.Process] | None = None,
+    procs: Mapping[int, Process] | None = None,
     agents: Mapping[int, str] | None = None,
 ) -> int:
     """Stop the code checkers a chat's agent started; how many were told to stop.
 
     Raises StopRefusedError when the chat has none running, or one is not ours to stop.
     """
-    live = procs if procs is not None else programs.read_processes()
+    live = procs if procs is not None else read_processes()
     registered = agents if agents is not None else programs.agents_by_pid()
     pids = usage.checker_pids_of_chat(live, registered, agent_id)
     if not pids:

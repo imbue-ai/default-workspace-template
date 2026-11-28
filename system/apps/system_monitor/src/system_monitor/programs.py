@@ -1,33 +1,21 @@
-"""The running programs and who they belong to: each process's memory, the chats, the apps the
-user built, and the programs supervisord runs."""
+"""The records of who runs what: the chats, the apps the user built, and the programs supervisord
+runs. The processes themselves, and which of these each belongs to, are read through
+``oom_priority.processes``."""
 
 import json
 import os
-import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from oom_priority.meminfo import KIB, PROC, parse_kib_fields
+from oom_priority.meminfo import PROC
 from oom_priority.registry import live_pids_by_agent_id
 
 # mngr's host dir is not the same path on every host (a container keeps it at /home/user/.mngr, a
 # Modal sandbox at /mngr), so the agent records are found through the agent environment's own.
 DEFAULT_MNGR_HOST_DIR = Path("/home/user/.mngr")
 APPS_REGISTRY = Path("data/.state/apps.toml")
-# Command-line fragments of the language servers chats start to check code.
-CODE_CHECKER_MARKERS = (
-    "langserver",
-    "language-server",
-    "language_server",
-    "gopls",
-    "rust-analyzer",
-    "clangd",
-    "pylsp",
-)
-_AGENT_DIR = re.compile(r"/\.?mngr/agents/(agent-[^/\s]+)")
-
 
 # Friendly names for the supervised programs that are not apps (an app's name comes from the
 # registry). A program named nowhere shows under its program name.
@@ -46,103 +34,6 @@ PROGRAM_NAMES = {
     "owner-exec": "Web access",
     "env-converge": "Environment setup",
 }
-
-
-class Rollup(NamedTuple):
-    """What smaps_rollup reports for one process, in bytes."""
-
-    private: int
-    pss: int
-    anonymous: int | None
-    shmem: int | None
-
-
-class Process:
-    def __init__(
-        self,
-        pid: int,
-        ppid: int,
-        rss: int,
-        argv: list[str],
-        private: int | None = None,
-        pss: int | None = None,
-        anonymous: int | None = None,
-        shmem: int | None = None,
-    ) -> None:
-        self.pid = pid
-        self.ppid = ppid
-        self.rss = rss  # bytes, shared pages counted in full
-        self.argv = argv
-        # From smaps_rollup, in bytes, None where the kernel has none or the process is not
-        # ours to read: the memory only this process maps, its proportional share (each shared
-        # page divided evenly among the processes that map it), the anonymous memory it made for
-        # itself (what stopping it frees: its file pages are cache the kernel can drop), and its
-        # proportional share of shared memory segments.
-        self.private = private
-        self.pss = pss
-        self.anonymous = anonymous
-        self.shmem = shmem
-
-
-def read_rollup(entry: Path) -> Rollup | None:
-    """The figures from a process's smaps_rollup, or None when it cannot be read."""
-    try:
-        values = parse_kib_fields((entry / "smaps_rollup").read_text())
-    except OSError:
-        return None  # no such file on this kernel, the process is gone, or not ours to read
-    if "Pss" not in values:
-        return None
-    private = values.get("Private_Clean", 0) + values.get("Private_Dirty", 0)
-    return Rollup(
-        private, values["Pss"], values.get("Anonymous"), values.get("Pss_Shmem")
-    )
-
-
-def read_processes(proc: Path = PROC) -> dict[int, Process]:
-    out: dict[int, Process] = {}
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            status = (entry / "status").read_text()
-            argv = [a for a in (entry / "cmdline").read_bytes().split(b"\0") if a]
-        except OSError:
-            continue  # gone, or not ours to read
-        ppid = rss = 0
-        for line in status.splitlines():
-            if line.startswith("PPid:"):
-                ppid = int(line.split()[1])
-            elif line.startswith("VmRSS:"):
-                rss = int(line.split()[1]) * KIB
-        rollup = read_rollup(entry) if rss else None
-        out[int(entry.name)] = Process(
-            int(entry.name),
-            ppid,
-            rss,
-            [a.decode(errors="replace") for a in argv],
-            private=rollup.private if rollup else None,
-            pss=rollup.pss if rollup else None,
-            anonymous=rollup.anonymous if rollup else None,
-            shmem=rollup.shmem if rollup else None,
-        )
-    return out
-
-
-def has_breakdown(procs: dict[int, Process]) -> bool:
-    """Whether the kernel reported private and proportional memory (smaps_rollup) for any process."""
-    return any(p.pss is not None for p in procs.values())
-
-
-def is_code_checker(command: str) -> bool:
-    return any(marker in command for marker in CODE_CHECKER_MARKERS)
-
-
-def chat_agent_id(command: str) -> str | None:
-    """The agent id a command line names through its ``<host dir>/agents/agent-...`` path, if any.
-
-    The host dir is ``~/.mngr`` in a container and ``/mngr`` in a Modal sandbox."""
-    found = _AGENT_DIR.search(command)
-    return found.group(1) if found else None
 
 
 def _agent_records(agents_dir: Path) -> dict[str, dict[str, Any]]:

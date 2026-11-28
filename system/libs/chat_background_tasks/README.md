@@ -28,7 +28,7 @@ task's completion will start the next one.
 - The chat app -- reads the markers on its state poller, shows the `background`
   status, and removes a Claude marker once the transcript reports the task over.
 - The shell's avatar, which keeps working while a chat is busy.
-- `system/services/oom_priority/bin/memory_candidates.py`, which never offers a
+- `system/services/oom_priority/bin/workspace_memory.py`, which never offers a
   busy chat's agent as safe to stop.
 - `.agents/skills/launch-task/scripts/create_worker.py`'s worker idle check.
 
@@ -36,7 +36,7 @@ task's completion will start the next one.
 layout, since update-self's staged copy of it runs in workspaces that may predate
 this package; `run_in_background_test.py` pins the two together.
 
-The hooks and `memory_candidates.py` import this package under a bare `python3`
+The hooks and `workspace_memory.py` import this package under a bare `python3`
 (no virtualenv), and `create_worker.py` in the isolated environment `uv run`
 gives a script, each via an explicit `sys.path` entry, which is why it is
 **stdlib-only** and must stay that way.

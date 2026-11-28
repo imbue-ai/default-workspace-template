@@ -1,4 +1,4 @@
-"""Tests for the process reader and the records of who runs what: chats, user apps, and the agent registry."""
+"""Tests for the records of who runs what: chats, user apps, and the agent registry."""
 
 import json
 from pathlib import Path
@@ -7,54 +7,6 @@ import pytest
 from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 from system_monitor import programs
-
-
-def _write_proc_entry(
-    proc: Path, pid: int, ppid: int, rss_kib: int, argv: list[str]
-) -> None:
-    entry = proc / str(pid)
-    entry.mkdir(parents=True)
-    (entry / "status").write_text(f"Name:\tx\nPPid:\t{ppid}\nVmRSS:\t{rss_kib} kB\n")
-    (entry / "cmdline").write_bytes(b"\0".join(arg.encode() for arg in argv) + b"\0")
-
-
-def test_processes_are_read_from_numeric_entries_and_unreadable_ones_are_skipped(
-    tmp_path: Path,
-) -> None:
-    _write_proc_entry(tmp_path, 42, 1, 2048, ["python3", "-m", "thing"])
-    (tmp_path / "self").mkdir()
-    (tmp_path / "43").mkdir()
-
-    procs = programs.read_processes(tmp_path)
-
-    assert list(procs) == [42]
-    assert (procs[42].ppid, procs[42].rss, procs[42].argv) == (
-        1,
-        2048 * 1024,
-        ["python3", "-m", "thing"],
-    )
-    # No smaps_rollup (a kernel without one, or a process not ours to read): no breakdown.
-    assert (procs[42].private, procs[42].pss) == (None, None)
-    assert not programs.has_breakdown(procs)
-
-
-def test_private_and_proportional_memory_are_read_from_smaps_rollup(
-    tmp_path: Path,
-) -> None:
-    _write_proc_entry(tmp_path, 42, 1, 33236, ["system-monitor"])
-    (tmp_path / "42" / "smaps_rollup").write_text(
-        "00400000-ffffc2f5b000 ---p 00000000 00:00 0                              [rollup]\n"
-        "Rss:               33236 kB\n"
-        "Pss:               22440 kB\n"
-        "Shared_Clean:      11496 kB\n"
-        "Private_Clean:       100 kB\n"
-        "Private_Dirty:     21640 kB\n"
-    )
-
-    procs = programs.read_processes(tmp_path)
-
-    assert (procs[42].private, procs[42].pss) == (21740 * 1024, 22440 * 1024)
-    assert programs.has_breakdown(procs)
 
 
 def test_chat_names_prefer_the_display_label_and_drop_the_agent_suffix(
@@ -158,56 +110,6 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
         21: "agent-codex",
         30: "agent-pi",
     }
-
-
-def test_chats_and_code_checkers_are_recognised_by_their_command_lines() -> None:
-    assert (
-        programs.chat_agent_id(
-            "claude --settings /home/user/.mngr/agents/agent-abc/x.json"
-        )
-        == "agent-abc"
-    )
-    assert (
-        programs.chat_agent_id("claude /home/user/.mngr/agents/agent-abc --resume")
-        == "agent-abc"
-    )
-    # A Modal sandbox keeps mngr's host dir at /mngr rather than under a home directory.
-    assert (
-        programs.chat_agent_id("claude --settings /mngr/agents/agent-abc/x.json")
-        == "agent-abc"
-    )
-    assert programs.chat_agent_id("claude --print hi") is None
-    for checker in (
-        "node /usr/lib/node_modules/pyright/langserver.index.js --stdio",
-        "node typescript-language-server --stdio",
-        "/home/user/go/bin/gopls serve",
-        "/home/user/.cargo/bin/rust-analyzer",
-    ):
-        assert programs.is_code_checker(checker), checker
-    assert not programs.is_code_checker("node /opt/app/server.js")
-
-
-def test_anonymous_and_shared_memory_are_read_from_smaps_rollup_when_the_kernel_reports_them(
-    tmp_path: Path,
-) -> None:
-    _write_proc_entry(tmp_path, 42, 1, 33236, ["system-monitor"])
-    (tmp_path / "42" / "smaps_rollup").write_text(
-        "Rss:               33236 kB\nPss:               22440 kB\nPss_Shmem:           512 kB\n"
-        "Private_Clean:       100 kB\nPrivate_Dirty:     21640 kB\nAnonymous:         20000 kB\n"
-    )
-    _write_proc_entry(tmp_path, 43, 1, 1000, ["old-kernel"])
-    (tmp_path / "43" / "smaps_rollup").write_text(
-        "Rss:  1000 kB\nPss:   900 kB\nPrivate_Dirty: 800 kB\n"
-    )
-
-    procs = programs.read_processes(tmp_path)
-
-    assert (procs[42].anonymous, procs[42].shmem) == (20000 * 1024, 512 * 1024)
-    assert (procs[43].private, procs[43].anonymous, procs[43].shmem) == (
-        800 * 1024,
-        None,
-        None,
-    )
 
 
 def test_chat_ids_come_from_the_chat_id_label_and_fall_back_to_the_agent_id(

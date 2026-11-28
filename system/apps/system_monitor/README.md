@@ -37,14 +37,20 @@ the view it was on.
 codex, pi), each with whatever it is running, found through oom_priority's
 agent-pid registry; code checkers; the workspace's own programs (chat app,
 desktop, built-in apps, background services, each listed under the Workspace
-row by the name its registry row or `programs.PROGRAM_NAMES` gives it; what
-none of them started is "SSH access", "Internal system" or "Other" by its
-command); and the apps the user built. A row
+row by the name its registry row or `programs.PROGRAM_NAMES` gives it, with
+the browsers on the Screen as one "Browser" item apart from the Screen's
+service that starts them; what none of them started is "SSH access",
+"Internal system" or "Other" by its command); and the apps the user built.
+Which processes belong to which is `oom_priority.processes`' answer, shared
+with the workspace memory command
+(`system/services/oom_priority/bin/workspace_memory.py`), so a row here and a
+row there are the same processes with the same figure. A row
 with nothing under it (Code checkers, Your apps) is left out until something
 runs there.
 
 - Where the kernel reports each program's own memory
-  (`/proc/<pid>/smaps_rollup`), each row holds its programs' anonymous
+  (`/proc/<pid>/smaps_rollup`, or under gVisor, which has no rollup,
+  `/proc/<pid>/smaps`), each row holds its programs' anonymous
   memory: what they made for themselves, which is what stopping them frees
   (the file pages they map are cache the kernel drops under pressure, and the
   memory guard's figure of what is in use leaves them out too). The shared
@@ -52,11 +58,18 @@ runs there.
   counted once in a Shared row, the files in the scratch space (`/tmp`) are a
   Temporary files row, and the rest of the memory in use (the kernel,
   programs this app cannot inspect) is a System row. The rows add up to the
-  memory in use (`usage.exact_usage`).
-- Where it does not (gVisor), only resident sizes are available, and each is
+  memory in use (`usage.exact_usage`). gVisor reports every page as private,
+  so its `Pss` equals its `Rss` and is not read; the Shared row there counts
+  each segment (a memfd, a `/dev/shm` file, a System V segment) once, at the
+  largest resident size any process that maps it reports
+  (`oom_priority.processes.read_smaps`).
+- Where neither file can be read, only resident sizes are available, and each is
   scaled down by one factor until the rows add up to what is in use less the
   scratch space, with a System row for whatever the programs do not account
   for (`usage.scaled_usage`). The page then says the values are approximate.
+  Resident size counts every file a process maps in each process that maps it
+  (Chromium's binary in every one of its processes), so these rows lean toward
+  the programs with many processes.
 - The Temporary files row appears only where `/tmp` is a tmpfs (every workspace
   today), since only then are its files held in memory; it shows its size
   limit, and an info popup explains what it is.
@@ -117,7 +130,7 @@ their pid can never mislabel them; they keep a plainer description with no
 command.
 
 One known limit: code checkers are recognised by command-line fragments of the
-common language servers (`programs.CODE_CHECKER_MARKERS`); one not in that list
+common language servers (`oom_priority.processes.CODE_CHECKER_MARKERS`); one not in that list
 counts under the chat or program that started it.
 
 The app describes its own HTTP API at `GET /api/schema` (the manifest's

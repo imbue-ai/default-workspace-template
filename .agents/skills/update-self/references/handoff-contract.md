@@ -68,6 +68,40 @@ target release's own copy (or the local one, when the ref predates the skill).
   `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
 
+## What travels with the skill, and what is asked of the workspace's tree
+
+Code that serves a pass is one of two kinds, and each has one place:
+
+- **The update's own logic travels with the skill.** Whatever decides or does a
+  step of the update lives in this skill's directory and is staged from the
+  target release. A helper another part of the workspace also needs is kept
+  twice, byte for byte, and `system/scripts/update_self_mirrors_sync_test.py`
+  holds the two equal. Only standard-library code that reads nothing the
+  running workspace wrote can be mirrored this way.
+- **A client of the running workspace stays in the workspace's tree.** A
+  program that talks to a running service, or reads state the running
+  workspace wrote, matches that workspace only in the copy that shipped with
+  it: `message_chat.py` (the chat app), `create_worker.py` (mngr's settings and
+  plugins), `supervisorctl`, the `oom_priority` bands, and the memory tool
+  (mngr's listing, the agent-pid registry, the shell's and the Screen service's
+  answers). A copy staged from the target would meet an older service or an
+  older file.
+
+What the staged flow asks of a program of the second kind is an interface
+across versions, held the way the launcher's is:
+
+- the staged code or prose picks the program by what the tree has
+  (`message_chat.py`, else `mngr message`; `workspace_memory.py`, else
+  `memory_candidates.py`, else nothing), with a `CLEANUP:` marker on each
+  branch that goes once the floor passes it;
+- it asks only for what the oldest release with that program provides, takes
+  anything newer by its presence, and reports what is absent as unknown;
+- a test holds it to those releases (`launcher_contract_test.py`,
+  `staged_runner_test.py`, the memory tool's own `workspace_memory_test.py`).
+
+A new call from the staged prose or code into `system/` is one of the two
+kinds; decide which before adding it.
+
 ## The scheduled entry: a pinned target and ceiling
 
 The Imbue Studio app starts every pass with one message, scheduled or pressed,
