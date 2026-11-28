@@ -4,6 +4,38 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-27
+
+### .agents
+
+The `datalib` skill's data root moves from `data/.skills/datalib/Default` to `data/.mirrored-data`: the folder is the data root itself, with no libraries folder or `Default` library around it. The folder is named for what it holds, the mirror datalib keeps of the user's data, shared by the skill and the Datalib app, not the skill's own state; data that belongs to one app stays under `data/.apps/<app>/`. The skill's preamble, its `sync_request.py` default and its backup-exclude advice name the new path. No store is moved: datalib is dark-launched, so nothing was written at the old path that a workspace relies on.
+
+### system
+
+The Datalib app serves `data/.mirrored-data` instead of `data/.skills/datalib/Default`. The folder is the store's data root itself; the libraries folder with its `Default` library is gone, since the layout only ever had room for one store. The folder is named for what it holds, the mirror datalib keeps of the user's data, shared by the `datalib` skill and the app, rather than the skill's own state or one app's data, which stays in that app's `data/.apps/<app>/`. The launcher no longer moves a store written before the libraries folder existed into `Default`: datalib is dark-launched, so no workspace holds such a store.
+
+- `shareIcon()` draws the Share glyph Imbue Studio uses, an outlined arrow curving forward; the outline `share` icon is gone.
+
+- A hover-opened menu (the size menu on a window's maximize control) no longer opens after its trigger was pressed before the pointer had rested on it, so a quick maximize does not leave the menu over the moved window's controls.
+
+### system/apps/chat
+
+- On the first run's provider page, the dialogs it opens (the sign-in chooser, the removal confirmation) are white, borderless cards in the standard look's regular ink over the page's cream wash, as Imbue Studio's first-run sign-in is, instead of cream with brown ink.
+
+- The provider page's Next button is smaller: 12px by 20px padding, matching Imbue Studio's first-run buttons, and a 16px label.
+
+- Leaving the first run's provider page (Next or Skip) puts the keyboard in the message box of the chat on screen, so the user can type straight into the welcome chat.
+
+- The composer box (and the bar and suggestion line around it) starts where an agent's message bubbles start, with the agent's face hanging out to its left, and in the phone layout the composer's tools button sits in that gutter, so the box still lines up with the bubbles (the phone footer now shares the transcript's 16px sides); suggestion pills end at the box's right edge, their labels set in as far as a bubble's text.
+
+- A reply's suggestion line reads "Disable" and "Hide" while its suggestions are shown, 12px apart and set in so Hide lines up with the pills' labels, "You" and the bubbles' text, each naming itself in full in a tooltip and to screen readers ("Disable suggestions", "Hide suggestions"); the new-chat line keeps its link in full, capitalized ("Disable new chat suggestions").
+
+### system/apps/system_interface
+
+- Share in a window's title bar (and the window menu's Share row) wears Studio's new outlined forward-arrow icon, at 14px, and with its word it is tighter: 8px each side and 4px between the icon and the word.
+
+- Pressing a window's maximize, fullscreen or restore control closes the size menu resting on it opened, so the menu no longer stays behind over the controls of the window that just moved.
+
 ## 2026-11-26
 
 ### .agents
