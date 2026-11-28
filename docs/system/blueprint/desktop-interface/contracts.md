@@ -370,7 +370,7 @@ A refused grants document also carries `refusals`, one `{"scope", "kind", "value
 Two routes answer before their work is done, and a client reads on:
 
 - `PUT /api/workspace/backups/destination` names where the backups go and answers the backup state, under `202` when the request left the workspace something to do and under `200` when it did not. `GET /api/workspace/backups` then says how the setup stands.
-- `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then holds the attempt under `last_start`, with its outcome once it has one. An attempt whose process is gone reads as `CREATE_FAILED`.
+- `POST /api/workspace/update/start` answers `200` with an outcome when a quick check declines (no update-self skill, no signed-in account, an update running or about to), and otherwise `202` with the outcome `STARTING` and an attempt id while the update's chat is created; `GET /api/workspace/update` then reads `STARTING` until the chat is made, and names a start that made none as `start_failure`, under that attempt id. An attempt whose process is gone reads as `CREATE_FAILED`.
 
 **The workspace sets up its own backups.**
 A client names where the backups go and supplies the storage credentials that destination needs, and nothing else: the workspace makes the repository's password, initialises the repository, installs `data/.secrets/restic.env`, and tries again by itself when any of that fails.
@@ -427,7 +427,7 @@ The workspace's own setup takes it as `setup`. A program of the Imbue Studio des
 `PUT /api/workspace/profile` leaves the stored snapshot alone when the one sent equals it apart from `written_at`, and answers `is_written: false` then: a client sends the snapshot whenever it opens the workspace, and the shell watches the file, so a rewrite would announce a change that did not happen.
 
 **The workspace arms its own updates.**
-`PUT /api/workspace/update/settings` stores the update settings and answers them as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in, as the account sets them), and `window_start_hour_here` and `window_end_hour_here` (this workspace's own hours, which win over the account's: both set, or both null when it has none).
+`PUT /api/workspace/update/settings` stores the update settings and answers the workspace's updates as the write left them, whose `settings` are the settings as stored: `channel` (the release channel the workspace follows), `feed_base_url` (where that channel's file is read from, empty on a tier that publishes none), `is_auto_update_enabled` (the account's answer to whether its workspaces arm their own updates), `is_auto_update_enabled_here` (this workspace's own answer, which wins; null when it has none), `window_start_hour` and `window_end_hour` (whole hours 0 to 23 that differ, the owner's local hours an armed update may start in, as the account sets them), and `window_start_hour_here` and `window_end_hour_here` (this workspace's own hours, which win over the account's: both set, or both null when it has none).
 Settings that cannot be the workspace's are refused with `INVALID_UPDATE_SETTINGS`.
 The hours are read in the timezone the workspace records (`data/.state/user_timezone`), and in UTC when it records none.
 
@@ -452,7 +452,49 @@ A schedule armed with the workspace's own values keeps them current: the dispatc
 
 A request that names `ceiling` is from a desktop app built before the workspace read its channel, and is served as it always was. Such a desktop sweeps every 300 seconds and names its newest version when it arms, starts, or refreshes an armed schedule (a sweep that finds nothing armed only reads), so the workspace holds itself to that version for 15 minutes after the last such request: it arms no update past it, takes the older of the two for a request that names none, and leaves an armed schedule to that desktop's own refreshes. A refresh that names a release the checkout is at or past leaves the version of a schedule the workspace filled in itself as it is, and rewrites the window and the backup flag.
 
-`GET /api/workspace/update` also answers `settings` (null when no client has written any) and `channel_version`: `{"channel", "template_ref", "read_at", "checked_at", "error"}`, the version as the workspace last read it and how the last read went (null when it has read nothing for the settings' channel), so a client shows what is available without reading the feed.
+**What an update is doing is the workspace's to say.**
+`GET /api/workspace/update` answers what the update is doing, worked out by the workspace when it is asked, from its own files, its own listing of its agents and its own clock. Every client that asks is told the same, whichever of them started a run and however long ago it opened, and none keeps anything of a run between two reads.
+
+| Field | Meaning |
+|---|---|
+| `activity` | `IDLE`, `STARTING`, `RUNNING`, `WAITING`, `APPLYING`, `FINISHING` or `STALLED` (below) |
+| `run` | The run under way, or the last one while its outcome or its note is not dismissed; null when there is nothing of a run to show |
+| `start_failure` | `{"attempt_id", "code", "detail"}` for the last accepted start that made no chat (`CREATE_FAILED` or `CHAT_APP_UNREACHABLE`); null once it is dismissed, a chat is made or a run begins |
+| `schedule` | The armed schedule: `target_ref`, `override_ref`, `is_auto_armed`, `window_opens_at` and `window_closes_at` (the window open now, else the next to open, in seconds since the epoch) and `last_skip_reason` (`UPDATE_IN_FLIGHT`, `LEASE_HELD`, `NEEDS_SIGN_IN`, `DISPATCH_FAILED`, `WINDOW_CLOSED`, or null); null when none is armed |
+| `needs_sign_in` | Whether a start, an arm or a scheduled start found no AI account signed in, and none is signed in now |
+| `is_update_skipped` | Whether the user skipped the version the channel is on |
+| `will_self_arm` | Whether the dispatcher's next minute arms the update to the channel's version by itself |
+| `is_backup_configured` | Whether the workspace holds backup credentials |
+| `allowed_actions` | What a client may ask as things stand: `START`, `SCHEDULE`, `CANCEL_SCHEDULE`, `SKIP`, `DISMISS_OUTCOME`, `DISMISS_NOTE` |
+| `installed_version` | The version of the checkout, as the status route answers it |
+| `as_of` | When the workspace worked the answer out, by its own clock, in seconds since the epoch |
+| `settings`, `channel_version` | The update settings (null when no client has written any), and `{"channel", "template_ref", "read_at", "checked_at", "error"}`: the channel's version as the workspace last read it and how the last read went (null when it has read nothing for the settings' channel) |
+| `run_record`, `last_start` | The run's own record and the last start attempt, as they are on disk, for a client that follows an apply |
+
+Whether an update is on offer is left to the client: it compares `installed_version` with `channel_version` against release floors that only a current client knows, so the workspace answers the versions and no verdict on them.
+
+| `activity` | When |
+|---|---|
+| `STARTING` | A start was accepted and its chat is still being created |
+| `RUNNING` | The run's chat exists and is preparing. A chat made within the last fifteen minutes is the run before it has recorded one, so a record still held by an earlier chat of the same name is not shown in its place |
+| `WAITING` | The run's lead recorded a hold (at once, with `run.is_holding` and `run.hold_detail`), or it and the worker its record names sit idle with no background task about to start a turn of theirs, and the lead's last turn ended forty seconds ago or more |
+| `APPLYING` | The run's record says the apply is landing, whatever became of its lead |
+| `FINISHING` | The apply landed and the lead is finishing its checks |
+| `STALLED` | The run has no verdict and nothing will carry it on: its chat was deleted, or stopped where no watchdog restarts it. A lead that comes back reads as under way again |
+| `IDLE` | None of these: no run, a run with a verdict, or a stalled run the user dismissed |
+
+When the lead's last turn ended is read from the observer's events (`turn_end.ended_at`). For a lead whose harness records none, the dispatcher's own count stands in: the run reads as waiting once a minute of the watchdog found it idle, which takes cron.
+Agents that cannot be read count as there and working: a run is never called stalled or waiting without evidence.
+
+`run` is `{"started_at", "chat_agent_name", "chat_id", "is_chat_gone", "started_by", "target_ref", "override_ref", "is_holding", "hold_detail", "verdict", "verdict_detail", "in_place_compatible_ref", "updated_to"}`, with what the user dismissed already left out: `verdict` is null once the run's outcome is dismissed, and `updated_to` (the version a landed run left the workspace on) is empty once that note is.
+`started_at` is the name a dismissal gives the run, sent back exactly as it was read.
+
+`POST /api/workspace/update/dismissals` takes `note_run_started_at` and `outcome_run_started_at` (a run's `started_at`; a later run's covers an earlier one's) and `start_failure_attempt_id` (a `start_failure`'s attempt).
+A start or an arm that finds no account signed in is put on record (`data/.state/update-apply/sign-in-refusal.json`), and a start records the version the user named for it in `last-start.json`, so `needs_sign_in` and a start under way read the same for every client.
+
+Every write of the update routes answers the same document under `state`, as the write left it, beside what the write itself came to (`outcome`, `detail` and `attempt_id` for a start or an arm, `is_armed` for a refresh, `is_cancelled` for a cancel or a skip). A client shows that and does not read again. Of two answers the one with the later `as_of` is the newer, so a read that was on its way when a write was answered is dropped, not put over it.
+
+`GET /api/workspace/update/liveness` still answers what a client used to work all this out from (the run record, the agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed), for the Imbue Studio desktop's backend, which follows a run to keep its recovery away from an apply.
 
 A read route changes nothing in the workspace, and reads no feed.
 The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
