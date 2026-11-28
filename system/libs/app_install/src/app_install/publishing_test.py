@@ -47,6 +47,7 @@ from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
 from app_manifest.records import load_record
+from app_manifest.records import record_path
 from github_sync.testing import install_fake_latchkey
 
 _PUBLISHED_URL = "https://github.com/octo/notes"
@@ -595,7 +596,7 @@ def test_a_repository_published_before_records_said_who_can_see_it_is_unknown_un
 ) -> None:
     workspace, _published, runtime = _publisher(tmp_path)
     _publish(workspace, runtime, "0.1.0")
-    record_file = workspace / "system" / "config" / "apps" / "notes.toml"
+    record_file = record_path(workspace, "notes")
     record_file.write_text(record_file.read_text().replace('published_visibility = "private"\n', ""))
     commit_all(workspace, "A record from before it said who can see the repository")
 

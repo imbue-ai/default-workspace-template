@@ -161,7 +161,8 @@ there):
   good, under the MIT license. When their request did not say which, ask here
   and offer private as the default. On a later publish (`is_published` in
   step 1) say which it is now, and never ask
-  (`uv run --no-sync app-install publish visibility <name>`);
+  (`uv run --no-sync app-install publish visibility <name>`; when
+  `is_private` is `null`, say its GitHub page shows it);
 - for a `modified` app: that this is their version of an app that came from
   `<upstream_url>`, published under their own account with a note of where it
   came from;
@@ -233,9 +234,9 @@ uv run --no-sync app-install publish push <name> --repo-name <repo_name> [--publ
 
 (`--repo-name` only on a first publish under another name.) A first publish
 creates the repository, private unless `--public` is given: pass it only when
-the user chose public at the scope gate. A later publish leaves who can see the
-repository as it is, and is refused with `--public`. The assembled tree is
-then pushed as ONE commit on top of the last published one, with the tag
+the user chose public at the scope gate. A later publish never changes who
+can see the repository: leave `--public` off. The assembled tree is then
+pushed as ONE commit on top of the last published one, with the tag
 `v<version>`, never forced.
 
 On `pushed` the version is on GitHub: keep `published_repo_url`, and check
@@ -267,8 +268,8 @@ git branch -d "mngr/<slug>"
 rm -rf data/.tasks/launch-task/<slug>
 ```
 
-If you are stopping after a failure instead, leave the worker and its branch
-for a retry.
+If you are stopping after a failure, leave the worker and its branch for a
+retry.
 
 In your final message say what went up: the version, what whoever installs
 it will be asked for (`needs`), and the app's address (`published_repo_url`),

@@ -251,8 +251,9 @@ than keep copies:
   and `lock_down_repository(repository)` closes issues, wiki, projects,
   discussions and outside pull requests, returning the problem when that did
   not take. `make_repository_public(repository)` makes a repository public,
-  raising unless GitHub's answer says it is. `set_repository_topics(repository, names)` sets the topics a
-  published template or app is found by, and `hint_for_push_failure(output)`
+  raising unless GitHub's answer says it is.
+  `set_repository_topics(repository, names)` sets the topics a published
+  template or app is found by, and `hint_for_push_failure(output)`
   says what a push git refused most likely means, when it is a refusal it
   knows.
 - `github_sync.app_history`: `is_app_linked`, `is_app_modified`, `app_tree`,
