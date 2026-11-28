@@ -10,8 +10,9 @@ from workspace_update_control.channel import (
     CHANNEL_READ_INTERVAL_SECONDS,
     ChannelFileFetcher,
 )
-from workspace_update_control.dispatcher import AgentEnvironment
+from workspace_update_control.dispatcher import AgentEnvironment, busy_agents
 from workspace_update_control.protocol import NO_BACKUP_NOTE
+from workspace_update_control.state import read_update_state
 from workspace_update_control.testing import (
     STAGED_FEED_BASE_URL,
     RecordingFeed,
@@ -435,15 +436,18 @@ def test_reading_answers_the_settings_and_the_channels_version_as_last_read_and_
     state_dir = staged.state_path("")
     before = {path.name: path.read_bytes() for path in state_dir.iterdir()}
 
-    answer = control.read_update_state(
-        is_sign_in_checked=False,
+    answer = read_update_state(
+        now=_NOW,
         proc_root=str(staged.proc_root),
+        live_cron_dir=str(staged.live_cron_dir),
         agent_environment=AgentEnvironment(),
         read_agents=staged.read_listed_agents,
+        read_busy_agents=lambda: busy_agents(AgentEnvironment()),
+        read_installed_ref=lambda: "",
     )
 
-    assert answer["settings"] == settings
-    assert answer["channel_version"] == {
+    assert answer.settings == settings
+    assert answer.channel_version == {
         "schema": 1,
         "channel": "stable",
         "feed_base_url": STAGED_FEED_BASE_URL,

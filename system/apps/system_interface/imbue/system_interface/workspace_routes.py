@@ -75,18 +75,19 @@ from workspace_update_control.agents import read_observed_agents
 from workspace_update_control.control import AgentsReader
 from workspace_update_control.control import arm_schedule
 from workspace_update_control.control import cancel_schedule
+from workspace_update_control.control import dismiss_start_failure
 from workspace_update_control.control import install_cron_entry
-from workspace_update_control.control import read_liveness
-from workspace_update_control.control import read_update_state
 from workspace_update_control.control import record_dismissals
 from workspace_update_control.control import refresh_schedule
 from workspace_update_control.control import skip_target
 from workspace_update_control.control import start_update
 from workspace_update_control.dispatcher import AgentEnvironment
 from workspace_update_control.dispatcher import PROC_ROOT
+from workspace_update_control.dispatcher import busy_agents
 from workspace_update_control.protocol import OUTCOME_STARTING
 from workspace_update_control.settings import InvalidUpdateSettingsError
 from workspace_update_control.settings import take_update_settings
+from workspace_update_control.state import read_update_state
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.desktop_routes import wallpaper_directories
@@ -141,7 +142,6 @@ from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_RE
 from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_TIMEZONE_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_DISMISS
-from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_LIVENESS_READ
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_READ
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_CANCEL
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_REFRESH
@@ -159,18 +159,16 @@ from imbue.system_interface.workspace_api_models import SuggestionSettingsReques
 from imbue.system_interface.workspace_api_models import SuggestionSettingsResponse
 from imbue.system_interface.workspace_api_models import TimezoneRequest
 from imbue.system_interface.workspace_api_models import TimezoneResponse
-from imbue.system_interface.workspace_api_models import UpdateBusyChat
 from imbue.system_interface.workspace_api_models import UpdateChannelVersion
 from imbue.system_interface.workspace_api_models import UpdateDismissalsRequest
-from imbue.system_interface.workspace_api_models import UpdateDismissalsResponse
-from imbue.system_interface.workspace_api_models import UpdateLivenessAgent
-from imbue.system_interface.workspace_api_models import UpdateLivenessResponse
+from imbue.system_interface.workspace_api_models import UpdateDismissedResponse
 from imbue.system_interface.workspace_api_models import UpdateOutcomeResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleCancelledResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleRefreshRequest
 from imbue.system_interface.workspace_api_models import UpdateScheduleRefreshedResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleRequest
 from imbue.system_interface.workspace_api_models import UpdateSettingsModel
+from imbue.system_interface.workspace_api_models import UpdateSettingsWrittenResponse
 from imbue.system_interface.workspace_api_models import UpdateSkipRequest
 from imbue.system_interface.workspace_api_models import UpdateSkippedResponse
 from imbue.system_interface.workspace_api_models import UpdateStartAttempt
@@ -199,14 +197,10 @@ UPDATE_START_ROUTE: Final[str] = f"{UPDATE_ROUTE}/start"
 UPDATE_SCHEDULE_ROUTE: Final[str] = f"{UPDATE_ROUTE}/schedule"
 UPDATE_SKIP_ROUTE: Final[str] = f"{UPDATE_ROUTE}/skip"
 UPDATE_DISMISSALS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/dismissals"
-UPDATE_LIVENESS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/liveness"
 UPDATE_SETTINGS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/settings"
 SUGGESTIONS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/suggestions"
 APPS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/apps"
 WALLPAPER_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/wallpaper"
-
-# The query parameter that asks the update read whether an account is signed in.
-CHECK_SIGN_IN_PARAMETER: Final[str] = "check_sign_in"
 
 _PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 _OWNER_ONLY_REFUSAL_DETAIL: Final[str] = "Only the workspace's owner may read its backup credentials."
@@ -596,9 +590,45 @@ def _observed_agents_reader() -> AgentsReader:
     return lambda: read_observed_agents(events_path, time.time())
 
 
+def _update_state() -> UpdateStateResponse:
+    """The workspace's updates as they stand now: what the read answers, and what every write answers with, so
+    that a client shows what its request left without reading again."""
+    agent_environment = AgentEnvironment()
+    workspace_root = _workspace_root()
+    state = read_update_state(
+        now=time.time(),
+        proc_root=PROC_ROOT,
+        live_cron_dir=str(get_state().live_cron_directory),
+        agent_environment=agent_environment,
+        read_agents=_observed_agents_reader(),
+        read_busy_agents=lambda: busy_agents(agent_environment),
+        read_installed_ref=lambda: read_template_ref(workspace_root),
+    ).document()
+    channel_version = state["channel_version"]
+    last_start = state["last_start"]
+    return UpdateStateResponse.model_validate(
+        {
+            **state,
+            "channel_version": UpdateChannelVersion.model_validate(
+                {key: value for key, value in channel_version.items() if key in UpdateChannelVersion.model_fields}
+            )
+            if isinstance(channel_version, dict)
+            else None,
+            "last_start": UpdateStartAttempt.model_validate(
+                {key: value for key, value in last_start.items() if key in UpdateStartAttempt.model_fields}
+            )
+            if isinstance(last_start, dict)
+            else None,
+        }
+    )
+
+
 def _outcome_response(answer: dict[str, object]) -> UpdateOutcomeResponse:
-    return UpdateOutcomeResponse.model_validate(
-        {key: value for key, value in answer.items() if key in UpdateOutcomeResponse.model_fields}
+    return UpdateOutcomeResponse(
+        outcome=str(answer["outcome"]),
+        detail=str(answer.get("detail") or ""),
+        attempt_id=str(answer.get("attempt_id") or ""),
+        state=_update_state(),
     )
 
 
@@ -620,9 +650,10 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
     """Store the update settings: the release channel the workspace follows, where that channel's file is read
     from, whether the workspace arms its own updates, and the hours of the owner's day one may start in.
 
-    Answers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at
-    most once an hour, and while arming is on it arms an update to that version by itself. The hours are read in
-    the timezone the workspace records, and in UTC when it records none.
+    Answers the workspace's updates as the write left them, whose ``settings`` are the settings as stored. The
+    dispatcher reads them every minute: it reads the channel's version at most once an hour, and while arming is
+    on it arms an update to that version by itself. The hours are read in the timezone the workspace records, and
+    in UTC when it records none.
 
     The workspace's own answer on arming and its own hours win over the account's. A request that leaves one of
     those three out keeps the stored value, and one that sends null clears it.
@@ -633,7 +664,7 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
     body = _body(UpdateSettingsModel)
     _require_workspace_root_as_working_directory()
     try:
-        stored = take_update_settings(body.model_dump(exclude_unset=True))
+        take_update_settings(body.model_dump(exclude_unset=True))
     except InvalidUpdateSettingsError as e:
         raise WorkspaceRouteRefusal(str(e), CODE_INVALID_UPDATE_SETTINGS, HTTP_BAD_REQUEST) from e
     except OSError as e:
@@ -648,43 +679,24 @@ def write_update_settings_of_workspace() -> ResponseReturnValue:
         install_cron_entry(str(get_state().live_cron_directory))
     except OSError as e:
         logger.warning("Could not write the update dispatcher's cron line: {}", e)
-    return model_response(UpdateSettingsModel.model_validate(stored.document()))
+    return model_response(UpdateSettingsWrittenResponse(state=_update_state()))
 
 
 def read_update() -> ResponseReturnValue:
-    """The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the
+    """What the workspace's update is doing, and what a client compares to tell whether one is on offer.
+
+    The workspace works the answer out when asked, from its own files, its own agents and its own clock: whether
+    a run is starting, under way, waiting on the user, applying, finishing or stalled, the run itself with what
+    the user dismissed of it already left out, a start that made no chat, the armed schedule, whether an account
+    needs signing in, and what a client may ask next. Beside that it answers the version of the checkout, the
     update settings, and the version the settings' release channel is on as the workspace last read it.
 
-    Nothing in the workspace changes, and the feed is not read. ``?check_sign_in=1`` also asks whether an AI
-    account is signed in.
+    Nothing in the workspace changes, and the feed is not read. Every write of the update routes answers the same
+    document under ``state``, as the write left it.
     """
     _admit(is_changing_the_workspace=False)
     _require_workspace_root_as_working_directory()
-    state = read_update_state(
-        is_sign_in_checked=request.args.get(CHECK_SIGN_IN_PARAMETER) == "1",
-        proc_root=PROC_ROOT,
-        agent_environment=AgentEnvironment(),
-        read_agents=_observed_agents_reader(),
-    )
-    last_start = state["last_start"]
-    channel_version = state["channel_version"]
-    return model_response(
-        UpdateStateResponse.model_validate(
-            {
-                **state,
-                "channel_version": UpdateChannelVersion.model_validate(
-                    {key: value for key, value in channel_version.items() if key in UpdateChannelVersion.model_fields}
-                )
-                if isinstance(channel_version, dict)
-                else None,
-                "last_start": UpdateStartAttempt.model_validate(
-                    {key: value for key, value in last_start.items() if key in UpdateStartAttempt.model_fields}
-                )
-                if isinstance(last_start, dict)
-                else None,
-            }
-        )
-    )
+    return model_response(_update_state())
 
 
 def start_update_now() -> ResponseReturnValue:
@@ -692,8 +704,8 @@ def start_update_now() -> ResponseReturnValue:
 
     The quick checks come first (the update-self skill is there, an account is signed in, no update is running or
     about to), and one that fails is answered 200 with its outcome. Otherwise the update's chat begins to be
-    created and the answer is 202 with the outcome STARTING and an attempt id; the read route's ``last_start``
-    holds the attempt's outcome once it has one.
+    created and the answer is 202 with the outcome STARTING and an attempt id. The state then reads STARTING until
+    the chat is made, and a start that made none is its ``start_failure``, under that attempt id.
 
     A request that names no ``ceiling`` updates to the version the workspace's release channel is on, and is
     answered NO_CHANNEL_VERSION when the workspace has read none and the user named none.
@@ -728,8 +740,8 @@ def start_update_now() -> ResponseReturnValue:
 def arm_update_schedule() -> ResponseReturnValue:
     """Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.
 
-    Answers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the schedule. Arming
-    again starts the dispatcher's record of earlier attempts over.
+    Answers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the workspace's updates
+    as the request left them. Arming again starts the dispatcher's record of earlier attempts over.
 
     A value the request leaves out is the workspace's own, which the dispatcher then keeps current in the
     schedule: the version its release channel is on (NO_CHANNEL_VERSION when it has read none and the user named
@@ -781,14 +793,17 @@ def refresh_update_schedule() -> ResponseReturnValue:
             fetch_channel_file=get_state().channel_file_fetcher,
         )
     )
-    return model_response(UpdateScheduleRefreshedResponse.model_validate(answer))
+    return model_response(UpdateScheduleRefreshedResponse(is_armed=answer["is_armed"] is True, state=_update_state()))
 
 
 def cancel_update_schedule() -> ResponseReturnValue:
     """Cancel the schedule, and answer whether there was one."""
     _admit(is_changing_the_workspace=True)
     _require_workspace_root_as_working_directory()
-    return model_response(UpdateScheduleCancelledResponse.model_validate(_changing_update_state(cancel_schedule)))
+    answer = _changing_update_state(cancel_schedule)
+    return model_response(
+        UpdateScheduleCancelledResponse(is_cancelled=answer["is_cancelled"] is True, state=_update_state())
+    )
 
 
 def skip_update() -> ResponseReturnValue:
@@ -797,46 +812,23 @@ def skip_update() -> ResponseReturnValue:
     body = _body(UpdateSkipRequest)
     _require_workspace_root_as_working_directory()
     answer = _changing_update_state(lambda: skip_target(target_ref=body.target_ref, skipped_at=body.skipped_at))
-    return model_response(UpdateSkippedResponse.model_validate(answer))
+    return model_response(UpdateSkippedResponse(is_cancelled=answer["is_cancelled"] is True, state=_update_state()))
+
+
+def _record_dismissals(body: UpdateDismissalsRequest) -> None:
+    record_dismissals(note_run_started_at=body.note_run_started_at, outcome_run_started_at=body.outcome_run_started_at)
+    if body.start_failure_attempt_id is not None:
+        dismiss_start_failure(body.start_failure_attempt_id)
 
 
 def dismiss_update() -> ResponseReturnValue:
-    """Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's."""
+    """Record what the user put away, so that no client shows it again: a run's note or its outcome, by the run's
+    start (a later run's start covers an earlier one's), or a start that made no chat, by its attempt."""
     _admit(is_changing_the_workspace=True)
     body = _body(UpdateDismissalsRequest)
     _require_workspace_root_as_working_directory()
-    answer = _changing_update_state(
-        lambda: record_dismissals(
-            note_run_started_at=body.note_run_started_at, outcome_run_started_at=body.outcome_run_started_at
-        )
-    )
-    return model_response(UpdateDismissalsResponse.model_validate(answer))
-
-
-def read_update_liveness() -> ResponseReturnValue:
-    """What tells whether a running update is still alive: the run record, the workspace's agents with their states
-    and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed."""
-    _admit(is_changing_the_workspace=False)
-    _require_workspace_root_as_working_directory()
-    liveness = read_liveness(
-        live_cron_dir=str(get_state().live_cron_directory),
-        agent_environment=AgentEnvironment(),
-        read_agents=_observed_agents_reader(),
-    )
-    agents = liveness["agents"]
-    busy_chats = liveness["busy_chats"]
-    return model_response(
-        UpdateLivenessResponse(
-            run=liveness["run"] if isinstance(liveness["run"], dict) else None,
-            agents=tuple(UpdateLivenessAgent.model_validate(agent) for agent in agents)
-            if isinstance(agents, list)
-            else None,
-            busy_chats=tuple(UpdateBusyChat.model_validate(row) for row in busy_chats)
-            if isinstance(busy_chats, list)
-            else (),
-            is_watchdog_installed=liveness["is_watchdog_installed"] is True,
-        )
-    )
+    _changing_update_state(lambda: _record_dismissals(body))
+    return model_response(UpdateDismissedResponse(state=_update_state()))
 
 
 # Suggestions
@@ -988,9 +980,8 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("PATCH", UPDATE_SCHEDULE_ROUTE): _route(UpdateScheduleRefreshRequest, UpdateScheduleRefreshedResponse),
     ("DELETE", UPDATE_SCHEDULE_ROUTE): _route(None, UpdateScheduleCancelledResponse),
     ("POST", UPDATE_SKIP_ROUTE): _route(UpdateSkipRequest, UpdateSkippedResponse),
-    ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissalsResponse),
-    ("GET", UPDATE_LIVENESS_ROUTE): _route(None, UpdateLivenessResponse),
-    ("PUT", UPDATE_SETTINGS_ROUTE): _route(UpdateSettingsModel, UpdateSettingsModel),
+    ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissedResponse),
+    ("PUT", UPDATE_SETTINGS_ROUTE): _route(UpdateSettingsModel, UpdateSettingsWrittenResponse),
     ("GET", SUGGESTIONS_ROUTE): _route(None, SuggestionSettingsResponse, other_answers=_SUGGESTIONS_FAILURES),
     ("PUT", SUGGESTIONS_ROUTE): _route(
         SuggestionSettingsRequest, SuggestionSettingsResponse, other_answers=_SUGGESTIONS_FAILURES
@@ -1019,7 +1010,6 @@ WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
     ("DELETE", UPDATE_SCHEDULE_ROUTE): OPERATION_UPDATE_SCHEDULE_CANCEL,
     ("POST", UPDATE_SKIP_ROUTE): OPERATION_UPDATE_SKIP,
     ("POST", UPDATE_DISMISSALS_ROUTE): OPERATION_UPDATE_DISMISS,
-    ("GET", UPDATE_LIVENESS_ROUTE): OPERATION_UPDATE_LIVENESS_READ,
     ("PUT", UPDATE_SETTINGS_ROUTE): OPERATION_UPDATE_SETTINGS_WRITE,
     ("GET", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_READ,
     ("PUT", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_WRITE,
@@ -1044,7 +1034,6 @@ _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] 
     ("DELETE", UPDATE_SCHEDULE_ROUTE): cancel_update_schedule,
     ("POST", UPDATE_SKIP_ROUTE): skip_update,
     ("POST", UPDATE_DISMISSALS_ROUTE): dismiss_update,
-    ("GET", UPDATE_LIVENESS_ROUTE): read_update_liveness,
     ("PUT", UPDATE_SETTINGS_ROUTE): write_update_settings_of_workspace,
     ("GET", SUGGESTIONS_ROUTE): read_suggestions,
     ("PUT", SUGGESTIONS_ROUTE): write_suggestions,

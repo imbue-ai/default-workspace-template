@@ -24,6 +24,7 @@ from workspace_update_control.channel import (
     refresh_channel_version,
 )
 from workspace_update_control.control import (
+    DISMISSED_OUTCOME_KEY,
     arm_schedule,
     cancel_schedule_armed_at,
     read_self_armed_schedule,
@@ -126,20 +127,29 @@ def should_auto_arm(
     return is_update_offered()
 
 
-def _shown_verdict(
+def is_run_dismissed(
+    dismissals: Mapping[str, object] | None, key: str, started_at: float | None
+) -> bool:
+    """Whether the dismissal recorded under ``key`` covers the run that began at ``started_at``: a dismissal names
+    a run by its start, and covers every run that began no later."""
+    dismissed_at = (dismissals or {}).get(key)
+    return (
+        started_at is not None
+        and isinstance(dismissed_at, (int, float))
+        and not isinstance(dismissed_at, bool)
+        and dismissed_at >= started_at
+    )
+
+
+def shown_verdict(
     run: Mapping[str, object] | None, dismissals: Mapping[str, object] | None
 ) -> str:
     """The run's verdict unless the user dismissed that run's outcome."""
     verdict = run.get("verdict") if run is not None else None
     if not isinstance(verdict, str):
         return ""
-    started_at = run_started_at(run)
-    dismissed_at = (dismissals or {}).get("outcome_run_started_at")
-    is_dismissed = (
-        started_at is not None
-        and isinstance(dismissed_at, (int, float))
-        and not isinstance(dismissed_at, bool)
-        and dismissed_at >= started_at
+    is_dismissed = is_run_dismissed(
+        dismissals, DISMISSED_OUTCOME_KEY, run_started_at(run)
     )
     return "" if is_dismissed else verdict
 
@@ -168,7 +178,7 @@ def read_arming_facts(is_enabled: bool, now: float) -> ArmingFacts:
         is_scheduled=read_json_object(SCHEDULE_FILE_PATH) is not None,
         is_run_in_flight=is_run_open
         or pending_dispatched_chat(run, None, now) is not None,
-        shown_verdict=_shown_verdict(run, read_json_object(DISMISSALS_FILE_PATH)),
+        shown_verdict=shown_verdict(run, read_json_object(DISMISSALS_FILE_PATH)),
         run_chat_agent_name=str((run or {}).get("chat_agent_name") or ""),
         skipped_target_ref=_read_skipped_target_ref(),
         last_dispatch=LastDispatch(
@@ -218,6 +228,32 @@ def read_installed_version(now: float) -> str:
         },
     )
     return template_ref
+
+
+def armable_target(
+    facts: ArmingFacts,
+    channel_version: Mapping[str, object] | None,
+    now: float,
+    # Asked only when the answer turns on it, as it may read the checkout's version from git.
+    read_installed_ref: Callable[[], str],
+) -> str | None:
+    """The version the workspace arms its own update to, given what its channel was last read at; None when it
+    arms none.
+
+    A channel whose file could not be read arms nothing. Neither does a version past the one a client from
+    before the workspace armed its own updates named, while that client keeps asking.
+    """
+    if not is_channel_version_current(channel_version):
+        return None
+    target_ref = bounded_by_client_ceiling(
+        channel_template_ref(channel_version), read_fresh_client_ceiling(now)
+    )
+    if target_ref is None:
+        return None
+    is_armed = should_auto_arm(
+        facts, target_ref, lambda: is_release_behind(read_installed_ref(), target_ref)
+    )
+    return target_ref if is_armed else None
 
 
 def _why_not_moved_to(facts: ArmingFacts, moved_to: str, now: float) -> str:
@@ -292,18 +328,10 @@ def tick_self_arming(
             return
         refresh_followed_schedule(now)
         return
-    if not is_channel_version_current(channel_version):
-        return
-    target_ref = bounded_by_client_ceiling(
-        channel_template_ref(channel_version), read_fresh_client_ceiling(now)
+    target_ref = armable_target(
+        facts, channel_version, now, lambda: read_installed_version(now)
     )
     if target_ref is None:
-        return
-    if not should_auto_arm(
-        facts,
-        target_ref,
-        lambda: is_release_behind(read_installed_version(now), target_ref),
-    ):
         return
     answer = arm_schedule(
         ceiling=None,

@@ -12,8 +12,8 @@ where supervisord runs the shell and where the cron line changes to.
 
 - `control` -- one function per operation of the shell's update routes
   (`/api/workspace/update...`): start an update now, arm the schedule, refresh the
-  client's values in an armed schedule, cancel it, skip a version, record a
-  dismissal, read all of it, and read what tells whether a running update is alive.
+  client's values in an armed schedule, cancel it, skip a version, and record a
+  dismissal.
   A client may name the values an update runs with (the newest version it knows, a
   version the user typed, the window in UTC, whether it holds backup credentials),
   and one it leaves out is the workspace's own: the version its release channel is
@@ -22,7 +22,24 @@ where supervisord runs the shell and where the cron line changes to.
   Starting answers at once: the create of the update's chat
   runs on in the background and `data/.state/update-apply/last-start.json` records
   how it went, naming the process that runs it, so an attempt whose process is gone
-  reads as `CREATE_FAILED`.
+  reads as `CREATE_FAILED`. The record also keeps the version the user named for
+  the start, and whether the user put its failure away. A start or an arm that finds
+  no AI account signed in leaves `sign-in-refusal.json`, which the next one that
+  finds an account takes away.
+- `state` -- what the update is doing, worked out when it is asked
+  (`read_update_state`): the read of `GET /api/workspace/update`, and what every
+  write of the update routes answers with. One of seven activities (idle, starting,
+  running, waiting, applying, finishing, stalled), the run with what the user
+  dismissed left out, a start that made no chat, the armed schedule with the window
+  it may next start in, whether a sign-in is needed, whether the dispatcher's next
+  minute arms the update by itself, and what a client may ask next. It reads the
+  workspace's files, a listing of its agents and its clock, writes nothing, and uses
+  the dispatcher's own decisions, so what a client is told is under way is what a
+  start would find under way. The chats waiting on background tasks are read only
+  for a lead idle long enough to read as waiting, and whether an account is signed
+  in only while a refusal for want of one is on record. Whether an update is on
+  offer is left to the client, which compares the installed version with the
+  channel's.
 - `dispatcher` -- the minute-by-minute tick: it dispatches an armed schedule inside
   its window, closes out or reminds a run with no verdict (and brings a stopped
   lead back), and holds the run's agents out of the memory guard's way.
@@ -49,7 +66,8 @@ where supervisord runs the shell and where the cron line changes to.
   `system/scripts/install_update_dispatcher_cron.py` writes that line at boot.
 - `agents` -- the workspace's agents read from the events file `mngr observe`
   writes, for the routes, which run no `mngr`. Where the file cannot vouch for the
-  agents the answer is "unknown", never "none".
+  agents the answer is "unknown", never "none". It also says when each agent's last
+  turn ended, which is how long a run's lead has sat idle.
 - `protocol` -- the state paths, the outcomes and skip reasons, and the text of the
   messages the dispatcher sends.
 
@@ -69,8 +87,8 @@ cancel or a skip that lands while the tick or another request is writing is not
 undone, and a schedule armed while the tick was deciding to arm one of its own, or
 to cancel the one it had armed, stands as it was armed; that desktop's program takes none. The lock is held for file reads and
 writes alone, never while a chat is created or the feed is read, and it is not the
-lock cron's line tests. `last-start.json` is this library's alone, and so are the
-files a workspace that arms its own updates keeps: `settings.json`,
+lock cron's line tests. `last-start.json` and `sign-in-refusal.json` are this
+library's alone, and so are the files a workspace that arms its own updates keeps: `settings.json`,
 `channel-version.json`
 (which the update-self skill reads for its default target), `client-ceiling.json`,
 `schedule-origin.json` and `installed-version.json`. A desktop from before them

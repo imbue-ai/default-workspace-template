@@ -1,5 +1,8 @@
 import time
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from flask import Flask
@@ -11,10 +14,12 @@ from workspace_update_control.protocol import UPDATE_STATE_DIR
 from workspace_update_control.testing import RecordingFeed
 from workspace_update_control.testing import STAGED_CREATED_CHAT
 from workspace_update_control.testing import STAGED_FEED_BASE_URL
+from workspace_update_control.testing import ScriptedToolAnswer
 from workspace_update_control.testing import StagedUpdateWorkspace
 from workspace_update_control.testing import full_state_line
 from workspace_update_control.testing import observed_agent
 from workspace_update_control.testing import observed_services_agent
+from workspace_update_control.testing import stage_checkout_at
 from workspace_update_control.testing import stage_update_workspace
 from workspace_update_control.testing import the_accounts_settings
 from workspace_update_control.testing import update_settings_document
@@ -23,7 +28,6 @@ from workspace_update_control.testing import write_event_lines
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.workspace_routes import UPDATE_DISMISSALS_ROUTE
-from imbue.system_interface.workspace_routes import UPDATE_LIVENESS_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SCHEDULE_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SETTINGS_ROUTE
@@ -45,6 +49,10 @@ def _client(update_workspace_app: Flask) -> FlaskClient:
     return update_workspace_app.test_client()
 
 
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+
+
 def _stand_in_for_the_feed(update_workspace_app: Flask, template_ref: str | None) -> RecordingFeed:
     """Have the shell read its release channel's file from a feed that names ``template_ref``, or cannot be read."""
     feed = RecordingFeed(template_ref)
@@ -52,50 +60,157 @@ def _stand_in_for_the_feed(update_workspace_app: Flask, template_ref: str | None
     return feed
 
 
-def test_a_workspace_with_no_update_state_answers_nothing_and_writes_nothing(
+def _state(client: FlaskClient) -> dict[str, Any]:
+    return client.get(UPDATE_ROUTE).get_json()
+
+
+def _without_the_time(state: dict[str, Any]) -> dict[str, Any]:
+    """A state without when it was worked out, to hold two answers to the same reading."""
+    return {key: value for key, value in state.items() if key != "as_of"}
+
+
+def _await_the_chat(client: FlaskClient) -> dict[str, Any]:
+    """The state once the start under way has made its chat, or has failed to."""
+    wait_for(
+        lambda: _state(client)["activity"] != "STARTING",
+        error_message="the start never came to an end",
+    )
+    return _state(client)
+
+
+def test_a_workspace_with_no_update_state_is_idle_and_the_read_writes_nothing(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
+    asked_at = time.time()
     response = _client(update_workspace_app).get(UPDATE_ROUTE)
 
     assert response.status_code == 200
+    assert asked_at <= response.get_json()["as_of"] <= time.time()
     assert response.get_json() == {
+        "as_of": response.get_json()["as_of"],
+        # The staged workspace is no checkout, so it names no version.
+        "installed_version": "",
         "settings": None,
         "channel_version": None,
-        "schedule": None,
+        "activity": "IDLE",
         "run": None,
-        "last_dispatch": None,
-        "run_chat_id": None,
-        "is_signed_in": None,
-        "skipped_target": None,
-        "dismissals": None,
+        "start_failure": None,
+        "schedule": None,
+        "needs_sign_in": False,
+        "is_update_skipped": False,
+        "will_self_arm": False,
+        "is_backup_configured": False,
+        "allowed_actions": ["START", "SCHEDULE"],
+        "run_record": None,
         "last_start": None,
     }
     assert not (staged_update_workspace.root / "data").exists()
 
 
-def test_asking_whether_an_account_is_signed_in_rides_the_read(update_workspace_app: Flask) -> None:
-    assert (
-        _client(update_workspace_app).get(UPDATE_ROUTE, query_string={"check_sign_in": "1"}).get_json()["is_signed_in"]
-        is True
+def test_the_read_answers_the_version_of_the_checkout(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    stage_checkout_at(staged_update_workspace.root, ("the release", "minds-v0.9.0"))
+
+    assert _state(_client(update_workspace_app))["installed_version"] == "minds-v0.9.0"
+
+
+def test_the_read_tells_a_run_under_way_from_the_run_record_and_the_observers_listing(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    now = time.time()
+    run_record = {"chat_agent_name": "Update-to-v0110", "started_at": now - 600.0}
+    staged_update_workspace.write_state("run.json", run_record)
+    lead = observed_agent("agent-lead", "Update-to-v0110", "RUNNING", chat_id="chat-of-the-update")
+    write_event_lines(staged_update_workspace.events_path, [full_state_line([observed_services_agent(), lead], now)])
+
+    running = _state(client)
+
+    assert (running["activity"], running["allowed_actions"]) == ("RUNNING", [])
+    assert running["run"] == {
+        "started_at": now - 600.0,
+        "chat_agent_name": "Update-to-v0110",
+        "chat_id": "chat-of-the-update",
+        "is_chat_gone": False,
+        "started_by": None,
+        "target_ref": "",
+        "override_ref": "",
+        "is_holding": False,
+        "hold_detail": "",
+        "verdict": None,
+        "verdict_detail": "",
+        "in_place_compatible_ref": "",
+        "updated_to": "",
+    }
+    assert running["run_record"] == run_record
+
+    idle_lead = {**lead, "state": "WAITING", "turn_end": {"kind": "COMPLETED", "ended_at": _iso(now - 300.0)}}
+    write_event_lines(
+        staged_update_workspace.events_path, [full_state_line([observed_services_agent(), idle_lead], now)]
     )
+
+    assert _state(client)["activity"] == "WAITING"
+
+    write_event_lines(staged_update_workspace.events_path, [full_state_line([observed_services_agent()], now)])
+    stalled = _state(client)
+
+    assert (stalled["activity"], stalled["run"]["is_chat_gone"]) == ("STALLED", True)
+    assert stalled["allowed_actions"] == ["START", "SCHEDULE", "DISMISS_OUTCOME"]
+
+
+def test_a_lead_parked_on_a_background_task_is_not_waiting_on_the_user(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    now = time.time()
+    staged_update_workspace.write_state("run.json", {"chat_agent_name": "Update-to-v0110", "started_at": now - 600.0})
+    idle_lead = {
+        **observed_agent("agent-lead", "Update-to-v0110", "WAITING", chat_id="chat-of-the-update"),
+        "turn_end": {"kind": "COMPLETED", "ended_at": _iso(now - 300.0)},
+    }
+    write_event_lines(
+        staged_update_workspace.events_path, [full_state_line([observed_services_agent(), idle_lead], now)]
+    )
+    staged_update_workspace.script_tool(
+        "system/scripts/background_tasks.py",
+        [ScriptedToolAnswer(stdout="chat-of-the-update\tagent-lead\tUpdate-to-v0110\ttrue\t1\n")],
+    )
+
+    assert _state(client)["activity"] == "RUNNING"
+    assert staged_update_workspace.tool_calls("background_tasks.py") == [["list", "--format", "tsv"]]
 
 
 def test_a_schedule_is_armed_refreshed_and_cancelled_and_its_cron_line_runs_the_templates_dispatcher(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
     client = _client(update_workspace_app)
+    read_before_the_arm = _state(client)
 
     armed = client.put(UPDATE_SCHEDULE_ROUTE, json={**_SCHEDULE_REQUEST, "override_ref": "minds-v0.10.5"})
 
     assert armed.status_code == 200
     assert armed.get_json()["outcome"] == "ARMED"
-    schedule = armed.get_json()["schedule"]
-    assert (schedule["ceiling"], schedule["override_ref"], schedule["window_start_minute_utc"]) == (
+    schedule_file = staged_update_workspace.read_state("schedule.json")
+    assert schedule_file is not None
+    assert (schedule_file["ceiling"], schedule_file["override_ref"], schedule_file["window_start_minute_utc"]) == (
         "minds-v0.11.0",
         "minds-v0.10.5",
         420,
     )
-    assert client.get(UPDATE_ROUTE).get_json()["schedule"] == schedule
+    # The answer carries the state the arm left, which is what a read then answers.
+    armed_state = armed.get_json()["state"]
+    assert armed_state["as_of"] > read_before_the_arm["as_of"]
+    schedule = armed_state["schedule"]
+    assert (schedule["target_ref"], schedule["override_ref"], schedule["is_auto_armed"]) == (
+        "minds-v0.10.5",
+        "minds-v0.10.5",
+        False,
+    )
+    assert schedule["window_closes_at"] - schedule["window_opens_at"] == 240 * 60
+    assert schedule["window_opens_at"] % (24 * 3600) == 420 * 60
+    assert "CANCEL_SCHEDULE" in armed_state["allowed_actions"]
+    assert _state(client)["schedule"] == schedule
     cron_line = (staged_update_workspace.live_cron_dir / DISPATCHER_CRON_NAME).read_text()
     assert f"cd {staged_update_workspace.root.resolve()} && python3 {TICK_ENTRY_PATH} >>" in cron_line
 
@@ -110,18 +225,25 @@ def test_a_schedule_is_armed_refreshed_and_cancelled_and_its_cron_line_runs_the_
     )
 
     assert refreshed.get_json()["is_armed"] is True
-    refreshed_schedule = refreshed.get_json()["schedule"]
-    assert (refreshed_schedule["ceiling"], refreshed_schedule["window_start_minute_utc"]) == ("minds-v0.12.0", 60)
+    refreshed_schedule = refreshed.get_json()["state"]["schedule"]
+    assert refreshed_schedule["window_opens_at"] % (24 * 3600) == 60 * 60
+    assert refreshed_schedule["window_closes_at"] - refreshed_schedule["window_opens_at"] == 120 * 60
+    refreshed_file = staged_update_workspace.read_state("schedule.json")
+    assert refreshed_file is not None
+    assert (refreshed_file["ceiling"], refreshed_file["window_start_minute_utc"]) == ("minds-v0.12.0", 60)
     # What the user typed and when the schedule was armed are the arm's, not the refresh's.
-    assert (refreshed_schedule["override_ref"], refreshed_schedule["armed_at"]) == (
+    assert (refreshed_schedule["target_ref"], refreshed_file["armed_at"]) == (
         "minds-v0.10.5",
-        schedule["armed_at"],
+        schedule_file["armed_at"],
     )
 
-    assert client.delete(UPDATE_SCHEDULE_ROUTE).get_json() == {"is_cancelled": True}
-    assert client.get(UPDATE_ROUTE).get_json()["schedule"] is None
-    assert client.delete(UPDATE_SCHEDULE_ROUTE).get_json() == {"is_cancelled": False}
-    assert client.patch(
+    cancelled = client.delete(UPDATE_SCHEDULE_ROUTE).get_json()
+
+    assert (cancelled["is_cancelled"], cancelled["state"]["schedule"]) == (True, None)
+    assert "CANCEL_SCHEDULE" not in cancelled["state"]["allowed_actions"]
+    assert _state(client)["schedule"] is None
+    assert client.delete(UPDATE_SCHEDULE_ROUTE).get_json()["is_cancelled"] is False
+    unarmed = client.patch(
         UPDATE_SCHEDULE_ROUTE,
         json={
             "ceiling": "minds-v0.12.0",
@@ -129,108 +251,162 @@ def test_a_schedule_is_armed_refreshed_and_cancelled_and_its_cron_line_runs_the_
             "window_length_minutes": 120,
             "is_backup_configured": False,
         },
-    ).get_json() == {"is_armed": False, "schedule": None}
+    ).get_json()
+    assert (unarmed["is_armed"], unarmed["state"]["schedule"]) == (False, None)
 
 
-def test_a_start_is_answered_at_once_and_the_read_then_says_how_creating_the_chat_went(
+def test_a_start_is_answered_at_once_and_the_state_then_follows_the_chat_it_makes(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
     client = _client(update_workspace_app)
 
-    started = client.post(UPDATE_START_ROUTE, json=_START_REQUEST)
+    started = client.post(UPDATE_START_ROUTE, json={**_START_REQUEST, "override_ref": "minds-v0.10.5"})
 
     assert started.status_code == 202
     assert started.get_json()["outcome"] == "STARTING"
     attempt_id = started.get_json()["attempt_id"]
     assert attempt_id
-    wait_for(
-        lambda: (client.get(UPDATE_ROUTE).get_json()["last_start"] or {}).get("outcome") is not None,
-        error_message="the start attempt never recorded an outcome",
-    )
-    last_start = client.get(UPDATE_ROUTE).get_json()["last_start"]
-    assert (last_start["attempt_id"], last_start["outcome"]) == (attempt_id, "CREATED")
-    assert (last_start["chat_agent_name"], last_start["chat_id"]) == (
+    # The answer's state is the start under way, or already the chat it made.
+    assert started.get_json()["state"]["activity"] in ("STARTING", "RUNNING")
+    assert started.get_json()["state"]["run"]["override_ref"] == "minds-v0.10.5"
+    running = _await_the_chat(client)
+    assert running["activity"] == "RUNNING"
+    assert running["start_failure"] is None
+    assert (running["run"]["chat_agent_name"], running["run"]["chat_id"], running["run"]["started_by"]) == (
         STAGED_CREATED_CHAT["name"],
         STAGED_CREATED_CHAT["chat_id"],
+        "IMMEDIATE",
     )
+    assert (running["run"]["target_ref"], running["run"]["override_ref"]) == ("minds-v0.10.5", "minds-v0.10.5")
+    assert running["allowed_actions"] == []
+    last_start = running["last_start"]
+    assert (last_start["attempt_id"], last_start["outcome"]) == (attempt_id, "CREATED")
     assert len(staged_update_workspace.chat_creates()) == 1
     # The watchdog's cron line is installed by a start too, so a stopped lead is brought back.
     assert (staged_update_workspace.live_cron_dir / DISPATCHER_CRON_NAME).exists()
 
+    again = client.post(UPDATE_START_ROUTE, json=_START_REQUEST)
 
-def test_a_start_with_no_account_signed_in_is_declined_with_its_outcome_and_creates_nothing(
+    assert again.status_code == 200
+    assert again.get_json()["outcome"] == "ALREADY_RUNNING"
+    assert again.get_json()["state"]["run"]["chat_id"] == STAGED_CREATED_CHAT["chat_id"]
+
+
+def test_a_start_that_makes_no_chat_is_told_by_the_state_until_it_is_dismissed(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
+    client = _client(update_workspace_app)
+    staged_update_workspace.script_tool(
+        "system/scripts/message_chat.py", [ScriptedToolAnswer(exit_code=1, stderr="the chat app fell over")]
+    )
+
+    attempt_id = client.post(UPDATE_START_ROUTE, json=_START_REQUEST).get_json()["attempt_id"]
+    failed = _await_the_chat(client)
+
+    assert (failed["activity"], failed["run"]) == ("IDLE", None)
+    assert failed["start_failure"] == {
+        "attempt_id": attempt_id,
+        "code": "CREATE_FAILED",
+        "detail": "the chat app fell over",
+    }
+    assert "DISMISS_OUTCOME" in failed["allowed_actions"]
+
+    dismissed = client.post(UPDATE_DISMISSALS_ROUTE, json={"start_failure_attempt_id": attempt_id})
+
+    assert dismissed.status_code == 200
+    assert dismissed.get_json()["state"]["start_failure"] is None
+    assert "DISMISS_OUTCOME" not in dismissed.get_json()["state"]["allowed_actions"]
+    assert _state(client)["start_failure"] is None
+
+
+def test_a_start_with_no_account_signed_in_is_declined_and_the_state_says_a_sign_in_is_needed(
     tmp_path: Path, update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
-    (staged_update_workspace.root / ".mngr" / "settings.local.toml").unlink()
+    client = _client(update_workspace_app)
+    local_settings = staged_update_workspace.root / ".mngr" / "settings.local.toml"
+    signed_in = local_settings.read_text()
+    local_settings.unlink()
 
-    declined = _client(update_workspace_app).post(UPDATE_START_ROUTE, json=_START_REQUEST)
+    declined = client.post(UPDATE_START_ROUTE, json=_START_REQUEST)
 
     assert declined.status_code == 200
     assert declined.get_json()["outcome"] == "NEEDS_SIGN_IN"
+    assert declined.get_json()["state"]["needs_sign_in"] is True
     assert staged_update_workspace.chat_creates() == []
     assert staged_update_workspace.read_state("last-start.json") is None
+    # Every client reads it, not only the one that was refused.
+    assert _state(client)["needs_sign_in"] is True
+
+    local_settings.write_text(signed_in)
+
+    assert _state(client)["needs_sign_in"] is False
 
 
 def test_skipping_a_version_cancels_the_schedule_and_keeps_the_later_skip(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
     client = _client(update_workspace_app)
-    client.put(UPDATE_SCHEDULE_ROUTE, json=_SCHEDULE_REQUEST)
+    _stand_in_for_the_feed(update_workspace_app, "minds-v0.11.0")
+    client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document())
+    client.put(UPDATE_SCHEDULE_ROUTE, json={})
+    assert (_state(client)["is_update_skipped"], "SKIP" in _state(client)["allowed_actions"]) == (False, True)
 
     skipped = client.post(UPDATE_SKIP_ROUTE, json={"target_ref": "minds-v0.11.0", "skipped_at": 200.0})
     earlier = client.post(UPDATE_SKIP_ROUTE, json={"target_ref": "minds-v0.10.0", "skipped_at": 100.0})
 
-    assert skipped.get_json() == {
-        "is_cancelled": True,
-        "skipped_target": {"schema": 1, "target_ref": "minds-v0.11.0", "skipped_at": 200.0},
-    }
+    assert skipped.get_json()["is_cancelled"] is True
+    skipped_state = skipped.get_json()["state"]
+    assert (skipped_state["schedule"], skipped_state["is_update_skipped"]) == (None, True)
+    assert "SKIP" not in skipped_state["allowed_actions"]
     assert earlier.get_json()["is_cancelled"] is False
-    assert earlier.get_json()["skipped_target"]["target_ref"] == "minds-v0.11.0"
-    state = client.get(UPDATE_ROUTE).get_json()
-    assert (state["schedule"], state["skipped_target"]["target_ref"]) == (None, "minds-v0.11.0")
-
-
-def test_a_dismissal_is_recorded_by_the_runs_start_and_a_later_run_covers_an_earlier_one(
-    update_workspace_app: Flask,
-) -> None:
-    client = _client(update_workspace_app)
-
-    client.post(UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": 200.0})
-    answered = client.post(
-        UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": 100.0, "outcome_run_started_at": 50.0}
-    )
-
-    assert answered.get_json() == {
-        "dismissals": {"schema": 1, "note_run_started_at": 200.0, "outcome_run_started_at": 50.0}
+    assert earlier.get_json()["state"]["is_update_skipped"] is True
+    assert staged_update_workspace.read_state("skipped-target.json") == {
+        "schema": 1,
+        "target_ref": "minds-v0.11.0",
+        "skipped_at": 200.0,
     }
-    assert client.get(UPDATE_ROUTE).get_json()["dismissals"] == answered.get_json()["dismissals"]
+    assert _without_the_time(_state(client)) == _without_the_time(earlier.get_json()["state"])
 
 
-def test_liveness_answers_the_agents_the_observers_file_lists_and_null_when_it_cannot_vouch_for_them(
+def test_a_dismissal_names_a_run_by_the_start_the_read_answered_and_the_state_then_leaves_it_out(
     update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
 ) -> None:
     client = _client(update_workspace_app)
-    staged_update_workspace.write_state("run.json", {"chat_agent_name": "Update-to-v0110", "started_at": 5.0})
-
-    without_events = client.get(UPDATE_LIVENESS_ROUTE).get_json()
-
-    assert without_events["agents"] is None
-    assert without_events["run"] == {"chat_agent_name": "Update-to-v0110", "started_at": 5.0}
-    assert without_events["is_watchdog_installed"] is False
-
-    lead = observed_agent("agent-lead", "Update-to-v0110", "RUNNING", chat_id="chat-of-the-update")
-    write_event_lines(
-        staged_update_workspace.events_path, [full_state_line([observed_services_agent(), lead], time.time())]
+    # A start as a workspace's clock stamps one, with more digits than a microsecond.
+    started_at = 1792000000.1234567
+    staged_update_workspace.write_state(
+        "run.json",
+        {
+            "chat_agent_name": "Update-to-v0110",
+            "started_at": started_at,
+            "verdict": "UPDATED",
+            "resulting_ref": "minds-v0.11.0",
+        },
     )
+    shown = _state(client)
+    assert (shown["run"]["verdict"], shown["run"]["updated_to"]) == ("UPDATED", "minds-v0.11.0")
+    assert shown["allowed_actions"] == ["START", "SCHEDULE", "DISMISS_OUTCOME", "DISMISS_NOTE"]
 
-    with_events = client.get(UPDATE_LIVENESS_ROUTE).get_json()
+    without_outcome = client.post(
+        UPDATE_DISMISSALS_ROUTE, json={"outcome_run_started_at": shown["run"]["started_at"]}
+    ).get_json()["state"]
 
-    assert {
-        "name": "Update-to-v0110",
-        "state": "RUNNING",
-        "agent_id": "agent-lead",
-        "chat_id": "chat-of-the-update",
-    } in (with_events["agents"])
+    assert (without_outcome["run"]["verdict"], without_outcome["run"]["updated_to"]) == (None, "minds-v0.11.0")
+    assert without_outcome["allowed_actions"] == ["START", "SCHEDULE", "DISMISS_NOTE"]
+
+    without_note = client.post(
+        UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": shown["run"]["started_at"]}
+    ).get_json()["state"]
+
+    assert without_note["run"] is None
+    assert _state(client)["run"] is None
+    # A dismissal of an earlier run stands under the later one's.
+    client.post(UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": 100.0, "outcome_run_started_at": 50.0})
+    assert staged_update_workspace.read_state("dismissals.json") == {
+        "schema": 1,
+        "note_run_started_at": started_at,
+        "outcome_run_started_at": started_at,
+    }
 
 
 def test_a_request_whose_values_are_out_of_range_is_refused_and_arms_nothing(
@@ -285,14 +461,21 @@ def test_a_time_that_is_not_a_finite_number_is_refused_and_records_nothing(
     assert staged_update_workspace.read_state(state_file) is None
 
 
-def test_a_time_sent_as_a_whole_number_is_taken(update_workspace_app: Flask) -> None:
+def test_a_time_sent_as_a_whole_number_is_taken(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
     client = _client(update_workspace_app)
 
     skipped = client.post(UPDATE_SKIP_ROUTE, json={"target_ref": "minds-v0.11.0", "skipped_at": 200})
     dismissed = client.post(UPDATE_DISMISSALS_ROUTE, json={"note_run_started_at": 200})
 
-    assert skipped.get_json()["skipped_target"]["skipped_at"] == 200.0
-    assert dismissed.get_json()["dismissals"]["note_run_started_at"] == 200.0
+    assert (skipped.status_code, dismissed.status_code) == (200, 200)
+    assert staged_update_workspace.read_state("skipped-target.json") == {
+        "schema": 1,
+        "target_ref": "minds-v0.11.0",
+        "skipped_at": 200.0,
+    }
+    assert staged_update_workspace.read_state("dismissals.json") == {"schema": 1, "note_run_started_at": 200.0}
 
 
 @pytest.mark.parametrize(
@@ -303,6 +486,7 @@ def test_a_time_sent_as_a_whole_number_is_taken(update_workspace_app: Flask) -> 
         ("DELETE", UPDATE_SCHEDULE_ROUTE, None),
         ("POST", UPDATE_SKIP_ROUTE, {"target_ref": "minds-v0.11.0", "skipped_at": 200.0}),
         ("POST", UPDATE_DISMISSALS_ROUTE, {"note_run_started_at": 200.0}),
+        ("POST", UPDATE_DISMISSALS_ROUTE, {"start_failure_attempt_id": "an-attempt"}),
     ],
 )
 def test_update_state_that_cannot_be_written_is_answered_with_the_routes_own_error_object(
@@ -348,7 +532,7 @@ def test_the_update_settings_are_stored_and_answered_as_stored_and_the_read_answ
     stored = client.put(UPDATE_SETTINGS_ROUTE, json=settings)
 
     assert stored.status_code == 200
-    assert stored.get_json() == settings
+    assert stored.get_json()["state"]["settings"] == settings
     assert staged_update_workspace.read_state("settings.json") == {"schema": 1, **settings}
     # The schedule is a file of its own, which a desktop from before the settings reads and writes.
     assert staged_update_workspace.read_state("schedule.json") is None
@@ -376,7 +560,7 @@ def test_a_write_of_the_update_settings_puts_the_templates_dispatcher_back_on_th
 def test_settings_with_none_of_the_workspaces_own_follow_the_accounts(update_workspace_app: Flask) -> None:
     stored = _client(update_workspace_app).put(UPDATE_SETTINGS_ROUTE, json=the_accounts_settings())
 
-    assert stored.get_json() == update_settings_document()
+    assert stored.get_json()["state"]["settings"] == update_settings_document()
 
 
 def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_and_cleared_by_a_null(
@@ -394,26 +578,32 @@ def test_a_setting_of_the_workspaces_own_is_kept_when_a_request_leaves_it_out_an
     kept = client.put(UPDATE_SETTINGS_ROUTE, json=the_accounts_settings(channel="beta"))
 
     assert kept.status_code == 200
-    assert kept.get_json() == update_settings_document(channel="beta", **of_the_workspace)
-    assert client.get(UPDATE_ROUTE).get_json()["settings"] == kept.get_json()
+    assert kept.get_json()["state"]["settings"] == update_settings_document(channel="beta", **of_the_workspace)
+    assert _without_the_time(_state(client)) == _without_the_time(kept.get_json()["state"])
 
     cleared = client.put(
         UPDATE_SETTINGS_ROUTE,
         json={**the_accounts_settings(channel="beta"), "window_start_hour_here": None, "window_end_hour_here": None},
     )
 
-    assert cleared.get_json() == update_settings_document(channel="beta", is_auto_update_enabled_here=False)
-    assert staged_update_workspace.read_state("settings.json") == {"schema": 1, **cleared.get_json()}
+    cleared_settings = cleared.get_json()["state"]["settings"]
+    assert cleared_settings == update_settings_document(channel="beta", is_auto_update_enabled_here=False)
+    assert staged_update_workspace.read_state("settings.json") == {"schema": 1, **cleared_settings}
 
 
-def test_an_armed_schedule_takes_the_workspaces_own_hours_where_it_has_them(update_workspace_app: Flask) -> None:
+def test_an_armed_schedule_takes_the_workspaces_own_hours_where_it_has_them(
+    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
+) -> None:
     client = _client(update_workspace_app)
     _stand_in_for_the_feed(update_workspace_app, "minds-v0.12.0")
     client.put(UPDATE_SETTINGS_ROUTE, json=update_settings_document(window_start_hour_here=22, window_end_hour_here=1))
 
-    schedule = client.put(UPDATE_SCHEDULE_ROUTE, json={}).get_json()["schedule"]
+    armed = client.put(UPDATE_SCHEDULE_ROUTE, json={}).get_json()["state"]["schedule"]
 
+    schedule = staged_update_workspace.read_state("schedule.json")
+    assert schedule is not None
     assert (schedule["window_start_minute_utc"], schedule["window_length_minutes"]) == (22 * 60, 3 * 60)
+    assert armed["window_closes_at"] - armed["window_opens_at"] == 3 * 3600
 
 
 @pytest.mark.parametrize(
@@ -466,7 +656,9 @@ def test_a_schedule_armed_with_nothing_named_takes_the_channels_version_and_the_
 
     assert armed.status_code == 200
     assert armed.get_json()["outcome"] == "ARMED"
-    schedule = armed.get_json()["schedule"]
+    assert armed.get_json()["state"]["schedule"]["target_ref"] == "minds-v0.12.0"
+    schedule = staged_update_workspace.read_state("schedule.json")
+    assert schedule is not None
     assert (
         schedule["ceiling"],
         schedule["window_start_minute_utc"],
@@ -486,7 +678,8 @@ def test_a_schedule_armed_with_nothing_named_takes_the_channels_version_and_the_
     # A refresh that names nothing keeps the workspace's own values, and the feed is not asked again within the hour.
     refreshed = client.patch(UPDATE_SCHEDULE_ROUTE, json={})
 
-    assert refreshed.get_json() == {"is_armed": True, "schedule": schedule}
+    assert refreshed.get_json()["is_armed"] is True
+    assert staged_update_workspace.read_state("schedule.json") == schedule
     assert len(feed.asked) == 1
 
 
@@ -549,11 +742,8 @@ def test_a_start_with_no_version_named_updates_to_the_channels_version(
 
     assert started.status_code == 202
     assert started.get_json()["outcome"] == "STARTING"
-    wait_for(
-        lambda: (client.get(UPDATE_ROUTE).get_json()["last_start"] or {}).get("outcome") is not None,
-        error_message="the start attempt never recorded an outcome",
-    )
-    assert client.get(UPDATE_ROUTE).get_json()["last_dispatch"]["target_ref"] == "minds-v0.12.0"
+    run = _await_the_chat(client)["run"]
+    assert (run["target_ref"], run["override_ref"]) == ("minds-v0.12.0", "")
     assert "- Target: minds-v0.12.0" in staged_update_workspace.chat_creates()[0][-1]
 
 
@@ -576,11 +766,8 @@ def test_a_start_at_a_version_the_user_named_needs_no_channel(
     started = client.post(UPDATE_START_ROUTE, json={"override_ref": "minds-v0.11.3"})
 
     assert started.status_code == 202
-    wait_for(
-        lambda: (client.get(UPDATE_ROUTE).get_json()["last_start"] or {}).get("outcome") is not None,
-        error_message="the start attempt never recorded an outcome",
-    )
-    assert client.get(UPDATE_ROUTE).get_json()["last_dispatch"]["target_ref"] == "minds-v0.11.3"
+    run = _await_the_chat(client)["run"]
+    assert (run["target_ref"], run["override_ref"]) == ("minds-v0.11.3", "minds-v0.11.3")
 
 
 def test_a_client_that_names_its_newest_version_is_served_as_before_and_recorded_as_holding_the_workspace_to_it(
@@ -592,7 +779,9 @@ def test_a_client_that_names_its_newest_version_is_served_as_before_and_recorded
 
     armed = client.put(UPDATE_SCHEDULE_ROUTE, json=_SCHEDULE_REQUEST)
 
-    schedule = armed.get_json()["schedule"]
+    assert armed.get_json()["state"]["schedule"]["target_ref"] == "minds-v0.11.0"
+    schedule = staged_update_workspace.read_state("schedule.json")
+    assert schedule is not None
     assert (schedule["ceiling"], schedule["window_start_minute_utc"], schedule["is_backup_configured"]) == (
         "minds-v0.11.0",
         420,

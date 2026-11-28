@@ -253,7 +253,7 @@ class UpdateLease(TypedDict):
     body: str
 
 
-def _epoch_or_none(value: object) -> float | None:
+def epoch_or_none(value: object) -> float | None:
     """``value`` as seconds since the epoch, or None when it is not a JSON number."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -466,7 +466,7 @@ def _find_agent(
     return None
 
 
-def _is_agent_ended(agent: Mapping[str, str] | None) -> bool:
+def is_agent_ended(agent: Mapping[str, str] | None) -> bool:
     return agent is None or agent.get("state") in _ENDED_AGENT_STATES
 
 
@@ -475,7 +475,7 @@ def chat_id_of(agent: Mapping[str, str]) -> str:
     return str(agent.get("labels.chat_id") or agent.get("id") or "")
 
 
-def _find_chat(
+def find_chat(
     agents: Sequence[Mapping[str, str]], name: str, chat_id: str
 ) -> Mapping[str, str] | None:
     """A chat's agent: by ``name``, else by ``chat_id`` ('' for none); None when neither is listed.
@@ -489,7 +489,7 @@ def _find_chat(
     members = [
         member for member in agents if chat_id in (member.get("id"), chat_id_of(member))
     ]
-    live_members = [member for member in members if not _is_agent_ended(member)]
+    live_members = [member for member in members if not is_agent_ended(member)]
     candidates = live_members or members
     return candidates[0] if candidates else None
 
@@ -509,7 +509,7 @@ def find_run_lead(
 ) -> Mapping[str, str] | None:
     """The run's lead: by the name its record holds, else by the chat id the last dispatch gave that name."""
     name = str(run.get("chat_agent_name") or "")
-    return _find_chat(agents, name, _dispatched_chat_id(name))
+    return find_chat(agents, name, _dispatched_chat_id(name))
 
 
 def busy_chat_rows(agent_environment: AgentEnvironment) -> list[dict[str, object]]:
@@ -568,7 +568,7 @@ def busy_agents(agent_environment: AgentEnvironment) -> BusyAgents:
 
 def _is_agent_busy(agent: Mapping[str, str] | None, busy: BusyAgents) -> bool:
     """Running, or waiting on a background task that will resume it."""
-    if agent is None or _is_agent_ended(agent):
+    if agent is None or is_agent_ended(agent):
         return False
     if agent.get("state") in (
         "RUNNING",
@@ -730,7 +730,7 @@ def is_update_lease_held(
         if agents is None or not holders:
             return True
         if any(
-            not _is_agent_ended(agent) and _agent_identities(agent) & holders
+            not is_agent_ended(agent) and _agent_identities(agent) & holders
             for agent in agents
         ):
             return True
@@ -742,7 +742,7 @@ def _run_verdict(run: Mapping[str, object] | None) -> object:
 
 
 def run_started_at(run: Mapping[str, object] | None) -> float | None:
-    return _epoch_or_none(run.get("started_at")) if run is not None else None
+    return epoch_or_none(run.get("started_at")) if run is not None else None
 
 
 def is_run_in_flight(
@@ -762,27 +762,23 @@ def is_run_in_flight(
     lead = find_run_lead(agents, run)
     if lead is None:
         return False
-    return is_stopped_lead_revived or not _is_agent_ended(lead)
+    return is_stopped_lead_revived or not is_agent_ended(lead)
 
 
-def pending_dispatched_chat(
-    run: Mapping[str, object] | None,
-    agents: Sequence[Mapping[str, str]] | None,
-    now: float,
+def unrecorded_dispatch(
+    run: Mapping[str, object] | None, now: float
 ) -> tuple[str, str, float] | None:
-    """The last dispatch's ``(chat agent name, chat id, dispatched at)`` while its lead may still be on its way
-    to recording its run; None otherwise.
+    """The last dispatch's ``(chat agent name, chat id, dispatched at)`` while its chat has not put its run on the
+    record and the dispatch is recent; None otherwise.
 
     A new lead records its start and takes the update lease only minutes after its chat is made,
     so until then the last dispatch is the one sign of it. Only for a short while after the
-    dispatch, so a lead that never records a start cannot hold updates back for good. An unlisted
-    chat counts only while the chat app may still be creating it, which it answered without a chat
-    id; one the create gave an id to was there, so unlisted it was deleted.
+    dispatch, so a lead that never records a start cannot hold updates back for good.
     """
     dispatch = read_json_object(LAST_DISPATCH_FILE_PATH)
     if dispatch is None or not dispatch.get("chat_agent_name"):
         return None
-    dispatched_at = _epoch_or_none(dispatch.get("dispatched_at"))
+    dispatched_at = epoch_or_none(dispatch.get("dispatched_at"))
     if (
         dispatched_at is None
         or now - dispatched_at >= _UNLISTED_MARKED_LEAD_GRACE_SECONDS
@@ -798,13 +794,30 @@ def pending_dispatched_chat(
     )
     if is_run_recorded:
         return None
-    chat_id = str(dispatch.get("chat_id") or "")
+    return name, str(dispatch.get("chat_id") or ""), dispatched_at
+
+
+def pending_dispatched_chat(
+    run: Mapping[str, object] | None,
+    agents: Sequence[Mapping[str, str]] | None,
+    now: float,
+) -> tuple[str, str, float] | None:
+    """The last dispatch's ``(chat agent name, chat id, dispatched at)`` while its lead may still be on its way
+    to recording its run; None otherwise.
+
+    An unlisted chat counts only while the chat app may still be creating it, which it answered
+    without a chat id; one the create gave an id to was there, so unlisted it was deleted.
+    """
+    unrecorded = unrecorded_dispatch(run, now)
+    if unrecorded is None:
+        return None
+    name, chat_id, _ = unrecorded
     if agents is not None:
-        listed = _find_chat(agents, name, chat_id)
+        listed = find_chat(agents, name, chat_id)
         is_deleted = listed is None and bool(chat_id)
-        if is_deleted or (listed is not None and _is_agent_ended(listed)):
+        if is_deleted or (listed is not None and is_agent_ended(listed)):
             return None
-    return name, chat_id, dispatched_at
+    return unrecorded
 
 
 def _display_version(ref: str) -> str:
@@ -1053,7 +1066,7 @@ def _recent_unreported_attempt_id(target_ref: str, now: float) -> str:
     """
     attempt = read_json_object(_DISPATCH_ATTEMPT_PATH) or {}
     attempt_id = str(attempt.get("attempt_id") or "")
-    attempted_at = _epoch_or_none(attempt.get("attempted_at"))
+    attempted_at = epoch_or_none(attempt.get("attempted_at"))
     if (
         not attempt_id
         or attempt.get("target_ref") != target_ref
@@ -1073,7 +1086,7 @@ def _find_attempt_chat(
     for agent in agents:
         if agent.get(
             "labels." + _DISPATCH_ATTEMPT_LABEL
-        ) == attempt_id and not _is_agent_ended(agent):
+        ) == attempt_id and not is_agent_ended(agent):
             return agent
     return None
 
@@ -1187,7 +1200,20 @@ def current_window(
     return None
 
 
-def _schedule_window(schedule: Mapping[str, object]) -> tuple[int, int] | None:
+def next_window(
+    now: float, start_minute_utc: int, length_minutes: int
+) -> tuple[float, float]:
+    """``(opens_at, closes_at)`` of the window ``now`` is inside, or of the next one to open."""
+    window = current_window(now, start_minute_utc, length_minutes)
+    if window is not None:
+        return window
+    opens_at = now - now % _SECONDS_PER_DAY + start_minute_utc * 60
+    if opens_at <= now:
+        opens_at += _SECONDS_PER_DAY
+    return opens_at, opens_at + length_minutes * 60
+
+
+def schedule_window(schedule: Mapping[str, object]) -> tuple[int, int] | None:
     """The schedule's ``(UTC start minute, length in minutes)``, or None when the file does not hold both."""
     start_minute_utc = schedule.get("window_start_minute_utc")
     length_minutes = schedule.get("window_length_minutes")
@@ -1204,13 +1230,13 @@ def decide_schedule_action(
     is_marked_lead_gone: Callable[[], bool],
 ) -> ScheduleAction:
     """What one tick does about an armed schedule."""
-    window_bounds = _schedule_window(schedule)
+    window_bounds = schedule_window(schedule)
     if window_bounds is None:
         return ScheduleAction.NOTHING
-    armed_at = _epoch_or_none(schedule.get("armed_at")) or 0.0
+    armed_at = epoch_or_none(schedule.get("armed_at")) or 0.0
     started_at = run_started_at(run)
     marked_chat = str(schedule.get("marked_chat") or "")
-    marked_at = _epoch_or_none(schedule.get("marked_at"))
+    marked_at = epoch_or_none(schedule.get("marked_at"))
     # A record under the marked name that started before the mark is an earlier chat's that had the name.
     is_marked_run = (
         bool(marked_chat)
@@ -1224,7 +1250,7 @@ def decide_schedule_action(
         return ScheduleAction.REMOVE
     window = current_window(now, *window_bounds)
     if window is None:
-        seen = _epoch_or_none(schedule.get("window_seen_open_at"))
+        seen = epoch_or_none(schedule.get("window_seen_open_at"))
         if seen is None:
             return ScheduleAction.NOTHING
         is_started_in_seen_window = (started_at is not None and started_at >= seen) or (
@@ -1238,7 +1264,7 @@ def decide_schedule_action(
     opened_at = window[0]
     if started_at is not None and started_at >= opened_at and started_at >= armed_at:
         return ScheduleAction.NOTE_WINDOW
-    next_attempt_at = _epoch_or_none(schedule.get("next_attempt_at"))
+    next_attempt_at = epoch_or_none(schedule.get("next_attempt_at"))
     is_held_back = next_attempt_at is not None and now < next_attempt_at
     if marked_at is not None and marked_at >= opened_at:
         is_start_recorded = (
@@ -1294,9 +1320,9 @@ def _is_marked_lead_gone(
         return False
     lead = _find_agent(agents, str(schedule.get("marked_chat") or ""))
     if lead is not None:
-        return _is_agent_ended(lead)
+        return is_agent_ended(lead)
     # A create the chat app answered as still running is not listed until it lands.
-    marked_at = _epoch_or_none(schedule.get("marked_at"))
+    marked_at = epoch_or_none(schedule.get("marked_at"))
     if marked_at is None:
         return True
     return now - marked_at >= _UNLISTED_MARKED_LEAD_GRACE_SECONDS
@@ -1305,7 +1331,7 @@ def _is_marked_lead_gone(
 def _tick_schedule(now: float, agent_environment: AgentEnvironment) -> None:
     """One minute of an armed schedule: dispatch inside the window, record a skipped window, or retire the file."""
     schedule = read_json_object(SCHEDULE_FILE_PATH)
-    window_bounds = _schedule_window(schedule) if schedule is not None else None
+    window_bounds = schedule_window(schedule) if schedule is not None else None
     if schedule is None or window_bounds is None:
         return
     run = read_json_object(RUN_RECORD_PATH)
@@ -1433,7 +1459,7 @@ def decide_watchdog_action(
     lead = find_run_lead(agents, run)
     if lead is None:
         return WatchdogAction.CLOSE_OUT
-    if _is_agent_ended(lead):
+    if is_agent_ended(lead):
         return WatchdogAction.REVIVE
     if run.get("is_holding"):
         return WatchdogAction.RESET
@@ -1448,7 +1474,7 @@ def decide_watchdog_action(
         # An unreadable state (a loaded host) is no evidence the run is idle, and mngr refuses to message it.
         return WatchdogAction.NOTHING
     idle_ticks = _count_or_zero(watchdog_state.get("idle_ticks")) + 1
-    last_reminded_at = _epoch_or_none(watchdog_state.get("last_reminded_at")) or 0.0
+    last_reminded_at = epoch_or_none(watchdog_state.get("last_reminded_at")) or 0.0
     if (
         idle_ticks >= _IDLE_TICKS_BEFORE_REMINDER
         and now - last_reminded_at >= _REMINDER_INTERVAL_SECONDS
@@ -1464,6 +1490,11 @@ def _watchdog_state_for(run: Mapping[str, object]) -> dict[str, object]:
     if state.get("run") != key:
         return {"run": key, "idle_ticks": 0, "last_reminded_at": 0.0}
     return state
+
+
+def watchdog_idle_ticks(run: Mapping[str, object]) -> int:
+    """How many of the watchdog's last minutes in a row found this run's lead and worker idle."""
+    return _count_or_zero(_watchdog_state_for(run).get("idle_ticks"))
 
 
 def _send_to_chat(
@@ -1581,7 +1612,7 @@ def close_out_run(
         return
     worker_name = str(run.get("worker_agent_name") or "")
     worker = _find_agent(agents, worker_name) if worker_name else None
-    if worker is not None and not _is_agent_ended(worker):
+    if worker is not None and not is_agent_ended(worker):
         stopped = run_command(
             ["mngr", "stop", worker_name],
             _MNGR_CREATE_TIMEOUT_SECONDS,

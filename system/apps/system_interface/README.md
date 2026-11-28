@@ -120,7 +120,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `backups/destination`, which names where they go; `backups/credentials`,
   which answers the credentials in use to the owner alone; and
   `backups/verification`), the updates
-  (`update`, `update/start|schedule|skip|dismissals|liveness|settings`), and
+  (`update`, which answers what an update is doing as the workspace works it
+  out when asked, and `update/start|schedule|skip|dismissals|settings`,
+  whose writes each answer that state as they left it), and
   what a client with no backend of its own reads from the shell: the two
   suggestion switches (`suggestions`), the workspace's apps with each one's
   icon markup (`apps`), and the image its first desktop wears (`wallpaper`,

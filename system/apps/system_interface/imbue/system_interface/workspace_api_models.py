@@ -17,6 +17,12 @@ from pydantic import StrictFloat
 from pydantic import StrictInt
 from workspace_backup_setup.state import BackupLeaseHolder
 from workspace_initial_data.status import InitialDataStatus
+from workspace_update_control.state import UpdateAction
+from workspace_update_control.state import UpdateActivity
+from workspace_update_control.state import UpdateSkipReason
+from workspace_update_control.state import UpdateStartFailureCode
+from workspace_update_control.state import UpdateStartedBy
+from workspace_update_control.state import UpdateVerdict
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -47,7 +53,6 @@ OPERATION_UPDATE_SCHEDULE_CANCEL: Final[str] = "update.schedule.cancel"
 OPERATION_UPDATE_SCHEDULE_REFRESH: Final[str] = "update.schedule.refresh"
 OPERATION_UPDATE_SKIP: Final[str] = "update.skip"
 OPERATION_UPDATE_DISMISS: Final[str] = "update.dismiss"
-OPERATION_UPDATE_LIVENESS_READ: Final[str] = "update.liveness.read"
 OPERATION_UPDATE_SETTINGS_WRITE: Final[str] = "update.settings.write"
 OPERATION_SUGGESTIONS_READ: Final[str] = "suggestions.read"
 OPERATION_SUGGESTIONS_WRITE: Final[str] = "suggestions.write"
@@ -70,7 +75,6 @@ WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_UPDATE_SCHEDULE_REFRESH,
     OPERATION_UPDATE_SKIP,
     OPERATION_UPDATE_DISMISS,
-    OPERATION_UPDATE_LIVENESS_READ,
     OPERATION_UPDATE_SETTINGS_WRITE,
     OPERATION_SUGGESTIONS_READ,
     OPERATION_SUGGESTIONS_WRITE,
@@ -424,7 +428,8 @@ class UpdateSkipRequest(FrozenModel):
 
 
 class UpdateDismissalsRequest(FrozenModel):
-    """Which run's note or outcome the user dismissed, by the run's start."""
+    """What the user put away: a run's note or outcome, named by the run's start as the read answers it
+    (``run.started_at``, sent back as it was read), or a start that made no chat, named by its attempt."""
 
     note_run_started_at: StrictFloat | None = Field(
         default=None,
@@ -436,29 +441,11 @@ class UpdateDismissalsRequest(FrozenModel):
         allow_inf_nan=False,
         description="The start of the run whose outcome was dismissed, seconds since the epoch",
     )
-
-
-class UpdateOutcomeResponse(FrozenModel):
-    """What starting an update or arming a schedule came to.
-
-    ``outcome`` is one of ``STARTING``, ``CREATED``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``,
-    ``CHAT_APP_UNREACHABLE``, ``CREATE_FAILED``, ``NO_CRON`` and ``TOO_OLD_TO_UPDATE``; a later template may add one.
-    A request that left its version or its window to the workspace may also be answered ``NO_CHANNEL_VERSION`` (the
-    workspace has read no version for its release channel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).
-    """
-
-    outcome: str = Field(description="What the request came to")
-    detail: str = Field(default="", description="One line about it")
-    chat_agent_name: str = Field(default="", description="The update's chat an ALREADY_RUNNING names; '' otherwise")
-    chat_id: str = Field(default="", description="That chat's id, for opening it; '' when unknown")
-    run_started_at: float | None = Field(
-        default=None, description="When an ALREADY_RUNNING run began, seconds since the epoch; null when unsaid"
-    )
-    attempt_id: str = Field(
-        default="", description="The start attempt a STARTING began (or one already under way); '' otherwise"
-    )
-    schedule: dict[str, object] | None = Field(
-        default=None, description="The schedule file as arming left it; null for a start"
+    start_failure_attempt_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The attempt of the failed start that was dismissed (start_failure.attempt_id); one that is "
+        "no longer the last attempt records nothing",
     )
 
 
@@ -493,9 +480,85 @@ class UpdateChannelVersion(FrozenModel):
     )
 
 
-class UpdateStateResponse(FrozenModel):
-    """Everything a client reads about the workspace's updates. The files are answered as they are on disk."""
+class UpdateRunModel(FrozenModel):
+    """The run a client shows: the one under way, or the last one for as long as its outcome or its note has not
+    been dismissed."""
 
+    started_at: float | None = Field(
+        description="The run's start, seconds since the epoch, which is the name a dismissal gives the run: sent "
+        "back exactly as read. For a chat that has recorded no run yet it is when the chat was made. Null while "
+        "the chat is still being created, and for a record with no readable start, which nothing can dismiss"
+    )
+    chat_agent_name: str = Field(description="The name of the run's chat; '' while it is being created")
+    chat_id: str = Field(description="That chat's id, for opening it; '' when it is unknown, or the chat is gone")
+    is_chat_gone: bool = Field(description="Whether the run's chat was deleted, so there is no chat left to open")
+    started_by: UpdateStartedBy | None = Field(
+        description="Whether a schedule or a start now began the run; null when nothing recorded it"
+    )
+    target_ref: str = Field(
+        description="The version the run aims at; '' for a run no start or schedule of the workspace's began"
+    )
+    override_ref: str = Field(description="The version the user named for the run; '' when it aims at the channel's")
+    is_holding: bool = Field(
+        description="Whether the run waits on a hold its lead recorded, for the user's go-ahead; false for a run "
+        "that waits because its lead sits idle"
+    )
+    hold_detail: str = Field(description="One line naming what a recorded hold waits on; '' otherwise")
+    verdict: UpdateVerdict | None = Field(
+        description="How the run ended; null while it goes, once the user dismissed its outcome, and for a verdict "
+        "this template does not know"
+    )
+    verdict_detail: str = Field(description="One line about the verdict; '' when verdict is null")
+    in_place_compatible_ref: str = Field(
+        description="On REFUSED or NEEDS_RECREATION, the newest version that could still be applied in place; '' "
+        "when the run named none, or verdict is null"
+    )
+    updated_to: str = Field(
+        description="The version a run that landed left the workspace on, until the user dismisses that note; '' "
+        "otherwise. The note and the outcome are dismissed apart"
+    )
+
+
+class UpdateStartFailureModel(FrozenModel):
+    """The last accepted start that made no chat."""
+
+    attempt_id: str = Field(description="The attempt, which the start answered, and which a dismissal names")
+    code: UpdateStartFailureCode = Field(description="Why no chat was made")
+    detail: str = Field(description="What the create said, or '' when it said nothing")
+
+
+class UpdateScheduleModel(FrozenModel):
+    """The armed schedule."""
+
+    target_ref: str = Field(description="The version the scheduled update goes to: the one named, else the ceiling")
+    override_ref: str = Field(description="The version the user named; '' when the schedule follows the channel's")
+    is_auto_armed: bool = Field(description="Whether auto-update armed it, rather than the user")
+    window_opens_at: float | None = Field(
+        description="When the window the update may start in opens, seconds since the epoch: the one open now "
+        "(a moment in the past), else the next. Null for a schedule that holds no window, which starts nothing"
+    )
+    window_closes_at: float | None = Field(description="When that window closes; null with window_opens_at")
+    last_skip_reason: UpdateSkipReason | None = Field(
+        description="Why the last window closed without the update starting; null when it did not, and for a "
+        "reason this template does not know"
+    )
+
+
+class UpdateStateResponse(FrozenModel):
+    """Everything a client reads about the workspace's updates, as the workspace works it out when asked.
+
+    What the update is doing (``activity``, ``run``, ``start_failure``, ``schedule``, ``needs_sign_in``) is the
+    workspace's own reading of its files and its agents, so every client is told the same. Whether an update is
+    on offer is left to the client, which compares ``installed_version`` with ``channel_version``.
+    """
+
+    as_of: float = Field(
+        description="When the workspace worked this answer out, by its own clock, seconds since the epoch. Of two "
+        "answers the later is the newer, so a client keeps the later and drops a read that a write overtook"
+    )
+    installed_version: str = Field(
+        description="The version of the workspace's checkout, as the status route answers it; '' when it names none"
+    )
     settings: UpdateSettingsModel | None = Field(
         description="The update settings the workspace holds; null when no client has written any"
     )
@@ -503,74 +566,90 @@ class UpdateStateResponse(FrozenModel):
         description="The version the settings' channel is on, as the workspace last read it; null when it has read "
         "nothing for that channel. The workspace reads it at most once an hour, and this read does not"
     )
-    schedule: dict[str, object] | None = Field(description="The armed schedule's file; null when none is armed")
-    run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
-    last_dispatch: dict[str, object] | None = Field(description="The record of the update chat last created")
-    run_chat_id: str | None = Field(
-        description="The id of the chat the run record names, looked up when the last dispatch does not name it: '' "
-        "when the workspace lists no such chat, null when there was nothing to look up or the agents could not be read"
+    activity: UpdateActivity = Field(
+        description="What an update run is doing. IDLE: none is in flight. STARTING: a start was accepted and its "
+        "chat is being created. RUNNING: the chat exists and is preparing. WAITING: the run's lead waits on the "
+        "user, on a hold it recorded or because it and its worker sit idle. APPLYING: the update is landing. "
+        "FINISHING: it landed and the lead is finishing its checks. STALLED: the run has no verdict and nothing "
+        "will carry it on, until its lead is back, it is dismissed, or an update starts"
     )
-    is_signed_in: bool | None = Field(
-        description="Whether an AI account is signed in; null unless asked (check_sign_in=1) or the schedule's skip "
-        "says none was"
+    run: UpdateRunModel | None = Field(
+        description="The run under way, or the last run while its outcome or its note is not dismissed; null when "
+        "there is nothing of a run to show"
     )
-    skipped_target: dict[str, object] | None = Field(description="The skipped-version file; null when none")
-    dismissals: dict[str, object] | None = Field(description="The dismissals file; null when none")
+    start_failure: UpdateStartFailureModel | None = Field(
+        description="The last accepted start when it made no chat; null once it is dismissed, a chat is made or a "
+        "run begins, and for a start refused for want of a signed-in account while needs_sign_in tells it"
+    )
+    schedule: UpdateScheduleModel | None = Field(description="The armed schedule; null when none is armed")
+    needs_sign_in: bool = Field(
+        description="Whether a start, an arm or a scheduled start found no AI account signed in, and none is "
+        "signed in now"
+    )
+    is_update_skipped: bool = Field(description="Whether the user skipped the version the channel is on")
+    will_self_arm: bool = Field(
+        description="Whether the workspace's dispatcher arms the update to the channel's version by itself within "
+        "its next minute, so a client need not offer it"
+    )
+    is_backup_configured: bool = Field(description="Whether the workspace holds backup credentials")
+    allowed_actions: tuple[UpdateAction, ...] = Field(
+        description="What a client may ask as things stand. START and SCHEDULE: no run is in flight and none "
+        "waits on a decision (SCHEDULE also needs cron). CANCEL_SCHEDULE: a schedule is armed. SKIP: the channel's "
+        "version is read and not skipped. DISMISS_OUTCOME: a verdict, a stalled run or a failed start is showing. "
+        "DISMISS_NOTE: run.updated_to is showing"
+    )
+    run_record: dict[str, object] | None = Field(
+        description="The latest run's own record, as it is on disk; null when there is none. For a client that "
+        "follows an apply, which reads when the apply last moved"
+    )
     last_start: UpdateStartAttempt | None = Field(description="The last start attempt; null when there was none")
+
+
+class UpdateOutcomeResponse(FrozenModel):
+    """What starting an update or arming a schedule came to.
+
+    ``outcome`` is one of ``STARTING``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``, ``NO_CRON`` and
+    ``TOO_OLD_TO_UPDATE``; a later template may add one. A request that left its version or its window to the
+    workspace may also be answered ``NO_CHANNEL_VERSION`` (the workspace has read no version for its release
+    channel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).
+    """
+
+    outcome: str = Field(description="What the request came to")
+    detail: str = Field(default="", description="One line about it")
+    attempt_id: str = Field(
+        default="", description="The start attempt a STARTING began (or one already under way); '' otherwise"
+    )
+    state: UpdateStateResponse = Field(description="The workspace's updates as the request left them")
 
 
 class UpdateScheduleRefreshedResponse(FrozenModel):
     """What refreshing the schedule answers."""
 
     is_armed: bool = Field(description="Whether a schedule is armed; a refresh does nothing when none is")
-    schedule: dict[str, object] | None = Field(description="The schedule file as the refresh left it")
+    state: UpdateStateResponse = Field(description="The workspace's updates as the refresh left them")
 
 
 class UpdateScheduleCancelledResponse(FrozenModel):
     """What cancelling the schedule answers."""
 
     is_cancelled: bool = Field(description="Whether there was a schedule to cancel")
+    state: UpdateStateResponse = Field(description="The workspace's updates as the cancel left them")
 
 
 class UpdateSkippedResponse(FrozenModel):
     """What skipping a version answers."""
 
     is_cancelled: bool = Field(description="Whether there was a schedule to cancel")
-    skipped_target: dict[str, object] = Field(description="The skipped-version file as it now stands")
+    state: UpdateStateResponse = Field(description="The workspace's updates as the skip left them")
 
 
-class UpdateDismissalsResponse(FrozenModel):
+class UpdateDismissedResponse(FrozenModel):
     """What recording a dismissal answers."""
 
-    dismissals: dict[str, object] | None = Field(description="The dismissals file as it now stands; null when none")
+    state: UpdateStateResponse = Field(description="The workspace's updates as the dismissal left them")
 
 
-class UpdateLivenessAgent(FrozenModel):
-    """One of the workspace's agents, as the observer's event file lists it."""
+class UpdateSettingsWrittenResponse(FrozenModel):
+    """What storing the update settings answers; the settings as stored are the state's."""
 
-    name: str = Field(description="The agent's name")
-    state: str = Field(description="Its lifecycle state as mngr reports it; '' when the file does not say")
-    agent_id: str = Field(description="Its id")
-    chat_id: str = Field(description="The chat it takes messages for, when it is labelled with one; '' otherwise")
-
-
-class UpdateBusyChat(FrozenModel):
-    """One chat waiting on background tasks."""
-
-    chat_id: str = Field(description="The chat")
-    agent_id: str = Field(description="The chat's active agent's id; '' when unknown")
-    agent_name: str = Field(description="The chat's active agent's name; '' when unknown")
-    is_busy: bool = Field(description="Whether a task still pending will start the agent's next turn")
-
-
-class UpdateLivenessResponse(FrozenModel):
-    """What tells whether a running update is still alive, in one answer."""
-
-    run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
-    agents: tuple[UpdateLivenessAgent, ...] | None = Field(
-        description="The workspace's agents; null when they could not be read, which a caller counts as alive"
-    )
-    busy_chats: tuple[UpdateBusyChat, ...] = Field(description="The chats waiting on background tasks")
-    is_watchdog_installed: bool = Field(
-        description="Whether the dispatcher's cron line is installed, so a stopped lead is brought back"
-    )
+    state: UpdateStateResponse = Field(description="The workspace's updates as the write left them")

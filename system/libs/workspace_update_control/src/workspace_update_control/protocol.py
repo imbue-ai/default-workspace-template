@@ -16,6 +16,10 @@ DISMISSALS_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/dismissals.json"
 # library reads it; the dispatcher a desktop ships does not.
 LAST_START_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/last-start.json"
 
+# That a start or an arm was refused because no AI account was signed in, and when: what every client reads the
+# workspace as needing a sign-in by, until one is seen. Only this library reads it.
+SIGN_IN_REFUSAL_FILE_PATH: Final[str] = f"{UPDATE_STATE_DIR}/sign-in-refusal.json"
+
 # What a workspace that arms its own updates keeps, each in a file only this library writes. A desktop from
 # before these files ships a program that reads none of them.
 # The update settings a client wrote: the release channel, where its file is read from, whether updates are armed

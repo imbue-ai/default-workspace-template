@@ -788,39 +788,32 @@
         "title": "TimezoneResponse",
         "type": "object"
       },
-      "UpdateBusyChat": {
-        "additionalProperties": false,
-        "description": "One chat waiting on background tasks.",
-        "properties": {
-          "agent_id": {
-            "description": "The chat's active agent's id; '' when unknown",
-            "title": "Agent Id",
-            "type": "string"
-          },
-          "agent_name": {
-            "description": "The chat's active agent's name; '' when unknown",
-            "title": "Agent Name",
-            "type": "string"
-          },
-          "chat_id": {
-            "description": "The chat",
-            "title": "Chat Id",
-            "type": "string"
-          },
-          "is_busy": {
-            "description": "Whether a task still pending will start the agent's next turn",
-            "title": "Is Busy",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "chat_id",
-          "agent_id",
-          "agent_name",
-          "is_busy"
+      "UpdateAction": {
+        "description": "Something a client may ask of the workspace's updates as they stand.",
+        "enum": [
+          "START",
+          "SCHEDULE",
+          "CANCEL_SCHEDULE",
+          "SKIP",
+          "DISMISS_OUTCOME",
+          "DISMISS_NOTE"
         ],
-        "title": "UpdateBusyChat",
-        "type": "object"
+        "title": "UpdateAction",
+        "type": "string"
+      },
+      "UpdateActivity": {
+        "description": "What an update run is doing, as far as the workspace can tell.",
+        "enum": [
+          "IDLE",
+          "STARTING",
+          "RUNNING",
+          "WAITING",
+          "APPLYING",
+          "FINISHING",
+          "STALLED"
+        ],
+        "title": "UpdateActivity",
+        "type": "string"
       },
       "UpdateChannelVersion": {
         "additionalProperties": false,
@@ -878,7 +871,7 @@
       },
       "UpdateDismissalsRequest": {
         "additionalProperties": false,
-        "description": "Which run's note or outcome the user dismissed, by the run's start.",
+        "description": "What the user put away: a run's note or outcome, named by the run's start as the read answers it\n(``run.started_at``, sent back as it was read), or a start that made no chat, named by its attempt.",
         "properties": {
           "note_run_started_at": {
             "anyOf": [
@@ -905,144 +898,48 @@
             "default": null,
             "description": "The start of the run whose outcome was dismissed, seconds since the epoch",
             "title": "Outcome Run Started At"
+          },
+          "start_failure_attempt_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The attempt of the failed start that was dismissed (start_failure.attempt_id); one that is no longer the last attempt records nothing",
+            "title": "Start Failure Attempt Id"
           }
         },
         "title": "UpdateDismissalsRequest",
         "type": "object"
       },
-      "UpdateDismissalsResponse": {
+      "UpdateDismissedResponse": {
         "additionalProperties": false,
         "description": "What recording a dismissal answers.",
         "properties": {
-          "dismissals": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The dismissals file as it now stands; null when none",
-            "title": "Dismissals"
-          }
-        },
-        "required": [
-          "dismissals"
-        ],
-        "title": "UpdateDismissalsResponse",
-        "type": "object"
-      },
-      "UpdateLivenessAgent": {
-        "additionalProperties": false,
-        "description": "One of the workspace's agents, as the observer's event file lists it.",
-        "properties": {
-          "agent_id": {
-            "description": "Its id",
-            "title": "Agent Id",
-            "type": "string"
-          },
-          "chat_id": {
-            "description": "The chat it takes messages for, when it is labelled with one; '' otherwise",
-            "title": "Chat Id",
-            "type": "string"
-          },
-          "name": {
-            "description": "The agent's name",
-            "title": "Name",
-            "type": "string"
-          },
           "state": {
-            "description": "Its lifecycle state as mngr reports it; '' when the file does not say",
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the dismissal left them"
           }
         },
         "required": [
-          "name",
-          "state",
-          "agent_id",
-          "chat_id"
+          "state"
         ],
-        "title": "UpdateLivenessAgent",
-        "type": "object"
-      },
-      "UpdateLivenessResponse": {
-        "additionalProperties": false,
-        "description": "What tells whether a running update is still alive, in one answer.",
-        "properties": {
-          "agents": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/UpdateLivenessAgent"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The workspace's agents; null when they could not be read, which a caller counts as alive",
-            "title": "Agents"
-          },
-          "busy_chats": {
-            "description": "The chats waiting on background tasks",
-            "items": {
-              "$ref": "#/components/schemas/UpdateBusyChat"
-            },
-            "title": "Busy Chats",
-            "type": "array"
-          },
-          "is_watchdog_installed": {
-            "description": "Whether the dispatcher's cron line is installed, so a stopped lead is brought back",
-            "title": "Is Watchdog Installed",
-            "type": "boolean"
-          },
-          "run": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The latest run's record; null when there is none",
-            "title": "Run"
-          }
-        },
-        "required": [
-          "run",
-          "agents",
-          "busy_chats",
-          "is_watchdog_installed"
-        ],
-        "title": "UpdateLivenessResponse",
+        "title": "UpdateDismissedResponse",
         "type": "object"
       },
       "UpdateOutcomeResponse": {
         "additionalProperties": false,
-        "description": "What starting an update or arming a schedule came to.\n\n``outcome`` is one of ``STARTING``, ``CREATED``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``,\n``CHAT_APP_UNREACHABLE``, ``CREATE_FAILED``, ``NO_CRON`` and ``TOO_OLD_TO_UPDATE``; a later template may add one.\nA request that left its version or its window to the workspace may also be answered ``NO_CHANNEL_VERSION`` (the\nworkspace has read no version for its release channel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).",
+        "description": "What starting an update or arming a schedule came to.\n\n``outcome`` is one of ``STARTING``, ``ARMED``, ``ALREADY_RUNNING``, ``NEEDS_SIGN_IN``, ``NO_CRON`` and\n``TOO_OLD_TO_UPDATE``; a later template may add one. A request that left its version or its window to the\nworkspace may also be answered ``NO_CHANNEL_VERSION`` (the workspace has read no version for its release\nchannel) or ``NO_UPDATE_SETTINGS`` (it holds no update settings).",
         "properties": {
           "attempt_id": {
             "default": "",
             "description": "The start attempt a STARTING began (or one already under way); '' otherwise",
             "title": "Attempt Id",
-            "type": "string"
-          },
-          "chat_agent_name": {
-            "default": "",
-            "description": "The update's chat an ALREADY_RUNNING names; '' otherwise",
-            "title": "Chat Agent Name",
-            "type": "string"
-          },
-          "chat_id": {
-            "default": "",
-            "description": "That chat's id, for opening it; '' when unknown",
-            "title": "Chat Id",
             "type": "string"
           },
           "detail": {
@@ -1056,7 +953,58 @@
             "title": "Outcome",
             "type": "string"
           },
-          "run_started_at": {
+          "state": {
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the request left them"
+          }
+        },
+        "required": [
+          "outcome",
+          "state"
+        ],
+        "title": "UpdateOutcomeResponse",
+        "type": "object"
+      },
+      "UpdateRunModel": {
+        "additionalProperties": false,
+        "description": "The run a client shows: the one under way, or the last one for as long as its outcome or its note has not\nbeen dismissed.",
+        "properties": {
+          "chat_agent_name": {
+            "description": "The name of the run's chat; '' while it is being created",
+            "title": "Chat Agent Name",
+            "type": "string"
+          },
+          "chat_id": {
+            "description": "That chat's id, for opening it; '' when it is unknown, or the chat is gone",
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "hold_detail": {
+            "description": "One line naming what a recorded hold waits on; '' otherwise",
+            "title": "Hold Detail",
+            "type": "string"
+          },
+          "in_place_compatible_ref": {
+            "description": "On REFUSED or NEEDS_RECREATION, the newest version that could still be applied in place; '' when the run named none, or verdict is null",
+            "title": "In Place Compatible Ref",
+            "type": "string"
+          },
+          "is_chat_gone": {
+            "description": "Whether the run's chat was deleted, so there is no chat left to open",
+            "title": "Is Chat Gone",
+            "type": "boolean"
+          },
+          "is_holding": {
+            "description": "Whether the run waits on a hold its lead recorded, for the user's go-ahead; false for a run that waits because its lead sits idle",
+            "title": "Is Holding",
+            "type": "boolean"
+          },
+          "override_ref": {
+            "description": "The version the user named for the run; '' when it aims at the channel's",
+            "title": "Override Ref",
+            "type": "string"
+          },
+          "started_at": {
             "anyOf": [
               {
                 "type": "number"
@@ -1065,29 +1013,63 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "When an ALREADY_RUNNING run began, seconds since the epoch; null when unsaid",
-            "title": "Run Started At"
+            "description": "The run's start, seconds since the epoch, which is the name a dismissal gives the run: sent back exactly as read. For a chat that has recorded no run yet it is when the chat was made. Null while the chat is still being created, and for a record with no readable start, which nothing can dismiss",
+            "title": "Started At"
           },
-          "schedule": {
+          "started_by": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdateStartedBy"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "The schedule file as arming left it; null for a start",
-            "title": "Schedule"
+            "description": "Whether a schedule or a start now began the run; null when nothing recorded it"
+          },
+          "target_ref": {
+            "description": "The version the run aims at; '' for a run no start or schedule of the workspace's began",
+            "title": "Target Ref",
+            "type": "string"
+          },
+          "updated_to": {
+            "description": "The version a run that landed left the workspace on, until the user dismisses that note; '' otherwise. The note and the outcome are dismissed apart",
+            "title": "Updated To",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the run ended; null while it goes, once the user dismissed its outcome, and for a verdict this template does not know"
+          },
+          "verdict_detail": {
+            "description": "One line about the verdict; '' when verdict is null",
+            "title": "Verdict Detail",
+            "type": "string"
           }
         },
         "required": [
-          "outcome"
+          "started_at",
+          "chat_agent_name",
+          "chat_id",
+          "is_chat_gone",
+          "started_by",
+          "target_ref",
+          "override_ref",
+          "is_holding",
+          "hold_detail",
+          "verdict",
+          "verdict_detail",
+          "in_place_compatible_ref",
+          "updated_to"
         ],
-        "title": "UpdateOutcomeResponse",
+        "title": "UpdateRunModel",
         "type": "object"
       },
       "UpdateScheduleCancelledResponse": {
@@ -1098,12 +1080,83 @@
             "description": "Whether there was a schedule to cancel",
             "title": "Is Cancelled",
             "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the cancel left them"
           }
         },
         "required": [
-          "is_cancelled"
+          "is_cancelled",
+          "state"
         ],
         "title": "UpdateScheduleCancelledResponse",
+        "type": "object"
+      },
+      "UpdateScheduleModel": {
+        "additionalProperties": false,
+        "description": "The armed schedule.",
+        "properties": {
+          "is_auto_armed": {
+            "description": "Whether auto-update armed it, rather than the user",
+            "title": "Is Auto Armed",
+            "type": "boolean"
+          },
+          "last_skip_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateSkipReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the last window closed without the update starting; null when it did not, and for a reason this template does not know"
+          },
+          "override_ref": {
+            "description": "The version the user named; '' when the schedule follows the channel's",
+            "title": "Override Ref",
+            "type": "string"
+          },
+          "target_ref": {
+            "description": "The version the scheduled update goes to: the one named, else the ceiling",
+            "title": "Target Ref",
+            "type": "string"
+          },
+          "window_closes_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When that window closes; null with window_opens_at",
+            "title": "Window Closes At"
+          },
+          "window_opens_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the window the update may start in opens, seconds since the epoch: the one open now (a moment in the past), else the next. Null for a schedule that holds no window, which starts nothing",
+            "title": "Window Opens At"
+          }
+        },
+        "required": [
+          "target_ref",
+          "override_ref",
+          "is_auto_armed",
+          "window_opens_at",
+          "window_closes_at",
+          "last_skip_reason"
+        ],
+        "title": "UpdateScheduleModel",
         "type": "object"
       },
       "UpdateScheduleRefreshRequest": {
@@ -1180,23 +1233,14 @@
             "title": "Is Armed",
             "type": "boolean"
           },
-          "schedule": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The schedule file as the refresh left it",
-            "title": "Schedule"
+          "state": {
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the refresh left them"
           }
         },
         "required": [
           "is_armed",
-          "schedule"
+          "state"
         ],
         "title": "UpdateScheduleRefreshedResponse",
         "type": "object"
@@ -1366,6 +1410,33 @@
         "title": "UpdateSettingsModel",
         "type": "object"
       },
+      "UpdateSettingsWrittenResponse": {
+        "additionalProperties": false,
+        "description": "What storing the update settings answers; the settings as stored are the state's.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the write left them"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "UpdateSettingsWrittenResponse",
+        "type": "object"
+      },
+      "UpdateSkipReason": {
+        "description": "Why an update window closed without its scheduled run starting.",
+        "enum": [
+          "UPDATE_IN_FLIGHT",
+          "LEASE_HELD",
+          "NEEDS_SIGN_IN",
+          "DISPATCH_FAILED",
+          "WINDOW_CLOSED"
+        ],
+        "title": "UpdateSkipReason",
+        "type": "string"
+      },
       "UpdateSkipRequest": {
         "additionalProperties": false,
         "description": "The version the user chose to skip for this workspace.",
@@ -1398,16 +1469,14 @@
             "title": "Is Cancelled",
             "type": "boolean"
           },
-          "skipped_target": {
-            "additionalProperties": true,
-            "description": "The skipped-version file as it now stands",
-            "title": "Skipped Target",
-            "type": "object"
+          "state": {
+            "$ref": "#/components/schemas/UpdateStateResponse",
+            "description": "The workspace's updates as the skip left them"
           }
         },
         "required": [
           "is_cancelled",
-          "skipped_target"
+          "state"
         ],
         "title": "UpdateSkippedResponse",
         "type": "object"
@@ -1485,6 +1554,42 @@
         "title": "UpdateStartAttempt",
         "type": "object"
       },
+      "UpdateStartFailureCode": {
+        "description": "Why a start that was accepted made no chat.",
+        "enum": [
+          "CREATE_FAILED",
+          "CHAT_APP_UNREACHABLE"
+        ],
+        "title": "UpdateStartFailureCode",
+        "type": "string"
+      },
+      "UpdateStartFailureModel": {
+        "additionalProperties": false,
+        "description": "The last accepted start that made no chat.",
+        "properties": {
+          "attempt_id": {
+            "description": "The attempt, which the start answered, and which a dismissal names",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/components/schemas/UpdateStartFailureCode",
+            "description": "Why no chat was made"
+          },
+          "detail": {
+            "description": "What the create said, or '' when it said nothing",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "code",
+          "detail"
+        ],
+        "title": "UpdateStartFailureModel",
+        "type": "object"
+      },
       "UpdateStartRequest": {
         "additionalProperties": false,
         "description": "The values an update started now runs with. Each one left out is the workspace's own.",
@@ -1526,10 +1631,36 @@
         "title": "UpdateStartRequest",
         "type": "object"
       },
+      "UpdateStartedBy": {
+        "description": "How an update run was started.",
+        "enum": [
+          "SCHEDULED",
+          "IMMEDIATE"
+        ],
+        "title": "UpdateStartedBy",
+        "type": "string"
+      },
       "UpdateStateResponse": {
         "additionalProperties": false,
-        "description": "Everything a client reads about the workspace's updates. The files are answered as they are on disk.",
+        "description": "Everything a client reads about the workspace's updates, as the workspace works it out when asked.\n\nWhat the update is doing (``activity``, ``run``, ``start_failure``, ``schedule``, ``needs_sign_in``) is the\nworkspace's own reading of its files and its agents, so every client is told the same. Whether an update is\non offer is left to the client, which compares ``installed_version`` with ``channel_version``.",
         "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/UpdateActivity",
+            "description": "What an update run is doing. IDLE: none is in flight. STARTING: a start was accepted and its chat is being created. RUNNING: the chat exists and is preparing. WAITING: the run's lead waits on the user, on a hold it recorded or because it and its worker sit idle. APPLYING: the update is landing. FINISHING: it landed and the lead is finishing its checks. STALLED: the run has no verdict and nothing will carry it on, until its lead is back, it is dismissed, or an update starts"
+          },
+          "allowed_actions": {
+            "description": "What a client may ask as things stand. START and SCHEDULE: no run is in flight and none waits on a decision (SCHEDULE also needs cron). CANCEL_SCHEDULE: a schedule is armed. SKIP: the channel's version is read and not skipped. DISMISS_OUTCOME: a verdict, a stalled run or a failed start is showing. DISMISS_NOTE: run.updated_to is showing",
+            "items": {
+              "$ref": "#/components/schemas/UpdateAction"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "as_of": {
+            "description": "When the workspace worked this answer out, by its own clock, seconds since the epoch. Of two answers the later is the newer, so a client keeps the later and drops a read that a write overtook",
+            "title": "As Of",
+            "type": "number"
+          },
           "channel_version": {
             "anyOf": [
               {
@@ -1541,43 +1672,20 @@
             ],
             "description": "The version the settings' channel is on, as the workspace last read it; null when it has read nothing for that channel. The workspace reads it at most once an hour, and this read does not"
           },
-          "dismissals": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The dismissals file; null when none",
-            "title": "Dismissals"
+          "installed_version": {
+            "description": "The version of the workspace's checkout, as the status route answers it; '' when it names none",
+            "title": "Installed Version",
+            "type": "string"
           },
-          "is_signed_in": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Whether an AI account is signed in; null unless asked (check_sign_in=1) or the schedule's skip says none was",
-            "title": "Is Signed In"
+          "is_backup_configured": {
+            "description": "Whether the workspace holds backup credentials",
+            "title": "Is Backup Configured",
+            "type": "boolean"
           },
-          "last_dispatch": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The record of the update chat last created",
-            "title": "Last Dispatch"
+          "is_update_skipped": {
+            "description": "Whether the user skipped the version the channel is on",
+            "title": "Is Update Skipped",
+            "type": "boolean"
           },
           "last_start": {
             "anyOf": [
@@ -1590,7 +1698,23 @@
             ],
             "description": "The last start attempt; null when there was none"
           },
+          "needs_sign_in": {
+            "description": "Whether a start, an arm or a scheduled start found no AI account signed in, and none is signed in now",
+            "title": "Needs Sign In",
+            "type": "boolean"
+          },
           "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateRunModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run under way, or the last run while its outcome or its note is not dismissed; null when there is nothing of a run to show"
+          },
+          "run_record": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -1600,33 +1724,19 @@
                 "type": "null"
               }
             ],
-            "description": "The latest run's record; null when there is none",
-            "title": "Run"
-          },
-          "run_chat_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The id of the chat the run record names, looked up when the last dispatch does not name it: '' when the workspace lists no such chat, null when there was nothing to look up or the agents could not be read",
-            "title": "Run Chat Id"
+            "description": "The latest run's own record, as it is on disk; null when there is none. For a client that follows an apply, which reads when the apply last moved",
+            "title": "Run Record"
           },
           "schedule": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdateScheduleModel"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "The armed schedule's file; null when none is armed",
-            "title": "Schedule"
+            "description": "The armed schedule; null when none is armed"
           },
           "settings": {
             "anyOf": [
@@ -1639,34 +1749,56 @@
             ],
             "description": "The update settings the workspace holds; null when no client has written any"
           },
-          "skipped_target": {
+          "start_failure": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdateStartFailureModel"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "The skipped-version file; null when none",
-            "title": "Skipped Target"
+            "description": "The last accepted start when it made no chat; null once it is dismissed, a chat is made or a run begins, and for a start refused for want of a signed-in account while needs_sign_in tells it"
+          },
+          "will_self_arm": {
+            "description": "Whether the workspace's dispatcher arms the update to the channel's version by itself within its next minute, so a client need not offer it",
+            "title": "Will Self Arm",
+            "type": "boolean"
           }
         },
         "required": [
+          "as_of",
+          "installed_version",
           "settings",
           "channel_version",
-          "schedule",
+          "activity",
           "run",
-          "last_dispatch",
-          "run_chat_id",
-          "is_signed_in",
-          "skipped_target",
-          "dismissals",
+          "start_failure",
+          "schedule",
+          "needs_sign_in",
+          "is_update_skipped",
+          "will_self_arm",
+          "is_backup_configured",
+          "allowed_actions",
+          "run_record",
           "last_start"
         ],
         "title": "UpdateStateResponse",
         "type": "object"
+      },
+      "UpdateVerdict": {
+        "description": "How an update run ended, as the update-self skill records it.",
+        "enum": [
+          "UPDATED",
+          "UPDATED_WITH_REBUILD_ITEMS",
+          "ALREADY_CURRENT",
+          "NEEDS_RECREATION",
+          "STUCK",
+          "REFUSED",
+          "NEEDS_DECISION"
+        ],
+        "title": "UpdateVerdict",
+        "type": "string"
       },
       "WorkspaceApp": {
         "additionalProperties": false,
@@ -2763,7 +2895,7 @@
     },
     "/api/workspace/update": {
       "get": {
-        "description": "The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the\nupdate settings, and the version the settings' release channel is on as the workspace last read it.\n\nNothing in the workspace changes, and the feed is not read. ``?check_sign_in=1`` also asks whether an AI\naccount is signed in.",
+        "description": "What the workspace's update is doing, and what a client compares to tell whether one is on offer.\n\nThe workspace works the answer out when asked, from its own files, its own agents and its own clock: whether\na run is starting, under way, waiting on the user, applying, finishing or stalled, the run itself with what\nthe user dismissed of it already left out, a start that made no chat, the armed schedule, whether an account\nneeds signing in, and what a client may ask next. Beside that it answers the version of the checkout, the\nupdate settings, and the version the settings' release channel is on as the workspace last read it.\n\nNothing in the workspace changes, and the feed is not read. Every write of the update routes answers the same\ndocument under ``state``, as the write left it.",
         "operationId": "get_api_workspace_update",
         "responses": {
           "200": {
@@ -2827,13 +2959,13 @@
             "description": "Error"
           }
         },
-        "summary": "The schedule, the last run, the last dispatch, the last start, the skipped version, the dismissals, the update settings, and the version the settings' release channel is on as the workspace last read it.",
+        "summary": "What the workspace's update is doing, and what a client compares to tell whether one is on offer.",
         "x-workspace-operation": "update.read"
       }
     },
     "/api/workspace/update/dismissals": {
       "post": {
-        "description": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's.",
+        "description": "Record what the user put away, so that no client shows it again: a run's note or its outcome, by the run's\nstart (a later run's start covers an earlier one's), or a start that made no chat, by its attempt.",
         "operationId": "post_api_workspace_update_dismissals",
         "requestBody": {
           "content": {
@@ -2850,7 +2982,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UpdateDismissalsResponse"
+                  "$ref": "#/components/schemas/UpdateDismissedResponse"
                 }
               }
             },
@@ -2907,78 +3039,8 @@
             "description": "Error"
           }
         },
-        "summary": "Record a run's note or outcome as dismissed, by the run's start; a later run's start covers an earlier one's.",
+        "summary": "Record what the user put away, so that no client shows it again: a run's note or its outcome, by the run's start (a later run's start covers an earlier one's), or a start that made no chat, by its attempt.",
         "x-workspace-operation": "update.dismiss"
-      }
-    },
-    "/api/workspace/update/liveness": {
-      "get": {
-        "description": "What tells whether a running update is still alive: the run record, the workspace's agents with their states\nand chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed.",
-        "operationId": "get_api_workspace_update_liveness",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateLivenessResponse"
-                }
-              }
-            },
-            "description": "Success"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRouteError"
-                }
-              }
-            },
-            "description": "Failure"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "What tells whether a running update is still alive: the run record, the workspace's agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed.",
-        "x-workspace-operation": "update.liveness.read"
       }
     },
     "/api/workspace/update/schedule": {
@@ -3129,7 +3191,7 @@
         "x-workspace-operation": "update.schedule.refresh"
       },
       "put": {
-        "description": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.\n\nAnswers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the schedule. Arming\nagain starts the dispatcher's record of earlier attempts over.\n\nA value the request leaves out is the workspace's own, which the dispatcher then keeps current in the\nschedule: the version its release channel is on (NO_CHANNEL_VERSION when it has read none and the user named\nnone), the window of its update settings (NO_UPDATE_SETTINGS when it holds none), and whether it holds backup\ncredentials.",
+        "description": "Arm the schedule: a scheduled update starts inside the window, by the dispatcher cron runs every minute.\n\nAnswers the outcome (ARMED, or why not: NO_CRON, TOO_OLD_TO_UPDATE, NEEDS_SIGN_IN) and the workspace's updates\nas the request left them. Arming again starts the dispatcher's record of earlier attempts over.\n\nA value the request leaves out is the workspace's own, which the dispatcher then keeps current in the\nschedule: the version its release channel is on (NO_CHANNEL_VERSION when it has read none and the user named\nnone), the window of its update settings (NO_UPDATE_SETTINGS when it holds none), and whether it holds backup\ncredentials.",
         "operationId": "put_api_workspace_update_schedule",
         "requestBody": {
           "content": {
@@ -3209,7 +3271,7 @@
     },
     "/api/workspace/update/settings": {
       "put": {
-        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the settings as stored. The dispatcher reads them every minute: it reads the channel's version at\nmost once an hour, and while arming is on it arms an update to that version by itself. The hours are read in\nthe timezone the workspace records, and in UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.\n\nThe cron line that runs the dispatcher is written again too, so that it runs this workspace's own.",
+        "description": "Store the update settings: the release channel the workspace follows, where that channel's file is read\nfrom, whether the workspace arms its own updates, and the hours of the owner's day one may start in.\n\nAnswers the workspace's updates as the write left them, whose ``settings`` are the settings as stored. The\ndispatcher reads them every minute: it reads the channel's version at most once an hour, and while arming is\non it arms an update to that version by itself. The hours are read in the timezone the workspace records, and\nin UTC when it records none.\n\nThe workspace's own answer on arming and its own hours win over the account's. A request that leaves one of\nthose three out keeps the stored value, and one that sends null clears it.\n\nThe cron line that runs the dispatcher is written again too, so that it runs this workspace's own.",
         "operationId": "put_api_workspace_update_settings",
         "requestBody": {
           "content": {
@@ -3226,7 +3288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UpdateSettingsModel"
+                  "$ref": "#/components/schemas/UpdateSettingsWrittenResponse"
                 }
               }
             },
@@ -3369,7 +3431,7 @@
     },
     "/api/workspace/update/start": {
       "post": {
-        "description": "Start an update now.\n\nThe quick checks come first (the update-self skill is there, an account is signed in, no update is running or\nabout to), and one that fails is answered 200 with its outcome. Otherwise the update's chat begins to be\ncreated and the answer is 202 with the outcome STARTING and an attempt id; the read route's ``last_start``\nholds the attempt's outcome once it has one.\n\nA request that names no ``ceiling`` updates to the version the workspace's release channel is on, and is\nanswered NO_CHANNEL_VERSION when the workspace has read none and the user named none.",
+        "description": "Start an update now.\n\nThe quick checks come first (the update-self skill is there, an account is signed in, no update is running or\nabout to), and one that fails is answered 200 with its outcome. Otherwise the update's chat begins to be\ncreated and the answer is 202 with the outcome STARTING and an attempt id. The state then reads STARTING until\nthe chat is made, and a start that made none is its ``start_failure``, under that attempt id.\n\nA request that names no ``ceiling`` updates to the version the workspace's release channel is on, and is\nanswered NO_CHANNEL_VERSION when the workspace has read none and the user named none.",
         "operationId": "post_api_workspace_update_start",
         "requestBody": {
           "content": {
