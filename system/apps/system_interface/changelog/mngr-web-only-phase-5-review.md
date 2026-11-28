@@ -4,7 +4,7 @@
 
 - The files are no longer answered: `schedule` (now the derived schedule), `last_dispatch`, `run_chat_id`, `is_signed_in`, `skipped_target` and `dismissals` are gone, and `?check_sign_in=1` with them. The run's own record is answered as `run_record`, and `last_start` stays, for the Imbue Studio desktop's backend.
 
-- Every write of the update routes answers that state under `state`, as the write left it: the start, the arm, the refresh, the cancel, the skip, the dismissals and the settings write. The start and the arm no longer answer `chat_agent_name`, `chat_id`, `run_started_at` or `schedule`, the skip no longer answers `skipped_target`, and the settings write answers the settings as the state's `settings`.
+- Every write of the update routes answers that state under `state`, as the write left it: the start, the arm, the refresh, the cancel, the skip, the dismissals and the settings write. The start and the arm no longer answer `chat_agent_name`, `chat_id`, `run_started_at` or `schedule`, the refresh no longer answers `schedule`, the skip no longer answers `skipped_target`, the dismissals no longer answer `dismissals`, and the settings write answers the settings as the state's `settings`.
 
 - `POST /api/workspace/update/dismissals` also takes `start_failure_attempt_id`, which puts a failed start away for every client.
 
