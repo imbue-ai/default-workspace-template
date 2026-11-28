@@ -50,7 +50,9 @@ A permission request is the exception: it is kept for the user when no device
 is connected, so filing one needs no device. On a permission request for a
 device's own feature (its files, a command on it) the header says which device
 the request is for. Take the ID from `/devices`: a request for an ID no device
-has is shown to nobody.
+has is shown to nobody. Send the header on every permission request, with the
+device's ID or `*`: one filed without it may be shown on every device or only
+on the most recently seen one.
 
 If the request is routed to more than one device, the response has the
 `X-Latchkey-Multiple-Desktops-Matched: true` header and its body has this form:
