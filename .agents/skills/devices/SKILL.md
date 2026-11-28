@@ -46,6 +46,11 @@ Unknown device IDs, or no known device at all, result in a 503 response.
 Requests to third-party services ignore the header. For a local workspace,
 there is only one device and the header has no effect.
 
+A permission request is the exception: the workspace's machine keeps it
+itself, so filing one needs no device to be connected. On a permission request
+for a device's own feature (its files, a command on it) the header says which
+device the request is for.
+
 If the request is routed to more than one device, the response has the
 `X-Latchkey-Multiple-Desktops-Matched: true` header and its body has this form:
 
