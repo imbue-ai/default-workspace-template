@@ -22,6 +22,10 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: Claude chats tell progress updates from reasoning with mngr_claude's common-transcript rule, matching `mngr transcript`.
 - Changed: Latchkey is bumped to 3.26.0 (was 3.22.1).
 - Changed: The `datalib` skill covers a workspace's first datalib use and checking a synced copy is complete before answering from it, deferring per-source details to `datalib-step help agent` and `datalib-step help <type>`.
+- Changed: The `datalib` skill and the Datalib app use `data/.mirrored-data` as the data root (was `data/.skills/datalib/Default`); the libraries folder and the launcher's move of old stores into `Default` are gone.
+- Changed: The first run's provider page opens its dialogs as white cards like Imbue Studio's first-run sign-in, has a smaller Next button, and leaving it (Next or Skip) focuses the chat's message box.
+- Changed: The chat composer lines up with the agent's message bubbles (phone layout too), and a reply's suggestion line reads "Disable" and "Hide", naming each in full in a tooltip.
+- Changed: Share in a window's title bar and window menu uses Studio's outlined forward-arrow icon (`shareIcon()`), with tighter spacing.
 
 ### Fixed
 
@@ -29,6 +33,7 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Fixed: Stopping an Antigravity chat or switching it to another provider no longer fails with "'AntigravityHarnessSession' object has no attribute '_handed_back_tokens'".
 - Fixed: The list of connected people no longer gets stuck out of date when a profile loads as someone arrives or leaves, and someone briefly shown as gone reappears as soon as their window checks in.
 - Fixed: The `datalib` skill, its install script and the Datalib launcher use `/home/user` instead of `$HOME`, so an agent shell (`HOME=/root`) no longer writes configs the Datalib app can't read or installs a second copy of the binaries.
+- Fixed: Maximizing, fullscreening or restoring a window no longer leaves its size menu open over the moved window's controls.
 
 ## [minds-v0.10.7] - 2026-11-23
 
