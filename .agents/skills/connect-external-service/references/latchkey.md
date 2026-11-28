@@ -99,12 +99,13 @@ change can take a moment to propagate. Do not ask the user to tell you when they
 respond; mention that you will continue once they do if you need to wait.
 
 Do not forget to use the `-H 'X-Latchkey-Device: *'` option, so that the request
-is for every one of the user’s devices. The workspace's machine keeps the
-request whether or not an Imbue Studio app is connected, and the user sees it
-the next time they open one, so a request you filed is filed: wait for the
-message. A machine set up by an older Imbue Studio answers a filing made while
-no app is connected with an HTTP 503 that says the request was kept; that
-request is filed too, and is not to be filed again.
+is for every one of the user’s devices. A request is kept for the user whether
+or not an Imbue Studio app is connected, and they see it the next time they
+open one, so a request you filed is filed: wait for the message. A workspace
+whose machine does not keep requests itself answers a filing made while no app
+can be reached with an HTTP 503 that says the request was kept, or with the
+502 of a device that did not answer. An answer of either kind that carries a
+`request_id` is a request that was filed too: do not file it again.
 
 ### File exactly one permission request per tool call
 
