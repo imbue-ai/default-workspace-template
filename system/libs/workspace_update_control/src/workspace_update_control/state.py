@@ -5,15 +5,14 @@ writes answers with. It is worked out from the workspace's own files, its own li
 clock, so every client that asks is told the same thing, whichever of them started the run and however long ago
 it opened. Nothing is written, and the feed is not read.
 
-The decisions are the ones the dispatcher and the start of an update make for themselves (``is_run_in_flight``,
-``pending_dispatched_chat``, ``decide_watchdog_action``, ``should_auto_arm``), so what a client is told is under way
-is what a start would find under way.
+The decisions are the ones the dispatcher and the start of an update make for themselves, so what a client is told
+is under way is what a start would find under way.
 
 What it leaves to a client is whether an update is on offer at all: that compares the installed version with the
 channel's against release floors only a current client knows, so the read answers the two versions and the
 settings, and no verdict on them.
 
-The two things that can take long are asked only when the answer turns on them. The chats waiting on background
+The things that can take long are asked only when the answer turns on them. The chats waiting on background
 tasks are read (a program of up to a minute) only for a lead that has sat idle long enough to read as waiting,
 and whether an account is signed in only while a refusal for want of one is on record.
 """
@@ -701,7 +700,7 @@ def read_update_state(
     read_installed_ref: Callable[[], str],
 ) -> UpdateState:
     """What the workspace's update is doing at ``now``, with what a client compares to tell whether one is on
-    offer. Each of the three readers is asked once at most, and only when the answer turns on it, but for the
+    offer. Each of the readers is asked once at most, and only when the answer turns on it, but for the
     version of the checkout, which is part of every answer."""
     run = read_json_object(RUN_RECORD_PATH)
     dispatch = read_json_object(LAST_DISPATCH_FILE_PATH)
