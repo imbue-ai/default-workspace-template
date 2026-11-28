@@ -8,6 +8,6 @@
 
 - `POST /api/workspace/update/dismissals` also takes `start_failure_attempt_id`, which puts a failed start away for every client.
 
-- `GET /api/workspace/update/liveness` is unchanged.
+- `GET /api/workspace/update/liveness` and its operation `update.liveness.read` are removed: the update read answers what the route was read for.
 
 `workspace_routes_api.json` describes the new shapes.

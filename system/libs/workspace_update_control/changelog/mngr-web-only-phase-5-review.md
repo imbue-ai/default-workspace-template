@@ -8,6 +8,8 @@ The workspace says what its update is doing, so a client no longer works that ou
 
 - A start or an arm that finds no AI account signed in leaves `sign-in-refusal.json`, which the next one that finds an account takes away. A start records the version the user named for it in `last-start.json`, and `dismiss_start_failure` records there that the user put a failed start away.
 
+- `control.read_liveness` is removed with the route it answered (`GET /api/workspace/update/liveness`): the state answers what it was read for.
+
 - `dispatcher` gains `unrecorded_dispatch`, `next_window` and `watchdog_idle_ticks`, and `arming` gains `armable_target`, which the dispatcher's minute and the read share.
 
 No file a released desktop reads or writes changes format.

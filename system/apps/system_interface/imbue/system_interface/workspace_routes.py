@@ -77,7 +77,6 @@ from workspace_update_control.control import arm_schedule
 from workspace_update_control.control import cancel_schedule
 from workspace_update_control.control import dismiss_start_failure
 from workspace_update_control.control import install_cron_entry
-from workspace_update_control.control import read_liveness
 from workspace_update_control.control import record_dismissals
 from workspace_update_control.control import refresh_schedule
 from workspace_update_control.control import skip_target
@@ -143,7 +142,6 @@ from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_RE
 from imbue.system_interface.workspace_api_models import OPERATION_SUGGESTIONS_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_TIMEZONE_WRITE
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_DISMISS
-from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_LIVENESS_READ
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_READ
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_CANCEL
 from imbue.system_interface.workspace_api_models import OPERATION_UPDATE_SCHEDULE_REFRESH
@@ -161,12 +159,9 @@ from imbue.system_interface.workspace_api_models import SuggestionSettingsReques
 from imbue.system_interface.workspace_api_models import SuggestionSettingsResponse
 from imbue.system_interface.workspace_api_models import TimezoneRequest
 from imbue.system_interface.workspace_api_models import TimezoneResponse
-from imbue.system_interface.workspace_api_models import UpdateBusyChat
 from imbue.system_interface.workspace_api_models import UpdateChannelVersion
 from imbue.system_interface.workspace_api_models import UpdateDismissalsRequest
 from imbue.system_interface.workspace_api_models import UpdateDismissedResponse
-from imbue.system_interface.workspace_api_models import UpdateLivenessAgent
-from imbue.system_interface.workspace_api_models import UpdateLivenessResponse
 from imbue.system_interface.workspace_api_models import UpdateOutcomeResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleCancelledResponse
 from imbue.system_interface.workspace_api_models import UpdateScheduleRefreshRequest
@@ -202,7 +197,6 @@ UPDATE_START_ROUTE: Final[str] = f"{UPDATE_ROUTE}/start"
 UPDATE_SCHEDULE_ROUTE: Final[str] = f"{UPDATE_ROUTE}/schedule"
 UPDATE_SKIP_ROUTE: Final[str] = f"{UPDATE_ROUTE}/skip"
 UPDATE_DISMISSALS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/dismissals"
-UPDATE_LIVENESS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/liveness"
 UPDATE_SETTINGS_ROUTE: Final[str] = f"{UPDATE_ROUTE}/settings"
 SUGGESTIONS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/suggestions"
 APPS_ROUTE: Final[str] = f"{WORKSPACE_ROUTE_PREFIX}/apps"
@@ -837,32 +831,6 @@ def dismiss_update() -> ResponseReturnValue:
     return model_response(UpdateDismissedResponse(state=_update_state()))
 
 
-def read_update_liveness() -> ResponseReturnValue:
-    """What tells whether a running update is still alive: the run record, the workspace's agents with their states
-    and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed."""
-    _admit(is_changing_the_workspace=False)
-    _require_workspace_root_as_working_directory()
-    liveness = read_liveness(
-        live_cron_dir=str(get_state().live_cron_directory),
-        agent_environment=AgentEnvironment(),
-        read_agents=_observed_agents_reader(),
-    )
-    agents = liveness["agents"]
-    busy_chats = liveness["busy_chats"]
-    return model_response(
-        UpdateLivenessResponse(
-            run=liveness["run"] if isinstance(liveness["run"], dict) else None,
-            agents=tuple(UpdateLivenessAgent.model_validate(agent) for agent in agents)
-            if isinstance(agents, list)
-            else None,
-            busy_chats=tuple(UpdateBusyChat.model_validate(row) for row in busy_chats)
-            if isinstance(busy_chats, list)
-            else (),
-            is_watchdog_installed=liveness["is_watchdog_installed"] is True,
-        )
-    )
-
-
 # Suggestions
 
 
@@ -1013,7 +981,6 @@ WORKSPACE_ROUTE_TABLE: RouteTable = {
     ("DELETE", UPDATE_SCHEDULE_ROUTE): _route(None, UpdateScheduleCancelledResponse),
     ("POST", UPDATE_SKIP_ROUTE): _route(UpdateSkipRequest, UpdateSkippedResponse),
     ("POST", UPDATE_DISMISSALS_ROUTE): _route(UpdateDismissalsRequest, UpdateDismissedResponse),
-    ("GET", UPDATE_LIVENESS_ROUTE): _route(None, UpdateLivenessResponse),
     ("PUT", UPDATE_SETTINGS_ROUTE): _route(UpdateSettingsModel, UpdateSettingsWrittenResponse),
     ("GET", SUGGESTIONS_ROUTE): _route(None, SuggestionSettingsResponse, other_answers=_SUGGESTIONS_FAILURES),
     ("PUT", SUGGESTIONS_ROUTE): _route(
@@ -1043,7 +1010,6 @@ WORKSPACE_OPERATION_BY_ROUTE: Final[dict[tuple[str, str], str]] = {
     ("DELETE", UPDATE_SCHEDULE_ROUTE): OPERATION_UPDATE_SCHEDULE_CANCEL,
     ("POST", UPDATE_SKIP_ROUTE): OPERATION_UPDATE_SKIP,
     ("POST", UPDATE_DISMISSALS_ROUTE): OPERATION_UPDATE_DISMISS,
-    ("GET", UPDATE_LIVENESS_ROUTE): OPERATION_UPDATE_LIVENESS_READ,
     ("PUT", UPDATE_SETTINGS_ROUTE): OPERATION_UPDATE_SETTINGS_WRITE,
     ("GET", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_READ,
     ("PUT", SUGGESTIONS_ROUTE): OPERATION_SUGGESTIONS_WRITE,
@@ -1068,7 +1034,6 @@ _VIEW_BY_ROUTE: Final[dict[tuple[str, str], Callable[[], ResponseReturnValue]]] 
     ("DELETE", UPDATE_SCHEDULE_ROUTE): cancel_update_schedule,
     ("POST", UPDATE_SKIP_ROUTE): skip_update,
     ("POST", UPDATE_DISMISSALS_ROUTE): dismiss_update,
-    ("GET", UPDATE_LIVENESS_ROUTE): read_update_liveness,
     ("PUT", UPDATE_SETTINGS_ROUTE): write_update_settings_of_workspace,
     ("GET", SUGGESTIONS_ROUTE): read_suggestions,
     ("PUT", SUGGESTIONS_ROUTE): write_suggestions,

@@ -28,7 +28,6 @@ from workspace_update_control.testing import write_event_lines
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.workspace_routes import UPDATE_DISMISSALS_ROUTE
-from imbue.system_interface.workspace_routes import UPDATE_LIVENESS_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SCHEDULE_ROUTE
 from imbue.system_interface.workspace_routes import UPDATE_SETTINGS_ROUTE
@@ -408,33 +407,6 @@ def test_a_dismissal_names_a_run_by_the_start_the_read_answered_and_the_state_th
         "note_run_started_at": started_at,
         "outcome_run_started_at": started_at,
     }
-
-
-def test_liveness_answers_the_agents_the_observers_file_lists_and_null_when_it_cannot_vouch_for_them(
-    update_workspace_app: Flask, staged_update_workspace: StagedUpdateWorkspace
-) -> None:
-    client = _client(update_workspace_app)
-    staged_update_workspace.write_state("run.json", {"chat_agent_name": "Update-to-v0110", "started_at": 5.0})
-
-    without_events = client.get(UPDATE_LIVENESS_ROUTE).get_json()
-
-    assert without_events["agents"] is None
-    assert without_events["run"] == {"chat_agent_name": "Update-to-v0110", "started_at": 5.0}
-    assert without_events["is_watchdog_installed"] is False
-
-    lead = observed_agent("agent-lead", "Update-to-v0110", "RUNNING", chat_id="chat-of-the-update")
-    write_event_lines(
-        staged_update_workspace.events_path, [full_state_line([observed_services_agent(), lead], time.time())]
-    )
-
-    with_events = client.get(UPDATE_LIVENESS_ROUTE).get_json()
-
-    assert {
-        "name": "Update-to-v0110",
-        "state": "RUNNING",
-        "agent_id": "agent-lead",
-        "chat_id": "chat-of-the-update",
-    } in (with_events["agents"])
 
 
 def test_a_request_whose_values_are_out_of_range_is_refused_and_arms_nothing(

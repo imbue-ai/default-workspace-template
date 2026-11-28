@@ -40,7 +40,6 @@ from workspace_update_control.dispatcher import (
     UPDATE_PROGRAM_SCHEMA,
     AgentEnvironment,
     CreateResult,
-    busy_chat_rows,
     chat_id_of,
     create_result,
     create_update_chat,
@@ -907,33 +906,3 @@ def run_chat_id(
         return None
     lead = find_run_lead(agents, run)
     return chat_id_of(lead) if lead is not None else ""
-
-
-def read_liveness(
-    *,
-    live_cron_dir: str,
-    agent_environment: AgentEnvironment,
-    read_agents: AgentsReader,
-) -> dict[str, object]:
-    """What tells whether a running update is still alive: the run record, the workspace's agents with their
-    states and chats (None when they cannot be read), the chats with a live background task, and whether the
-    dispatcher's cron line is installed."""
-    agents = read_agents()
-    return {
-        "run": read_json_object(RUN_RECORD_PATH),
-        "agents": None
-        if agents is None
-        else [
-            {
-                "name": str(agent.get("name") or ""),
-                "state": str(agent.get("state") or ""),
-                "agent_id": str(agent.get("id") or ""),
-                "chat_id": str(agent.get("labels.chat_id") or ""),
-            }
-            for agent in agents
-        ],
-        "busy_chats": busy_chat_rows(agent_environment),
-        "is_watchdog_installed": os.path.isfile(
-            os.path.join(live_cron_dir, DISPATCHER_CRON_NAME)
-        ),
-    }

@@ -12,8 +12,8 @@ where supervisord runs the shell and where the cron line changes to.
 
 - `control` -- one function per operation of the shell's update routes
   (`/api/workspace/update...`): start an update now, arm the schedule, refresh the
-  client's values in an armed schedule, cancel it, skip a version, record a
-  dismissal, and read what tells whether a running update is alive.
+  client's values in an armed schedule, cancel it, skip a version, and record a
+  dismissal.
   A client may name the values an update runs with (the newest version it knows, a
   version the user typed, the window in UTC, whether it holds backup credentials),
   and one it leaves out is the workspace's own: the version its release channel is

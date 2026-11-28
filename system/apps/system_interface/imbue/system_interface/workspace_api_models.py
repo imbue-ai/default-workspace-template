@@ -53,7 +53,6 @@ OPERATION_UPDATE_SCHEDULE_CANCEL: Final[str] = "update.schedule.cancel"
 OPERATION_UPDATE_SCHEDULE_REFRESH: Final[str] = "update.schedule.refresh"
 OPERATION_UPDATE_SKIP: Final[str] = "update.skip"
 OPERATION_UPDATE_DISMISS: Final[str] = "update.dismiss"
-OPERATION_UPDATE_LIVENESS_READ: Final[str] = "update.liveness.read"
 OPERATION_UPDATE_SETTINGS_WRITE: Final[str] = "update.settings.write"
 OPERATION_SUGGESTIONS_READ: Final[str] = "suggestions.read"
 OPERATION_SUGGESTIONS_WRITE: Final[str] = "suggestions.write"
@@ -76,7 +75,6 @@ WORKSPACE_OPERATIONS: Final[tuple[str, ...]] = (
     OPERATION_UPDATE_SCHEDULE_REFRESH,
     OPERATION_UPDATE_SKIP,
     OPERATION_UPDATE_DISMISS,
-    OPERATION_UPDATE_LIVENESS_READ,
     OPERATION_UPDATE_SETTINGS_WRITE,
     OPERATION_SUGGESTIONS_READ,
     OPERATION_SUGGESTIONS_WRITE,
@@ -655,34 +653,3 @@ class UpdateSettingsWrittenResponse(FrozenModel):
     """What storing the update settings answers; the settings as stored are the state's."""
 
     state: UpdateStateResponse = Field(description="The workspace's updates as the write left them")
-
-
-class UpdateLivenessAgent(FrozenModel):
-    """One of the workspace's agents, as the observer's event file lists it."""
-
-    name: str = Field(description="The agent's name")
-    state: str = Field(description="Its lifecycle state as mngr reports it; '' when the file does not say")
-    agent_id: str = Field(description="Its id")
-    chat_id: str = Field(description="The chat it takes messages for, when it is labelled with one; '' otherwise")
-
-
-class UpdateBusyChat(FrozenModel):
-    """One chat waiting on background tasks."""
-
-    chat_id: str = Field(description="The chat")
-    agent_id: str = Field(description="The chat's active agent's id; '' when unknown")
-    agent_name: str = Field(description="The chat's active agent's name; '' when unknown")
-    is_busy: bool = Field(description="Whether a task still pending will start the agent's next turn")
-
-
-class UpdateLivenessResponse(FrozenModel):
-    """What tells whether a running update is still alive, in one answer."""
-
-    run: dict[str, object] | None = Field(description="The latest run's record; null when there is none")
-    agents: tuple[UpdateLivenessAgent, ...] | None = Field(
-        description="The workspace's agents; null when they could not be read, which a caller counts as alive"
-    )
-    busy_chats: tuple[UpdateBusyChat, ...] = Field(description="The chats waiting on background tasks")
-    is_watchdog_installed: bool = Field(
-        description="Whether the dispatcher's cron line is installed, so a stopped lead is brought back"
-    )

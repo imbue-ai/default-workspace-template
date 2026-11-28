@@ -355,7 +355,6 @@ A status without the member is a template from before the initial data, which ig
 | `update.schedule.cancel` | `DELETE /api/workspace/update/schedule` |
 | `update.skip` | `POST /api/workspace/update/skip` |
 | `update.dismiss` | `POST /api/workspace/update/dismissals` |
-| `update.liveness.read` | `GET /api/workspace/update/liveness` |
 | `update.settings.write` | `PUT /api/workspace/update/settings` |
 | `suggestions.read` | `GET /api/workspace/suggestions` |
 | `suggestions.write` | `PUT /api/workspace/suggestions` |
@@ -493,8 +492,6 @@ Agents that cannot be read count as there and working: a run is never called sta
 A start or an arm that finds no account signed in is put on record (`data/.state/update-apply/sign-in-refusal.json`), and a start records the version the user named for it in `last-start.json`, so `needs_sign_in` and a start under way read the same for every client.
 
 Every write of the update routes answers the same document under `state`, as the write left it, beside what the write itself came to (`outcome`, `detail` and `attempt_id` for a start or an arm, `is_armed` for a refresh, `is_cancelled` for a cancel or a skip). A client shows that and does not read again. Of two answers the one with the later `as_of` is the newer, so a read that was on its way when a write was answered is dropped, not put over it.
-
-`GET /api/workspace/update/liveness` still answers what a client used to work all this out from (the run record, the agents with their states and chats, the chats waiting on background tasks, and whether the dispatcher's cron line is installed), for the Imbue Studio desktop's backend, which follows a run to keep its recovery away from an apply.
 
 A read route changes nothing in the workspace, and reads no feed.
 The update routes act on the workspace the shell runs from, so they are refused with `NOT_AT_WORKSPACE_ROOT` when the shell's working directory is not the workspace root.
