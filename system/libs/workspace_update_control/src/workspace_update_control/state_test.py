@@ -887,6 +887,39 @@ def test_a_chat_made_with_no_id_yet_is_on_its_way_while_it_is_unlisted(
     assert (state.run.chat_id, state.run.is_chat_gone) == ("", False)
 
 
+def test_a_later_chat_under_the_runs_name_that_never_recorded_a_run_says_nothing_of_the_run(
+    staged: StagedUpdateWorkspace,
+) -> None:
+    """Update chats are named for their target, so a second try at a version makes a chat under the name of the
+    run on the record."""
+    staged.write_state(
+        "run.json",
+        {"chat_agent_name": _LEAD, "started_at": _NOW - 9000.0, "verdict": "STUCK"},
+    )
+    _write_dispatch(
+        staged,
+        _NOW - 3600.0,
+        chat_id="agent-later",
+        target_ref="minds-v0.9.9",
+        started_by="immediate",
+    )
+
+    state = _read(staged)
+
+    assert state.activity is UpdateActivity.IDLE
+    assert state.run is not None
+    assert (state.run.started_at, state.run.verdict) == (
+        _NOW - 9000.0,
+        UpdateVerdict.STUCK,
+    )
+    assert (
+        state.run.chat_id,
+        state.run.is_chat_gone,
+        state.run.target_ref,
+        state.run.started_by,
+    ) == ("", False, "", None)
+
+
 def test_a_chat_made_long_ago_that_never_recorded_a_run_is_no_run(
     staged: StagedUpdateWorkspace,
 ) -> None:
