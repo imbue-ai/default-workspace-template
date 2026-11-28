@@ -19,6 +19,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from screen.errors import InvalidScreenSizeError
+from screen.errors import ScreenServiceUnreachableError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
 from screen.primitives import APP_NAME
@@ -100,7 +101,8 @@ def own_chat_id() -> str | None:
     return os.environ.get("MINDS_CHAT_ID") or os.environ.get("MNGR_AGENT_ID")
 
 
-def _headers(is_identity_required: bool) -> dict[str, str]:
+def identity_headers() -> dict[str, str]:
+    """The JSON content type, and the caller's agent identity when it has one."""
     headers = {"Content-Type": "application/json"}
     chat_id = own_chat_id()
     if chat_id:
@@ -108,16 +110,22 @@ def _headers(is_identity_required: bool) -> dict[str, str]:
         name = os.environ.get("MNGR_AGENT_NAME")
         if name:
             headers[AGENT_NAME_HEADER] = name
-    elif is_identity_required:
+    return headers
+
+
+def _headers(is_identity_required: bool) -> dict[str, str]:
+    headers = identity_headers()
+    if is_identity_required and AGENT_ID_HEADER not in headers:
         _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync screen control ...` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
     return headers
 
 
-def request_service(method: str, path: str, body: dict[str, Any] | None, is_identity_required: bool) -> ServiceAnswer:
+def call_service(method: str, path: str, body: dict[str, Any] | None, headers: dict[str, str]) -> ServiceAnswer:
+    """One request to the Screen service; raises ``ScreenServiceUnreachableError`` when nothing answers."""
     url = service_url() + path
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method, headers=_headers(is_identity_required))
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read()
@@ -128,7 +136,20 @@ def request_service(method: str, path: str, body: dict[str, Any] | None, is_iden
         raw = e.read()
         return ServiceAnswer(status=e.code, body=parse_answer_body(raw, e.headers.get("Content-Type", "")), raw=raw)
     except urllib.error.URLError as e:
-        _err(f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?")
+        raise ScreenServiceUnreachableError(
+            f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?"
+        ) from e
+    except TimeoutError as e:
+        raise ScreenServiceUnreachableError(
+            f"the Screen service at {service_url()} did not answer within {_REQUEST_TIMEOUT_SECONDS:.0f}s"
+        ) from e
+
+
+def request_service(method: str, path: str, body: dict[str, Any] | None, is_identity_required: bool) -> ServiceAnswer:
+    try:
+        return call_service(method, path, body, _headers(is_identity_required))
+    except ScreenServiceUnreachableError as e:
+        _err(str(e))
         raise SystemExit(EXIT_NO_SERVICE) from e
 
 

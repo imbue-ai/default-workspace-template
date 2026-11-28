@@ -28,6 +28,7 @@ from screen.band_sweep import BandSweeper
 from screen.broadcast import ViewerBroadcaster
 from screen.browser_fleet import Browser
 from screen.browser_fleet import BrowserFleet
+from screen.cli_sessions import CliSessionReaper
 from screen.connect_info import ConnectInfoAggregator
 from screen.control import ScreenControl
 from screen.data_types import AcquireStatus
@@ -202,6 +203,7 @@ class ScreenService(MutableModel):
     _control: ScreenControl | None = PrivateAttr(default=None)
     _fleet: BrowserFleet | None = PrivateAttr(default=None)
     _band_sweeper: BandSweeper | None = PrivateAttr(default=None)
+    _cli_session_reaper: CliSessionReaper | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _sessions: dict[NekoSessionId, NekoSession] = PrivateAttr(default_factory=dict)
     _service_session: NekoSession | None = PrivateAttr(default=None)
@@ -236,9 +238,15 @@ class ScreenService(MutableModel):
     def attach_stack(self, stack: ScreenStack) -> None:
         self._stack = stack
 
-    def attach_fleet(self, fleet: BrowserFleet, band_sweeper: BandSweeper | None) -> None:
+    def attach_fleet(
+        self,
+        fleet: BrowserFleet,
+        band_sweeper: BandSweeper | None,
+        cli_session_reaper: CliSessionReaper | None,
+    ) -> None:
         self._fleet = fleet
         self._band_sweeper = band_sweeper
+        self._cli_session_reaper = cli_session_reaper
 
     @property
     def stack(self) -> ScreenStack:
@@ -412,6 +420,9 @@ class ScreenService(MutableModel):
         while not self._stop.wait(_REAP_INTERVAL_SECONDS):
             if self.stack.lifecycle == Lifecycle.RUNNING:
                 self.reap_disconnected_sessions(datetime.now(timezone.utc))
+            # Whatever the stack's state: a stopped stack's browsers are gone, and so is every use of their sessions.
+            if self._cli_session_reaper is not None:
+                self._cli_session_reaper.sweep()
 
     def reap_disconnected_sessions(self, now: datetime) -> int:
         """Delete every human session disconnected for ten minutes; returns how many went."""

@@ -8,11 +8,7 @@ Exit codes, which an agent branches on: 0 ok, 1 error, 2 preempted (a human has 
 3 busy (another agent holds it, or the browser is still starting), 4 timed out, 64 usage, 69 no service.
 """
 
-import json
-import os
 import threading
-import urllib.error
-import urllib.request
 from typing import Any
 from typing import Final
 
@@ -27,13 +23,13 @@ from screen.cli import EXIT_OK
 from screen.cli import EXIT_PREEMPTED
 from screen.cli import EXIT_TIMEOUT
 from screen.cli import EXIT_USAGE
+from screen.cli import call_service
+from screen.cli import identity_headers
 from screen.cli import open_screen_window
 from screen.cli import own_chat_id
-from screen.cli import service_url
+from screen.errors import ScreenServiceUnreachableError
 from screen.identity import AGENT_ID_HEADER
-from screen.identity import AGENT_NAME_HEADER
 
-_REQUEST_TIMEOUT_SECONDS: Final[float] = 90.0
 # ``new`` answers as soon as the browser is registered; the stack and Chromium come up behind it, so the attach
 # URL is polled for a while before the agent is told to come back.
 _ATTACH_ATTEMPTS: Final[int] = 120
@@ -54,30 +50,21 @@ def _err(message: str) -> None:
 
 def agent_headers() -> dict[str, str]:
     """The identity headers; a hard failure with no chat id to send (no null owner)."""
-    chat_id = own_chat_id()
-    if not chat_id:
+    headers = identity_headers()
+    if AGENT_ID_HEADER not in headers:
         _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync agentic-browser-fleet` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
-    headers = {AGENT_ID_HEADER: chat_id, "Content-Type": "application/json"}
-    name = os.environ.get("MNGR_AGENT_NAME")
-    if name:
-        headers[AGENT_NAME_HEADER] = name
     return headers
 
 
 def request(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
     """One JSON request to the Screen service; answers (status, body)."""
-    url = service_url() + path
-    data = json.dumps(body).encode() if body is not None else None
-    http_request = urllib.request.Request(url, data=data, method=method, headers=agent_headers())
     try:
-        with urllib.request.urlopen(http_request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
-            return response.status, _parse(response.read())
-    except urllib.error.HTTPError as e:
-        return e.code, _parse(e.read()) or {"detail": e.reason}
-    except urllib.error.URLError as e:
-        _err(f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?")
+        answer = call_service(method, path, body, agent_headers())
+    except ScreenServiceUnreachableError as e:
+        _err(str(e))
         raise SystemExit(EXIT_NO_SERVICE) from e
+    return answer.status, answer.body
 
 
 # CLEANUP: drop the ``error`` fallback once no Screen service that answers a refusal as ``{"error": ...}`` can
@@ -88,15 +75,6 @@ def refusal_reason(payload: dict[str, Any], fallback: str) -> str:
     """Why the service refused, in its own words: ``detail``, the shape of every refusal; ``error`` from a service
     not yet restarted on the typed routes; else ``fallback``."""
     return str(payload.get("detail") or payload.get("error") or fallback)
-
-
-@pure
-def _parse(raw: bytes) -> dict[str, Any]:
-    try:
-        parsed = json.loads(raw or b"{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 @pure

@@ -1,9 +1,12 @@
+import os
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.serving import make_server
 
 from mock_broker_test import FakeBroker
 from mock_chromium_test import FakeCdpConnector
@@ -17,7 +20,10 @@ from mock_window_tools_test import FakeWindowTools
 from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
 from screen.cdp_proxy import ProxyServer
+from screen.cli import ENV_SERVICE_URL
 from screen.connect_info import ConnectInfoAggregator
+from screen.primitives import AgentId
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
@@ -163,7 +169,7 @@ def service(
         on_chromium_processes_expected=lambda: None,
         on_browser_running=built.on_browser_running,
     )
-    built.attach_fleet(fleet, band_sweeper=None)
+    built.attach_fleet(fleet, band_sweeper=None, cli_session_reaper=None)
     stack = ScreenStack(
         supervisor=fake_supervisor,
         neko=fake_neko,
@@ -206,3 +212,48 @@ def app(service: ScreenService, tmp_path: Path) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+@pytest.fixture
+def served_screen(app: Flask, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """The service fixture's app on a real loopback listener, named to the CLI helpers by the environment; its URL."""
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    # A short poll keeps shutdown() from waiting out serve_forever's default half second.
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    serving.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    monkeypatch.setenv(ENV_SERVICE_URL, url)
+    yield url
+    server.shutdown()
+    serving.join()
+
+
+@pytest.fixture
+def fake_playwright_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A stand-in ``playwright-cli`` first on ``PATH``, in the directory this answers: each run appends its arguments
+    as one line to ``calls.log`` there, and ``detach`` fails while a ``fail-detach`` file exists there."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    script = bin_dir / PLAYWRIGHT_CLI_COMMAND
+    script.write_text(f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "{bin_dir}/calls.log"
+for arg in "$@"; do
+  if [ "$arg" = detach ] && [ -e "{bin_dir}/fail-detach" ]; then
+    echo "no such session" >&2
+    exit 1
+  fi
+done
+""")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return bin_dir
+
+
+@pytest.fixture
+def script_agent(monkeypatch: pytest.MonkeyPatch) -> AgentId:
+    """The agent a script run in this process speaks as: ``MNGR_AGENT_ID`` set, no chat id or name to override it."""
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.setenv("MNGR_AGENT_ID", "chat-script")
+    return AgentId("chat-script")

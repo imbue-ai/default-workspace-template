@@ -42,6 +42,10 @@ from screen.browser_manifest import ManifestStore
 from screen.cdp_client import WebSocketCdpConnector
 from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
+from screen.cli import ENV_SERVICE_URL
+from screen.cli_sessions import AbandonReason
+from screen.cli_sessions import CliSessionReaper
+from screen.cli_sessions import ProcCliSessions
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.events import EVENTS_RELATIVE_PATH
@@ -55,6 +59,7 @@ from screen.primitives import DISPLAY
 from screen.primitives import DISPLAY_SOCKET_PATH
 from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
+from screen.primitives import PLAYWRIGHT_CLI_COMMAND
 from screen.primitives import STACK_PROGRAMS
 from screen.proxy import NekoProxy
 from screen.routes import build_app
@@ -181,7 +186,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         on_chromium_processes_expected=lambda: None,
         on_browser_running=service.on_browser_running,
     )
-    service.attach_fleet(fleet, band_sweeper=None)
+    service.attach_fleet(fleet, band_sweeper=None, cli_session_reaper=None)
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,
@@ -481,6 +486,84 @@ def test_the_browser_command_opens_a_page_in_the_fleets_chromium(
         )
         assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
     finally:
+        server.shutdown()
+        serving.join()
+
+
+_DRIVEN_BROWSER_SCRIPT = Path(__file__).parent / "driven_browser_script.py"
+
+
+@pytest.mark.browser
+def test_a_scripts_browser_session_ends_with_its_block_and_a_killed_scripts_session_is_reaped(
+    running: _LiveService, tmp_path: Path
+) -> None:
+    """The ``driven_browser`` block leaves no ``playwright-cli`` daemon behind when its body finishes or raises; a
+    script killed inside the block does leave one, and the reaper ends it once a later attach supersedes its token,
+    with the browser still running."""
+    service, client = running.service, running.client
+    missing = describe_missing_browser_install()
+    if missing is not None:
+        pytest.skip(missing)
+    if shutil.which(PLAYWRIGHT_CLI_COMMAND) is None:
+        pytest.skip("playwright-cli is not installed")
+    answer = client.post("/launch/browser", json={})
+    assert answer.status_code == 200, answer.get_json()
+    browser = service.fleet.get(BrowserName("browser-1"))
+    assert wait_until(lambda: browser.is_running, 120.0), browser.lifecycle
+    server = make_server("127.0.0.1", 0, build_app(service, tmp_path / "static", NekoProxy()))
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    sessions = ProcCliSessions()
+    # A chat id or agent name inherited from the shell would make the script speak as someone other than chat-itest.
+    environment = {
+        **{key: value for key, value in os.environ.items() if key not in ("MINDS_CHAT_ID", "MNGR_AGENT_NAME")},
+        ENV_SERVICE_URL: f"http://127.0.0.1:{server.server_port}",
+        "MNGR_AGENT_ID": "chat-itest",
+    }
+
+    def live_session_names() -> set[str]:
+        return {session.session_name for session in sessions.attached_through(running.proxy_server)}
+
+    killed: subprocess.Popen[bytes] | None = None
+    try:
+        for mode, expected_exit in (("finish", 0), ("raise", 1)):
+            name_file = tmp_path / f"{mode}.name"
+            completed = subprocess.run(
+                [sys.executable, str(_DRIVEN_BROWSER_SCRIPT), mode, str(name_file)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+            assert completed.returncode == expected_exit, (mode, completed.stdout, completed.stderr)
+            session_name = name_file.read_text()
+            assert session_name.startswith("itest-")
+            # detach returns once the daemon acknowledges; its process exits a moment later.
+            assert wait_until(lambda name=session_name: name not in live_session_names(), 10.0), mode
+        orphan_file = tmp_path / "hang.name"
+        killed = subprocess.Popen(
+            [sys.executable, str(_DRIVEN_BROWSER_SCRIPT), "hang", str(orphan_file)], env=environment
+        )
+        assert wait_until(lambda: orphan_file.exists() and orphan_file.read_text() in live_session_names(), 60.0)
+        orphan_name = orphan_file.read_text()
+        killed.send_signal(signal.SIGKILL)
+        killed.wait(timeout=30)
+        assert orphan_name in live_session_names()
+        # Another attach supersedes the orphan's token, which is what lets the reaper end it.
+        attach = client.get("/browsers/browser-1/attach", headers={"X-Mngr-Agent-Id": "chat-itest"}).get_json()
+        assert attach["ok"] is True, attach
+        ended = CliSessionReaper(fleet=service.fleet, sessions=sessions).sweep()
+        assert [(session.session_name, reason) for session, reason in ended] == [
+            (orphan_name, AbandonReason.SUPERSEDED)
+        ]
+        assert orphan_name not in live_session_names()
+        assert browser.is_running
+    finally:
+        if killed is not None and killed.poll() is None:
+            killed.kill()
+            killed.wait(timeout=30)
+        client.post("/browsers/browser-1/release", headers={"X-Mngr-Agent-Id": "chat-itest"})
         server.shutdown()
         serving.join()
 

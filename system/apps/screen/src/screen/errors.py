@@ -74,6 +74,10 @@ class InvalidBrowserNameError(ScreenError, ValueError):
     """A string is not a browser name (see ``browser_names.is_valid_browser_name``)."""
 
 
+class InvalidSessionPurposeError(ScreenError, ValueError):
+    """A ``driven_browser`` purpose is not lowercase alphanumeric words joined by single dashes."""
+
+
 class InvalidStartUrlError(ScreenError, ValueError):
     """A start page is not an absolute http(s) URL with a host, or not one on this machine where that is required."""
 
@@ -105,3 +109,19 @@ class ChromiumStartError(ScreenError):
 
 class CdpError(ScreenError):
     """A CDP call returned an error payload, timed out, or could not be delivered."""
+
+
+class ScreenServiceUnreachableError(ScreenError):
+    """The Screen service did not answer at all (it is not running, or the address is wrong)."""
+
+
+class BrowserSessionError(ScreenError):
+    """A script's playwright-cli session on the Screen's browser could not be opened, driven or ended."""
+
+
+class BrowserUnavailableError(BrowserSessionError):
+    """The browser could not be reserved for a script: a human or another agent holds it, or it is not running."""
+
+    def __init__(self, status: str, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status

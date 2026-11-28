@@ -1,0 +1,3 @@
+- `playwright-cli` sessions left attached to the browser no longer hold memory for good. The Screen service's reap loop ends a session once a later attach has replaced its token, its browser has stopped, or it has sent nothing for 30 minutes while its agent does not hold the browser, and leaves the browser running. One workspace had 13 such sessions from an hourly sync, about 2.2 GB.
+
+- Scripts can drive the browser with `screen.browser_session.driven_browser`, a `with` block that reserves the browser, attaches a session only it uses, and detaches it and releases the browser however the block ends.
