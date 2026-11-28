@@ -66,7 +66,8 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
   invites them to the repository on GitHub. Never the app's dev repository
   (the `github-sync` skill), which has had no secret scan.
 - **Making a published app public later**, only when the user asks for
-  exactly that: "Making a published app public" in `references/results.md`.
+  exactly that: read "Making a published app public" in
+  `references/results.md`.
 - **Making it private again, or unpublishing**, is the user's to do on
   GitHub. `app-install uninstall` leaves an app's repositories alone.
 
