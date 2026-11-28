@@ -1178,8 +1178,6 @@ def test_the_command_runs_a_publish_step_by_step_and_names_each_refusal(
     assert run_git(published, ["rev-parse", "main"]) == pushed["published_commit"]
 
 
-# A stand-in for latchkey that logs each request and answers as GitHub does for a private repository: private
-# when it is read, public once it is changed.
 # A stand-in for latchkey that logs each request and answers a change to a repository's settings as GitHub
 # does once the repository is public.
 _LATCHKEY_MAKING_A_REPOSITORY_PUBLIC = """\

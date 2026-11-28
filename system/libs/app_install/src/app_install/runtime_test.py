@@ -74,7 +74,7 @@ def test_a_published_repository_is_created_private_when_asked(tmp_path: Path, mo
 
 
 # A stand-in for latchkey that logs each request and answers what GitHub says of one repository: the content of
-# the file beside it, whether the repository is read or changed.
+# the file beside it.
 _LATCHKEY_ANSWERING_FOR_ONE_REPOSITORY = """\
 directory="$(dirname "$0")"
 printf '%s\\n' "$*" >> "$directory/requests"
