@@ -28,12 +28,15 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
   everyone ("publicly", "open source", "so anyone can install it") make a
   public one, for good. When you cannot tell which they mean, ask at the scope
   gate. Never make anything public on a guess.
-- **Two gates only the user can pass.** The scope gate (step 3) comes before
-  anything is prepared, and the publish gate (step 6) before anything is
-  pushed. Each needs an explicit reply to THAT message: the original "publish
-  this", an earlier gate, and approving a GitHub permission do not count, and
-  your own checks are verification, not confirmation. End your turn after
-  sending each one.
+- **One gate only the user can pass.** The scope gate (step 3) comes before
+  anything is prepared, and their yes to it is the go-ahead to publish what
+  it described. It needs an explicit reply to THAT message: the original
+  "publish this" and approving a GitHub permission do not count. Ask again
+  only when what was prepared differs from what they approved (step 6).
+- **"Sync" or "back up" is not "publish".** Those words may mean the app's
+  dev repository, which follows the app by itself (the `github-sync` skill).
+  Ask which they mean before step 2: a version people can install, or a
+  private copy that stays current.
 - **Nothing leaves the workspace until step 7, and what goes is exactly what
   was scanned.** If any step before the push fails, nothing has left the
   workspace: fix the cause and run the step again, or stop and tell the user
@@ -62,8 +65,8 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 - **Sharing with particular people** is a private publish: the user then
   invites them to the repository on GitHub. Never the app's dev repository
   (the `github-sync` skill), which has had no secret scan.
-- **Making a published app public later**: read "Making a published app
-  public" in `references/results.md`. It needs the user's explicit yes.
+- **Making a published app public later**, only when the user asks for
+  exactly that: "Making a published app public" in `references/results.md`.
 - **Making it private again, or unpublishing**, is the user's to do on
   GitHub. `app-install uninstall` leaves an app's repositories alone.
 
@@ -75,7 +78,7 @@ with a `result` (`system/libs/app_install/README.md`, "Publishing an app").
 3. The scope gate. *Ends the turn:* wait for the user's reply.
 4. Get the version ready, in a background worker.
 5. Assemble and scan what will be published.
-6. The publish gate. *Ends the turn:* wait for the user's go-ahead.
+6. Check it is what the user approved. *Ends the turn* only when it differs.
 7. Push.
 8. Record it, and close out.
 
@@ -155,11 +158,14 @@ there):
 - who will be able to see it. **Private**: only they and the people they
   invite on GitHub. **Public**, only when they asked for that: anyone, for
   good, under the MIT license. When their request did not say which, ask here
-  and offer private as the default. On a later publish, say which it is now
+  and offer private as the default. On a later publish (`is_published` in
+  step 1) say which it is now, and never ask
   (`uv run --no-sync app-install publish visibility <name>`);
 - for a `modified` app: that this is their version of an app that came from
   `<upstream_url>`, published under their own account with a note of where it
-  came from.
+  came from;
+- that on their yes you will get it ready and publish it, with no further
+  question unless something turns out different from this.
 
 Then end your turn and wait for their reply.
 
@@ -195,38 +201,28 @@ less what `[publish] exclude` names) outside the workspace, runs the secret
 scan over it, and checks that the app stands alone there. Nothing is pushed.
 
 On `assembled`, go on: keep `version`, `paths`, `excluded_paths` and `needs`
-for the publish gate. On any other `result` (`secrets_found`,
+for step 6 and your final message. On any other `result` (`secrets_found`,
 `outside_skills_found`, `lock_check_failed`, `refused`), read "When
 assembling stops" in `references/results.md`, have the worker fix what it
 names, wait for its next report, and assemble again.
 
-## Step 6: The publish gate
+## Step 6: Check it is what the user approved
 
-Present the publish ONCE, in plain language:
+The user's yes at the scope gate covers what that message described. Go
+straight on to step 7 unless one of these holds:
 
-- the app's **name** and the **version**;
-- **what it contains**, from `paths`, as features ("the app itself, the weekly
-  digest it runs, the skill for adding sources"), and **what was left out**,
-  from `excluded_paths`;
-- **what whoever installs it will be asked for**, from `needs`: the
-  permissions, the secret values (what each is and where to get it), whether
-  it uses an AI model, anything it installs on their workspace, other apps it
-  expects, and what they will have to decide or change. Ask: "does that look
-  right and complete?" A gap here silently breaks the app for whoever
-  installs it;
-- the **README**, pasted as your message so it renders as a page
-  (`git show mngr/<slug>:system/apps/<package>/README.md`), asking
-  whether it reads like a good description of what they built. Say up front
-  that the button at its top shows as a plain link in chat;
-- the **address** it will have, `https://github.com/<owner>/<repo_name>`, and
-  once more who will be able to see it: private, or **public**, for anyone
-  and for good, under the MIT license.
+- the worker settled on **another version** than the one agreed;
+- the app **took in a skill**, or leaves something out, that the scope gate
+  did not name;
+- the worker's report names something it **could not determine**, or
+  something personal it left in and only noted;
+- `needs` asks whoever installs the app for something the user would not
+  expect (a permission, a secret value).
 
-Then end your turn and wait for their explicit go-ahead to THIS message.
-
-Changes they ask for go to the worker, followed by step 5 again, and the
-changed part shown again. If they call it off, stop here: follow "When the
-user calls it off" in `references/results.md`, and say nothing was published.
+Only then: say in ONE message what differs and what it means, end your turn,
+and wait for their go-ahead to it. Changes they ask for go to the worker,
+then step 5 again. If they call it off, follow "When the user calls it off"
+in `references/results.md`, and say nothing was published.
 
 ## Step 7: Push
 
@@ -236,7 +232,7 @@ uv run --no-sync app-install publish push <name> --repo-name <repo_name> [--publ
 
 (`--repo-name` only on a first publish under another name.) A first publish
 creates the repository, private unless `--public` is given: pass it only when
-the user chose public at the gates. A later publish leaves who can see the
+the user chose public at the scope gate. A later publish leaves who can see the
 repository as it is, and is refused with `--public`. The assembled tree is
 then pushed as ONE commit on top of the last published one, with the tag
 `v<version>`, never forced.
@@ -273,8 +269,10 @@ rm -rf data/.tasks/launch-task/<slug>
 If you are stopping after a failure instead, leave the worker and its branch
 for a retry.
 
-In your final message give the user the app's address (`published_repo_url`)
-and the two ways to take it: the "Open in Imbue Studio" button on that page,
-or pasting the address into a workspace's chat. For a private one, say that
-only people they invite to it on GitHub can do either. Mention any follow-up
-from step 7.
+In your final message say what went up: the version, what whoever installs
+it will be asked for (`needs`), and the app's address (`published_repo_url`),
+where its description page is. Give the two ways to take the app: the "Open
+in Imbue Studio" button on that page, or pasting the address into a
+workspace's chat. For a private one, say that only people they invite to it
+on GitHub can do either. Mention any follow-up from step 7, and that a
+change they want goes out as the next version.

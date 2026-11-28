@@ -114,8 +114,8 @@ assemble is what gets pushed.
   skills" and "A skill something else uses too" in
   `skills-the-app-needs.md`, decide what becomes of the skill, and have the
   worker take it in or take the line out. A skill the app takes in changes
-  what the user agreed to at the scope gate, so tell them before the publish
-  gate.
+  what the user agreed to at the scope gate, so step 6 of SKILL.md stops and
+  tells them before anything is pushed.
 - `lock_check_failed`: the app's dependencies do not resolve on their own.
   Have the worker make the lock again in the app's directory (`uv lock`) and
   commit it. If it still fails, the app depends on something that exists only
@@ -204,16 +204,25 @@ in the repository went through the secret scan before it was pushed.
 uv run --no-sync app-install publish visibility <name>
 ```
 
-says who can see it now (`is_private`). To make it public:
+says who can see it (`is_private`), as this workspace last set it: it reads
+the app's record and asks GitHub nothing, so it does not know of a change the
+user made on GitHub themselves. `is_private` is `null` for an app published
+before the record kept this: say you cannot tell, and that the repository's
+page on GitHub shows it.
 
-1. Tell the user, in one message, that anyone will be able to see and install
-   the app from then on, that this cannot be taken back by you (they can make
-   it private again themselves on GitHub, but copies people took stay out
-   there), and that it is shared under the MIT license. End your turn and
-   wait for an explicit yes to THAT message.
+To make it public:
+
+1. Do it only on a request that says so in words that mean everyone ("make
+   it public", "open source it", "let anyone install it"). That request is
+   the go-ahead: do not ask again. When the words could mean something less
+   (sharing with a few people is an invitation on GitHub, not a public
+   repository), ask which they mean, and end your turn.
 2. Run `uv run --no-sync app-install publish visibility <name> --make-public`.
-   `is_changed` is true when it was private and is public now. On `refused`,
-   `detail` says why: an app that was never published has no repository to
-   make public, and a missing GitHub permission is requested as "Asking for
-   the access" in `github-access.md` says.
-3. Give the user the address again.
+   `is_changed` is true when this made it public. On `refused`, `detail` says
+   why: an app that was never published has no repository to make public,
+   and a missing GitHub permission is requested as "Asking for the access" in
+   `github-access.md` says. `problems` names a record that was not saved:
+   the repository IS public, so run the command again, which only saves it.
+3. Tell the user it is public now, at the same address: anyone can see and
+   install it, under the MIT license. They can make it private again
+   themselves on GitHub, though copies people took by then stay out there.
