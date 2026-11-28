@@ -54,6 +54,11 @@ has is shown to nobody. Send the header on every permission request, with the
 device's ID or `*`: one filed without it may be shown on every device or only
 on the most recently seen one.
 
+A read of `/permissions/self` without the header may be answered with the
+workspace's grants for third-party services alone, and with no device
+connected. To read what a device shares with you, send the header with that
+device's ID.
+
 If the request is routed to more than one device, the response has the
 `X-Latchkey-Multiple-Desktops-Matched: true` header and its body has this form:
 
