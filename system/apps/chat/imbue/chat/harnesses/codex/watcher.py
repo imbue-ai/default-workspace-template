@@ -37,13 +37,16 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.codex.ledger import write_codex_model_state
 from imbue.chat.harnesses.codex.live_user_turns import was_live_user_turn_broadcast
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.codex.session_parser import ImageGenerationCalls
 from imbue.chat.harnesses.codex.session_parser import SETTINGS_CHANGED_SINCE_TURN_KEY
 from imbue.chat.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import assistant_message_event_id
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
+from imbue.chat.harnesses.codex.session_parser import parse_line_image
 from imbue.chat.harnesses.codex.session_parser import parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_reasoning_detail
+from imbue.chat.harnesses.event_images import EventImage
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.model import model_state_path
@@ -139,6 +142,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
     _current_path: Path | None
     _byte_offset: int
     _tool_name_by_call_id: dict[str, str]
+    _image_generation: ImageGenerationCalls
     _turn_state: dict[str, Any]
     # The byte span of the most recent reasoning line with readable summaries, waiting to
     # attach to the NEXT assistant event (a reasoning item precedes its output in the
@@ -162,6 +166,8 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         # call_id -> tool_name, so a function_call_output can recover its tool name from
         # the earlier function_call. Persists across files (a resume re-serialises them).
         self._tool_name_by_call_id = {}
+        # Which calls return generated images; persists across files like the tool names.
+        self._image_generation = ImageGenerationCalls()
         # The EFFECTIVE per-turn model/effort, updated from each rollout ``turn_context``
         # line: the model the turn actually RAN on. The watcher reflects it into the
         # model-bar state file so a framework fallback shows in the bar rather than the
@@ -302,7 +308,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
             return []
         if not isinstance(record, dict):
             return []
-        return parse_lines(record, self._tool_name_by_call_id, self._turn_state)
+        return parse_lines(record, self._tool_name_by_call_id, self._turn_state, self._image_generation)
 
     # on-demand payload detail
 
@@ -339,6 +345,16 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         if thinking is not None:
             detail = {**detail, "thinking": thinking}
         return detail
+
+    def _parse_image(self, event: dict[str, Any], source_line: str, index: int) -> EventImage | None:
+        try:
+            record = json.loads(source_line.strip())
+        except json.JSONDecodeError as e:
+            logger.warning("codex watcher: undecodable rollout line during an image read: {}", e)
+            return None
+        if not isinstance(record, dict):
+            return None
+        return parse_line_image(record, event["event_id"], index)
 
     def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
         """Scan the active rollout for the line that carries this event's payloads."""

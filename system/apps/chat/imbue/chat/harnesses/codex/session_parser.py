@@ -48,6 +48,7 @@ re-read from byte 0) the same user bubble dedups instead of duplicating.
 
 from __future__ import annotations
 
+import binascii
 import hashlib
 import json
 from datetime import datetime
@@ -56,14 +57,21 @@ from typing import Any
 from typing import Final
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
+from imbue.chat.harnesses.codex.tool_labels import WAIT_TOOL_NAME
+from imbue.chat.harnesses.codex.tool_labels import generates_images
 from imbue.chat.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.chat.harnesses.codex.tool_labels import shell_command
 from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
+from imbue.chat.harnesses.codex.tool_labels import yielded_cell_id
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.event_images import EventImage
+from imbue.chat.harnesses.event_images import decode_image_data_url
+from imbue.chat.harnesses.event_images import served_media_type
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
@@ -74,6 +82,7 @@ from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
 from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
+from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
 
@@ -136,6 +145,75 @@ def _output_text(output: Any) -> str:
     return "" if output is None else str(output)
 
 
+def _output_image_urls(output: Any) -> list[str]:
+    """The ``data:`` URLs of the servable images in a ``*_output.output`` content list, in order."""
+    if not isinstance(output, list):
+        return []
+    urls: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "input_image":
+            continue
+        image_url = item.get("image_url")
+        if isinstance(image_url, str) and served_media_type(image_url) is not None:
+            urls.append(image_url)
+    return urls
+
+
+class ImageGenerationCalls(MutableModel):
+    """The tool calls whose output carries images codex generated, tracked across rollout lines.
+
+    A code-mode program that calls image generation usually returns the image on its own
+    ``exec`` result, but a program that outlives its yield window returns it on a later
+    ``wait`` for the cell it kept running in, so a ``wait`` counts when its cell came from
+    such a program. A cell is forgotten once its program ends, or once a program that does not
+    generate yields its number: codex numbers cells afresh after a restart, and a program cut
+    off by one never ends on the record, so a remembered number would mark an unrelated later
+    program.
+    """
+
+    call_ids: set[str] = Field(default_factory=set, description="Calls whose output carries generated images")
+    cell_ids: set[str] = Field(default_factory=set, description="Running cells of programs that generate images")
+    waited_cell_by_call_id: dict[str, str] = Field(
+        default_factory=dict, description="The generating cell each such wait call resumes, until its output lands"
+    )
+
+    def note_call(self, call_id: str, tool_name: str, raw_input: str) -> None:
+        waited_cell_id = _waited_cell_id(raw_input) if tool_name == WAIT_TOOL_NAME else None
+        if waited_cell_id is not None and waited_cell_id in self.cell_ids:
+            self.call_ids.add(call_id)
+            self.waited_cell_by_call_id[call_id] = waited_cell_id
+        if generates_images(tool_name, raw_input):
+            self.call_ids.add(call_id)
+
+    def note_output(self, call_id: str, output_text: str) -> None:
+        running_cell_id = yielded_cell_id(output_text)
+        if call_id not in self.call_ids:
+            if running_cell_id is not None:
+                self.cell_ids.discard(running_cell_id)
+            return
+        waited_cell_id = self.waited_cell_by_call_id.pop(call_id, None)
+        if running_cell_id is not None:
+            self.cell_ids.add(running_cell_id)
+        elif waited_cell_id is not None:
+            self.cell_ids.discard(waited_cell_id)
+        else:
+            # A generating exec whose program finished within its own result leaves no cell behind.
+            pass
+
+
+def _waited_cell_id(raw_arguments: str) -> str | None:
+    """The cell a ``wait`` call resumes, from its JSON arguments."""
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError as exc:
+        logger.warning("Could not decode a codex wait call's arguments: {}", exc)
+        return None
+    cell_id = arguments.get("cell_id") if isinstance(arguments, dict) else None
+    if isinstance(cell_id, bool) or not isinstance(cell_id, (str, int)):
+        return None
+    return str(cell_id)
+
+
 def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     """The tool call's raw, untruncated input. ``function_call`` carries ``arguments``
     (a JSON string); ``custom_tool_call`` carries ``input`` (raw text, e.g. an
@@ -175,6 +253,11 @@ def _unwrap_command_result_envelopes(output: str) -> str:
             remaining = remaining[end:].lstrip()
         lines.append("\n".join(outputs) if outputs and not remaining else line)
     return "\n".join(lines)
+
+
+def _result_event_id(call_id: str, timestamp: str, payload: dict[str, Any]) -> str:
+    """The event id of a tool result line: its codex ``call_id`` (shared by re-serialised copies)."""
+    return f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
 
 
 def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, Any]:
@@ -445,6 +528,7 @@ def parse_lines(
     record: dict[str, Any],
     tool_name_by_call_id: dict[str, str],
     turn_state: dict[str, Any] | None = None,
+    image_generation: ImageGenerationCalls | None = None,
 ) -> list[dict[str, Any]]:
     """Map one codex rollout line to zero or more UI event dicts (``[]`` to skip).
 
@@ -459,6 +543,8 @@ def parse_lines(
     ``SETTINGS_CHANGED_SINCE_TURN_KEY``, whether a ``thread_settings_applied`` line came after that
     ``turn_context``. ``None`` disables the tracking (the model stays ``_UNKNOWN_MODEL``) -- used by
     callers that only want the transcript events.
+    ``image_generation`` tracks which calls return generated images across lines, stamping
+    ``is_generated_image`` on their results; ``None`` leaves every result unstamped.
     """
     outer = record.get("type")
     payload = record.get("payload")
@@ -644,6 +730,8 @@ def parse_lines(
         tool_name = str(payload.get("name", ""))
         if call_id and tool_name:
             tool_name_by_call_id[call_id] = tool_name
+        if call_id and image_generation is not None:
+            image_generation.note_call(call_id, tool_name, _tool_call_raw_input(payload))
         # Same dedup rationale: a re-serialised tool call keeps its ``call_id``.
         event_id = f"codex-call-{call_id}" if call_id else _synthetic_event_id("assistant", timestamp, payload)
         return [
@@ -658,7 +746,7 @@ def parse_lines(
 
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
+        event_id = _result_event_id(call_id, timestamp, payload)
         raw_output = _output_text(payload.get("output"))
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the request objects the permission and
@@ -684,6 +772,13 @@ def parse_lines(
         stamped_tk = tk_stamp(unwrapped_output)
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
+        image_count = len(_output_image_urls(payload.get("output")))
+        if image_count:
+            event["image_count"] = image_count
+        if image_generation is not None:
+            image_generation.note_output(call_id, raw_output)
+            if image_count and call_id in image_generation.call_ids:
+                event["is_generated_image"] = True
         return [event]
 
     return []
@@ -731,11 +826,33 @@ def parse_line_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
+        event_id = _result_event_id(call_id, timestamp, payload)
         return {
             event_id: {"inputs_by_tool_call_id": {}, "output": _output_text(payload.get("output")), "thinking": None}
         }
     return {}
+
+
+def parse_line_image(record: dict[str, Any], event_id: str, index: int) -> EventImage | None:
+    """Image ``index`` of the tool result ``event_id`` on one raw rollout line, or None when the
+    line is not that result or the result has no such image."""
+    payload = record.get("payload")
+    timestamp = record.get("timestamp", "")
+    if record.get("type") != "response_item" or not isinstance(payload, dict) or not isinstance(timestamp, str):
+        return None
+    if payload.get("type") not in ("function_call_output", "custom_tool_call_output"):
+        return None
+    call_id = str(payload.get("call_id", ""))
+    if _result_event_id(call_id, timestamp, payload) != event_id:
+        return None
+    image_urls = _output_image_urls(payload.get("output"))
+    if not 0 <= index < len(image_urls):
+        return None
+    try:
+        return decode_image_data_url(image_urls[index])
+    except binascii.Error as exc:
+        logger.warning("Image {} of codex tool result {} is not valid base64: {}", index, event_id, exc)
+        return None
 
 
 def parse_reasoning_detail(record: dict[str, Any]) -> str | None:

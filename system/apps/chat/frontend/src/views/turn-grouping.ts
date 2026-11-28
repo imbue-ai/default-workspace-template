@@ -55,6 +55,11 @@
  * it does after renders below it. The one exception is a chip landing inside an
  * open handoff node, which stays in the handoff's turn.
  *
+ * Images a call generated are never folded away either: they are lifted out of any
+ * open step into a `generated_images` timeline item right after the message that
+ * made the call, so they show with no click. The call itself stays where it is
+ * (its chip in the step or its chip row).
+ *
  * One message is never grouped under a step: an agent permission request, or a
  * secret request (the same shape, answered on the card itself). It
  * is lifted out into a dedicated inline break (the `permission` timeline item)
@@ -106,6 +111,7 @@ import { isHandoffPromptChip } from "../models/handoffPrompt";
 import type { RequestResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import { isFiledSecretRequest, parseSecretRequest } from "./secret-card";
+import { hasGeneratedImages } from "./tool-result-images";
 import {
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
@@ -194,6 +200,9 @@ export type TimelineItem =
       /** The user's note on a declined secret request, by request id (shared like the verdicts). */
       secretNotesByRequestId: ReadonlyMap<string, string>;
     }
+  /** The images `event`'s calls generated (one result per call that carries some), right after it in
+   *  transcript order and outside any step, so they show without opening the step or the call's chip. */
+  | { kind: "generated_images"; event: AssistantMessageEvent; results: ToolResultEvent[] }
   /** A system chip or notice that landed inside an open handoff node, shown inline after it.
    *  Anywhere else a chip heads a section of its own (SectionView.user_event). */
   | { kind: "chip"; event: UserMessageEvent }
@@ -282,6 +291,17 @@ function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string,
   return e.tool_calls.some((tc) => {
     const toolResult = toolResults.get(tc.tool_call_id) ?? null;
     return isFiledPermissionRequest(tc, toolResult) || isFiledSecretRequest(tc, toolResult);
+  });
+}
+
+/** The results of a message's calls that carry generated images, in call order. */
+function generatedImageResults(
+  e: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
+): ToolResultEvent[] {
+  return e.tool_calls.flatMap((tc) => {
+    const toolResult = toolResults.get(tc.tool_call_id);
+    return toolResult !== undefined && hasGeneratedImages(toolResult) ? [toolResult] : [];
   });
 }
 
@@ -478,6 +498,8 @@ type SectionEntry =
   /** A permission request, lifted out of any open step to render inline as a
    *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
   | { kind: "permission"; event: AssistantMessageEvent }
+  /** Generated images, lifted out of any open step (see the `generated_images` TimelineItem). */
+  | { kind: "generated_images"; event: AssistantMessageEvent; results: ToolResultEvent[] }
   /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
   /** A compaction, landed or running. */
@@ -899,6 +921,11 @@ export function buildSections(
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
+        // The call stays where it was routed; only its images break out, right after it.
+        const imageResults = generatedImageResults(parsed.render, toolResults);
+        if (imageResults.length > 0) {
+          current.entries.push({ kind: "generated_images", event: parsed.render, results: imageResults });
+        }
       }
       continue;
     }
@@ -1117,11 +1144,10 @@ function finalizeSection(
   let lastStepEntryIdx = -1;
   for (let i = 0; i < section.entries.length; i++) {
     const en = section.entries[i];
-    // A permission request is real (non-tk) activity, so it acts as a reply
-    // boundary just like a work event -- prose before a trailing permission
-    // request stays inline at its spot, not hoisted below the timeline as a
-    // reply.
-    if (en.kind === "permission") lastWorkEntryIdx = i;
+    // A permission request or generated images are real (non-tk) activity, so
+    // they act as a reply boundary just like a work event -- prose before them
+    // stays inline at its spot, not hoisted below the timeline as a reply.
+    if (en.kind === "permission" || en.kind === "generated_images") lastWorkEntryIdx = i;
     else if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
     // A handoff node bounds the reply too: what the agent said before the switch stays above it.
     else if (en.kind === "step" || en.kind === "handoff") lastStepEntryIdx = i;
@@ -1218,6 +1244,9 @@ function finalizeSection(
       // its own verdict in resolutionsByRequestId by its own request id.
       flushUngrouped();
       items.push({ kind: "permission", event: entry.event, resolutionsByRequestId, secretNotesByRequestId });
+    } else if (entry.kind === "generated_images") {
+      flushUngrouped();
+      items.push({ kind: "generated_images", event: entry.event, results: entry.results });
     } else if (entry.kind === "chip") {
       // Likewise a chip: it ends any in-flight ungrouped run and stands at its
       // own transcript position.

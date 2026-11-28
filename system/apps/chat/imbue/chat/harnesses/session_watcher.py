@@ -26,6 +26,7 @@ from typing import Final
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.event_images import EventImage
 from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -135,6 +136,13 @@ class TranscriptReader(ABC):
         thinking -- re-read statelessly from the harness's own transcript, or None when the
         event is unknown or its source is gone. Never cached backend-side. Default: no
         deferred payloads (a harness that has not adopted deferral).
+        """
+        return None
+
+    def get_event_image(self, event_id: str, index: int) -> EventImage | None:
+        """Image ``index`` of a tool result's output, re-read from the harness's own transcript
+        like :meth:`get_event_detail`, or None when there is no such image. Default: none (a
+        harness whose results carry no ``image_count``).
         """
         return None
 

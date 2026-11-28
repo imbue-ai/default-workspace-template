@@ -1,0 +1,1 @@
+- An image a Codex agent generates now appears in the chat, where it was made and without opening anything; clicking it opens it full size, with a download button. Before, the chat showed only "Generating an image" and the agent's word that it had made one. An image the agent only looked at shows inside that tool call's details.

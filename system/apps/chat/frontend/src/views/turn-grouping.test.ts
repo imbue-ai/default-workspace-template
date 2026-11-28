@@ -2784,3 +2784,124 @@ describe("secret requests", () => {
     expect(live[0].events.map((e) => e.event_id)).toEqual(["a-w-after"]);
   });
 });
+
+describe("generated images", () => {
+  // Images a call generated are what the user asked for, so they break out of any
+  // step into their own item right after the call's message -- while the call itself
+  // stays where it was routed.
+
+  /** The result of a call whose output carries images. */
+  function imageResult(ts: string, callId: string, count: number, isGenerated: boolean): ToolResultEvent {
+    return {
+      timestamp: ts,
+      type: "tool_result",
+      event_id: `r-${callId}`,
+      source: "test",
+      tool_call_id: callId,
+      tool_name: "exec",
+      output_chars: 40,
+      is_error: false,
+      image_count: count,
+      ...(isGenerated ? { is_generated_image: true } : {}),
+    };
+  }
+
+  type ImagesItem = Extract<TimelineItem, { kind: "generated_images" }>;
+
+  function imagesItems(items: TimelineItem[]): ImagesItem[] {
+    return items.filter((i): i is ImagesItem => i.kind === "generated_images");
+  }
+
+  it("lifts the images out of the open step, leaving the call that made them inside it", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "draw me a fox"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Draw the fox")),
+      workMsg("2026-05-01T01:00:02Z", "exec", "gen"),
+      imageResult("2026-05-01T01:00:02Z", "gen", 1, true),
+      workMsg("2026-05-01T01:00:03Z", "exec", "w2"),
+      result("2026-05-01T01:00:03Z", "w2", "ok"),
+    ];
+    const items = run(events, /* idle */ false)[0].items;
+    expect(items.map((i) => i.kind)).toEqual(["step", "generated_images"]);
+    expect(stepItems(items)[0].events.map((e) => e.event_id)).toEqual(["a-gen", "a-w2"]);
+    const [images] = imagesItems(items);
+    expect(images.event.event_id).toBe("a-gen");
+    expect(images.results.map((r) => r.event_id)).toEqual(["r-gen"]);
+  });
+
+  it("stands between the steps around it, at the call's position", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "draw me a fox, then frame it"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Draw the fox")),
+      workMsg("2026-05-01T01:00:02Z", "exec", "gen"),
+      imageResult("2026-05-01T01:00:02Z", "gen", 1, true),
+      tkMsg("2026-05-01T01:00:03Z", "tk close s1; tk start s2", "x-s1"),
+      result("2026-05-01T01:00:03Z", "x-s1", `${closeOut("s1", "Draw the fox")}\n${startOut("s2", "Frame it")}`),
+      workMsg("2026-05-01T01:00:04Z", "exec", "w2"),
+      result("2026-05-01T01:00:04Z", "w2", "ok"),
+    ];
+    const items = run(events, /* idle */ false)[0].items;
+    expect(items.map((i) => (i.kind === "step" ? i.step.ticket_id : i.kind))).toEqual([
+      "s1",
+      "generated_images",
+      "s2",
+    ]);
+  });
+
+  it("splits a run with no step open at the call, so the images follow the chips of the calls before them", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "draw me a fox"),
+      workMsg("2026-05-01T01:00:01Z", "exec", "w1"),
+      result("2026-05-01T01:00:01Z", "w1", "ok"),
+      workMsg("2026-05-01T01:00:02Z", "exec", "gen"),
+      imageResult("2026-05-01T01:00:02Z", "gen", 2, true),
+      workMsg("2026-05-01T01:00:03Z", "exec", "w3"),
+      result("2026-05-01T01:00:03Z", "w3", "ok"),
+    ];
+    const items = run(events)[0].items;
+    expect(items.map((i) => i.kind)).toEqual(["ungrouped", "generated_images", "ungrouped"]);
+    expect(ungroupedIds(items)).toEqual(["a-w1", "a-gen", "a-w3"]);
+  });
+
+  it("appears once the result that carries the images lands, on whichever call's result that is", () => {
+    // Codex can start generating in one `exec` and get the image back on a later `wait`.
+    const started = [
+      userMsg("2026-05-01T01:00:00Z", "draw me a fox"),
+      workMsg("2026-05-01T01:00:01Z", "exec", "gen"),
+      result("2026-05-01T01:00:01Z", "gen", "Script running with cell ID 1"),
+      workMsg("2026-05-01T01:00:02Z", "wait", "wait"),
+    ];
+    expect(imagesItems(run(started, /* idle */ false)[0].items)).toHaveLength(0);
+
+    const landed = run([...started, imageResult("2026-05-01T01:00:03Z", "wait", 1, true)], /* idle */ false);
+    const [images] = imagesItems(landed[0].items);
+    expect(images.event.event_id).toBe("a-wait");
+    expect(landed[0].items.map((i) => i.kind)).toEqual(["ungrouped", "generated_images"]);
+  });
+
+  it("bounds the reply: what the agent said before the images stays above them, what it said after is the reply", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "draw me a fox"),
+      assistantText("2026-05-01T01:00:01Z", "Drawing it now.", "a-before"),
+      workMsg("2026-05-01T01:00:02Z", "exec", "gen"),
+      imageResult("2026-05-01T01:00:02Z", "gen", 1, true),
+      assistantText("2026-05-01T01:00:03Z", "Here is your fox.", "a-after"),
+    ];
+    const [section] = run(events);
+    expect(section.items.map((i) => i.kind)).toEqual(["ungrouped", "generated_images"]);
+    expect(ungroupedIds(section.items)).toEqual(["a-before", "a-gen"]);
+    expect(section.trailing_reply.map((e) => e.event_id)).toEqual(["a-after"]);
+  });
+
+  it("leaves images the agent only looked at in the call's chip", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "what is in this screenshot?"),
+      workMsg("2026-05-01T01:00:01Z", "exec", "view"),
+      imageResult("2026-05-01T01:00:01Z", "view", 1, false),
+    ];
+    const items = run(events)[0].items;
+    expect(items.map((i) => i.kind)).toEqual(["ungrouped"]);
+  });
+});

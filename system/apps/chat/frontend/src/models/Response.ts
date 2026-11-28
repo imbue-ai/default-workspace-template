@@ -207,6 +207,12 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
   // The secret request the request script echoed on stdout, parsed the same way; the
   // secret card renders from this field.
   secret_request?: Record<string, unknown>;
+  // How many images the output carries, each served by the result's images route;
+  // absent when it carries none.
+  image_count?: number;
+  // True when those images were made by image generation, rather than one the agent
+  // only looked at (codex's view_image).
+  is_generated_image?: boolean;
   // NEVER on the wire: only the frontend-synthesized skill-expansion results (see
   // buildToolResultsWithSkillExpansions) carry inline output.
   output?: string;

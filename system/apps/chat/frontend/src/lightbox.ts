@@ -68,11 +68,12 @@ export function closeImageLightbox(): void {
   document.removeEventListener("keydown", onKeydown);
 }
 
-export function openImageLightbox(imageUrl: string, altText: string): void {
+/** `name` is what to call the image when its URL does not end in its filename (a route that serves it by index). */
+export function openImageLightbox(imageUrl: string, altText: string, name?: string): void {
   // Only one lightbox open at a time.
   closeImageLightbox();
 
-  const filename = filenameFromUrl(imageUrl);
+  const filename = name ?? filenameFromUrl(imageUrl);
 
   const overlay = document.createElement("div");
   overlay.className = "image-lightbox-overlay fixed inset-0 z-(--z-overlay) flex flex-col bg-black/85";

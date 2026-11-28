@@ -155,12 +155,14 @@ from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.testing import InlineExecutor
+from imbue.chat.testing import ONE_PIXEL_PNG
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import block_onboarding_markers
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import codex_image_generation_rollout_lines
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import drain_pushes
@@ -178,6 +180,7 @@ from imbue.chat.testing import serve_app
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import write_codex_rollout
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_gated_mngr_binary
 from imbue.chat.testing import write_plain_app_registry
@@ -795,6 +798,33 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
 
     missing = client.get("/api/chats/agent-123/events/not-a-real-event/detail")
     assert missing.status_code == 404
+
+
+def test_event_image_route_serves_a_codex_generated_image_and_404s(client: FlaskClient, app: Flask) -> None:
+    """The bytes behind a tool result's ``image_count``: inline, as a download, and 404 past the end."""
+    write_codex_rollout(
+        Path(os.environ["MNGR_HOST_DIR"]) / "agents" / "agent-456", codex_image_generation_rollout_lines()
+    )
+    seed_agent_state(state_of(app).agent_manager, "agent-456", name="codex-agent", harness=HarnessType.CODEX)
+
+    events = client.get("/api/chats/agent-456/events").get_json()["events"]
+    result_event = next(e for e in events if e["type"] == "tool_result")
+    assert result_event["image_count"] == 1
+    assert result_event["is_generated_image"] is True
+
+    image_url = f"/api/chats/agent-456/events/{result_event['event_id']}/images/0"
+    inline = client.get(image_url)
+    assert inline.status_code == 200
+    assert inline.mimetype == "image/png"
+    assert inline.data == ONE_PIXEL_PNG
+    assert "attachment" not in inline.headers.get("Content-Disposition", "")
+
+    download = client.get(f"{image_url}?download")
+    assert download.data == ONE_PIXEL_PNG
+    assert download.headers["Content-Disposition"].startswith("attachment")
+
+    assert client.get(f"/api/chats/agent-456/events/{result_event['event_id']}/images/1").status_code == 404
+    assert client.get("/api/chats/agent-456/events/codex-result-unknown/images/0").status_code == 404
 
 
 def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: str) -> AgentInfo:

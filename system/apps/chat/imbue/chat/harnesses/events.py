@@ -44,7 +44,9 @@ SPECIAL_EVENT_TYPE: Final[str] = "special"
 # ``input_chars`` / ``output_chars`` (so the frontend knows whether there is anything to
 # fetch), ``error_snippet`` (a failed call stays glanceable without a fetch), ``tk_stamp``
 # and ``tk_command`` (the step progress view's facts), ``permission_request`` and
-# ``secret_request`` (the two cards' structured objects), and ``has_thinking``.
+# ``secret_request`` (the two cards' structured objects), ``has_thinking``, and a tool result's
+# ``image_count`` and ``is_generated_image`` (its images are served one at a time by the images
+# endpoint, see ``harnesses/event_images``).
 MAX_ERROR_SNIPPET_LENGTH: Final[int] = 200
 # Ceiling on the resident tk stamp. tk decoration is a handful of short lines per call;
 # the cap only guards against pathological output that happens to be full of step-id

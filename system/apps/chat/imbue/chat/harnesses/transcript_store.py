@@ -39,6 +39,7 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
+from imbue.chat.harnesses.event_images import EventImage
 from imbue.chat.harnesses.path_watch import PathWatcher
 from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
@@ -462,6 +463,11 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
         file was rewritten under us). Default: no fallback."""
         return None
 
+    def _parse_image(self, event: dict[str, Any], source_line: str, index: int) -> EventImage | None:
+        """Image ``index`` of ``event`` from its source line, or None when the line no longer
+        matches the event or holds no such image. Default: none (harness without images)."""
+        return None
+
     # -- read API -------------------------------------------------------------------------
 
     def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
@@ -533,6 +539,24 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
         if fallback_line is None:
             return None
         return self._parse_detail(event, fallback_line, thinking_line)
+
+    def get_event_image(self, event_id: str, index: int) -> EventImage | None:
+        """Image ``index`` of a tool result, re-read statelessly from disk like :meth:`get_event_detail`."""
+        with self._lock:
+            self._refresh_locked()
+            event = self._store.get_event(event_id)
+            source = self._store.source_of(event_id)
+        # Past the count the event carries there is no image to find, so no line is scanned for one.
+        if event is None or not 0 <= index < event.get("image_count", 0):
+            return None
+        source_line = read_source_line(source) if source is not None else None
+        image = self._parse_image(event, source_line, index) if source_line is not None else None
+        if image is not None:
+            return image
+        fallback_line = self._find_detail_source_fallback(event)
+        if fallback_line is None:
+            return None
+        return self._parse_image(event, fallback_line, index)
 
 
 class ReplyDraftBaseline(FrozenModel):

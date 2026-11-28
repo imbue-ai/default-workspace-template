@@ -22,28 +22,21 @@ from imbue.chat.harnesses.codex.live_user_turns import note_live_user_turn
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
+from imbue.chat.harnesses.codex.watcher import codex_sessions_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 from imbue.chat.harnesses.session_watcher import StreamedReply
-
-_SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
+from imbue.chat.testing import ONE_PIXEL_PNG
+from imbue.chat.testing import codex_image_generation_rollout_lines
+from imbue.chat.testing import write_codex_rollout
+from imbue.chat.testing import write_codex_rollout_without_marker
 
 
 def _user_line(text: str, timestamp: str) -> dict[str, Any]:
     return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "user_message", "message": text}}
-
-
-def _write_rollout(agent_state_dir: Path, lines: list[dict[str, Any]]) -> Path:
-    """Write a rollout plus the marker naming it, exactly as a live agent would."""
-    sessions_dir = agent_state_dir / _SESSIONS_RELATIVE / "2026" / "08" / "03"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    rollout = sessions_dir / "rollout-2026-08-03T00-00-00-test.jsonl"
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
-    (agent_state_dir / "codex_transcript_path").write_text(str(rollout), encoding="utf-8")
-    return rollout
 
 
 def _build_watcher(
@@ -78,7 +71,7 @@ def test_reads_serve_history_without_the_thread_having_run(tmp_path: Path) -> No
     ``start()`` is deliberately never called, which is the whole point -- this is the
     state the very first request after a restart sees.
     """
-    _write_rollout(
+    write_codex_rollout(
         tmp_path, [_user_line("first", "2026-08-03T00:00:01Z"), _user_line("second", "2026-08-03T00:00:02Z")]
     )
     watcher, _ = _build_watcher(tmp_path)
@@ -106,7 +99,7 @@ def test_effective_model_from_turn_context_is_reflected_in_the_state_file(tmp_pa
     # The ledger already mirrored the SELECTED settings (fast on).
     state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
     # The turn actually RAN on a fallback model/effort (over-quota downgrade).
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _turn_context_line("gpt-5.2", "low", "2026-08-03T00:00:01Z"),
@@ -130,7 +123,7 @@ def test_effective_model_matching_the_file_writes_nothing_new(tmp_path: Path) ->
     watcher does not rewrite it (no churn), leaving the existing content untouched."""
     state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
     before = state_path.read_text()
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
@@ -158,7 +151,7 @@ def test_an_effort_picked_between_turns_is_not_reverted_to_the_previous_turn(tmp
     """Codex logs a settings change to the rollout before any turn runs on it. That append must not
     make the watcher write the previous turn's effort over the pick the ledger just recorded."""
     state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
-    rollout = _write_rollout(
+    rollout = write_codex_rollout(
         tmp_path,
         [
             _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
@@ -184,7 +177,7 @@ def test_a_fallback_turn_after_an_effort_change_is_still_reflected(tmp_path: Pat
     """A settings change holds off the reflection only until the next turn: a turn that then runs on
     a fallback still shows in the bar."""
     state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "max")
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
@@ -201,17 +194,6 @@ def test_a_fallback_turn_after_an_effort_change_is_still_reflected(tmp_path: Pat
     assert identity.effort == "low"
 
 
-def _write_rollout_without_marker(
-    agent_state_dir: Path, lines: list[dict[str, Any]], name: str = "rollout-2026-08-03T00-00-00-web.jsonl"
-) -> Path:
-    """Write a rollout but NOT the marker -- a web/CLI-only agent whose UserPromptSubmit hook never fired."""
-    sessions_dir = agent_state_dir / _SESSIONS_RELATIVE / "2026" / "08" / "03"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    rollout = sessions_dir / name
-    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
-    return rollout
-
-
 def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
     """A web-only codex agent never gets a UserPromptSubmit marker; the newest rollout is tailed anyway.
 
@@ -219,7 +201,7 @@ def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
     writes ``codex_transcript_path``) on a programmatic turn, so without the fallback the web chat
     renders empty. With one thread per daemon the newest rollout IS the live conversation.
     """
-    _write_rollout_without_marker(tmp_path, [_user_line("web-first", "2026-08-03T00:00:01Z")])
+    write_codex_rollout_without_marker(tmp_path, [_user_line("web-first", "2026-08-03T00:00:01Z")])
     assert not (tmp_path / "codex_transcript_path").exists()
     watcher, _ = _build_watcher(tmp_path)
 
@@ -229,9 +211,9 @@ def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
 
 def test_marker_takes_precedence_over_newest_rollout(tmp_path: Path) -> None:
     """When the marker IS present it wins -- the deterministic TUI path is preserved."""
-    marked = _write_rollout(tmp_path, [_user_line("marked", "2026-08-03T00:00:01Z")])
+    marked = write_codex_rollout(tmp_path, [_user_line("marked", "2026-08-03T00:00:01Z")])
     # A second, newer rollout with no bearing on the marker must NOT be picked while the marker points elsewhere.
-    other = _write_rollout_without_marker(
+    other = write_codex_rollout_without_marker(
         tmp_path,
         [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")],
         name="rollout-2026-08-03T00-00-09-other.jsonl",
@@ -252,7 +234,7 @@ def test_a_read_does_not_stop_the_loop_broadcasting_those_events(tmp_path: Path)
     reader happened to pull in first. Uses an assistant line (agent output the file reader
     still owns live) rather than a user line (now suppressed live -- see the suppression test).
     """
-    _write_rollout(tmp_path, [_assistant_line("m1", "only", "2026-08-03T00:00:01Z")])
+    write_codex_rollout(tmp_path, [_assistant_line("m1", "only", "2026-08-03T00:00:01Z")])
     watcher, broadcast = _build_watcher(tmp_path)
 
     assert len(watcher.get_tail_events(50)) == 1
@@ -273,7 +255,7 @@ def test_user_turns_the_ledger_already_broadcast_are_suppressed_from_the_file_br
     page load rebuilds from -- serve it; only the live broadcast omits it. Agent output on
     the same pass is still broadcast."""
     drop_live_user_turns("agent-test")
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _user_line("hi there", "2026-08-03T00:00:01Z"),
@@ -304,7 +286,7 @@ def test_a_user_turn_the_ledger_never_broadcast_flows_from_the_file(tmp_path: Pa
     copy would leave the turn invisible on the live stream forever, with the frontend's
     "Sending..." bubble waiting on exactly that arrival."""
     drop_live_user_turns("agent-test")
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _user_line("revived send", "2026-08-03T00:00:01Z"),
@@ -320,7 +302,7 @@ def test_a_user_turn_the_ledger_never_broadcast_flows_from_the_file(tmp_path: Pa
 
 def test_reads_pick_up_lines_appended_after_the_first_read(tmp_path: Path) -> None:
     """Refresh is incremental, so a later read sees appended turns without a restart."""
-    rollout = _write_rollout(tmp_path, [_user_line("first", "2026-08-03T00:00:01Z")])
+    rollout = write_codex_rollout(tmp_path, [_user_line("first", "2026-08-03T00:00:01Z")])
     watcher, _ = _build_watcher(tmp_path)
     assert watcher.get_total_event_count() == 1
 
@@ -362,7 +344,7 @@ def test_start_tails_the_rollout_via_the_shared_watcher(tmp_path: Path) -> None:
     loop. Uses assistant lines -- agent output the file reader still broadcasts live (user
     turns are ledger-owned now)."""
     broadcast_signal = threading.Event()
-    rollout = _write_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
+    rollout = write_codex_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
     watcher, broadcast = _build_watcher(tmp_path, broadcast_signal)
     watcher.start()
     try:
@@ -389,7 +371,7 @@ def test_multibyte_char_split_across_reads_is_preserved(tmp_path: Path) -> None:
     data = (json.dumps(_user_line("hi\U0001f389", "2026-08-03T00:00:01Z"), ensure_ascii=False) + "\n").encode("utf-8")
     # Split in the middle of the four-byte emoji, straddling the read boundary.
     split = data.index("\U0001f389".encode("utf-8")) + 2
-    sessions_dir = tmp_path / _SESSIONS_RELATIVE / "2026" / "08" / "03"
+    sessions_dir = codex_sessions_dir(tmp_path) / "2026" / "08" / "03"
     sessions_dir.mkdir(parents=True, exist_ok=True)
     rollout = sessions_dir / "rollout-2026-08-03T00-00-00-test.jsonl"
     (tmp_path / "codex_transcript_path").write_text(str(rollout), encoding="utf-8")
@@ -420,7 +402,7 @@ def test_supersession_replaces_and_rebroadcasts(tmp_path: Path) -> None:
     stored copy -- not kept stale, not duplicated -- and is re-broadcast so the client
     upgrades its held copy."""
     watcher, broadcast = _build_watcher(tmp_path)
-    rollout = _write_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
+    rollout = write_codex_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
     watcher._emit_cycle()
     assert [e["text"] for e in broadcast if e["type"] == "assistant_message"] == ["first"]
 
@@ -451,7 +433,7 @@ def test_interrupt_synthesizes_results_for_open_calls(tmp_path: Path) -> None:
     'Interrupted.' result, keyed on the id a real result would use, so the card resolves
     instead of spinning forever."""
     watcher, _ = _build_watcher(tmp_path)
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _tool_call_line("c1", "exec", '{"cmd":"sleep 999"}', "2026-08-03T00:00:01Z"),
@@ -469,7 +451,7 @@ def test_interrupt_synthesizes_results_for_open_calls(tmp_path: Path) -> None:
 def test_interrupt_leaves_already_completed_calls_alone(tmp_path: Path) -> None:
     """A call that already has a real result is not given a synthetic Interrupted one."""
     watcher, _ = _build_watcher(tmp_path)
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _tool_call_line("c1", "exec", '{"cmd":"ls"}', "2026-08-03T00:00:01Z"),
@@ -489,7 +471,7 @@ def test_identical_reserialisation_is_dropped(tmp_path: Path) -> None:
     """An exact re-serialisation (same id, same content) is a pure duplicate: not
     re-broadcast and not duplicated in the store."""
     watcher, broadcast = _build_watcher(tmp_path)
-    rollout = _write_rollout(tmp_path, [_assistant_line("m1", "hello", "2026-08-03T00:00:01Z")])
+    rollout = write_codex_rollout(tmp_path, [_assistant_line("m1", "hello", "2026-08-03T00:00:01Z")])
     watcher._emit_cycle()
     before = len(broadcast)
 
@@ -508,7 +490,7 @@ def test_reasoning_summary_marks_the_next_assistant_event_and_serves_its_text(tm
     """A reasoning line with readable summaries stamps ``has_thinking`` on the assistant
     event that follows it, and the detail read serves the summary text; a reasoning line
     with only encrypted content stamps nothing."""
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             {
@@ -541,7 +523,7 @@ def test_reasoning_summary_marks_the_next_assistant_event_and_serves_its_text(tm
 
 def test_get_event_detail_serves_the_full_tool_payloads(tmp_path: Path) -> None:
     big_args = '{"cmd":"echo ' + "x" * 4000 + '"}'
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             {
@@ -571,11 +553,26 @@ def test_get_event_detail_serves_the_full_tool_payloads(tmp_path: Path) -> None:
     assert result_detail["output"] == "y" * 6000
 
 
+def test_get_event_image_reads_a_generated_image_back_from_the_rollout(tmp_path: Path) -> None:
+    """The image stays in the rollout; the event names how many there are and the read decodes one."""
+    write_codex_rollout(tmp_path, codex_image_generation_rollout_lines())
+    watcher, _ = _build_watcher(tmp_path)
+    result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
+    assert result["image_count"] == 1
+    assert result["is_generated_image"] is True
+
+    image = watcher.get_event_image(result["event_id"], 0)
+    assert image is not None
+    assert (image.media_type, image.data) == ("image/png", ONE_PIXEL_PNG)
+    assert watcher.get_event_image(result["event_id"], 1) is None
+    assert watcher.get_event_image("codex-result-unknown", 0) is None
+
+
 def test_a_loader_reads_the_rollout_without_watching_or_touching_the_model_bar(tmp_path: Path) -> None:
     """An archived codex agent's segment reads through the loader: the same events as the watcher,
     each naming its agent, and no write to the model-bar state file even when the rollout names
     the model the turns ran on (an archived agent has no bar to update)."""
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             {"timestamp": "2026-08-03T00:00:00Z", "type": "turn_context", "payload": {"model": "gpt-5.2-codex"}},
@@ -608,7 +605,7 @@ def _streamed_sources(streamed: StreamedReply | None) -> ReplyDraftSources:
 
 
 def test_reply_draft_is_the_message_codex_streams_after_the_last_event(tmp_path: Path) -> None:
-    _write_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
+    write_codex_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
     watcher, _ = _build_watcher(tmp_path)
     last_event_id = watcher.get_all_events()[-1]["event_id"]
 
@@ -618,7 +615,7 @@ def test_reply_draft_is_the_message_codex_streams_after_the_last_event(tmp_path:
 
 
 def test_reply_draft_is_dropped_once_the_rollout_records_the_streamed_message(tmp_path: Path) -> None:
-    _write_rollout(
+    write_codex_rollout(
         tmp_path,
         [
             _user_line("tell me about tides", "2026-08-03T00:00:01Z"),
@@ -636,7 +633,7 @@ def test_reply_draft_is_dropped_once_the_rollout_records_the_streamed_message(tm
 
 
 def test_reply_draft_is_empty_without_a_live_stream(tmp_path: Path) -> None:
-    _write_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
+    write_codex_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
     watcher, _ = _build_watcher(tmp_path)
     watcher.get_all_events()
 

@@ -8,7 +8,7 @@
  * the next person speaks or another agent takes over -- under the agent's name
  * and face, threaded by one line (see machine-bubbles). A stretch's parts are a
  * whole ProgressBlock for a turn that has tk steps, an ungrouped assistant
- * message, a system chip or notice, a handoff node, a trailing wrap-up reply, or
+ * message, a system chip or notice, a handoff node, the images a call generated, a trailing wrap-up reply, or
  * the chip row of a compaction that followed it. Sharing it here means a subagent's "View
  * conversation" gets the real progress view -- step timeline, statuses,
  * summaries -- and the same windowed virtualization as the main chat, with zero
@@ -43,6 +43,7 @@ import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView
 import { ProgressBlock } from "./ProgressBlock";
 import { renderFramedHandoffNode } from "./handoff-node";
 import { renderAgentTurn } from "./machine-bubbles";
+import { renderGeneratedImagesItem } from "./tool-result-images";
 import type { ResentTurns } from "../models/ResentSends";
 
 // Per-type fallback row heights, used until a row has been measured (live or
@@ -55,6 +56,8 @@ export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
 // order of magnitude shorter than the prose message the assistant estimate is
 // sized for.
 export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
+// A row of generated images, each drawn at most 384px tall.
+const ESTIMATED_GENERATED_IMAGES_HEIGHT_PX = 400;
 
 // Layout for the centered message column. Shared by the live transcript views
 // and the offscreen measurer, whose rows must lay out identically to measure
@@ -379,6 +382,15 @@ function buildRows(
           chipCallIds: chipCallIdsOf([permissionEvent], toolResults),
         });
         addFollowUp([permissionEvent.event_id]);
+      } else if (item.kind === "generated_images") {
+        const { event: imagesEvent, results } = item;
+        addPart({
+          key: `images-${imagesEvent.event_id}`,
+          estimate: ESTIMATED_GENERATED_IMAGES_HEIGHT_PX,
+          anchorEventId: imagesEvent.event_id,
+          render: () => renderGeneratedImagesItem(imagesEvent, results, chatId),
+          chipCallIds: [],
+        });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
