@@ -27,6 +27,8 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
+import { DEFAULT_WHAT_FAILED, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
@@ -133,6 +135,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  appDisplayName,
   avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
@@ -682,6 +685,17 @@ export class DesktopStore {
   /** Tell the user about a refusal. */
   private toast(message: string): void {
     this.toasts.show(message);
+  }
+
+  /**
+   * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
+   * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
+   * retry is the control just pressed asks for a plain note; any other, and any failure that owes the person help,
+   * shows one that stays.
+   */
+  private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
+    const told = failureSentence(describeRequestFailure(error), whatFailed);
+    this.toasts.show(told.message, { isLasting: isLasting || told.isHelpOwed, details: told.details });
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
@@ -1315,7 +1329,8 @@ export class DesktopStore {
       inventory = await this.deps.api.fetchInventory();
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
-      this.toast(`Could not read the desktops and apps: ${(error as Error).message}`);
+      // Lasting: nothing on screen retries the read, and the desktop stays on "Loading..." after a plain note leaves.
+      this.toastFailure("Could not read the desktops and apps", error, { isLasting: true });
       this.isStartupReadFailed = true;
       this.landPhone();
       return;
@@ -2044,7 +2059,7 @@ export class DesktopStore {
     try {
       relay = await this.relayMessage(message, sender);
     } catch (error) {
-      this.toast((error as Error).message);
+      this.toastFailure(DEFAULT_WHAT_FAILED, error, { isLasting: false });
       return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
@@ -2196,7 +2211,9 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      this.toastFailure(`Could not open ${appDisplayName(this.state, app)}`, error, {
+        isLasting: false,
+      });
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
@@ -2232,7 +2249,8 @@ export class DesktopStore {
     try {
       reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
-      this.toast(`Could not move the window: ${(error as Error).message}`);
+      // Lasting: the page moved its own window, so nothing the user pressed retries it.
+      this.toastFailure("Could not move the window", error, { isLasting: true });
       return false;
     }
     this.applyOwnNavigation(found, reported);
@@ -2274,7 +2292,7 @@ export class DesktopStore {
     try {
       await this.deps.api.selectAvatar(design);
     } catch (error) {
-      this.toast(`Could not change the avatar: ${(error as Error).message}`);
+      this.toastFailure("Could not change the avatar", error, { isLasting: false });
     }
   }
 
@@ -2292,7 +2310,7 @@ export class DesktopStore {
       if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      this.toast(`Could not change the entry: ${(error as Error).message}`);
+      this.toastFailure("Could not change the entry", error, { isLasting: false });
       if (this.entryPushes !== entryPushesBefore) return;
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
       this.dispatch({
@@ -2427,7 +2445,7 @@ export class DesktopStore {
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
-      this.toast(`Could not create the desktop: ${(error as Error).message}`);
+      this.toastFailure("Could not create the desktop", error, { isLasting: false });
     }
   }
 
@@ -2613,7 +2631,7 @@ export class DesktopStore {
       if (now !== null && findShortcut(now, app, launch) === shortcut) {
         this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
       }
-      this.toast(`Could not add the shortcut: ${(error as Error).message}`);
+      this.toastFailure("Could not add the shortcut", error, { isLasting: false });
     }
   }
 
@@ -2622,7 +2640,7 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.toast(`Could not change the shortcut: ${(error as Error).message}`);
+      this.toastFailure("Could not change the shortcut", error, { isLasting: false });
     }
   }
 
@@ -2663,7 +2681,7 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.toast(`Could not move the shortcut: ${(error as Error).message}`);
+      this.toastFailure("Could not move the shortcut", error, { isLasting: false });
     }
   }
 
@@ -2698,7 +2716,7 @@ export class DesktopStore {
       if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
         this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
       }
-      this.toast(`Could not remove the shortcut: ${(error as Error).message}`);
+      this.toastFailure("Could not remove the shortcut", error, { isLasting: false });
     }
   }
 
@@ -2843,7 +2861,9 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      this.toastFailure(`Could not open ${appDisplayName(this.state, app)}`, error, {
+        isLasting: false,
+      });
       return null;
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
@@ -2893,7 +2913,11 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
+      // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
+      this.toastFailure(`${appDisplayName(this.state, app)} couldn't open that`, error, {
+        isLasting: true,
+      });
       return null;
     }
     if (target.kind === "window") {
@@ -2930,7 +2954,7 @@ export class DesktopStore {
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {
-      this.toast(`Could not close the window: ${(error as Error).message}`);
+      this.toastFailure("Could not close the window", error, { isLasting: false });
       return;
     }
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
@@ -3152,7 +3176,8 @@ export class DesktopStore {
     try {
       await this.deps.api.quitApp(appName);
     } catch (error) {
-      this.toast(`Failed to quit ${appName}: ${(error as Error).message}`);
+      // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
+      this.toastFailure(`Failed to quit ${appDisplayName(this.state, appName)}`, error, { isLasting: true });
     }
   }
 

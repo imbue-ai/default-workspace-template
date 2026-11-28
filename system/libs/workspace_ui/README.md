@@ -25,7 +25,39 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   themselves with).
 - `src/base-path.ts`, `src/origin.ts`, and
   `src/models/` (`ClientIdentity`, `http`, `backoff`, `ws-json`,
-  `request-error`, and `toasts`, the queue `components/toasts.ts` draws): the base helpers every page shares.
+  `request-error`, `failure`, and `toasts`, the queue `components/toasts.ts` draws): the base helpers every page
+  shares.
+- How a failed request is told (`models/failure.ts`, `models/http.ts`,
+  `models/request-error.ts`): one reader, `readFailure`, says what went wrong,
+  for the REST helpers (`HttpError.failure`) and for a mithril rejection
+  (`describeRequestFailure`) alike: a route's `user_facing_message` (a sentence
+  for people, which owes the person help unless the body says `routine: true`:
+  ordinary operation the sentence fully explains, so nothing is broken), else its
+  `detail` or `error` (a reason, developer text), else no answer (nothing
+  answered, or a gateway status 502, 503 or 504 with no JSON reason), else
+  nothing. `failureSentence(failure, whatFailed)` is the one place that becomes
+  words, `whatFailed` being a sentence stem ("This window couldn't be closed"):
+  the server's sentence as written; no answer as "The workspace didn't answer.
+  Try again in a moment." for a read and "The workspace didn't answer. This
+  may not have gone through." for a change, never
+  prefixed with what failed (and never "nothing was changed": Imbue Studio's
+  forward proxy can send a gateway status after the request arrived); a refusal
+  (4xx) with a reason as "<what failed>."; anything else as the fallback "<what
+  failed>. Try again.". A screen not yet worded
+  this way shows `failureText` (an `HttpError`'s `message`, and
+  `describeRequestError`): the server's own reason, else our sentence. The status and the
+  server's own text go behind "See details" (`src/components/SeeDetails.ts`,
+  which `NoticeDialog` draws from its `details`).
+- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`):
+  the caller of `ToastQueue.show` says which kind it shows. A plain note goes
+  after five seconds; a lasting one (`isLasting: true`) stays until
+  dismissed, with a close control, its details behind "See details" and its
+  buttons ("Try again", ...), at most three on screen, and pressing one of
+  its buttons dismisses it. A toast that says the same as one already up
+  (message and details) replaces it. A plain toast may carry
+  details too: it then takes presses, shows "See details" and a close
+  button, and stays once its details are opened (`ToastQueue.hold`, which
+  `Toasts` calls through `onHold`).
 - `src/app_contract.ts`: an app page's side of the browser-side contract
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also

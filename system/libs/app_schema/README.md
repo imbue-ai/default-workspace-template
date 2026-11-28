@@ -33,7 +33,14 @@ for every operation:
   document as the operation's `x-no-schema`.
 
 Every operation's `default` response is `ErrorResponse` (`{"detail": ...}`),
-the one shape every route answers a refusal or a failure with.
+the one shape every route answers a refusal or a failure with. Beside
+`detail` it may carry `user_facing_message` (a sentence written for the
+person using the workspace, which its frontends show as written),
+`routine` (whether the refusal is ordinary operation that sentence fully
+explains, such as an app still starting: nothing is broken, so its frontends
+offer no help with it; unset means help is owed) and `kind` (which
+case of refusal it was, for a frontend that offers different controls per
+case); each is left out of the JSON when unset.
 
 ## API
 
@@ -56,8 +63,8 @@ the one shape every route answers a refusal or a failure with.
   answer; the table must name that model and status for the route (as the
   primary or an alternate), or the request fails the same way. An
   `ErrorResponse` needs no entry.
-- `app_schema.routes.error_response(detail, status)`: a refusal or a failure
-  as the `ErrorResponse`.
+- `app_schema.routes.error_response(detail, status, user_facing_message=None, routine=None, kind=None)`:
+  a refusal or a failure as the `ErrorResponse`.
 - `app_schema.request_guard.install_request_guard(app, exempt_rules)`: who may
   call the app at all, installed ahead of every other request hook. It refuses
   with a 403 `ErrorResponse` any request the provenance check of

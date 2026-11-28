@@ -949,7 +949,10 @@ def _send_to_chat(
         if is_refused_on_signed_out_account and _is_account_signed_out(agent_info):
             detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
             return _SendRefused(
-                answer=SendFailureResponse(detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND), status=409
+                answer=SendFailureResponse(
+                    detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND, user_facing_message=detail
+                ),
+                status=409,
             )
         try:
             # A seeded chat whose agent was launched as the user signed in has its conversation to deliver
@@ -967,16 +970,18 @@ def _send_to_chat(
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
             return _SendRefused(answer=_chat_not_found_error(str(chat_id)), status=404)
         except SendFailedError as send_failure:
-            # The harness said why it refused, in words written for the person who has to fix it
-            # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
-            # than the generic failure below -- it is the only thing here the user can act on.
-            # The kind travels beside the detail so the chat can decide what to offer: trying again
-            # can clear a blocked input, where only a restart is left for an agent that would not start.
-            # A /compact the chat declines is its own refusal, not a failure.
+            # The page words the failure from its kind and keeps the harness's reason behind its details. A /compact
+            # the chat declines is a refusal, not a failure, and its reason is the chat's sentence for the person.
             logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
-            status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
+            is_declined = send_failure.kind in _DECLINED_SEND_FAILURE_KINDS
+            status_code = 409 if is_declined else 500
             return _SendRefused(
-                answer=SendFailureResponse(detail=send_failure.detail, kind=send_failure.kind), status=status_code
+                answer=SendFailureResponse(
+                    detail=send_failure.detail,
+                    kind=send_failure.kind,
+                    user_facing_message=send_failure.detail if is_declined else None,
+                ),
+                status=status_code,
             )
         if outcome is SendOutcome.WITHDRAWN:
             return _SendAccepted(held_phase=None, is_withdrawn=True)

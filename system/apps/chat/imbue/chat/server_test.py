@@ -1602,6 +1602,9 @@ def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
 
     assert response.status_code == 409
     assert response.get_json()["kind"] == "account_signed_out"
+    assert response.get_json()["user_facing_message"] == (
+        "You signed out of the account this chat runs on. Choose a provider to continue it on."
+    )
     assert messenger.sent == []
 
 
@@ -6819,7 +6822,11 @@ def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
             )
 
         assert response.status_code == 409
-        assert response.get_json() == {"detail": "Nothing to compact yet.", "kind": "nothing_to_compact"}
+        assert response.get_json() == {
+            "detail": "Nothing to compact yet.",
+            "user_facing_message": "Nothing to compact yet.",
+            "kind": "nothing_to_compact",
+        }
         assert messenger.sent == []
         assert agent_info.id not in manager._compaction_pending_by_agent
     finally:
@@ -6985,7 +6992,11 @@ def test_a_compact_command_with_nothing_to_compact_is_declined_without_asking_mn
 ) -> None:
     with _compact_sent_from_the_composer(tmp_path, harness, events=events) as (response, manager, messenger, agent_id):
         assert response.status_code == 409
-        assert response.get_json() == {"detail": "Nothing to compact yet.", "kind": "nothing_to_compact"}
+        assert response.get_json() == {
+            "detail": "Nothing to compact yet.",
+            "user_facing_message": "Nothing to compact yet.",
+            "kind": "nothing_to_compact",
+        }
         assert messenger.compactions == []
         assert agent_id not in manager._compaction_pending_by_agent
 
@@ -7019,7 +7030,11 @@ def test_a_compact_command_while_the_agent_cannot_compact_is_declined_without_as
         tmp_path, harness, lifecycle_state=lifecycle_state, activity_state=activity_state
     ) as (response, manager, messenger, agent_id):
         assert response.status_code == 409
-        assert response.get_json() == {"detail": detail, "kind": COMPACT_UNAVAILABLE_SEND_FAILURE_KIND}
+        assert response.get_json() == {
+            "detail": detail,
+            "user_facing_message": detail,
+            "kind": COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
+        }
         assert messenger.compactions == []
         assert agent_id not in manager._compaction_pending_by_agent
 
@@ -7050,7 +7065,8 @@ def test_a_compaction_mngr_did_not_start_leaves_no_compaction_showing(
         agent_id,
     ):
         assert response.status_code == status_code
-        assert response.get_json() == {"detail": failure.reason, "kind": failure.kind}
+        declined = {"user_facing_message": failure.reason} if status_code == 409 else {}
+        assert response.get_json() == {"detail": failure.reason, **declined, "kind": failure.kind}
         assert messenger.compactions == [(agent_id, None)]
         assert agent_id not in manager._compaction_pending_by_agent
 
