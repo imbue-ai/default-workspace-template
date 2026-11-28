@@ -98,10 +98,13 @@ first call after an approval message, sleep for a few seconds and retry; the
 change can take a moment to propagate. Do not ask the user to tell you when they
 respond; mention that you will continue once they do if you need to wait.
 
-Do not forget to use the `-H 'X-Latchkey-Device: *'` option to send the request
-to all of the user’s available devices. If none are available (usually
-indicated by an HTTP 503 error) or there are connection failures, the request
-will be stored on the outer host and delivered when the user starts Imbue Studio again.
+Do not forget to use the `-H 'X-Latchkey-Device: *'` option, so that the request
+is for every one of the user’s devices. A request is kept for the user whether
+or not an Imbue Studio app is connected, and they see it the next time they
+open one, so a request you filed is filed: wait for the message. The request
+was kept too when the answer is an HTTP 503 or 502 that carries a
+`request_id`, or an HTTP 200 whose `responses` all carry an `error` (no device
+answered): do not file it again.
 
 ### File exactly one permission request per tool call
 
